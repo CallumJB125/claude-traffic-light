@@ -14,7 +14,7 @@ function register({ ipcMain, sessionsAllowed, sessions, bridge, capture, tasks, 
       forBridge = b;
       actions = SessionActions.create({
         sessions, repoOf: require('./work-capture.js').repoFor, rootOf: b.gitRoot, boards: b.boards, capture: { captureOnce: (r, k) => capture().captureOnce(r, k) },
-        links: b.links, captured: () => b.rows(), tasks, clipboard, pickFolder, openPage, pageExists,
+        links: b.links, tickets: b.tickets ?? null, captured: () => b.rows(), tasks, clipboard, pickFolder, openPage, pageExists,
       });
     }
     return actions;
@@ -37,6 +37,8 @@ function register({ ipcMain, sessionsAllowed, sessions, bridge, capture, tasks, 
   handle('sessions:search-cards', (q) => str(q, 80), (a, q) => a.searchCards(q));
   handle('sessions:attach', (h, r) => str(h) && str(r), (a, h, r) => a.attach(h, r));
   handle('sessions:share', (h, on) => str(h) && typeof on === 'boolean', async (a, h, on) => ({ ok: await a.shareHandover(h, on) }));
+  handle('sessions:ticket-draft', (h) => str(h), (a, h) => a.ticketDraft(h));
+  handle('sessions:ticket-create', (r, t, d) => str(r, 100) && str(t, 200) && str(d, 8000), (a, r, t, d) => a.ticketCreate(r, t, d));
   handle('sessions:connect', () => true, async (a) => { a.connect(); return { ok: true }; });
   return { rowInfo: (row) => get()?.rowInfo(row) ?? null };
 }

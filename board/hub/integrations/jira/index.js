@@ -6,6 +6,13 @@
 // adds one untrusted, human-readable comment. Nothing here moves a card or
 // starts an AI.
 //
+// Create ticket (optional, outbound): an admin may paste, after the webhook
+// secret, an Atlassian account email, a scoped API token (write:jira-work),
+// the site's cloud id, a project key and the site
+// ("<secret> me@x.com <token> <cloud id> ENG acme.atlassian.net"). Then a
+// member's explicit Create from a session makes one Task in that project
+// through api.atlassian.com with the title and description they approved.
+//
 // Go-live gate: not in connectorsFor() on any hub until a real Jira delivery
 // has been checked against verify() over its raw bytes (docs/JIRA-RUNBOOK.md).
 //
@@ -28,6 +35,9 @@ const ID_RE = /^\d{1,20}$/;
 const KEY_RE = /^[A-Z][A-Z0-9_]{0,19}-\d{1,9}$/;
 const PROJECT_RE = /^[A-Z][A-Z0-9_]{0,19}$/;
 const SITE_RE = /^[a-z0-9][a-z0-9-]{0,62}\.atlassian\.net$/;
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/;
+const TOKEN_RE = /^[\x21-\x7e]{16,1024}$/;
+const CLOUD_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const WINDOW_BACK_MS = 86_400_000;
 const WINDOW_AHEAD_MS = 300_000;
 export const SUGGESTION = 'Suggested: review this issue, choose an AI and start work from the card.';
@@ -82,24 +92,56 @@ export function issueEvent(payload) {
   };
 }
 
+const fail = (code) => Object.assign(new Error('Jira did not create the issue'), { code });
+// Atlassian Document Format: one paragraph per line, text only.
+const adf = (text) => ({ type: 'doc', version: 1, content: String(text).split('\n').map((l) => (l ? { type: 'paragraph', content: [{ type: 'text', text: l }] } : { type: 'paragraph' })) });
+
+/** One Task in the pasted project; { key, url } or a fixed-text throw. */
+export async function createJiraIssue({ title, description, secrets, provider, fetch }) {
+  const email = secrets?.api_email, token = secrets?.api_token;
+  const { cloud_id: cloud, project_key: project, site } = provider ?? {};
+  if (!EMAIL_RE.test(email ?? '') || !TOKEN_RE.test(token ?? '') || !CLOUD_RE.test(cloud ?? '') || !PROJECT_RE.test(project ?? '') || !SITE_RE.test(site ?? '')) throw fail('not_configured');
+  const res = await fetch(`https://api.atlassian.com/ex/jira/${cloud}/rest/api/3/issue`, { // privacy-flow: create-ticket
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json', authorization: `Basic ${Buffer.from(`${email}:${token}`, 'utf8').toString('base64')}` },
+    body: JSON.stringify({ fields: { project: { key: project }, summary: title, issuetype: { name: 'Task' }, description: adf(description) } }),
+  });
+  if (!res.ok) throw fail(res.status === 401 || res.status === 403 ? 'provider_auth' : 'provider_error');
+  let body;
+  try { body = await res.json(); } catch { throw fail('provider_error'); }
+  const key = own(body, 'key');
+  if (typeof key !== 'string' || !KEY_RE.test(key)) throw fail('provider_error');
+  return { key, url: `https://${site}/browse/${key}` };
+}
+
 export function createJiraConnector({ now = () => Date.now() } = {}) {
   return defineConnector({
     id: 'jira',
     name: 'Jira',
     scopes: ['webhook:jira:issue_created', 'webhook:jira:issue_updated'],
-    secrets: ['webhook_secret'],
-    hosts: [],
+    secrets: ['webhook_secret', 'api_email', 'api_token'],
+    hosts: ['api.atlassian.com'],
+    issueSecrets: ['api_email', 'api_token'],
+    createIssue: createJiraIssue,
     showsWebhookUrl: true,
     dailyCardCap: 100,
 
     connect: {
       kind: 'token',
       // Shape only; nothing is fetched. The error never carries the value.
+      // "<secret>" or "<secret> <email> <api token> <cloud id> <PROJECT> <site>.atlassian.net".
       async verifyToken({ token }) {
-        if (typeof token !== 'string' || !SECRET_SHAPE.test(token)) throw new Error('not a Jira webhook secret');
+        const parts = typeof token === 'string' ? token.trim().split(/\s+/) : [];
+        const [secret, email, apiToken, cloud, project, site] = parts;
+        if (!SECRET_SHAPE.test(secret ?? '')) throw new Error('not a Jira webhook secret');
+        const outbound = parts.length === 6 && EMAIL_RE.test(email) && TOKEN_RE.test(apiToken) && CLOUD_RE.test(cloud) && PROJECT_RE.test(project) && SITE_RE.test(site);
+        if (parts.length !== 1 && !outbound) throw new Error('not a Jira webhook secret and issue settings');
+        const scopes = ['webhook:jira:issue_created', 'webhook:jira:issue_updated'];
         return {
-          external_id: createHash('sha256').update(token, 'utf8').digest('hex').slice(0, 16),
-          display_name: 'Jira', scopes: ['webhook:jira:issue_created', 'webhook:jira:issue_updated'], secrets: { webhook_secret: token },
+          external_id: createHash('sha256').update(secret, 'utf8').digest('hex').slice(0, 16),
+          display_name: 'Jira', scopes: outbound ? [...scopes, 'write:jira-work'] : scopes,
+          secrets: { webhook_secret: secret, ...(outbound ? { api_email: email, api_token: apiToken } : {}) },
+          ...(outbound ? { settings: { cloud_id: cloud, project_key: project, site } } : {}),
         };
       },
     },

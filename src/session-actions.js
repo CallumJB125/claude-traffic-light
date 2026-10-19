@@ -21,7 +21,7 @@ const providerOf = (row) => (row.source == null || row.source === 'claude' || ro
 const isLocal = (r) => r && typeof r === 'object' && !r.remote && !r.device && typeof r.sessionId === 'string' && !r.sessionId.startsWith('remote:');
 const leaf = (p) => path.basename(String(p || '')).slice(0, 80) || 'folder';
 
-function create({ sessions, repoOf, rootOf, boards, capture, links, captured = () => [], tasks, clipboard, pickFolder, openPage, pageExists = () => false, wait = 800 }) {
+function create({ sessions, repoOf, rootOf, boards, capture, links, tickets = null, captured = () => [], tasks, clipboard, pickFolder, openPage, pageExists = () => false, wait = 800 }) {
   const salt = crypto.randomBytes(8).toString('hex');
   const handleOf = (row) => crypto.createHash('sha256').update(`${salt}|${providerOf(row)}|${row.sessionId}`).digest('hex').slice(0, 20);
   const folders = new Map(); // handle -> absolute path
@@ -51,6 +51,8 @@ function create({ sessions, repoOf, rootOf, boards, capture, links, captured = (
       handle: handleOf(row),
       card: link ? { label: [link.card_key, link.title].filter(Boolean).join(' ') || 'a card', how: 'attached' } : made ? { label: 'a board card', how: 'made' } : null,
       share: root ? { on: links.shared()[BurstHandover.repoKey(root)] === true } : null,
+      // Create ticket: shown only while a team connection can create issues.
+      ticket: tickets ? tickets.available() : [],
     };
   }
 
@@ -153,9 +155,17 @@ function create({ sessions, repoOf, rootOf, boards, capture, links, captured = (
     return root ? { folder: folder(root), label: leaf(root) } : null;
   }
 
+  // Create ticket: a scrubbed draft to edit, then only the approved text on Create.
+  async function ticketDraft(handle) {
+    const row = rowOf(handle);
+    if (!row || !tickets) return { ok: false, text: 'That session is no longer visible. Refresh.' };
+    return tickets.draft(row);
+  }
+  const ticketCreate = (ref, title, description) => (tickets ? tickets.send(ref, title, description) : { ok: false, text: 'Not available.' });
+
   const connect = () => openPage(pageExists(AI_TOOLS_PAGE_ID) ? AI_TOOLS_PAGE_ID : FALLBACK_PAGE_ID);
 
-  return { rowInfo, setup, chooseFolder, linkRepo, startSession, makeCard, searchCards, attach, shareHandover, linkFromSession, connect };
+  return { rowInfo, ticketDraft, ticketCreate, setup, chooseFolder, linkRepo, startSession, makeCard, searchCards, attach, shareHandover, linkFromSession, connect };
 }
 
 module.exports = { create, SCOPE_RULE, AI_TOOLS_PAGE_ID, providerOf };

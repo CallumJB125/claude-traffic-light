@@ -209,6 +209,15 @@
 //   // other consumers: it never moves a card, dispatches or notifies by itself.
 //   signals: ['incident'],
 //
+//   // Optional (create-ticket): a member's explicit "Create issue" from a
+//   // session. Called only by POST /api/integrations/:id/issues with the text
+//   // the member approved, never from a webhook or a bus event. `fetch` is the
+//   // restricted fetch without retries (creating an issue is not idempotent).
+//   // Throw fixed text only. The connection offers it once every kind in
+//   // issueSecrets is sealed on it.
+//   issueSecrets: ['api_key'],
+//   async createIssue({ title, description, secrets, provider, fetch }) → { key, url },
+//
 //   async health(ctx) → { ok, detail? },
 //
 //   // Pure reads a handler may use (org-scoped, nothing secret):
@@ -357,6 +366,10 @@ export function defineConnector(spec) {
       if (!(idn.subjectRe instanceof RegExp) || idn.subjectRe.global || idn.subjectRe.sticky) errs.push('identity.subjectRe is a RegExp without the g or y flag');
       if (typeof idn.authorizeUrl !== 'function' || typeof idn.exchange !== 'function') errs.push('identity.authorizeUrl and identity.exchange are functions');
     }
+  }
+  if (spec?.createIssue !== undefined || spec?.issueSecrets !== undefined) {
+    if (typeof spec.createIssue !== 'function') errs.push('createIssue is a function, declared together with issueSecrets');
+    if (!Array.isArray(spec.issueSecrets) || !spec.issueSecrets.length || spec.issueSecrets.some((k) => !spec.secrets?.includes?.(k))) errs.push('issueSecrets lists 1+ of the declared secrets that createIssue needs');
   }
   if (spec?.consumes && typeof spec.onEvent !== 'function') errs.push('consumes needs onEvent()');
   for (const [name, a] of Object.entries(spec?.actions ?? {})) {

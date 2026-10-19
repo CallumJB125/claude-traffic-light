@@ -49,6 +49,7 @@
       document.getElementById('remoteInteractionHost').checked = config.remoteInteractionHost === true;
       document.getElementById('codexDaemonMessaging').checked = config.codexDaemonMessaging === true;
       document.getElementById('busyHold').checked = config.busyHold !== false;
+      document.getElementById('slackPresence').checked = config.slackPresence === true;
       document.getElementById('busyCalendar').checked = !!config.busyCalendar;
       document.getElementById('busyCalendarTitles').checked = !!config.busyCalendarTitles;
       document.getElementById('busyFocus').checked = config.busyFocus !== false;
@@ -191,6 +192,7 @@
         gitDeployWorkflows: commaList('gitDeployWorkflows'),
         spend: spendSettings(), // F1 spend
         busyHold: document.getElementById('busyHold').checked,
+        slackPresence: document.getElementById('slackPresence').checked,
         busyCalendar: document.getElementById('busyCalendar').checked,
         busyCalendarTitles: document.getElementById('busyCalendarTitles').checked,
         busyFocus: document.getElementById('busyFocus').checked,

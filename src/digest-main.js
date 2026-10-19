@@ -15,7 +15,7 @@ const { createSecureStorage } = require('../buddy-window/secure-storage.js');
 const MAILTO_BODY_MAX = 1800;
 const period = (p) => (p === 'week' ? 'week' : 'day');
 
-function register({ ipcMain, allowed, rootDir, userData, safeStorage, clipboard, dialog, shell, Notification, fetch, usageTurns, costGuard, workCost = async () => null, scheduledRuns = () => [], teamBrief = async () => null, openHome = () => {}, onQuit = () => {}, log = () => {} }) {
+function register({ ipcMain, allowed, rootDir, userData, safeStorage, clipboard, dialog, shell, Notification, fetch, usageTurns, costGuard, workCost = async () => null, scheduledRuns = () => [], teamBrief = async () => null, interruptible = () => true, openHome = () => {}, onQuit = () => {}, log = () => {} }) {
   const secure = createSecureStorage(safeStorage);
   const digest = createDigest({
     tasksStoreDir: path.join(userData, 'tasks', 'store'),
@@ -30,7 +30,7 @@ function register({ ipcMain, allowed, rootDir, userData, safeStorage, clipboard,
     },
   });
   const delivery = createDelivery({
-    dir: rootDir, fetch, log,
+    dir: rootDir, fetch, log, interruptible,
     seal: (s) => secure.encrypt(s), unseal: (b) => secure.decrypt(b),
     digest: (p) => digest.build(p),
     notify: () => {

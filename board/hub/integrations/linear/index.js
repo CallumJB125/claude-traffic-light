@@ -5,6 +5,12 @@
 // id on the connection's target board; a later status change adds one
 // untrusted, human-readable comment. Nothing here moves a card or starts an AI.
 //
+// Create ticket (optional, outbound): an admin may paste, after the signing
+// secret, a Linear personal API key and a team key ("<secret> lin_api_… ENG").
+// Then a member's explicit Create from a session (POST
+// /api/integrations/:id/issues) makes one issue in that team with the title
+// and description the member approved; nothing else is ever sent to Linear.
+//
 // Go-live gate: not in connectorsFor() on any hub until a real Linear delivery
 // has been checked against verify() over its raw bytes (docs/LINEAR-RUNBOOK.md).
 //
@@ -26,6 +32,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const IDENTIFIER_RE = /^[A-Z0-9]{1,10}-\d{1,9}$/;
 const TEAM_RE = /^[A-Z0-9]{1,10}$/;
 const WORKSPACE_RE = /^[a-z0-9-]{1,64}$/;
+const API_KEY_RE = /^lin_api_[A-Za-z0-9]{20,80}$/;
+const API_URL = 'https://api.linear.app/graphql';
 const STATE_TYPES = Object.freeze(['triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled']);
 const CLOSED = Object.freeze(['completed', 'canceled']);
 const PRIORITY = Object.freeze(['No priority', 'Urgent', 'High', 'Medium', 'Low']);
@@ -83,24 +91,56 @@ export function issueEvent(payload) {
   };
 }
 
+const fail = (code) => Object.assign(new Error('Linear did not create the issue'), { code });
+
+/** One issue in the pasted team; { key, url } or a fixed-text throw. */
+export async function createLinearIssue({ title, description, secrets, provider, fetch }) {
+  const key = secrets?.api_key, team = provider?.team_key;
+  if (typeof key !== 'string' || !API_KEY_RE.test(key) || typeof team !== 'string' || !TEAM_RE.test(team)) throw fail('not_configured');
+  const gql = async (query, variables) => {
+    const res = await fetch(API_URL, { method: 'POST', headers: { 'content-type': 'application/json', authorization: key }, body: JSON.stringify({ query, variables }) }); // privacy-flow: create-ticket
+    if (!res.ok) throw fail(res.status === 401 || res.status === 403 ? 'provider_auth' : 'provider_error');
+    let body;
+    try { body = await res.json(); } catch { throw fail('provider_error'); }
+    if (own(body, 'errors')) throw fail('provider_error');
+    return own(body, 'data');
+  };
+  const teams = own(own(await gql('query($key: String!) { teams(filter: { key: { eq: $key } }) { nodes { id } } }', { key: team }), 'teams'), 'nodes');
+  const teamId = Array.isArray(teams) ? own(teams[0], 'id') : null;
+  if (typeof teamId !== 'string' || !UUID_RE.test(teamId)) throw fail('provider_error');
+  const made = own(await gql('mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { identifier url } } }', { input: { teamId, title, description } }), 'issueCreate');
+  const issue = own(made, 'issue'), identifier = own(issue, 'identifier');
+  if (own(made, 'success') !== true || typeof identifier !== 'string' || !IDENTIFIER_RE.test(identifier)) throw fail('provider_error');
+  return { key: identifier, url: issueLink(own(issue, 'url'), identifier) };
+}
+
 export function createLinearConnector({ now = () => Date.now() } = {}) {
   return defineConnector({
     id: 'linear',
     name: 'Linear',
     scopes: ['webhook:issues'],
-    secrets: ['webhook_secret'],
-    hosts: [],
+    secrets: ['webhook_secret', 'api_key'],
+    hosts: ['api.linear.app'],
+    issueSecrets: ['api_key'],
+    createIssue: createLinearIssue,
     showsWebhookUrl: true,
     dailyCardCap: 100,
 
     connect: {
       kind: 'token',
       // Shape only; nothing is fetched. The error never carries the value.
+      // "<signing secret>" or "<signing secret> <lin_api_ key> <TEAM key>".
       async verifyToken({ token }) {
-        if (typeof token !== 'string' || !SECRET_SHAPE.test(token)) throw new Error('not a Linear webhook signing secret');
+        const parts = typeof token === 'string' ? token.trim().split(/\s+/) : [];
+        const [secret, apiKey, team] = parts;
+        if (!SECRET_SHAPE.test(secret ?? '')) throw new Error('not a Linear webhook signing secret');
+        const outbound = parts.length === 3 && API_KEY_RE.test(apiKey) && TEAM_RE.test(team);
+        if (parts.length !== 1 && !outbound) throw new Error('not a Linear signing secret, API key and team key');
         return {
-          external_id: createHash('sha256').update(token, 'utf8').digest('hex').slice(0, 16),
-          display_name: 'Linear', scopes: ['webhook:issues'], secrets: { webhook_secret: token },
+          external_id: createHash('sha256').update(secret, 'utf8').digest('hex').slice(0, 16),
+          display_name: 'Linear', scopes: outbound ? ['webhook:issues', 'issues:create'] : ['webhook:issues'],
+          secrets: { webhook_secret: secret, ...(outbound ? { api_key: apiKey } : {}) },
+          ...(outbound ? { settings: { team_key: team } } : {}),
         };
       },
     },

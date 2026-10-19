@@ -14,6 +14,7 @@ const Share = require('../src/handover-share');
 const Handover = require('../src/session-handover');
 const BurstHandover = require('../src/burst-handover');
 const { createSessionBoards } = require('./session-boards');
+const CreateTicket = require('../src/create-ticket.js');
 
 // The git work tree a folder belongs to, or null.
 function gitRoot(cwd) {
@@ -24,6 +25,8 @@ function gitRoot(cwd) {
 
 function createSessionBridge({ userData, hubs, clientFor, userOf, signedIn, supervisor, workCapture, handoverWriter = () => null, currentHub = () => null, currentTeam = () => null, rootOf = gitRoot, home = null, log = () => {} }) {
   const links = Links.create({ file: path.join(userData, 'session-links.json') });
+  const tickets = CreateTicket.create({ hubs, clientFor, home, log,
+    handoverText: (row) => { const w = handoverWriter(); return w && row ? w.text(Handover.keyOf(Handover.adapterOf(row.source), row.sessionId)) : null; } });
   const boards = createSessionBoards({ hubs, clientFor, userOf, local: supervisor, getRoutes: () => workCapture.routes(), routeKey, log });
   const rows = () => [...(workCapture.overviewSnapshot?.() ?? []), ...links.rows()];
   let latest = [];
@@ -54,7 +57,7 @@ function createSessionBridge({ userData, hubs, clientFor, userOf, signedIn, supe
     },
   });
   return {
-    links, boards, rows, gitRoot, share,
+    links, boards, rows, gitRoot, share, tickets,
     sessionsChanged(sessions) { latest = Array.isArray(sessions) ? sessions : []; void share.pump(latest).catch(() => {}); },
     // The board page's read-only question: the local handover for a card, or null.
     async localHandover(cardId, { refresh = false } = {}) {
