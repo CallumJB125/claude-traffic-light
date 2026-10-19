@@ -61,8 +61,8 @@ test('burst-action: cancel sends nothing; confirm sends exactly one POST; the wo
 
 test('burst-action: bad args and unknown ids never reach a dialog or Burst; other pages are refused', async (t) => {
   const h = await harness({ t });
-  assert.deepEqual(await h.handlers['burst-action']({ from: 'sessions' }, 'coord-message', { session: SID, message: 'x'.repeat(501) }), { ok: false, error: 'Bad request.' });
-  assert.deepEqual(await h.handlers['burst-action']({ from: 'sessions' }, 'secondary-key', { api_key: 'k' }), { ok: false, error: 'Unknown action.' });
+  assert.deepEqual(await h.handlers['burst-action']({ from: 'sessions' }, 'coord-message', { session: SID, message: 'x'.repeat(501) }), { ok: false, error: 'Bad request.', reason: 'Bad request.' });
+  assert.deepEqual(await h.handlers['burst-action']({ from: 'sessions' }, 'secondary-key', { api_key: 'k' }), { ok: false, error: 'Unknown action.', reason: 'Unknown action.' });
   assert.equal(await h.handlers['burst-action']({ from: 'widget' }, 'reset', {}), null);
   assert.deepEqual((await h.handlers['burst:view']({ from: 'sessions' }, 'route')).view, null);
   assert.equal(h.dialogs.length, 0);
@@ -73,9 +73,9 @@ test('burst-action: bad args and unknown ids never reach a dialog or Burst; othe
 test('AI tools page: reads Codex routing and may only turn it on or off, behind consent', async (t) => {
   const AIT = { from: 'aitools' };
   const h = await harness({ answer: 0, t });
-  assert.deepEqual(await h.handlers['burst:codex-routing'](AIT), { view: { installed: true, enabled: false, problem: '' } });
+  assert.deepEqual(await h.handlers['burst:codex-routing'](AIT), { ok: true, view: { installed: true, enabled: false, problem: '' } });
   assert.equal(await h.handlers['burst:codex-routing']({ from: 'sessions' }), null);
-  assert.deepEqual(await h.handlers['burst-action'](AIT, 'reset', {}), { ok: false, error: 'Not available.' });
+  assert.deepEqual(await h.handlers['burst-action'](AIT, 'reset', {}), { ok: false, error: 'Not available.', reason: 'Not available.' });
   assert.deepEqual(await h.handlers['burst-action'](AIT, 'codex-enable', {}), { ok: false, cancelled: true });
   assert.equal(h.dialogs.length, 1);
   assert.equal(h.dialogs[0].title, 'Route Codex through Burst');
@@ -91,7 +91,7 @@ test('AI tools page: reads Codex routing and may only turn it on or off, behind 
 test('AI tools page: off macOS no Burst is read and no action runs', async () => {
   const handlers = {};
   Ipc.register({ utilityHandle: (c, a, f) => { handlers[c] = (e, ...x) => (a(e) ? f(e, ...x) : null); }, settingsOnly: () => false, aitoolsAllowed: () => true, isMac: false, dialog: { showMessageBox: () => { throw new Error('no dialog'); } }, shell: {}, scriptDir: '/x' });
-  assert.deepEqual(await handlers['burst:codex-routing']({}), { view: null });
+  assert.deepEqual(await handlers['burst:codex-routing']({}), { ok: true, view: null });
   assert.equal((await handlers['burst-action']({}, 'codex-enable', {})).ok, false);
 });
 

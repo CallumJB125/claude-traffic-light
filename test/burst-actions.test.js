@@ -149,7 +149,7 @@ test('non-mac: static text, no polling interval, burst-client never loaded', asy
   assert.equal(v.detail, View.MAC_ONLY);
   assert.deepEqual((await handlers['burst:action']({}, { kind: 'off' })).ok, false);
   const ipc = Ipc.register({ utilityHandle: (c, a, f) => { handlers[c] = f; }, settingsOnly: () => true, isMac: false, dialog: { showMessageBox: () => { throw new Error('no dialog off-mac'); } }, shell: {}, scriptDir: '/x', snapshotFile: '/nonexistent/burst-snapshot.json' });
-  assert.deepEqual(await handlers['burst-action']({}, 'reset', {}), { ok: false, error: View.MAC_ONLY });
+  assert.deepEqual(await handlers['burst-action']({}, 'reset', {}), { ok: false, error: View.MAC_ONLY, reason: View.MAC_ONLY });
   assert.deepEqual(await ipc.runAction('console-restart'), { ok: false, error: View.MAC_ONLY });
   assert.equal((await handlers['burst:view']({}, 'route')).view, null);
   assert.equal(await ipc.read('mac'), null);
@@ -184,7 +184,7 @@ test('ipc chip channel: widget/usage senders get only the chip; others get null;
     isMac: true, client: { detect: async () => detect, adminUrl: () => null }, home: H, scriptDir: '/x', dialog: {}, shell: {},
   });
   const r = await handlers['burst:chip']({ widget: true });
-  assert.deepEqual(Object.keys(r).sort(), ['chip', 'nextPollMs']);
+  assert.deepEqual(Object.keys(r).sort(), ['chip', 'nextPollMs', 'ok'], 'the chip and the D1 ok flag, nothing raw');
   assert.match(r.chip.label, /^Secondary until/);
   assert.equal(await handlers['burst:chip']({}), null);
   assert.equal(await handlers['burst:chip']({ account: true }), null);
@@ -192,7 +192,7 @@ test('ipc chip channel: widget/usage senders get only the chip; others get null;
   assert.equal(await handlers['burst:status']({ widget: true }), null, 'the widget may not');
   const h2 = {};
   Ipc.register({ utilityHandle: (c, a, f) => { h2[c] = f; }, settingsOnly: () => true, chipAllowed: () => true, isMac: false, dialog: {}, shell: {}, scriptDir: '/x' });
-  assert.deepEqual(await h2['burst:chip']({}), { chip: null, nextPollMs: 0 });
+  assert.deepEqual(await h2['burst:chip']({}), { ok: true, chip: null, nextPollMs: 0 });
 });
 
 test('renderer wiring: chip script on widget and Usage page, mirror in This Mac, single-line main.js hooks', () => {

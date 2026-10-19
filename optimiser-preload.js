@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('optimiserApi', {
   openBrowser: () => ipcRenderer.invoke('optimiser:open-browser'),
   openDocs: () => ipcRenderer.send('optimiser:docs'),
   tools: () => ipcRenderer.invoke('burst:tools'),
+  // Guided setup: which step the page started or wants to retry; main keeps the clock and probes Burst.
+  setupProgress: (req) => ipcRenderer.invoke('burst:setup-progress', { step: String(req && req.step || ''), start: !!(req && req.start === true), retry: !!(req && req.retry === true) }),
   waste: () => ipcRenderer.invoke('cost-guard:report'),
   setCompaction: (req) => ipcRenderer.invoke('burst:set-compaction', { enabled: !!(req && req.enabled), confirmed: !!(req && req.confirmed === true) }),
   openLink: (id) => ipcRenderer.send('optimiser:link', String(id)),

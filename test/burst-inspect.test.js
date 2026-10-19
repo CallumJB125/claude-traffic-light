@@ -112,7 +112,7 @@ test('Leave out, Put back and Send full history again: cancel sends nothing; con
 test('a malformed item id never reaches a dialog or Burst', async () => {
   const h = await harness(1);
   try {
-    assert.deepEqual(await h.handlers['burst-action'](SESSIONS, 'inspect-remove', { session: SID, id: 'not-hex' }), { ok: false, error: 'Bad request.' });
+    assert.deepEqual(await h.handlers['burst-action'](SESSIONS, 'inspect-remove', { session: SID, id: 'not-hex' }), { ok: false, error: 'Bad request.', reason: 'Bad request.' });
     assert.equal(h.dialogs.length, 0);
     assert.equal(h.posts().length, 0);
   } finally { await h.done(); }
