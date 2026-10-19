@@ -569,7 +569,7 @@ export function createHttpHandler({ hub, api, config, integrations = null, githu
   route('POST', '/api/boards/:board_id/cards', ({ member, params, body, ident }) => api.createCard(member, params.board_id, body, { cred: ident?.cred ?? null }), { collaboration: true });
   route('POST', '/api/boards/:board_id/work-capture', ({ member, params, body, ident }) => workCapture.observe(member, params.board_id, body, ident?.cred), { replay: false, maxBody: 12 * 1024 });
   route('POST', '/api/boards/:board_id/repos', ({ member, params, body }) => api.addBoardRepo(member, params.board_id, body));
-  route('GET', '/api/boards/:board_id/presence', ({ member, params }) => { api.boardFor(member, params.board_id); return hub.presence.view(params.board_id); }, { limit: 'presence_member' });
+  route('GET', '/api/boards/:board_id/presence', ({ member, params }) => { api.boardFor(member, params.board_id); return hub.presence.boardView(params.board_id); }, { limit: 'presence_member' });
   route('GET', '/api/my-day', ({ member, ident }) => myDay(hub, ident ? { userId: ident.user.id, cred: ident.cred } : { member }), { auth: config.auth === 'accounts' ? 'user' : 'member', replay: false });
   route('GET', '/api/team-session-directory', ({ member, ident }) => teamSessionDirectory(hub, member, ident?.cred ?? null), { replay: false, limit: 'communication_read_member', responseGuard: (_ctx, out) => guardTeamSessionDirectory(hub, out) });
   route('GET', '/api/cards/:card_id', ({ member, params, query }) => selectedContext(hub, api.detail(member, params.card_id), communicationOptions(query).boardIds));
