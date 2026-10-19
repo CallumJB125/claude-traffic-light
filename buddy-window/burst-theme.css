@@ -33,6 +33,10 @@
   --pc-c: #efb59a;
   --pcs-saved: #e49a78;
   --pcs-cost: #67c4a6;
+  /* Compaction-threshold chart (Burst v0.20): Claude Code alone / fixed threshold / Burst as it ran. */
+  --st-default: #9aa3b0;
+  --st-fixed: #efb59a;
+  --st-actual: #67c4a6;
   --grid: #343941;
 }
 
@@ -62,6 +66,9 @@
     --pc-c: #bd6649;
     --pcs-saved: #a34425;
     --pcs-cost: #187d63;
+    --st-default: #5c6879;
+    --st-fixed: #bd6649;
+    --st-actual: #187d63;
     --grid: #dde1e6;
   }
 }

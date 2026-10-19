@@ -76,10 +76,46 @@ function chipFor(d) {
 
 const A = (kind, label, extra = {}) => ({ kind, label, ...extra });
 
+// Below this a Burst is `too_old`: Plexiform's client reads nothing newer than
+// /api/state from it and the dashboard embed refuses it. 0.19 still works with
+// the 0.20 features hidden (capability flags false), so the floor stays at 0.19.
+const MIN_VERSION = [0, 19, 0];
+function atLeast(version, min) {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(version));
+  if (!m) return false;
+  for (let i = 0; i < 3; i++) { const n = Number(m[i + 1]); if (n !== min[i]) return n > min[i]; }
+  return true;
+}
+
+function ageText(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return 'a moment ago';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h} h ago`;
+  return `${Math.round(h / 24)} days ago`;
+}
+
+// The one next step for a state: the primary action, else the first; null when
+// there is nothing to do (a healthy, current Burst).
+const firstAction = (actions) => { const a = actions.find((x) => x.primary) || actions[0]; return a ? { kind: a.kind, label: a.label } : null; };
+
 const COMPACTION_ON_CONFIRM = 'Burst will use your Claude subscription tokens to write summaries in the background, which counts against your plan limits and can raise cost slightly when a summary is made.';
 const COMPACTION_OWN_OFF = 'While this is on, Plexiform\'s own Claude compactor is off, so the two never compete.';
 
-function statusView(d, { platform = process.platform } = {}) {
+// Every result: { kind, headline, detail (never empty), action: {kind,label}|null, actions[], chip, active, dimmed, ... }.
+function statusView(d, { platform = process.platform, now = Date.now } = {}) {
+  const v = statusViewInner(d, { platform, now });
+  if (!('action' in v)) v.action = v.kind === 'on' ? (v.updateAvailable ? { kind: 'update', label: 'Update' } : null) : firstAction(v.actions);
+  if (!v.detail) v.detail = 'Burst state is not known yet.';
+  if (typeof v.active !== 'boolean') v.active = false;
+  if (typeof v.dimmed !== 'boolean') v.dimmed = false;
+  return v;
+}
+
+function statusViewInner(d, { platform, now }) {
   if (platform !== 'darwin' || d.kind === 'unsupported') {
     return { kind: 'unsupported', headline: 'Claude Burst', detail: MAC_ONLY, chip: null, actions: [], version: '', mode: '', route: '', updateAvailable: false, compaction: null };
   }
@@ -89,11 +125,20 @@ function statusView(d, { platform = process.platform } = {}) {
       return { ...base, kind: 'not_installed', detail: 'Not installed. Burst keeps Claude Code working through limits by sending overflow to a provider you pay for.', actions: [A('install', 'Turn on Burst…', { primary: true, modes: ['base-url', 'transparent'] })] };
     case 'checking':
       return { ...base, kind: 'checking', detail: 'Checking whether Claude Burst is running…' };
-    case 'unreachable':
+    case 'unreachable': {
+      const lg = d.lastGood && d.lastGood.state && typeof d.lastGood.state === 'object' ? d.lastGood : null;
+      if (lg) {
+        // The gateway stopped answering after it had answered: show what it last said, dimmed, as Burst's own dashboard does.
+        const ls = lg.state;
+        const age = ageText(now() - (Number.isFinite(lg.at) ? lg.at : now()));
+        return { ...base, kind: 'gateway_stale', dimmed: true, chip: { tone: 'amber', label: 'Not responding' }, version: ls.version || '', mode: ls.mode || '', route: ls.route || '', active: ls.active === true,
+          detail: `Not responding: Burst's gateway stopped answering. Showing the last known state from ${age}: ${ls.active ? 'on' : 'off'}${ls.mode ? `, ${ls.mode} mode` : ''}${ls.version ? `, version ${ls.version}` : ''}. Repair restarts it in the mode it was in.`,
+          actions: [A('retry', 'Check again'), A('repair', 'Repair', { primary: true }), A('off', 'Turn Burst off')] };
+      }
       return (d.misses || 0) < RETRY_BEFORE_REPAIR
         ? { ...base, kind: 'off', detail: 'Not responding: Burst is installed but its gateway did not answer just now. A busy or restarting gateway usually answers on the next check.', actions: [A('retry', 'Check again', { primary: true })] }
         : { ...base, kind: 'off', detail: 'Not responding: Burst is installed but its gateway has not answered several checks in a row. If Claude Code is failing, take Burst out of its path.', actions: [A('retry', 'Check again'), A('enable', 'Turn on', { primary: true }), A('repair', 'Repair'), A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
-    case 'untrusted':
+    }    case 'untrusted':
       return { ...base, detail: `${d.reason} Plexiform read nothing from it. This usually means Burst was installed somewhere other than ~/.local/bin/claude-burst, or another program is using Burst\'s port.`, actions: [A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
     case 'broken':
       return { ...base, kind: 'broken', version: d.state.version, detail: 'Burst\'s configuration could not be read, so it is not working.', actions: [A('repair', 'Repair', { primary: true }), A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
@@ -101,8 +146,28 @@ function statusView(d, { platform = process.platform } = {}) {
       const s = d.state;
       const updateAvailable = !!(d.upgrade && d.upgrade.canUpgrade && !d.upgrade.upToDate);
       const pl = s.compaction && s.compaction.pauseless;
-      const out = { ...base, version: s.version, mode: s.mode, route: s.route, updateAvailable, canOpenDashboard: true, compaction: pl || null };
+      const out = { ...base, version: s.version, mode: s.mode, route: s.route, updateAvailable, canOpenDashboard: true, compaction: pl || null, active: s.active === true };
       if (pl && pl.enabled && out.chip) out.chip = { ...out.chip, tag: 'Compaction on' };
+      const attention = { tone: 'amber', label: 'Needs attention' };
+      if (!atLeast(s.version, MIN_VERSION)) {
+        const can = !d.upgrade || d.upgrade.canUpgrade !== false;
+        return { ...out, kind: 'too_old', chip: { tone: 'amber', label: 'Update needed' }, canOpenDashboard: false,
+          detail: `Burst ${s.version} is older than ${MIN_VERSION.join('.')}, so Plexiform can only see whether it is running. ${can ? 'Update it and the rest appears.' : 'Burst can\'t update itself here (it found no copy of its source next to it), so update it the way you installed it.'}`,
+          action: can ? { kind: 'update', label: 'Update Burst' } : { kind: 'off', label: 'Turn Burst off' },
+          actions: [...(can ? [A('update', 'Update Burst', { primary: true })] : []), A('off', 'Turn Burst off'), A('uninstall', 'Uninstall…')] };
+      }
+      if (s.mode === 'transparent' && s.caTrusted === false) {
+        return { ...out, kind: 'ca_untrusted', chip: attention, detail: 'Transparent mode is on, but this Mac does not trust Burst\'s certificate for api.anthropic.com, so Claude Code\'s requests fail the TLS check. Repair re-trusts it (macOS asks for your Mac password in Terminal).',
+          actions: [A('repair', 'Repair', { primary: true }), A('off', 'Turn Burst off')] };
+      }
+      if (s.mode === 'transparent' && s.hostsEntry === false) {
+        return { ...out, kind: 'hosts_missing', chip: attention, detail: 'Transparent mode is on, but the /etc/hosts entry that sends api.anthropic.com to Burst is missing, so Claude Code goes straight to Anthropic and Burst sees nothing. Repair puts it back (macOS asks for your Mac password in Terminal).',
+          actions: [A('repair', 'Repair', { primary: true }), A('off', 'Turn Burst off')] };
+      }
+      if (d.console && d.console.kind === 'unreachable') {
+        return { ...out, kind: 'console_down', chip: attention, detail: `Burst is ${s.active ? 'on' : 'installed'} and its gateway answers, but its support console (the part that repairs and restarts it) is not answering. Start the console so repairs and health checks work again.`,
+          actions: [A('console-restart', 'Start console', { primary: true }), A('repair', 'Repair'), A('off', 'Turn Burst off')] };
+      }
       if (s.active) {
         out.kind = 'on';
         out.detail = `On, ${s.mode} mode, version ${s.version}. Route: ${s.route === 'SECONDARY' ? 'secondary' : 'primary'}.`;
@@ -119,4 +184,4 @@ function statusView(d, { platform = process.platform } = {}) {
   }
 }
 
-module.exports = { RETRY_BEFORE_REPAIR, COMPACTION_ON_CONFIRM, COMPACTION_OWN_OFF, statusView, consent, chipFor, MAC_ONLY, TERMS_URL, CHANGES_ALWAYS, CHANGES_TRANSPARENT, TERMS };
+module.exports = { MIN_VERSION, ageText, RETRY_BEFORE_REPAIR, COMPACTION_ON_CONFIRM, COMPACTION_OWN_OFF, statusView, consent, chipFor, MAC_ONLY, TERMS_URL, CHANGES_ALWAYS, CHANGES_TRANSPARENT, TERMS };

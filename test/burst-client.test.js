@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createBurstClient, isAllowed, parseAdminAddress, atLeast } = require('../src/burst-client.js');
+const { createBurstClient, isAllowed, parseAdminAddress, atLeast, capabilitiesFor, CAPABILITY_NAMES } = require('../src/burst-client.js');
 const { createFakeBurst, stateV019, stateV012, upgradeStatus } = require('./fixtures/fake-burst.js');
 const { testTempDir } = require('./helpers/tmp');
 
@@ -41,7 +41,7 @@ test('v0.19 answering as the LaunchAgent: present, whitelisted snapshot, full ca
   assert.equal(d.state.version, '0.19.0');
   assert.equal(d.state.active, true);
   assert.equal(d.state.mode, 'base-url');
-  assert.deepEqual(d.capabilities, { state: true, usage: true, upgradeStatus: true, handoverAudit: true, handoverFile: true, testConnection: true });
+  assert.deepEqual(d.capabilities, { state: true, usage: true, upgradeStatus: true, handoverAudit: true, handoverFile: true, testConnection: true, looseEnds: false, keepAwake: false, mods: false, finder: false, handoffTaken: false, consoleRepair: false, intelligentCompaction: false, codex: false });
   assert.deepEqual(d.upgrade, { canUpgrade: true, upToDate: false, latestVersion: '0.20.0', behind: 3, error: '' });
   assert.ok(!JSON.stringify(d).includes('"secret"'));
   for (const r of t.fake.requests) { assert.equal(r.method, 'GET'); assert.equal(r.headers.host, '127.0.0.1'); assert.equal(r.headers['x-claude-burst-admin'], undefined); }

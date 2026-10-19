@@ -1,0 +1,5393 @@
+{
+  "/api/state": {
+    "version": "0.20.36",
+    "pid": 21729,
+    "route": "PRIMARY",
+    "overflow": false,
+    "gateway": "127.0.0.1:7777",
+    "primary": {
+      "provider": "oauth-passthrough",
+      "base_url": "[removed for fixture]",
+      "strategy": "subscription-limit"
+    },
+    "secondary": {
+      "provider": "none",
+      "base_url": "[removed for fixture]"
+    },
+    "intercept": {
+      "mode": "base-url",
+      "host": "api.anthropic.com",
+      "ca_trusted": false,
+      "hosts_entry": false,
+      "remote_control_expected": false,
+      "settings_base_url": "[removed for fixture]",
+      "active": true,
+      "self_heal": {
+        "installed": true,
+        "running": true,
+        "last_check_seconds": 24,
+        "events": [
+          "2026-10-04 13:19:01 gateway is not running (LaunchAgent unloaded or its process gone) -- attempting reload",
+          "2026-10-04 13:19:19 reloaded successfully",
+          "2026-10-19 11:11:23 gateway is not running (LaunchAgent unloaded or its process gone) -- attempting reload",
+          "2026-10-19 11:11:34 reloaded successfully"
+        ],
+        "log_path": "/Users/owner/.config/claude-burst/self-heal.log",
+        "has_log": true,
+        "install_cmd": "/Users/owner/claude-burst/scripts/install-selfheal-watchdog.sh"
+      }
+    },
+    "totals": {
+      "Requests": 24930,
+      "PrimaryRequests": 24930,
+      "SecondaryRequests": 0,
+      "InputTokens": 4449256,
+      "OutputTokens": 7885804,
+      "CacheReadTokens": 3420208465,
+      "CacheWriteTokens": 46132735,
+      "PrunedBytes": 0,
+      "APIEquivalentUSD": 259.75306815000005,
+      "UnpricedRequests": 11799,
+      "UnpricedModels": {
+        "": 11799
+      }
+    },
+    "today": {
+      "Requests": 20,
+      "PrimaryRequests": 20,
+      "SecondaryRequests": 0,
+      "InputTokens": 4,
+      "OutputTokens": 1117,
+      "CacheReadTokens": 479906,
+      "CacheWriteTokens": 480637,
+      "PrunedBytes": 0,
+      "APIEquivalentUSD": 9.7886065,
+      "UnpricedRequests": 0,
+      "UnpricedModels": null
+    },
+    "downgrade": {
+      "enabled": true,
+      "chain": {
+        "claude-fable-5": [
+          "claude-opus-5-5"
+        ],
+        "claude-fable-5-1": [
+          "claude-opus-5-5"
+        ]
+      }
+    },
+    "context": {
+      "applicable": false,
+      "pruning": {},
+      "efficiency": {
+        "primary": {
+          "requests": 4384,
+          "input_tokens": 470095,
+          "cache_read_tokens": 979105422,
+          "cache_write_tokens": 7636281,
+          "output_tokens": 2246493,
+          "usd": 259.75306815000005
+        },
+        "secondary": {
+          "requests": 0,
+          "input_tokens": 0,
+          "cache_read_tokens": 0,
+          "cache_write_tokens": 0,
+          "output_tokens": 0,
+          "usd": 0
+        },
+        "pruned_requests": 0,
+        "pruned_ok": 0,
+        "pruned_failed": 0,
+        "unpruned_ok": 0,
+        "unpruned_failed": 0,
+        "pruned_bytes": 0,
+        "stubbed_results": 0,
+        "truncated_results": 0,
+        "last_pruned_at": "0001-01-01T00:00:00Z",
+        "reruns_after_stub": 0,
+        "repeated_calls": 0
+      },
+      "window_days": 30,
+      "primary_cache_hit": 0.9917886151518622,
+      "secondary_cache_hit": 0,
+      "tokens_not_sent": 0,
+      "saved_pct": 0,
+      "usd_not_spent": 0,
+      "verdict": {
+        "level": "info",
+        "text": "Not applicable: the secondary is not an openai-compatible provider, so there is nothing to prune."
+      },
+      "cache_verdict": {
+        "level": "ok",
+        "text": ""
+      },
+      "compaction": {
+        "enabled": true,
+        "compact_at_tokens": 300000,
+        "warn_at_percent": 80,
+        "window_minutes": 30,
+        "mid_turn": true,
+        "floor_tokens": 100000,
+        "buffer_percent": 20
+      },
+      "sessions": [
+        {
+          "session": "c99be874-3e8e-4cca-95db-97fb6de3b6c3",
+          "model": "claude-fable-5-1",
+          "context": 480639,
+          "state": "summarising",
+          "compacted_at": "2026-10-19T11:12:30.377813+02:00",
+          "seen": "2026-10-19T11:12:30.377813+02:00",
+          "repo": "Desktop",
+          "repo_root": "/Users/owner/Desktop",
+          "compact_at": 300000,
+          "delay_minutes": 30,
+          "parts": [
+            {
+              "name": "System prompt",
+              "tokens": 4659
+            },
+            {
+              "name": "System tools",
+              "tokens": 36600
+            },
+            {
+              "name": "MCP tools",
+              "tokens": 63353
+            },
+            {
+              "name": "Memory files",
+              "tokens": 1763
+            },
+            {
+              "name": "Messages",
+              "tokens": 184080
+            },
+            {
+              "name": "Tool results",
+              "tokens": 190184
+            }
+          ]
+        }
+      ],
+      "compaction_stats": {
+        "compactions": 9,
+        "summary_usd": 1.3778143,
+        "rewrite_usd": 0.4713,
+        "compacted_requests": 22,
+        "tokens_not_resent": 5099103,
+        "saved_usd": 0.9366421000000001,
+        "net_usd": -0.9124721999999998,
+        "twin_tokens": 9061594,
+        "twin_usd": 1.6160338,
+        "twin_compactions": 0,
+        "largest_before": 489113,
+        "largest_after": 166382,
+        "sessions": [
+          {
+            "session": "0fa847a1-57ff-4a15-8cbb-2ac5af8f441f",
+            "model": "claude-opus-5-5",
+            "at": "2026-10-04T08:13:55.357857+02:00",
+            "before": 489113,
+            "after": 166382,
+            "per_turn_tokens": 322731,
+            "per_turn_usd": 0.0645462,
+            "compactions": 8,
+            "requests": 17,
+            "saved_tokens": 4267318,
+            "saved_usd": 0.8534636,
+            "summary_usd": 1.2314256000000001,
+            "rewrite_usd": 0.3858624,
+            "net_usd": -0.7638244000000001
+          },
+          {
+            "session": "0fa847a1-57ff-4a15-8cbb-2ac5af8f441f",
+            "model": "claude-sonnet-5-5",
+            "at": "2026-10-04T00:46:25.177008+02:00",
+            "before": 373401,
+            "after": 207044,
+            "per_turn_tokens": 166357,
+            "per_turn_usd": 0.0166357,
+            "compactions": 1,
+            "requests": 5,
+            "saved_tokens": 831785,
+            "saved_usd": 0.0831785,
+            "summary_usd": 0.14638869999999998,
+            "rewrite_usd": 0.08543759999999999,
+            "net_usd": -0.14864779999999997
+          }
+        ],
+        "daily": [
+          {
+            "date": "2026-09-19",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-09-20",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-09-21",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-09-22",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-09-23",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-09-24",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-09-25",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-09-26",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-09-27",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-09-28",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-09-29",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-09-30",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-01",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-02",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-03",
+            "compactions": 4,
+            "requests": 8,
+            "saved_usd": 0.2728394,
+            "summary_usd": 0.6108344,
+            "rewrite_usd": 0.1576032,
+            "net_usd": -0.4955982
+          },
+          {
+            "date": "2026-10-04",
+            "compactions": 5,
+            "requests": 14,
+            "saved_usd": 0.6638027,
+            "summary_usd": 0.7669798999999999,
+            "rewrite_usd": 0.3136968,
+            "net_usd": -0.41687399999999997
+          },
+          {
+            "date": "2026-10-05",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-06",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-07",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-08",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-09",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-10",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-11",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-12",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-13",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-14",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-15",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-16",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-17",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-18",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          },
+          {
+            "date": "2026-10-19",
+            "compactions": 0,
+            "requests": 0,
+            "saved_usd": 0,
+            "summary_usd": 0,
+            "rewrite_usd": 0,
+            "net_usd": 0
+          }
+        ]
+      },
+      "overflow_stats": {
+        "requests": 0,
+        "priced": 0,
+        "list_usd": 0,
+        "paid_usd": 0,
+        "saved_usd": 0,
+        "daily": [
+          {
+            "date": "2026-09-19",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-09-20",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-09-21",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-09-22",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-09-23",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-09-24",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-09-25",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-09-26",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-09-27",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-09-28",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-09-29",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-09-30",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-01",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-02",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-03",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-04",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-05",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-06",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-07",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-08",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-09",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-10",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-11",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-12",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-13",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-14",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-15",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-16",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-17",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-18",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          },
+          {
+            "date": "2026-10-19",
+            "requests": 0,
+            "list_usd": 0,
+            "paid_usd": 0,
+            "saved_usd": 0
+          }
+        ]
+      },
+      "compaction_strategies": {
+        "fixed_at": 300000,
+        "default_at": 950000,
+        "requests": 16055,
+        "default": {
+          "tokens": 3471231904,
+          "context_usd": 130.8748671500003,
+          "compactions": 0,
+          "compaction_usd": 0,
+          "usd": 130.8748671500003
+        },
+        "fixed": {
+          "tokens": 2619405927,
+          "context_usd": 91.73826724999978,
+          "compactions": 38,
+          "compaction_usd": 7.1629036,
+          "usd": 98.90117084999977
+        },
+        "actual": {
+          "tokens": 3467186738,
+          "context_usd": 130.08204065000027,
+          "compactions": 9,
+          "compaction_usd": 2.3907607,
+          "usd": 132.47280135000025
+        },
+        "daily": [
+          {
+            "date": "2026-09-19",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-09-20",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-09-21",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-09-22",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-09-23",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-09-24",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-09-25",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-09-26",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-09-27",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-09-28",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-09-29",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-09-30",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-10-01",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-10-02",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-10-03",
+            "requests": 763,
+            "default": {
+              "tokens": 217315567,
+              "context_usd": 40.756237300000016,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 40.756237300000016
+            },
+            "fixed": {
+              "tokens": 151798031,
+              "context_usd": 28.331371700000012,
+              "compactions": 4,
+              "compaction_usd": 2.0935884,
+              "usd": 30.424960100000014
+            },
+            "actual": {
+              "tokens": 215737647,
+              "context_usd": 40.440653300000015,
+              "compactions": 4,
+              "compaction_usd": 0.762644,
+              "usd": 41.20329730000002
+            }
+          },
+          {
+            "date": "2026-10-04",
+            "requests": 523,
+            "default": {
+              "tokens": 151459269,
+              "context_usd": 27.890888700000012,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 27.890888700000012
+            },
+            "fixed": {
+              "tokens": 95781440,
+              "context_usd": 17.39678050000002,
+              "compactions": 3,
+              "compaction_usd": 1.794366,
+              "usd": 19.19114650000002
+            },
+            "actual": {
+              "tokens": 148992023,
+              "context_usd": 27.413646200000002,
+              "compactions": 5,
+              "compaction_usd": 1.6281167000000003,
+              "usd": 29.041762900000002
+            }
+          },
+          {
+            "date": "2026-10-05",
+            "requests": 104,
+            "default": {
+              "tokens": 14891123,
+              "context_usd": 1.0943945000000002,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 1.0943945000000002
+            },
+            "fixed": {
+              "tokens": 14891123,
+              "context_usd": 1.0943945000000002,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 1.0943945000000002
+            },
+            "actual": {
+              "tokens": 14891123,
+              "context_usd": 1.0943945000000002,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 1.0943945000000002
+            }
+          },
+          {
+            "date": "2026-10-06",
+            "requests": 1649,
+            "default": {
+              "tokens": 344444184,
+              "context_usd": 14.20105040000001,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 14.20105040000001
+            },
+            "fixed": {
+              "tokens": 237015934,
+              "context_usd": 11.522153300000005,
+              "compactions": 4,
+              "compaction_usd": 0.5986290999999999,
+              "usd": 12.120782400000005
+            },
+            "actual": {
+              "tokens": 344444184,
+              "context_usd": 14.20105040000001,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 14.20105040000001
+            }
+          },
+          {
+            "date": "2026-10-07",
+            "requests": 6119,
+            "default": {
+              "tokens": 1252467780,
+              "context_usd": 26.05033939999999,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 26.05033939999999
+            },
+            "fixed": {
+              "tokens": 1000946655,
+              "context_usd": 20.76778279999999,
+              "compactions": 12,
+              "compaction_usd": 0.8972491,
+              "usd": 21.66503189999999
+            },
+            "actual": {
+              "tokens": 1252467780,
+              "context_usd": 26.05033939999999,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 26.05033939999999
+            }
+          },
+          {
+            "date": "2026-10-08",
+            "requests": 5705,
+            "default": {
+              "tokens": 1344331298,
+              "context_usd": 17.728777700000013,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 17.728777700000013
+            },
+            "fixed": {
+              "tokens": 974454787,
+              "context_usd": 9.682559300000005,
+              "compactions": 14,
+              "compaction_usd": 0.29909399999999997,
+              "usd": 9.981653300000005
+            },
+            "actual": {
+              "tokens": 1344331298,
+              "context_usd": 17.728777700000013,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 17.728777700000013
+            }
+          },
+          {
+            "date": "2026-10-09",
+            "requests": 1190,
+            "default": {
+              "tokens": 145362136,
+              "context_usd": 2.9130424000000006,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 2.9130424000000006
+            },
+            "fixed": {
+              "tokens": 144397226,
+              "context_usd": 2.9130424000000006,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 2.9130424000000006
+            },
+            "actual": {
+              "tokens": 145362136,
+              "context_usd": 2.9130424000000006,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 2.9130424000000006
+            }
+          },
+          {
+            "date": "2026-10-10",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-10-11",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-10-12",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-10-13",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-10-14",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-10-15",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-10-16",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-10-17",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-10-18",
+            "requests": 0,
+            "default": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "fixed": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            },
+            "actual": {
+              "tokens": 0,
+              "context_usd": 0,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0
+            }
+          },
+          {
+            "date": "2026-10-19",
+            "requests": 2,
+            "default": {
+              "tokens": 960547,
+              "context_usd": 0.24013675,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0.24013675
+            },
+            "fixed": {
+              "tokens": 120731,
+              "context_usd": 0.03018275,
+              "compactions": 1,
+              "compaction_usd": 1.479977,
+              "usd": 1.5101597500000001
+            },
+            "actual": {
+              "tokens": 960547,
+              "context_usd": 0.24013675,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 0.24013675
+            }
+          }
+        ],
+        "repos": [
+          {
+            "repo": "callumbaker",
+            "path": "/Users/owner",
+            "sessions": 4,
+            "requests": 10662,
+            "default": {
+              "tokens": 2474839636,
+              "context_usd": 113.03615690000022,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 113.03615690000022
+            },
+            "fixed": {
+              "tokens": 1813262298,
+              "context_usd": 80.40141199999982,
+              "compactions": 28,
+              "compaction_usd": 5.0846868,
+              "usd": 85.48609879999982
+            },
+            "actual": {
+              "tokens": 2470794470,
+              "context_usd": 112.24333040000023,
+              "compactions": 9,
+              "compaction_usd": 2.3907607,
+              "usd": 114.63409110000023
+            },
+            "daily": [
+              {
+                "date": "2026-09-19",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-20",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-21",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-22",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-23",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-24",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-25",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-26",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-27",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-28",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-29",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-30",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-01",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-02",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-03",
+                "requests": 763,
+                "default": {
+                  "tokens": 217315567,
+                  "context_usd": 40.756237300000016,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 40.756237300000016
+                },
+                "fixed": {
+                  "tokens": 151798031,
+                  "context_usd": 28.331371700000012,
+                  "compactions": 4,
+                  "compaction_usd": 2.0935884,
+                  "usd": 30.424960100000014
+                },
+                "actual": {
+                  "tokens": 215737647,
+                  "context_usd": 40.440653300000015,
+                  "compactions": 4,
+                  "compaction_usd": 0.762644,
+                  "usd": 41.20329730000002
+                }
+              },
+              {
+                "date": "2026-10-04",
+                "requests": 523,
+                "default": {
+                  "tokens": 151459269,
+                  "context_usd": 27.890888700000012,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 27.890888700000012
+                },
+                "fixed": {
+                  "tokens": 95781440,
+                  "context_usd": 17.39678050000002,
+                  "compactions": 3,
+                  "compaction_usd": 1.794366,
+                  "usd": 19.19114650000002
+                },
+                "actual": {
+                  "tokens": 148992023,
+                  "context_usd": 27.413646200000002,
+                  "compactions": 5,
+                  "compaction_usd": 1.6281167000000003,
+                  "usd": 29.041762900000002
+                }
+              },
+              {
+                "date": "2026-10-05",
+                "requests": 104,
+                "default": {
+                  "tokens": 14891123,
+                  "context_usd": 1.0943945000000002,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 1.0943945000000002
+                },
+                "fixed": {
+                  "tokens": 14891123,
+                  "context_usd": 1.0943945000000002,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 1.0943945000000002
+                },
+                "actual": {
+                  "tokens": 14891123,
+                  "context_usd": 1.0943945000000002,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 1.0943945000000002
+                }
+              },
+              {
+                "date": "2026-10-06",
+                "requests": 1649,
+                "default": {
+                  "tokens": 344444184,
+                  "context_usd": 14.20105040000001,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 14.20105040000001
+                },
+                "fixed": {
+                  "tokens": 237015934,
+                  "context_usd": 11.522153300000005,
+                  "compactions": 4,
+                  "compaction_usd": 0.5986290999999999,
+                  "usd": 12.120782400000005
+                },
+                "actual": {
+                  "tokens": 344444184,
+                  "context_usd": 14.20105040000001,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 14.20105040000001
+                }
+              },
+              {
+                "date": "2026-10-07",
+                "requests": 5914,
+                "default": {
+                  "tokens": 1199746620,
+                  "context_usd": 23.625367499999985,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 23.625367499999985
+                },
+                "fixed": {
+                  "tokens": 967441647,
+                  "context_usd": 19.35693449999998,
+                  "compactions": 10,
+                  "compaction_usd": 0.5981033,
+                  "usd": 19.955037799999978
+                },
+                "actual": {
+                  "tokens": 1199746620,
+                  "context_usd": 23.625367499999985,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 23.625367499999985
+                }
+              },
+              {
+                "date": "2026-10-08",
+                "requests": 1709,
+                "default": {
+                  "tokens": 546982873,
+                  "context_usd": 5.4682185,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 5.4682185
+                },
+                "fixed": {
+                  "tokens": 346334123,
+                  "context_usd": 2.6997775,
+                  "compactions": 7,
+                  "compaction_usd": 0,
+                  "usd": 2.6997775
+                },
+                "actual": {
+                  "tokens": 546982873,
+                  "context_usd": 5.4682185,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 5.4682185
+                }
+              },
+              {
+                "date": "2026-10-09",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-10",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-11",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-12",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-13",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-14",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-15",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-16",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-17",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-18",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-19",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              }
+            ],
+            "sizes": [
+              {
+                "at": 100000,
+                "tokens": 1384876050,
+                "context_usd": 54.55410360000017,
+                "compactions": 183,
+                "compaction_usd": 21.465733600000004,
+                "usd": 76.01983720000017
+              },
+              {
+                "at": 125000,
+                "tokens": 1382420009,
+                "context_usd": 58.38126680000011,
+                "compactions": 153,
+                "compaction_usd": 21.064448100000003,
+                "usd": 79.44571490000011
+              },
+              {
+                "at": 150000,
+                "tokens": 1389875829,
+                "context_usd": 60.15574040000007,
+                "compactions": 122,
+                "compaction_usd": 18.030908599999997,
+                "usd": 78.18664900000007
+              },
+              {
+                "at": 175000,
+                "tokens": 1432622440,
+                "context_usd": 62.175913099999875,
+                "compactions": 101,
+                "compaction_usd": 15.829597999999997,
+                "usd": 78.00551109999986
+              },
+              {
+                "at": 200000,
+                "tokens": 1451574059,
+                "context_usd": 61.41985280000012,
+                "compactions": 83,
+                "compaction_usd": 13.3407326,
+                "usd": 74.76058540000012
+              },
+              {
+                "at": 225000,
+                "tokens": 1550093727,
+                "context_usd": 63.362588500000044,
+                "compactions": 67,
+                "compaction_usd": 11.101692400000001,
+                "usd": 74.46428090000005
+              },
+              {
+                "at": 250000,
+                "tokens": 1602096148,
+                "context_usd": 68.10182410000002,
+                "compactions": 50,
+                "compaction_usd": 9.1217372,
+                "usd": 77.22356130000001
+              },
+              {
+                "at": 275000,
+                "tokens": 1704429780,
+                "context_usd": 75.93079720000003,
+                "compactions": 38,
+                "compaction_usd": 7.122043900000001,
+                "usd": 83.05284110000002
+              },
+              {
+                "at": 300000,
+                "tokens": 1813262298,
+                "context_usd": 80.40141199999982,
+                "compactions": 28,
+                "compaction_usd": 5.0846868,
+                "usd": 85.48609879999982
+              },
+              {
+                "at": 325000,
+                "tokens": 1878143555,
+                "context_usd": 84.65390590000004,
+                "compactions": 20,
+                "compaction_usd": 3.6196771999999995,
+                "usd": 88.27358310000004
+              },
+              {
+                "at": 350000,
+                "tokens": 1923393482,
+                "context_usd": 87.75128870000007,
+                "compactions": 19,
+                "compaction_usd": 3.6522374999999996,
+                "usd": 91.40352620000007
+              },
+              {
+                "at": 375000,
+                "tokens": 1978683112,
+                "context_usd": 93.44294260000002,
+                "compactions": 15,
+                "compaction_usd": 2.1459381000000004,
+                "usd": 95.58888070000002
+              },
+              {
+                "at": 400000,
+                "tokens": 2030324974,
+                "context_usd": 97.50138330000016,
+                "compactions": 14,
+                "compaction_usd": 2.1645651,
+                "usd": 99.66594840000016
+              },
+              {
+                "at": 425000,
+                "tokens": 2104679736,
+                "context_usd": 99.75277850000002,
+                "compactions": 13,
+                "compaction_usd": 1.5580463,
+                "usd": 101.31082480000002
+              },
+              {
+                "at": 450000,
+                "tokens": 2137320732,
+                "context_usd": 103.35667970000009,
+                "compactions": 13,
+                "compaction_usd": 1.5702843,
+                "usd": 104.92696400000008
+              },
+              {
+                "at": 475000,
+                "tokens": 2226062219,
+                "context_usd": 107.4347345000002,
+                "compactions": 11,
+                "compaction_usd": 1.5872406,
+                "usd": 109.0219751000002
+              },
+              {
+                "at": 500000,
+                "tokens": 2268720935,
+                "context_usd": 110.33902810000019,
+                "compactions": 9,
+                "compaction_usd": 0.958863,
+                "usd": 111.29789110000019
+              }
+            ],
+            "cheapest": {
+              "at": 225000,
+              "tokens": 1550093727,
+              "context_usd": 63.362588500000044,
+              "compactions": 67,
+              "compaction_usd": 11.101692400000001,
+              "usd": 74.46428090000005
+            }
+          },
+          {
+            "repo": "Desktop",
+            "path": "/Users/owner/Desktop",
+            "sessions": 5,
+            "requests": 5393,
+            "default": {
+              "tokens": 996392268,
+              "context_usd": 17.838710250000016,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 17.838710250000016
+            },
+            "fixed": {
+              "tokens": 806143629,
+              "context_usd": 11.336855249999992,
+              "compactions": 10,
+              "compaction_usd": 2.0782168,
+              "usd": 13.415072049999992
+            },
+            "actual": {
+              "tokens": 996392268,
+              "context_usd": 17.838710250000016,
+              "compactions": 0,
+              "compaction_usd": 0,
+              "usd": 17.838710250000016
+            },
+            "daily": [
+              {
+                "date": "2026-09-19",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-20",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-21",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-22",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-23",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-24",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-25",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-26",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-27",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-28",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-29",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-09-30",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-01",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-02",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-03",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-04",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-05",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-06",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-07",
+                "requests": 205,
+                "default": {
+                  "tokens": 52721160,
+                  "context_usd": 2.4249719,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 2.4249719
+                },
+                "fixed": {
+                  "tokens": 33505008,
+                  "context_usd": 1.4108483,
+                  "compactions": 2,
+                  "compaction_usd": 0.2991458,
+                  "usd": 1.7099941
+                },
+                "actual": {
+                  "tokens": 52721160,
+                  "context_usd": 2.4249719,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 2.4249719
+                }
+              },
+              {
+                "date": "2026-10-08",
+                "requests": 3996,
+                "default": {
+                  "tokens": 797348425,
+                  "context_usd": 12.260559200000003,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 12.260559200000003
+                },
+                "fixed": {
+                  "tokens": 628120664,
+                  "context_usd": 6.982781799999995,
+                  "compactions": 7,
+                  "compaction_usd": 0.29909399999999997,
+                  "usd": 7.2818757999999955
+                },
+                "actual": {
+                  "tokens": 797348425,
+                  "context_usd": 12.260559200000003,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 12.260559200000003
+                }
+              },
+              {
+                "date": "2026-10-09",
+                "requests": 1190,
+                "default": {
+                  "tokens": 145362136,
+                  "context_usd": 2.9130424000000006,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 2.9130424000000006
+                },
+                "fixed": {
+                  "tokens": 144397226,
+                  "context_usd": 2.9130424000000006,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 2.9130424000000006
+                },
+                "actual": {
+                  "tokens": 145362136,
+                  "context_usd": 2.9130424000000006,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 2.9130424000000006
+                }
+              },
+              {
+                "date": "2026-10-10",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-11",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-12",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-13",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-14",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-15",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-16",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-17",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-18",
+                "requests": 0,
+                "default": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "fixed": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                },
+                "actual": {
+                  "tokens": 0,
+                  "context_usd": 0,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0
+                }
+              },
+              {
+                "date": "2026-10-19",
+                "requests": 2,
+                "default": {
+                  "tokens": 960547,
+                  "context_usd": 0.24013675,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0.24013675
+                },
+                "fixed": {
+                  "tokens": 120731,
+                  "context_usd": 0.03018275,
+                  "compactions": 1,
+                  "compaction_usd": 1.479977,
+                  "usd": 1.5101597500000001
+                },
+                "actual": {
+                  "tokens": 960547,
+                  "context_usd": 0.24013675,
+                  "compactions": 0,
+                  "compaction_usd": 0,
+                  "usd": 0.24013675
+                }
+              }
+            ],
+            "sizes": [
+              {
+                "at": 100000,
+                "tokens": 532679287,
+                "context_usd": 6.147060249999997,
+                "compactions": 76,
+                "compaction_usd": 6.3461296,
+                "usd": 12.493189849999997
+              },
+              {
+                "at": 125000,
+                "tokens": 554809521,
+                "context_usd": 7.292314549999999,
+                "compactions": 63,
+                "compaction_usd": 5.9975303,
+                "usd": 13.289844849999998
+              },
+              {
+                "at": 150000,
+                "tokens": 585848585,
+                "context_usd": 7.936527049999993,
+                "compactions": 50,
+                "compaction_usd": 4.8950304,
+                "usd": 12.831557449999993
+              },
+              {
+                "at": 175000,
+                "tokens": 623686198,
+                "context_usd": 8.644986549999997,
+                "compactions": 37,
+                "compaction_usd": 3.7743767000000004,
+                "usd": 12.419363249999996
+              },
+              {
+                "at": 200000,
+                "tokens": 670351342,
+                "context_usd": 9.378862949999997,
+                "compactions": 28,
+                "compaction_usd": 3.2148643999999997,
+                "usd": 12.593727349999996
+              },
+              {
+                "at": 225000,
+                "tokens": 720850227,
+                "context_usd": 9.723327349999996,
+                "compactions": 20,
+                "compaction_usd": 2.6483323,
+                "usd": 12.371659649999996
+              },
+              {
+                "at": 250000,
+                "tokens": 753760732,
+                "context_usd": 9.930360149999991,
+                "compactions": 16,
+                "compaction_usd": 2.657741,
+                "usd": 12.588101149999991
+              },
+              {
+                "at": 275000,
+                "tokens": 773761049,
+                "context_usd": 10.66146484999999,
+                "compactions": 14,
+                "compaction_usd": 2.6669945999999998,
+                "usd": 13.32845944999999
+              },
+              {
+                "at": 300000,
+                "tokens": 806143629,
+                "context_usd": 11.336855249999992,
+                "compactions": 10,
+                "compaction_usd": 2.0782168,
+                "usd": 13.415072049999992
+              },
+              {
+                "at": 325000,
+                "tokens": 840541720,
+                "context_usd": 11.583035449999999,
+                "compactions": 9,
+                "compaction_usd": 2.0836181,
+                "usd": 13.66665355
+              },
+              {
+                "at": 350000,
+                "tokens": 862563732,
+                "context_usd": 11.719962149999997,
+                "compactions": 7,
+                "compaction_usd": 2.0895877,
+                "usd": 13.809549849999996
+              },
+              {
+                "at": 375000,
+                "tokens": 884757508,
+                "context_usd": 12.307207449999998,
+                "compactions": 6,
+                "compaction_usd": 2.0946477,
+                "usd": 14.401855149999998
+              },
+              {
+                "at": 400000,
+                "tokens": 892411687,
+                "context_usd": 12.22498524999999,
+                "compactions": 5,
+                "compaction_usd": 2.0983323,
+                "usd": 14.323317549999992
+              },
+              {
+                "at": 425000,
+                "tokens": 897352769,
+                "context_usd": 12.860703849999995,
+                "compactions": 5,
+                "compaction_usd": 2.1037611,
+                "usd": 14.964464949999995
+              },
+              {
+                "at": 450000,
+                "tokens": 904116802,
+                "context_usd": 13.673102949999988,
+                "compactions": 5,
+                "compaction_usd": 2.1098159,
+                "usd": 15.782918849999987
+              },
+              {
+                "at": 475000,
+                "tokens": 912031279,
+                "context_usd": 14.638209849999997,
+                "compactions": 5,
+                "compaction_usd": 2.1130384,
+                "usd": 16.751248249999996
+              },
+              {
+                "at": 500000,
+                "tokens": 927756155,
+                "context_usd": 16.294698750000002,
+                "compactions": 4,
+                "compaction_usd": 0.6386338,
+                "usd": 16.933332550000003
+              }
+            ],
+            "cheapest": {
+              "at": 225000,
+              "tokens": 720850227,
+              "context_usd": 9.723327349999996,
+              "compactions": 20,
+              "compaction_usd": 2.6483323,
+              "usd": 12.371659649999996
+            },
+            "track": {
+              "since": "2026-10-19T11:12:26.974124+02:00",
+              "requests": 2,
+              "default": {
+                "tokens": 960547,
+                "context_usd": 0.24013675,
+                "compactions": 0,
+                "compaction_usd": 0,
+                "usd": 0.24013675
+              },
+              "fixed": {
+                "tokens": 120731,
+                "context_usd": 0.03018275,
+                "compactions": 1,
+                "compaction_usd": 1.479977,
+                "usd": 1.5101597500000001
+              },
+              "actual": {
+                "tokens": 960547,
+                "context_usd": 0.24013675,
+                "compactions": 0,
+                "compaction_usd": 0,
+                "usd": 0.24013675
+              },
+              "planned": {
+                "tokens": 120731,
+                "context_usd": 0.03018275,
+                "compactions": 1,
+                "compaction_usd": 1.479977,
+                "usd": 1.5101597500000001
+              },
+              "daily": [
+                {
+                  "date": "2026-10-19",
+                  "requests": 2,
+                  "default": {
+                    "tokens": 960547,
+                    "context_usd": 0.24013675,
+                    "compactions": 0,
+                    "compaction_usd": 0,
+                    "usd": 0.24013675
+                  },
+                  "fixed": {
+                    "tokens": 120731,
+                    "context_usd": 0.03018275,
+                    "compactions": 1,
+                    "compaction_usd": 1.479977,
+                    "usd": 1.5101597500000001
+                  },
+                  "actual": {
+                    "tokens": 960547,
+                    "context_usd": 0.24013675,
+                    "compactions": 0,
+                    "compaction_usd": 0,
+                    "usd": 0.24013675
+                  },
+                  "planned": {
+                    "tokens": 120731,
+                    "context_usd": 0.03018275,
+                    "compactions": 1,
+                    "compaction_usd": 1.479977,
+                    "usd": 1.5101597500000001
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "sizes": [
+          {
+            "at": 100000,
+            "tokens": 1917555337,
+            "context_usd": 60.70116385000027,
+            "compactions": 259,
+            "compaction_usd": 27.811863200000005,
+            "usd": 88.51302705000028
+          },
+          {
+            "at": 125000,
+            "tokens": 1937229530,
+            "context_usd": 65.67358135000008,
+            "compactions": 216,
+            "compaction_usd": 27.061978400000005,
+            "usd": 92.73555975000008
+          },
+          {
+            "at": 150000,
+            "tokens": 1975724414,
+            "context_usd": 68.09226745000021,
+            "compactions": 172,
+            "compaction_usd": 22.925938999999993,
+            "usd": 91.0182064500002
+          },
+          {
+            "at": 175000,
+            "tokens": 2056308638,
+            "context_usd": 70.82089964999983,
+            "compactions": 138,
+            "compaction_usd": 19.603974700000002,
+            "usd": 90.42487434999984
+          },
+          {
+            "at": 200000,
+            "tokens": 2121925401,
+            "context_usd": 70.79871575000017,
+            "compactions": 111,
+            "compaction_usd": 16.555597000000002,
+            "usd": 87.35431275000018
+          },
+          {
+            "at": 225000,
+            "tokens": 2270943954,
+            "context_usd": 73.08591585000005,
+            "compactions": 87,
+            "compaction_usd": 13.7500247,
+            "usd": 86.83594055000005
+          },
+          {
+            "at": 250000,
+            "tokens": 2355856880,
+            "context_usd": 78.03218425000013,
+            "compactions": 66,
+            "compaction_usd": 11.7794782,
+            "usd": 89.81166245000013
+          },
+          {
+            "at": 275000,
+            "tokens": 2478190829,
+            "context_usd": 86.59226205000006,
+            "compactions": 52,
+            "compaction_usd": 9.7890385,
+            "usd": 96.38130055000006
+          },
+          {
+            "at": 300000,
+            "tokens": 2619405927,
+            "context_usd": 91.73826724999978,
+            "compactions": 38,
+            "compaction_usd": 7.1629036,
+            "usd": 98.90117084999977
+          },
+          {
+            "at": 325000,
+            "tokens": 2718685275,
+            "context_usd": 96.23694135000007,
+            "compactions": 29,
+            "compaction_usd": 5.7032953,
+            "usd": 101.94023665000006
+          },
+          {
+            "at": 350000,
+            "tokens": 2785957214,
+            "context_usd": 99.47125085000002,
+            "compactions": 26,
+            "compaction_usd": 5.741825199999999,
+            "usd": 105.21307605000001
+          },
+          {
+            "at": 375000,
+            "tokens": 2863440620,
+            "context_usd": 105.75015004999997,
+            "compactions": 21,
+            "compaction_usd": 4.240585800000001,
+            "usd": 109.99073584999998
+          },
+          {
+            "at": 400000,
+            "tokens": 2922736661,
+            "context_usd": 109.7263685500002,
+            "compactions": 19,
+            "compaction_usd": 4.2628974,
+            "usd": 113.9892659500002
+          },
+          {
+            "at": 425000,
+            "tokens": 3002032505,
+            "context_usd": 112.61348234999994,
+            "compactions": 18,
+            "compaction_usd": 3.6618074,
+            "usd": 116.27528974999994
+          },
+          {
+            "at": 450000,
+            "tokens": 3041437534,
+            "context_usd": 117.02978265000007,
+            "compactions": 18,
+            "compaction_usd": 3.6801002,
+            "usd": 120.70988285000007
+          },
+          {
+            "at": 475000,
+            "tokens": 3138093498,
+            "context_usd": 122.07294435000016,
+            "compactions": 16,
+            "compaction_usd": 3.700279,
+            "usd": 125.77322335000015
+          },
+          {
+            "at": 500000,
+            "tokens": 3196477090,
+            "context_usd": 126.63372685000016,
+            "compactions": 13,
+            "compaction_usd": 1.5974968,
+            "usd": 128.23122365000015
+          }
+        ],
+        "cheapest": {
+          "at": 225000,
+          "tokens": 2270943954,
+          "context_usd": 73.08591585000005,
+          "compactions": 87,
+          "compaction_usd": 13.7500247,
+          "usd": 86.83594055000005
+        },
+        "per_repo_usd": 86.83594055000005,
+        "track": {
+          "since": "2026-10-19T11:12:26.974124+02:00",
+          "requests": 2,
+          "default": {
+            "tokens": 960547,
+            "context_usd": 0.24013675,
+            "compactions": 0,
+            "compaction_usd": 0,
+            "usd": 0.24013675
+          },
+          "fixed": {
+            "tokens": 120731,
+            "context_usd": 0.03018275,
+            "compactions": 1,
+            "compaction_usd": 1.479977,
+            "usd": 1.5101597500000001
+          },
+          "actual": {
+            "tokens": 960547,
+            "context_usd": 0.24013675,
+            "compactions": 0,
+            "compaction_usd": 0,
+            "usd": 0.24013675
+          },
+          "planned": {
+            "tokens": 120731,
+            "context_usd": 0.03018275,
+            "compactions": 1,
+            "compaction_usd": 1.479977,
+            "usd": 1.5101597500000001
+          },
+          "daily": [
+            {
+              "date": "2026-10-19",
+              "requests": 2,
+              "default": {
+                "tokens": 960547,
+                "context_usd": 0.24013675,
+                "compactions": 0,
+                "compaction_usd": 0,
+                "usd": 0.24013675
+              },
+              "fixed": {
+                "tokens": 120731,
+                "context_usd": 0.03018275,
+                "compactions": 1,
+                "compaction_usd": 1.479977,
+                "usd": 1.5101597500000001
+              },
+              "actual": {
+                "tokens": 960547,
+                "context_usd": 0.24013675,
+                "compactions": 0,
+                "compaction_usd": 0,
+                "usd": 0.24013675
+              },
+              "planned": {
+                "tokens": 120731,
+                "context_usd": 0.03018275,
+                "compactions": 1,
+                "compaction_usd": 1.479977,
+                "usd": 1.5101597500000001
+              }
+            }
+          ]
+        }
+      },
+      "savings_by_repo": [
+        {
+          "repo": "callumbaker",
+          "path": "/Users/owner",
+          "sessions": 2,
+          "compactions": 9,
+          "requests": 22,
+          "saved_tokens": 5099103,
+          "saved_usd": 0.9366421,
+          "summary_usd": 1.3778143,
+          "rewrite_usd": 0.4713,
+          "net_usd": -0.9124722000000001
+        }
+      ],
+      "prompt_notice": "installed"
+    },
+    "handover": {
+      "installed": false,
+      "start_hook": false,
+      "end_hook": false,
+      "legacy": false,
+      "config": {},
+      "effective": {
+        "brief": true,
+        "write": true,
+        "commit": true,
+        "min_prompts": 2,
+        "model": "opus",
+        "briefing": "HANDOVER BRIEFING (injected at startup from {{file}})\n\nBefore answering the first request: read the latest handover below, then skim the code it names (files, packages, scripts in 'State' and 'Open') so you know the current shape of the codebase. Treat the handover as claims to verify, not facts. Older handover sections are further down {{file}}; read them only when relevant.",
+        "instructions": "This session has just been closed. Update {{file}} so the next session can start cold.\n\nRules:\n- Prepend a new section at the very top, headed exactly: # Handover, {{now}}: <short topic>\n  On the next line put: <!-- session: {{session}} -->\n  If the top section already carries that same session marker, rewrite that section instead of adding one.\n- Keep every older section below it byte for byte.\n- Sections, as short bullets, in this order: State right now (start with 'Written at session close. Verify before acting.'; what is installed/deployed/pushed vs local only; uncommitted work), What was done (with commit hashes), Open (next steps in priority order, each with how to check it), Things that will bite you.\n- Only facts from this conversation or checked now with read-only git commands. Mark anything you could not check as unverified.\n- Local time only, never UTC. Never use em or en dashes.\n- If nothing worth handing over happened (no changes, no findings, no decisions), leave the file untouched and reply NOTHING.\n- Edit only {{file}}. Do not commit, push, deploy, or run anything except read-only git commands."
+      },
+      "defaults": {
+        "brief": true,
+        "write": true,
+        "commit": true,
+        "min_prompts": 2,
+        "model": "opus",
+        "briefing": "HANDOVER BRIEFING (injected at startup from {{file}})\n\nBefore answering the first request: read the latest handover below, then skim the code it names (files, packages, scripts in 'State' and 'Open') so you know the current shape of the codebase. Treat the handover as claims to verify, not facts. Older handover sections are further down {{file}}; read them only when relevant.",
+        "instructions": "This session has just been closed. Update {{file}} so the next session can start cold.\n\nRules:\n- Prepend a new section at the very top, headed exactly: # Handover, {{now}}: <short topic>\n  On the next line put: <!-- session: {{session}} -->\n  If the top section already carries that same session marker, rewrite that section instead of adding one.\n- Keep every older section below it byte for byte.\n- Sections, as short bullets, in this order: State right now (start with 'Written at session close. Verify before acting.'; what is installed/deployed/pushed vs local only; uncommitted work), What was done (with commit hashes), Open (next steps in priority order, each with how to check it), Things that will bite you.\n- Only facts from this conversation or checked now with read-only git commands. Mark anything you could not check as unverified.\n- Local time only, never UTC. Never use em or en dashes.\n- If nothing worth handing over happened (no changes, no findings, no decisions), leave the file untouched and reply NOTHING.\n- Edit only {{file}}. Do not commit, push, deploy, or run anything except read-only git commands."
+      },
+      "dir": "/Users/owner/.config/claude-burst/handover",
+      "log": null
+    },
+    "primary_health": {
+      "last_answer": "2026-10-19T11:12:32.830539+02:00",
+      "last_failure": "0001-01-01T00:00:00Z",
+      "failing_since": "0001-01-01T00:00:00Z",
+      "failures": 0,
+      "network_down": false
+    },
+    "secondary_ready": false
+  },
+  "/api/upgrade-status": {
+    "checked_at": "2026-10-19T11:11:53.421341+02:00",
+    "running_version": "0.20.36",
+    "running_commit": "40551ad",
+    "latest_version": "0.20.36",
+    "latest_commit": "aa9eb5e",
+    "behind": 0,
+    "ahead": 1,
+    "up_to_date": true,
+    "can_upgrade": false,
+    "reason": "running a newer build than the newest release",
+    "panel": {
+      "installed": true,
+      "version": "1.7.0",
+      "behind": false,
+      "note": "could not reach GitHub for the usage panel: git fetch --quiet --tags origin main: signal: killed: "
+    }
+  },
+  "/api/mod-status": {
+    "claude": "2.1.302",
+    "supported": true,
+    "installed": true,
+    "version": "0.12.4",
+    "current": true,
+    "source": "/Users/owner/claude-burst/mods/burst-session",
+    "toasts": true,
+    "handoff": true,
+    "handoff_in_path": true
+  },
+  "/api/loose-ends": {
+    "report": {
+      "at": 1792401162,
+      "scanned": 4,
+      "repos": null
+    },
+    "stale": {
+      "commits": 0,
+      "files": 0,
+      "stashes": 0
+    },
+    "stale_hours": 24,
+    "within_days": 30
+  },
+  "/api/mac": {
+    "keep_awake": {
+      "mode": "off",
+      "idle_minutes": 0,
+      "live": {
+        "sleep_disabled": true,
+        "sleep_disabled_known": true,
+        "on_ac": true,
+        "battery": "100%; charged",
+        "applied_mode": "",
+        "applied_idle": 0,
+        "last_activity": "2026-10-19T11:12:15.934344+02:00",
+        "daemon_installed": false,
+        "ghostty_nap_off": false,
+        "blockers": [
+          {
+            "pid": "39566",
+            "process": "caffeinate",
+            "for": "caffeinate asserting forever"
+          }
+        ]
+      },
+      "daemon": "off",
+      "original": {
+        "changed": false
+      }
+    },
+    "panel": {
+      "installed": true,
+      "repo_dir": "/Users/owner/claude-code-cost-sidebar",
+      "options": {
+        "alerts": true,
+        "bypass_permissions": true,
+        "caffeinate": false,
+        "close_button": true,
+        "compact_notice": true,
+        "cost_alerts": true,
+        "keep_screen_on": false,
+        "loading_notice": true,
+        "remote_control": false,
+        "session_title": true
+      },
+      "numbers": {
+        "alert_min_usd": 5,
+        "restart_tokens": 400000
+      },
+      "running": false
+    }
+  },
+  "/api/settings": {
+    "pricing": [
+      {
+        "model": "claude-fable-5",
+        "price": {
+          "input_per_mtok": 10,
+          "output_per_mtok": 50
+        },
+        "default": {
+          "input_per_mtok": 10,
+          "output_per_mtok": 50
+        },
+        "requests": 0,
+        "usd": 0,
+        "unpriced": false
+      },
+      {
+        "model": "claude-fable-5-1",
+        "price": {
+          "input_per_mtok": 10,
+          "output_per_mtok": 50,
+          "cache_read_per_mtok": 0.25
+        },
+        "default": {
+          "input_per_mtok": 10,
+          "output_per_mtok": 50,
+          "cache_read_per_mtok": 0.25
+        },
+        "requests": 2,
+        "usd": 9.7886065,
+        "unpriced": false
+      },
+      {
+        "model": "claude-haiku-4-5",
+        "price": {
+          "input_per_mtok": 1,
+          "output_per_mtok": 5
+        },
+        "default": {
+          "input_per_mtok": 1,
+          "output_per_mtok": 5
+        },
+        "requests": 0,
+        "usd": 0,
+        "unpriced": false
+      },
+      {
+        "model": "claude-haiku-4-5-20251001",
+        "price": {
+          "input_per_mtok": 1,
+          "output_per_mtok": 5
+        },
+        "default": {
+          "input_per_mtok": 1,
+          "output_per_mtok": 5
+        },
+        "requests": 34,
+        "usd": 0.27246704999999993,
+        "unpriced": false
+      },
+      {
+        "model": "claude-haiku-5-5",
+        "price": {
+          "input_per_mtok": 0.1,
+          "output_per_mtok": 0.5,
+          "long_prompt_over_tokens": 100000,
+          "long_prompt_multiplier": 5
+        },
+        "default": {
+          "input_per_mtok": 0.1,
+          "output_per_mtok": 0.5,
+          "long_prompt_over_tokens": 100000,
+          "long_prompt_multiplier": 5
+        },
+        "requests": 0,
+        "usd": 0,
+        "unpriced": false
+      },
+      {
+        "model": "claude-opus-4-6",
+        "price": {
+          "input_per_mtok": 5,
+          "output_per_mtok": 25
+        },
+        "default": {
+          "input_per_mtok": 5,
+          "output_per_mtok": 25
+        },
+        "requests": 0,
+        "usd": 0,
+        "unpriced": false
+      },
+      {
+        "model": "claude-opus-4-7",
+        "price": {
+          "input_per_mtok": 5,
+          "output_per_mtok": 25
+        },
+        "default": {
+          "input_per_mtok": 5,
+          "output_per_mtok": 25
+        },
+        "requests": 0,
+        "usd": 0,
+        "unpriced": false
+      },
+      {
+        "model": "claude-opus-4-8",
+        "price": {
+          "input_per_mtok": 5,
+          "output_per_mtok": 25
+        },
+        "default": {
+          "input_per_mtok": 5,
+          "output_per_mtok": 25
+        },
+        "requests": 0,
+        "usd": 0,
+        "unpriced": false
+      },
+      {
+        "model": "claude-opus-5",
+        "price": {
+          "input_per_mtok": 5,
+          "output_per_mtok": 25
+        },
+        "default": {
+          "input_per_mtok": 5,
+          "output_per_mtok": 25
+        },
+        "requests": 0,
+        "usd": 0,
+        "unpriced": false
+      },
+      {
+        "model": "claude-opus-5-5",
+        "price": {
+          "input_per_mtok": 4,
+          "output_per_mtok": 20,
+          "cache_read_per_mtok": 0.2
+        },
+        "default": {
+          "input_per_mtok": 4,
+          "output_per_mtok": 20,
+          "cache_read_per_mtok": 0.2
+        },
+        "requests": 1082,
+        "usd": 89.55733659999976,
+        "unpriced": false
+      },
+      {
+        "model": "claude-sonnet-4-6",
+        "price": {
+          "input_per_mtok": 3,
+          "output_per_mtok": 15
+        },
+        "default": {
+          "input_per_mtok": 3,
+          "output_per_mtok": 15
+        },
+        "requests": 0,
+        "usd": 0,
+        "unpriced": false
+      },
+      {
+        "model": "claude-sonnet-5",
+        "price": {
+          "input_per_mtok": 2,
+          "output_per_mtok": 10
+        },
+        "default": {
+          "input_per_mtok": 2,
+          "output_per_mtok": 10
+        },
+        "requests": 0,
+        "usd": 0,
+        "unpriced": false
+      },
+      {
+        "model": "claude-sonnet-5-5",
+        "price": {
+          "input_per_mtok": 2,
+          "output_per_mtok": 10,
+          "cache_read_per_mtok": 0.1
+        },
+        "default": {
+          "input_per_mtok": 2,
+          "output_per_mtok": 10,
+          "cache_read_per_mtok": 0.1
+        },
+        "requests": 3267,
+        "usd": 160.1346580000002,
+        "unpriced": false
+      },
+      {
+        "model": "global.anthropic.claude-fable-5",
+        "price": {
+          "input_per_mtok": 10,
+          "output_per_mtok": 50
+        },
+        "default": {
+          "input_per_mtok": 10,
+          "output_per_mtok": 50
+        },
+        "requests": 0,
+        "usd": 0,
+        "unpriced": false
+      },
+      {
+        "model": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "price": {
+          "input_per_mtok": 1,
+          "output_per_mtok": 5
+        },
+        "default": {
+          "input_per_mtok": 1,
+          "output_per_mtok": 5
+        },
+        "requests": 0,
+        "usd": 0,
+        "unpriced": false
+      },
+      {
+        "model": "global.anthropic.claude-opus-5",
+        "price": {
+          "input_per_mtok": 5,
+          "output_per_mtok": 25
+        },
+        "default": {
+          "input_per_mtok": 5,
+          "output_per_mtok": 25
+        },
+        "requests": 0,
+        "usd": 0,
+        "unpriced": false
+      },
+      {
+        "model": "global.anthropic.claude-sonnet-5",
+        "price": {
+          "input_per_mtok": 2,
+          "output_per_mtok": 10
+        },
+        "default": {
+          "input_per_mtok": 2,
+          "output_per_mtok": 10
+        },
+        "requests": 0,
+        "usd": 0,
+        "unpriced": false
+      }
+    ],
+    "fallback_chain": {
+      "claude-fable-5": [
+        "claude-opus-5-5"
+      ],
+      "claude-fable-5-1": [
+        "claude-opus-5-5"
+      ]
+    },
+    "metered_failover": {
+      "window_seconds": 60,
+      "min_failures": 3,
+      "transport_error_min_failures": 1
+    },
+    "metered_defaults": {
+      "window_seconds": 60,
+      "min_failures": 3,
+      "transport_error_min_failures": 1
+    },
+    "advanced": {
+      "reset_grace_seconds": 10,
+      "unknown_reset_seconds": 300,
+      "response_header_timeout_seconds": 60,
+      "max_request_mb": 128
+    },
+    "advanced_defaults": {
+      "reset_grace_seconds": 10,
+      "unknown_reset_seconds": 300,
+      "response_header_timeout_seconds": 60,
+      "max_request_mb": 128
+    },
+    "listen": "[removed for fixture]",
+    "admin_listen": "[removed for fixture]",
+    "admin_hostname": "[removed for fixture]",
+    "peer_log": "[removed for fixture]",
+    "notify": {},
+    "alert_daily_spend_usd": 0,
+    "hotspot": "[removed for fixture]",
+    "restart_needed": null
+  },
+  "/api/codex": {
+    "status": {
+      "path": "/Users/owner/.codex/config.toml",
+      "installed": true,
+      "enabled": true,
+      "base_url": "[removed for fixture]"
+    },
+    "listen": "[removed for fixture]",
+    "upstream": "[removed for fixture]",
+    "listening": true,
+    "limits": {
+      "seen": "2026-10-18T19:38:43.626317+02:00",
+      "headers": {
+        "x-codex-active-limit": "premium",
+        "x-codex-credits-balance": "0",
+        "x-codex-credits-has-credits": "False",
+        "x-codex-credits-unlimited": "False",
+        "x-codex-plan-type": "prolite",
+        "x-codex-primary-over-secondary-limit-percent": "0",
+        "x-codex-primary-reset-after-seconds": "576456",
+        "x-codex-primary-reset-at": "1792921578",
+        "x-codex-primary-used-percent": "90",
+        "x-codex-primary-window-minutes": "10080",
+        "x-codex-safety-buffering-enabled": "true",
+        "x-codex-safety-buffering-faster-model": "gpt-6-luna",
+        "x-codex-secondary-reset-after-seconds": "0",
+        "x-codex-secondary-reset-at": "",
+        "x-codex-secondary-used-percent": "0",
+        "x-codex-secondary-window-minutes": "0"
+      }
+    },
+    "history": {
+      "days": [
+        {
+          "date": "2026-10-06",
+          "requests": 149,
+          "primary_requests": 149,
+          "secondary_requests": 0,
+          "errors": 1,
+          "offline": 0,
+          "cancelled": 3,
+          "input_tokens": 1621826,
+          "output_tokens": 134579,
+          "api_equivalent_usd": 0,
+          "sessions": 4,
+          "primary_tokens": 23525109,
+          "secondary_tokens": 0,
+          "primary_usd": 0,
+          "secondary_usd": 0,
+          "secondary_sent_tokens": 0,
+          "pruned_tokens": 0,
+          "pruned_usd": 0,
+          "compacted_tokens": 0,
+          "compacted_usd": 0,
+          "compaction_summary_usd": 0,
+          "compaction_rewrite_usd": 0
+        },
+        {
+          "date": "2026-10-07",
+          "requests": 129,
+          "primary_requests": 129,
+          "secondary_requests": 0,
+          "errors": 0,
+          "offline": 0,
+          "cancelled": 0,
+          "input_tokens": 1815296,
+          "output_tokens": 106234,
+          "api_equivalent_usd": 0,
+          "sessions": 4,
+          "primary_tokens": 26150522,
+          "secondary_tokens": 0,
+          "primary_usd": 0,
+          "secondary_usd": 0,
+          "secondary_sent_tokens": 0,
+          "pruned_tokens": 0,
+          "pruned_usd": 0,
+          "compacted_tokens": 0,
+          "compacted_usd": 0,
+          "compaction_summary_usd": 0,
+          "compaction_rewrite_usd": 0
+        },
+        {
+          "date": "2026-10-08",
+          "requests": 75,
+          "primary_requests": 75,
+          "secondary_requests": 0,
+          "errors": 0,
+          "offline": 0,
+          "cancelled": 0,
+          "input_tokens": 1294537,
+          "output_tokens": 21648,
+          "api_equivalent_usd": 0,
+          "sessions": 4,
+          "primary_tokens": 8745049,
+          "secondary_tokens": 0,
+          "primary_usd": 0,
+          "secondary_usd": 0,
+          "secondary_sent_tokens": 0,
+          "pruned_tokens": 0,
+          "pruned_usd": 0,
+          "compacted_tokens": 0,
+          "compacted_usd": 0,
+          "compaction_summary_usd": 0,
+          "compaction_rewrite_usd": 0
+        },
+        {
+          "date": "2026-10-09",
+          "requests": 0,
+          "primary_requests": 0,
+          "secondary_requests": 0,
+          "errors": 0,
+          "offline": 0,
+          "cancelled": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "api_equivalent_usd": 0,
+          "sessions": 0,
+          "primary_tokens": 0,
+          "secondary_tokens": 0,
+          "primary_usd": 0,
+          "secondary_usd": 0,
+          "secondary_sent_tokens": 0,
+          "pruned_tokens": 0,
+          "pruned_usd": 0,
+          "compacted_tokens": 0,
+          "compacted_usd": 0,
+          "compaction_summary_usd": 0,
+          "compaction_rewrite_usd": 0
+        },
+        {
+          "date": "2026-10-10",
+          "requests": 0,
+          "primary_requests": 0,
+          "secondary_requests": 0,
+          "errors": 0,
+          "offline": 0,
+          "cancelled": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "api_equivalent_usd": 0,
+          "sessions": 0,
+          "primary_tokens": 0,
+          "secondary_tokens": 0,
+          "primary_usd": 0,
+          "secondary_usd": 0,
+          "secondary_sent_tokens": 0,
+          "pruned_tokens": 0,
+          "pruned_usd": 0,
+          "compacted_tokens": 0,
+          "compacted_usd": 0,
+          "compaction_summary_usd": 0,
+          "compaction_rewrite_usd": 0
+        },
+        {
+          "date": "2026-10-11",
+          "requests": 0,
+          "primary_requests": 0,
+          "secondary_requests": 0,
+          "errors": 0,
+          "offline": 0,
+          "cancelled": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "api_equivalent_usd": 0,
+          "sessions": 0,
+          "primary_tokens": 0,
+          "secondary_tokens": 0,
+          "primary_usd": 0,
+          "secondary_usd": 0,
+          "secondary_sent_tokens": 0,
+          "pruned_tokens": 0,
+          "pruned_usd": 0,
+          "compacted_tokens": 0,
+          "compacted_usd": 0,
+          "compaction_summary_usd": 0,
+          "compaction_rewrite_usd": 0
+        },
+        {
+          "date": "2026-10-12",
+          "requests": 0,
+          "primary_requests": 0,
+          "secondary_requests": 0,
+          "errors": 0,
+          "offline": 0,
+          "cancelled": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "api_equivalent_usd": 0,
+          "sessions": 0,
+          "primary_tokens": 0,
+          "secondary_tokens": 0,
+          "primary_usd": 0,
+          "secondary_usd": 0,
+          "secondary_sent_tokens": 0,
+          "pruned_tokens": 0,
+          "pruned_usd": 0,
+          "compacted_tokens": 0,
+          "compacted_usd": 0,
+          "compaction_summary_usd": 0,
+          "compaction_rewrite_usd": 0
+        },
+        {
+          "date": "2026-10-13",
+          "requests": 0,
+          "primary_requests": 0,
+          "secondary_requests": 0,
+          "errors": 0,
+          "offline": 0,
+          "cancelled": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "api_equivalent_usd": 0,
+          "sessions": 0,
+          "primary_tokens": 0,
+          "secondary_tokens": 0,
+          "primary_usd": 0,
+          "secondary_usd": 0,
+          "secondary_sent_tokens": 0,
+          "pruned_tokens": 0,
+          "pruned_usd": 0,
+          "compacted_tokens": 0,
+          "compacted_usd": 0,
+          "compaction_summary_usd": 0,
+          "compaction_rewrite_usd": 0
+        },
+        {
+          "date": "2026-10-14",
+          "requests": 1444,
+          "primary_requests": 1444,
+          "secondary_requests": 0,
+          "errors": 6,
+          "offline": 0,
+          "cancelled": 101,
+          "input_tokens": 7710938,
+          "output_tokens": 675978,
+          "api_equivalent_usd": 0,
+          "sessions": 3,
+          "primary_tokens": 224466020,
+          "secondary_tokens": 0,
+          "primary_usd": 0,
+          "secondary_usd": 0,
+          "secondary_sent_tokens": 0,
+          "pruned_tokens": 0,
+          "pruned_usd": 0,
+          "compacted_tokens": 0,
+          "compacted_usd": 0,
+          "compaction_summary_usd": 0,
+          "compaction_rewrite_usd": 0
+        },
+        {
+          "date": "2026-10-15",
+          "requests": 3526,
+          "primary_requests": 3526,
+          "secondary_requests": 0,
+          "errors": 100,
+          "offline": 0,
+          "cancelled": 325,
+          "input_tokens": 10148515,
+          "output_tokens": 1247572,
+          "api_equivalent_usd": 0,
+          "sessions": 3,
+          "primary_tokens": 588944375,
+          "secondary_tokens": 0,
+          "primary_usd": 0,
+          "secondary_usd": 0,
+          "secondary_sent_tokens": 0,
+          "pruned_tokens": 0,
+          "pruned_usd": 0,
+          "compacted_tokens": 0,
+          "compacted_usd": 0,
+          "compaction_summary_usd": 0,
+          "compaction_rewrite_usd": 0
+        },
+        {
+          "date": "2026-10-16",
+          "requests": 1057,
+          "primary_requests": 1057,
+          "secondary_requests": 0,
+          "errors": 12,
+          "offline": 0,
+          "cancelled": 119,
+          "input_tokens": 6161050,
+          "output_tokens": 545379,
+          "api_equivalent_usd": 0,
+          "sessions": 2,
+          "primary_tokens": 147061117,
+          "secondary_tokens": 0,
+          "primary_usd": 0,
+          "secondary_usd": 0,
+          "secondary_sent_tokens": 0,
+          "pruned_tokens": 0,
+          "pruned_usd": 0,
+          "compacted_tokens": 0,
+          "compacted_usd": 0,
+          "compaction_summary_usd": 0,
+          "compaction_rewrite_usd": 0
+        },
+        {
+          "date": "2026-10-17",
+          "requests": 0,
+          "primary_requests": 0,
+          "secondary_requests": 0,
+          "errors": 0,
+          "offline": 0,
+          "cancelled": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "api_equivalent_usd": 0,
+          "sessions": 0,
+          "primary_tokens": 0,
+          "secondary_tokens": 0,
+          "primary_usd": 0,
+          "secondary_usd": 0,
+          "secondary_sent_tokens": 0,
+          "pruned_tokens": 0,
+          "pruned_usd": 0,
+          "compacted_tokens": 0,
+          "compacted_usd": 0,
+          "compaction_summary_usd": 0,
+          "compaction_rewrite_usd": 0
+        },
+        {
+          "date": "2026-10-18",
+          "requests": 796,
+          "primary_requests": 796,
+          "secondary_requests": 0,
+          "errors": 0,
+          "offline": 0,
+          "cancelled": 72,
+          "input_tokens": 2643904,
+          "output_tokens": 301136,
+          "api_equivalent_usd": 0,
+          "sessions": 2,
+          "primary_tokens": 89599888,
+          "secondary_tokens": 0,
+          "primary_usd": 0,
+          "secondary_usd": 0,
+          "secondary_sent_tokens": 0,
+          "pruned_tokens": 0,
+          "pruned_usd": 0,
+          "compacted_tokens": 0,
+          "compacted_usd": 0,
+          "compaction_summary_usd": 0,
+          "compaction_rewrite_usd": 0
+        },
+        {
+          "date": "2026-10-19",
+          "requests": 0,
+          "primary_requests": 0,
+          "secondary_requests": 0,
+          "errors": 0,
+          "offline": 0,
+          "cancelled": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "api_equivalent_usd": 0,
+          "sessions": 0,
+          "primary_tokens": 0,
+          "secondary_tokens": 0,
+          "primary_usd": 0,
+          "secondary_usd": 0,
+          "secondary_sent_tokens": 0,
+          "pruned_tokens": 0,
+          "pruned_usd": 0,
+          "compacted_tokens": 0,
+          "compacted_usd": 0,
+          "compaction_summary_usd": 0,
+          "compaction_rewrite_usd": 0
+        }
+      ],
+      "window": {
+        "Requests": 7176,
+        "PrimaryRequests": 7176,
+        "SecondaryRequests": 0,
+        "InputTokens": 31396066,
+        "OutputTokens": 3032526,
+        "CacheReadTokens": 1074063488,
+        "CacheWriteTokens": 0,
+        "PrunedBytes": 0,
+        "APIEquivalentUSD": 0,
+        "UnpricedRequests": 0,
+        "UnpricedModels": null
+      },
+      "sessions": 18,
+      "models": [
+        {
+          "model": "gpt-6.1-sol",
+          "slot": "primary",
+          "requests": 4695,
+          "tokens": 889069527,
+          "usd": 0,
+          "unpriced": false
+        },
+        {
+          "model": "gpt-6-astra",
+          "slot": "primary",
+          "requests": 1597,
+          "tokens": 208477695,
+          "usd": 0,
+          "unpriced": false
+        },
+        {
+          "model": "gpt-5.6-terra",
+          "slot": "primary",
+          "requests": 131,
+          "tokens": 8710222,
+          "usd": 0,
+          "unpriced": false
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "slot": "primary",
+          "requests": 7,
+          "tokens": 1865486,
+          "usd": 0,
+          "unpriced": false
+        },
+        {
+          "model": "gpt-6-luna",
+          "slot": "primary",
+          "requests": 7,
+          "tokens": 369150,
+          "usd": 0,
+          "unpriced": false
+        }
+      ],
+      "repos": null,
+      "latency_p50_ms": 8287,
+      "latency_p95_ms": 38880,
+      "earliest": "2026-10-06T10:26:54+02:00",
+      "covered": true,
+      "files": 1
+    },
+    "recent": [
+      {
+        "time": "2026-10-18T19:38:40.764337+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 41123,
+        "input_tokens": 1618,
+        "output_tokens": 1647,
+        "cache_read_tokens": 138368
+      },
+      {
+        "time": "2026-10-18T19:35:51.708153+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 33035,
+        "input_tokens": 1137,
+        "output_tokens": 1472,
+        "cache_read_tokens": 137344
+      },
+      {
+        "time": "2026-10-18T19:35:35.368877+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 499,
+        "duration_ms": 16300,
+        "note": "Codex closed the turn before it finished"
+      },
+      {
+        "time": "2026-10-18T19:35:12.900743+02:00",
+        "request_id": "01a15014-f07e-7b00-9046-4c405fd78dcc",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 23496,
+        "input_tokens": 1221,
+        "output_tokens": 925,
+        "cache_read_tokens": 36224
+      },
+      {
+        "time": "2026-10-18T19:35:12.171686+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 23091,
+        "input_tokens": 1435,
+        "output_tokens": 883,
+        "cache_read_tokens": 135168
+      },
+      {
+        "time": "2026-10-18T19:34:39.369969+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 32610,
+        "input_tokens": 1447,
+        "output_tokens": 1244,
+        "cache_read_tokens": 133888
+      },
+      {
+        "time": "2026-10-18T19:33:18.501709+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 29970,
+        "input_tokens": 1537,
+        "output_tokens": 1276,
+        "cache_read_tokens": 132480
+      },
+      {
+        "time": "2026-10-18T19:32:52.726916+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 499,
+        "duration_ms": 25725,
+        "note": "Codex closed the turn before it finished"
+      },
+      {
+        "time": "2026-10-18T19:32:53.427506+02:00",
+        "request_id": "01a15012-cfd1-70d2-89d4-af0f0246367e",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 22429,
+        "input_tokens": 16064,
+        "output_tokens": 937,
+        "cache_read_tokens": 21376
+      },
+      {
+        "time": "2026-10-18T19:32:45.831479+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 6808,
+        "input_tokens": 4611,
+        "output_tokens": 218,
+        "cache_read_tokens": 127744
+      },
+      {
+        "time": "2026-10-18T19:32:40.170909+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 5569,
+        "input_tokens": 178,
+        "output_tokens": 180,
+        "cache_read_tokens": 127744
+      },
+      {
+        "time": "2026-10-18T19:22:02.599587+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 5203,
+        "input_tokens": 1093,
+        "output_tokens": 73,
+        "cache_read_tokens": 126720
+      },
+      {
+        "time": "2026-10-18T19:21:45.170293+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 17316,
+        "input_tokens": 579,
+        "output_tokens": 960,
+        "cache_read_tokens": 126208
+      },
+      {
+        "time": "2026-10-18T19:21:12.62031+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 9742,
+        "input_tokens": 650,
+        "output_tokens": 353,
+        "cache_read_tokens": 125696
+      },
+      {
+        "time": "2026-10-18T19:21:01.390284+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 11094,
+        "input_tokens": 865,
+        "output_tokens": 259,
+        "cache_read_tokens": 124928
+      },
+      {
+        "time": "2026-10-18T19:20:49.58866+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 10675,
+        "input_tokens": 5134,
+        "output_tokens": 664,
+        "cache_read_tokens": 119936
+      },
+      {
+        "time": "2026-10-18T19:19:35.015695+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 74480,
+        "input_tokens": 776,
+        "output_tokens": 4933,
+        "cache_read_tokens": 119296
+      },
+      {
+        "time": "2026-10-18T19:19:25.439129+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 9292,
+        "input_tokens": 892,
+        "output_tokens": 463,
+        "cache_read_tokens": 118528
+      },
+      {
+        "time": "2026-10-18T19:19:12.466796+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 11660,
+        "input_tokens": 827,
+        "output_tokens": 601,
+        "cache_read_tokens": 117888
+      },
+      {
+        "time": "2026-10-18T19:16:59.793536+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 131438,
+        "input_tokens": 117623,
+        "output_tokens": 333
+      },
+      {
+        "time": "2026-10-18T19:16:55.812153+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 3947,
+        "input_tokens": 214,
+        "output_tokens": 15,
+        "cache_read_tokens": 116864
+      },
+      {
+        "time": "2026-10-18T19:16:51.547807+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 4236,
+        "input_tokens": 396,
+        "output_tokens": 62,
+        "cache_read_tokens": 116608
+      },
+      {
+        "time": "2026-10-18T19:16:43.447235+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 8074,
+        "input_tokens": 86,
+        "output_tokens": 291,
+        "cache_read_tokens": 116608
+      },
+      {
+        "time": "2026-10-18T19:16:41.684913+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 499,
+        "duration_ms": 1636,
+        "note": "Codex closed the turn before it finished"
+      },
+      {
+        "time": "2026-10-18T19:16:31.644622+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 9881,
+        "input_tokens": 585,
+        "output_tokens": 477,
+        "cache_read_tokens": 115456
+      },
+      {
+        "time": "2026-10-18T19:16:19.500837+02:00",
+        "request_id": "01a14fcd-36b4-71f3-b845-22db593b86a7",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 2734,
+        "input_tokens": 225,
+        "output_tokens": 31,
+        "cache_read_tokens": 85504
+      },
+      {
+        "time": "2026-10-18T19:16:15.604546+02:00",
+        "request_id": "01a14fcd-36b4-71f3-b845-22db593b86a7",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 2947,
+        "input_tokens": 264,
+        "output_tokens": 61,
+        "cache_read_tokens": 85376
+      },
+      {
+        "time": "2026-10-18T19:15:24.336003+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 7207,
+        "input_tokens": 2387,
+        "output_tokens": 223,
+        "cache_read_tokens": 113408
+      },
+      {
+        "time": "2026-10-18T19:15:19.662066+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 4551,
+        "input_tokens": 580,
+        "output_tokens": 151,
+        "cache_read_tokens": 113024
+      },
+      {
+        "time": "2026-10-18T19:15:12.263676+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 7269,
+        "input_tokens": 390,
+        "output_tokens": 163,
+        "cache_read_tokens": 112768
+      },
+      {
+        "time": "2026-10-18T19:15:16.602454+02:00",
+        "request_id": "01a14fcd-36b4-71f3-b845-22db593b86a7",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 2716,
+        "input_tokens": 304,
+        "output_tokens": 31,
+        "cache_read_tokens": 85248
+      },
+      {
+        "time": "2026-10-18T19:15:12.253125+02:00",
+        "request_id": "01a14fcd-36b4-71f3-b845-22db593b86a7",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 3380,
+        "input_tokens": 215,
+        "output_tokens": 61,
+        "cache_read_tokens": 85248
+      },
+      {
+        "time": "2026-10-18T19:15:09.69161+02:00",
+        "request_id": "01a14fcd-36b4-71f3-b845-22db593b86a7",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 2518,
+        "input_tokens": 412,
+        "output_tokens": 47,
+        "cache_read_tokens": 84992
+      },
+      {
+        "time": "2026-10-18T19:14:45.298705+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 7557,
+        "input_tokens": 1212,
+        "output_tokens": 119,
+        "cache_read_tokens": 111744
+      },
+      {
+        "time": "2026-10-18T19:14:29.407455+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 15710,
+        "input_tokens": 618,
+        "output_tokens": 922,
+        "cache_read_tokens": 111360
+      },
+      {
+        "time": "2026-10-18T19:14:22.658902+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 6707,
+        "input_tokens": 314,
+        "output_tokens": 192,
+        "cache_read_tokens": 111232
+      },
+      {
+        "time": "2026-10-18T19:14:10.68484+02:00",
+        "request_id": "01a14fcd-36b4-71f3-b845-22db593b86a7",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 2590,
+        "input_tokens": 328,
+        "output_tokens": 31,
+        "cache_read_tokens": 84864
+      },
+      {
+        "time": "2026-10-18T19:14:06.586658+02:00",
+        "request_id": "01a14fcd-36b4-71f3-b845-22db593b86a7",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 3144,
+        "input_tokens": 239,
+        "output_tokens": 61,
+        "cache_read_tokens": 84864
+      },
+      {
+        "time": "2026-10-18T19:13:17.290987+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 5293,
+        "input_tokens": 828,
+        "output_tokens": 103,
+        "cache_read_tokens": 110592
+      },
+      {
+        "time": "2026-10-18T19:13:08.437218+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 8303,
+        "input_tokens": 752,
+        "output_tokens": 430,
+        "cache_read_tokens": 110080
+      },
+      {
+        "time": "2026-10-18T19:13:07.584027+02:00",
+        "request_id": "01a14fcd-36b4-71f3-b845-22db593b86a7",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 3413,
+        "input_tokens": 279,
+        "output_tokens": 31,
+        "cache_read_tokens": 84736
+      },
+      {
+        "time": "2026-10-18T19:12:54.561474+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 499,
+        "duration_ms": 13833,
+        "note": "Codex closed the turn before it finished"
+      },
+      {
+        "time": "2026-10-18T19:13:02.786026+02:00",
+        "request_id": "01a14fcd-36b4-71f3-b845-22db593b86a7",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 4109,
+        "input_tokens": 190,
+        "output_tokens": 61,
+        "cache_read_tokens": 84736
+      },
+      {
+        "time": "2026-10-18T19:12:59.556821+02:00",
+        "request_id": "01a14fcd-36b4-71f3-b845-22db593b86a7",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 3204,
+        "input_tokens": 501,
+        "output_tokens": 61,
+        "cache_read_tokens": 84352
+      },
+      {
+        "time": "2026-10-18T19:12:51.591241+02:00",
+        "request_id": "01a14fcd-36b4-71f3-b845-22db593b86a7",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 3009,
+        "input_tokens": 352,
+        "output_tokens": 39,
+        "cache_read_tokens": 84224
+      },
+      {
+        "time": "2026-10-18T19:12:46.148909+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 7607,
+        "input_tokens": 386,
+        "output_tokens": 374,
+        "cache_read_tokens": 109440
+      },
+      {
+        "time": "2026-10-18T19:12:46.101459+02:00",
+        "request_id": "01a14fcd-36b4-71f3-b845-22db593b86a7",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 4275,
+        "input_tokens": 389,
+        "output_tokens": 162,
+        "cache_read_tokens": 83968
+      },
+      {
+        "time": "2026-10-18T19:12:42.767098+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 3360,
+        "input_tokens": 1680,
+        "output_tokens": 95,
+        "cache_read_tokens": 107904
+      },
+      {
+        "time": "2026-10-18T19:12:38.338236+02:00",
+        "request_id": "01a14fcd-36b4-71f3-b845-22db593b86a7",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 7274,
+        "input_tokens": 565,
+        "output_tokens": 103,
+        "cache_read_tokens": 83584
+      },
+      {
+        "time": "2026-10-18T19:12:36.132431+02:00",
+        "request_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "session_id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "slot": "primary",
+        "route": "PRIMARY",
+        "model": "gpt-6-astra",
+        "destination": "https://chatgpt.com/backend-api/codex/responses",
+        "http_status": 200,
+        "duration_ms": 6607,
+        "input_tokens": 316,
+        "output_tokens": 188,
+        "cache_read_tokens": 107776
+      }
+    ],
+    "sessions": [
+      {
+        "id": "01a13ade-5588-7731-a716-b7625bc0b18d",
+        "model": "gpt-6-astra",
+        "first": "2026-10-15T21:48:07.679242+02:00",
+        "last": "2026-10-18T19:38:40.764337+02:00",
+        "turns": 1979,
+        "context": 141633,
+        "window": 272000,
+        "percent": 52.07095588235294,
+        "tokens": 256476084,
+        "errors": 224
+      },
+      {
+        "id": "01a14fc3-8b14-74b1-830b-fb3fe3ee724a",
+        "model": "gpt-5.6-terra",
+        "first": "2026-10-18T18:06:18.345589+02:00",
+        "last": "2026-10-18T18:07:43.478689+02:00",
+        "turns": 9,
+        "context": 73631,
+        "window": 272000,
+        "percent": 27.070220588235294,
+        "tokens": 383647,
+        "errors": 1
+      },
+      {
+        "id": "01a14424-ec2a-76b2-9837-3471390b074e",
+        "model": "gpt-5.6-terra",
+        "first": "2026-10-16T11:57:13.588074+02:00",
+        "last": "2026-10-16T12:00:34.16877+02:00",
+        "turns": 12,
+        "context": 86928,
+        "window": 272000,
+        "percent": 31.958823529411763,
+        "tokens": 733879,
+        "errors": 0
+      }
+    ]
+  },
+  "/api/intelligent-compaction": {
+    "mode": "",
+    "enabled": true,
+    "fixed": 300000,
+    "start": 300000,
+    "floor": 100000,
+    "buffer_percent": 20,
+    "delay_minutes": 30,
+    "window_days": 14,
+    "repos": [
+      {
+        "root": "/Users/owner/Desktop",
+        "name": "Desktop",
+        "threshold": 0,
+        "target": 250000,
+        "compactions": 0,
+        "after_tokens": 0,
+        "growth_per_turn": 1498,
+        "cost_usd": 0,
+        "turns_after": 0,
+        "payback_turns": 0,
+        "saved_per_turn_usd": 0.0025000000000000005,
+        "failures": {
+          "summary_failed": 0,
+          "unused": 0,
+          "unpaid": 0,
+          "ended": 0,
+          "attempts": 0,
+          "rate": 0,
+          "lost_usd": 0,
+          "streak": 0
+        },
+        "measured": {
+          "requests": 5391,
+          "cheapest_at": 225000,
+          "cheapest_usd": 10.861499899999997,
+          "latest_at": 250000,
+          "latest_usd": 11.077941399999991,
+          "actual_usd": 17.59857350000002,
+          "fixed_usd": 11.904912299999992
+        },
+        "reason": "replayed over the 5391 requests of the last 14 days, which cost $17.60 as Burst ran them: cheapest at 225k ($10.86), as late as costs no more than 5% more: 250k ($11.08)",
+        "learned_at": "2026-10-19T11:11:47.767046+02:00",
+        "in_force": 300000,
+        "source": "fixed"
+      },
+      {
+        "root": "/Users/owner",
+        "name": "callumbaker",
+        "threshold": 0,
+        "target": 225000,
+        "previous": 400000,
+        "compactions": 0,
+        "after_tokens": 0,
+        "growth_per_turn": 1266,
+        "cost_usd": 0,
+        "turns_after": 0,
+        "payback_turns": 0,
+        "saved_per_turn_usd": 0.00375,
+        "failures": {
+          "summary_failed": 0,
+          "unused": 0,
+          "unpaid": 0,
+          "ended": 0,
+          "attempts": 0,
+          "rate": 0,
+          "lost_usd": 0,
+          "streak": 0
+        },
+        "measured": {
+          "requests": 9345,
+          "cheapest_at": 150000,
+          "cheapest_usd": 31.88407939999996,
+          "latest_at": 225000,
+          "latest_usd": 33.09982370000006,
+          "actual_usd": 44.025242800000086,
+          "fixed_usd": 35.50620410000006
+        },
+        "reason": "replayed over the 9345 requests of the last 14 days, which cost $44.03 as Burst ran them: cheapest at 150k ($31.88), as late as costs no more than 5% more: 225k ($33.10)",
+        "learned_at": "2026-10-19T11:11:47.767046+02:00",
+        "in_force": 300000,
+        "source": "fixed"
+      }
+    ]
+  }
+}

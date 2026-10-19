@@ -1,8 +1,10 @@
 'use strict';
 
 // Client for Claude Burst's loopback admin API and support console (verified
-// against claude-burst internal/admin, v0.19): allow-listed GETs, plus the few
-// POSTs in MUTATE_ALLOW, upgrade and compaction. The admin API has no authentication, so
+// against claude-burst v0.20.36 (40551ad), internal/admin): allow-listed GETs,
+// plus the few POSTs in MUTATE_ALLOW, upgrade and compaction. Features are
+// gated per capability (CAPABILITY_FLOORS), never on one version string, so an
+// older Burst keeps working with the newer features hidden. The admin API has no authentication, so
 // everything here fails closed: a non-loopback address, a failed handshake or
 // a listener that is not Burst's own LaunchAgent gives `untrusted` and reads
 // nothing. Callers get a whitelisted snapshot, never a raw response.
@@ -32,6 +34,32 @@ const COMPACTION_MODES = new Set(['fixed', 'intelligent']);
 const SEMVER = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/;
 const UPGRADE_CACHE_MS = 10 * 60 * 1000;
 
+// The Burst version each feature first shipped in. A flag is true when the
+// running Burst is at least that version; `looseEnds` is also probed once per
+// version (a 404 on /api/loose-ends turns it off). Nothing else is probed.
+const CAPABILITY_FLOORS = Object.freeze({
+  state: [0, 0, 0],
+  usage: [0, 19, 0],
+  upgradeStatus: [0, 19, 0],
+  handoverAudit: [0, 19, 0],
+  handoverFile: [0, 19, 0],
+  testConnection: [0, 19, 0],
+  looseEnds: [0, 20, 0],
+  keepAwake: [0, 20, 0],
+  mods: [0, 20, 0],
+  finder: [0, 20, 0],
+  handoffTaken: [0, 20, 0],
+  consoleRepair: [0, 20, 0],
+  intelligentCompaction: [0, 20, 0],
+  codex: [0, 20, 0],
+});
+const CAPABILITY_NAMES = Object.freeze(Object.keys(CAPABILITY_FLOORS));
+function capabilitiesFor(version) {
+  const out = {};
+  for (const k of CAPABILITY_NAMES) out[k] = atLeast(version, CAPABILITY_FLOORS[k]);
+  return out;
+}
+
 // Exact paths, GET only. Query keys are limited per path.
 const GET_ALLOW = Object.freeze({
   '/api/state': [],
@@ -51,11 +79,15 @@ const GET_ALLOW = Object.freeze({
   '/api/settings': [],
   '/api/audit': ['limit'],
   '/api/mod-status': [],
+  '/api/loose-ends': [],
+  '/api/finder': [],
 });
 
 // Removed from every response before it leaves this module, at any depth:
 // conversation text (inspector previews), credentials and their locations.
-const SECRET_KEYS = new Set(['preview', 'full', 'Full', 'hotspot_password', 'password', 'api_key', 'apiKey', 'secret', 'token', 'access_token', 'authorization', 'keychain_service', 'key_env_var']);
+const SECRET_KEYS = new Set(['preview', 'full', 'Full', 'password', 'api_key', 'apiKey', 'secret', 'token', 'access_token', 'authorization', 'keychain_service', 'key_env_var']);
+// Any key that names a password (whatever prefix Burst gives it) goes too.
+const SECRET_KEY_RE = /password|passwd/i;
 const URL_KEYS = new Set(['base_url', 'settings_base_url', 'destination']);
 function scrub(v, depth = 0) {
   if (depth > 20) return null;
@@ -63,7 +95,7 @@ function scrub(v, depth = 0) {
   if (!v || typeof v !== 'object') return v;
   const out = {};
   for (const [k, x] of Object.entries(v)) {
-    if (SECRET_KEYS.has(k)) continue;
+    if (SECRET_KEYS.has(k) || SECRET_KEY_RE.test(k)) continue;
     if (URL_KEYS.has(k) && typeof x === 'string') {
       try { const u = new URL(x); out[k] = `${u.protocol}//${u.host}${u.pathname}`; } catch { /* not a URL: dropped */ }
       continue;
@@ -160,6 +192,7 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
   let addr = null;
   let consoleAddr = null;
   let upgradeCache = null;
+  let probeCache = null; // { version, looseEnds }
   let configInFlight = null;
   let authorityEpoch = 0;
 
@@ -265,9 +298,11 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
       secondaryReady: s.secondary_ready === true,
       overflow: s.overflow === true,
       reason: str(s.reason),
-      caTrusted: i.ca_trusted === true,
-      hostsEntry: i.hosts_entry === true,
-      remoteControlExpected: i.remote_control_expected === true,
+      // v0.20.36 keeps these under `intercept`; an older or newer layout may lift them to the top.
+      caTrusted: i.ca_trusted === true || s.ca_trusted === true,
+      hostsEntry: i.hosts_entry === true || s.hosts_entry === true,
+      remoteControlExpected: i.remote_control_expected === true || s.remote_control_expected === true,
+      primaryHealth: { failures: num(ph.failures), failingSince: str(ph.failing_since), lastAnswer: str(ph.last_answer), lastFailure: str(ph.last_failure), lastError: str(ph.last_error).slice(0, 300), networkDown: ph.network_down === true },
       pfHeal: heal(i.pf_heal),
       selfHeal: heal(i.self_heal),
       clientTls: tls ? { failures: num(tls.failures), successes: num(tls.successes), threshold: num(tls.threshold), rejecting: tls.rejecting === true, lastClass: str(tls.last_class), lastFailure: str(tls.last_failure) } : null,
@@ -325,9 +360,14 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
     if (epoch !== authorityEpoch) return unavailableDetection();
 
     const state = normalizeState(raw);
-    const capabilities = atLeast(state.version, [0, 19, 0])
-      ? { state: true, usage: true, upgradeStatus: true, handoverAudit: true, handoverFile: true, testConnection: true }
-      : { state: true, usage: false, upgradeStatus: false, handoverAudit: false, handoverFile: false, testConnection: false };
+    const capabilities = capabilitiesFor(state.version);
+    if (capabilities.looseEnds && !state.configError) {
+      if (probeCache && probeCache.version === state.version) capabilities.looseEnds = probeCache.looseEnds;
+      else {
+        try { await send('GET', '/api/loose-ends', { to: candidate }); } catch (e) { if (e.code === 'http' && e.status === 404) capabilities.looseEnds = false; }
+        probeCache = { version: state.version, looseEnds: capabilities.looseEnds };
+      }
+    }
     let upgrade = null;
     if (capabilities.upgradeStatus && !state.configError) {
       if (upgradeCache && now() - upgradeCache.at < UPGRADE_CACHE_MS) upgrade = upgradeCache.value;
@@ -403,6 +443,8 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
   const mac = async () => request('GET', '/api/mac');
   const settings = async () => request('GET', '/api/settings');
   const modStatus = async () => request('GET', '/api/mod-status');
+  const looseEnds = async () => request('GET', '/api/loose-ends');
+  const finder = async () => request('GET', '/api/finder');
   const intelligentCompaction = async () => request('GET', '/api/intelligent-compaction');
 
   // The support console answers when the gateway is down, so it gets its own trust check:
@@ -481,10 +523,10 @@ function createBurstClient({ home = os.homedir(), platform = process.platform, i
 
   return {
     detect, request, testConnection, requestUpgrade, setCompaction, usage, sessionSecondaryUsd, codex, codexRouting, coordination, handoverAudit, handoverFile,
-    requests, history, inspect: inspectContext, audit, automask, mac, settings, modStatus, intelligentCompaction, consoleDetect, mutate,
+    requests, history, inspect: inspectContext, audit, automask, mac, settings, modStatus, looseEnds, finder, intelligentCompaction, consoleDetect, mutate,
     binPath,
     adminUrl: () => (addr ? `http://${addr.host === '::1' ? '[::1]' : addr.host}:${addr.port}/` : null),
   };
 }
 
-module.exports = { createBurstClient, isAllowed, parseAdminAddress, atLeast, parseVersion, scrub, GET_ALLOW, MUTATE_ALLOW, LABEL, CONSOLE_LABEL };
+module.exports = { createBurstClient, isAllowed, parseAdminAddress, atLeast, parseVersion, scrub, capabilitiesFor, CAPABILITY_FLOORS, CAPABILITY_NAMES, GET_ALLOW, MUTATE_ALLOW, LABEL, CONSOLE_LABEL };
