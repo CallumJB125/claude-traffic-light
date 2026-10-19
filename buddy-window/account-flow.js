@@ -62,7 +62,7 @@ async function clearHubSessions(origin, fromPartition) {
 // The probe says Cloudflare Access is still in front (a redirect to its login), or the hub itself runs Access auth.
 const behindAccess = (pr) => !!pr.accessTeam || pr.auth === 'access';
 
-function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLink, probe, makeDevice, hasDeviceFile = () => false, discardDeviceFiles = () => {}, deviceInfo = () => ({}), openBrowser = () => {}, oauthAllowOrigins = [], oauthTimeoutMs, ui, log = () => {}, now = () => Date.now() }) {
+function createAccountFlow({ store, clientFor, signedIn, settledSignedIn = async (origin) => signedIn(origin), userOf, normHub, normLink, probe, makeDevice, hasDeviceFile = () => false, discardDeviceFiles = () => {}, deviceInfo = () => ({}), openBrowser = () => {}, oauthAllowOrigins = [], oauthTimeoutMs, ui, log = () => {}, now = () => Date.now() }) {
   const acct = { screen: null, hub: null, notice: null, alert: null, deleting: false };
   let oauthRun = null; // {hub, provider, run, done}: the one provider sign-in waiting on the browser
   let noticeAfterSignIn = null; // the hub's SEPARATE_ACCOUNT words, for the first screen after that sign-in
@@ -396,7 +396,10 @@ function createAccountFlow({ store, clientFor, signedIn, userOf, normHub, normLi
     if (store.removeAccess(accessWsId(origin))) { log('dropped the Access entry of a hub that signs in itself now', { host: hostOf(origin) }); ui.pushState(); }
     trustedHub = origin;
     acct.hub = origin;
-    if (signedIn(origin)) { await afterSignIn(origin); return { ok: true }; }
+    // signedIn() is cache-only; a saved sign-in for this hub may still be restoring.
+    const restored = await settledSignedIn(origin);
+    if (acct.hub !== origin) return { ok: true };
+    if (restored) { await afterSignIn(origin); return { ok: true }; }
     show('email');
     return { ok: true };
   }

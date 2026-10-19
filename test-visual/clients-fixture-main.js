@@ -24,7 +24,7 @@ app.whenReady().then(async () => {
   const saved = JSON.parse(process.env.PLEXIFORM_CLIENT_TEST_ACCOUNT);
   const dir = path.join(app.getPath('userData'), 'buddy-accounts');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(dir, `${hubKey(origin)}.bin`), safeStorage.encryptString(JSON.stringify(saved)), { mode: 0o600 });
+  fs.writeFileSync(path.join(dir, `${hubKey(origin)}.bin`), await safeStorage.encryptStringAsync(JSON.stringify(saved)), { mode: 0o600 });
   const buddy = createBuddyWindow({ isDev: true, devAccountsHub: origin, log: (...args) => global.__clientTestLogs.push(args) });
   global.__clientTestBuddy = buddy;
   buddy.open('account');

@@ -16,7 +16,10 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => { await h?.cleanup(); });
 
-const SHOT = { threshold: 0.05, stylePath: path.join(__dirname, 'no-hover-chrome.css') };
+// The Burst chip mirrors this Mac's own Claude Burst (src/burst-client.js reads
+// ~/.local/bin/claude-burst), which the hermetic home cannot hide; it is not what these shots check.
+const SHOT = { threshold: 0.05, stylePath: path.join(__dirname, 'no-hover-chrome.css'), mask: [] };
+test.beforeAll(() => { SHOT.mask.push(widget.locator('#burst-chip')); });
 
 function writeRequest(id, tool, toolInput) {
   const dir = path.join(h.home, 'requests');

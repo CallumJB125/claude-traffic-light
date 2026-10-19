@@ -62,6 +62,10 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
       CLAUDE_TRAFFIC_LIGHT_PROJECTS: projects,
       CLAUDE_TRAFFIC_LIGHT_BACKUPS: backups,
       CLAUDE_TRAFFIC_LIGHT_BURST_HOME: home,
+      // A dev run's profile is os.tmpdir()/plexiform-dev-<pid> (main.js), and Tasks puts
+      // per-run sockets at <profile>/tasks/run/<id>/ipc.sock. Under macOS's /var/folders
+      // temp dir that is 103 or 104 bytes depending on the pid; AF_UNIX allows 103.
+      ...(process.platform === 'darwin' ? { TMPDIR: '/tmp' } : {}),
       ...env,
     },
   });
@@ -148,4 +152,13 @@ async function snapToPixels(locator) {
   return locator;
 }
 
-module.exports = { launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };
+// Tasks effects are accepted only from the focused owner window (src/tasks-main.js);
+// when another app is frontmost (a busy desktop) the harness has to bring it forward.
+async function focusMainWindow(app) {
+  await app.evaluate(({ app: a, BaseWindow, BrowserWindow }) => {
+    a.focus({ steal: true });
+    for (const w of BaseWindow.getAllWindows()) if (!w.isDestroyed() && !(w instanceof BrowserWindow) && w.isVisible()) w.focus();
+  });
+}
+
+module.exports = { focusMainWindow, launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };

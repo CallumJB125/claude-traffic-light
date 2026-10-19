@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { test, expect } = require('@playwright/test');
-const { launchApp, embedded } = require('./app');
+const { launchApp, embedded, focusMainWindow } = require('./app');
 const { startTasksMock, shortTmp } = require('./tasks-mock');
 
 const SHOT = { threshold: 0.05, stylePath: path.join(__dirname, 'no-hover-chrome.css') };
@@ -41,12 +41,15 @@ test.describe('with a supervisor', () => {
   test('open a task: the transcript appears and the approval is answerable; an action round-trips', async () => {
     await row(page, 'Add a dark mode toggle').click();
     await expect(page.locator('#d-head .d-title')).toHaveText(/dark mode/i);
+    // a task opens on its Overview (3a88b399); the transcript is its own tab
+    await page.locator('#tab-transcript').click();
     await expect(page.locator('#tx .msg').first()).toBeVisible({ timeout: 10000 });
     await expect(page.locator('#tx .tool').first()).toBeVisible();
     await expect(page.locator('#d-banners .ask')).toContainText('Wants to use Bash');
     expect(await page.evaluate(() => document.body.innerHTML.includes('btk_'))).toBe(false);
     await page.waitForTimeout(500);
     await expect(page.locator('#main')).toHaveScreenshot('detail-needs-you.png', { ...SHOT, mask: [page.locator('.age'), page.locator('.d-meta')], maxDiffPixelRatio: 0.03 });
+    await focusMainWindow(h.app);
     await page.getByRole('button', { name: 'Allow once' }).click();
     await expect(page.locator('#d-head .d-state')).not.toContainText('Needs you', { timeout: 15000 });
     await expect(page.locator('#d-head .d-state')).toContainText(/Running|Ready to review|Quiet/, { timeout: 15000 });
@@ -61,6 +64,7 @@ test.describe('with a supervisor', () => {
     await expect(page.locator('.confirm')).toHaveCount(0);
     await expect(page.locator('#d-head .d-state')).toContainText('Stalled');
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await focusMainWindow(h.app);
     await page.getByRole('button', { name: 'Yes, stop' }).click();
     await expect(page.locator('#d-head .d-state')).toContainText('Failed', { timeout: 15000 });
   });
@@ -73,6 +77,7 @@ test.describe('with a supervisor', () => {
   });
 
   test('composer: ⌥⌘T opens it, it validates, and a new task starts, shows up and takes a message', async () => {
+    await focusMainWindow(h.app);
     await page.keyboard.press('Alt+Meta+T');
     await expect(page.locator('.composer h2')).toHaveText('New task');
     await page.locator('#c-go').click();
@@ -85,12 +90,14 @@ test.describe('with a supervisor', () => {
     await expect(page.locator('#c-ai option')).not.toHaveCount(1, { timeout: 10000 });
     await page.mouse.move(0, 0);
     await expect(page.locator('#main')).toHaveScreenshot('composer.png', { ...SHOT, maxDiffPixelRatio: 0.03 });
+    await focusMainWindow(h.app);
     await page.locator('#c-go').click();
     await expect(page.locator('#d-head .d-title')).toContainText('Add a cache', { timeout: 15000 });
     await expect(row(page, 'Add a cache')).toHaveCount(1);
     await page.locator('#tab-messages').click();
     await expect(page.locator('#send-text')).toBeEnabled({ timeout: 20000 });
     await page.fill('#send-text', 'please keep the public API unchanged');
+    await focusMainWindow(h.app);
     await page.locator('#send-btn').click();
     await expect(page.locator('#thread .bubble.out .body')).toHaveText('please keep the public API unchanged', { timeout: 10000 });
     await expect(page.locator('#thread .bubble.out .who')).toHaveText('You');
