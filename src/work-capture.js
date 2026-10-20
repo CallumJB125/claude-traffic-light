@@ -64,6 +64,7 @@ function compactState(v) {
       for(const k of ['last_seen','attempt_at','sent_at','retry_at'])if(Number.isFinite(e[k])&&e[k]>=0)task[k]=e[k];
       for(const k of ['fingerprint','attempt_fingerprint'])if(HASH.test(e[k]??''))task[k]=e[k];
       if(e.backfilled===1)task.backfilled=1;
+      if(isId(e.run_id))task.run_id=e.run_id;
       const pr=prOf(e.pr);if(pr)task.pr=pr;
     }
     out.tasks[key]=task;
@@ -117,10 +118,13 @@ function isBackgroundSession(s) {
 function observation(s,{ownedRoots=[],host=null}={}) {
   if(!s||isBackgroundSession(s)||s.remote||s.demo||s.boardRunId||s.board_run_id||s.owned?.launcher==='board'||s.capture===false||!isId(s.sessionId)||host&&s.host!==host)return null;
   if(ownedRoots.some(root=>typeof s.cwd==='string'&&(s.cwd===root||s.cwd.startsWith(root+path.sep))))return null;
-  const provider = PROVIDERS.has(s.source)?s.source:PROVIDERS.has(s.via)?s.via:s.source==null&&s.via==null?'claude':null;
+  // Claude Code's hook reports no source; its `via` is the hook event (tool-use, session-start), not a provider.
+  const provider = PROVIDERS.has(s.source)?s.source:PROVIDERS.has(s.via)?s.via:s.source==null?'claude':null;
   if(!provider)return null;
   const task = s.taskId==null?'session':s.taskId;if(!isId(task))return null;
-  return {provider,session_id:s.sessionId,task_id:task,title:clean(untag(s.taskTitle)||`${provider[0].toUpperCase()+provider.slice(1)} · ${path.basename(s.cwd||'Work')}`,200),
+  // Each Hermes cron run is a new session (cron_<job>_<date>_<time>); one card per job, updated by every run.
+  const cron = provider==='hermes'&&/^(cron_[A-Za-z0-9]+)_\d{8}_\d{6}$/.exec(s.sessionId);
+  return {provider,session_id:cron?cron[1]:s.sessionId,...(cron?{run_id:s.sessionId}:{}),task_id:task,title:clean(untag(s.taskTitle)||`${provider[0].toUpperCase()+provider.slice(1)} · ${path.basename(s.cwd||'Work')}`,200),
     status:phase(s.signal),summary:typeof s.taskSummary==='string'?clean(s.taskSummary,2000):null,cwd:s.cwd,personal:s.scope?.state==='personal'};
 }
 function routeFor(repo,routes,choice) {
@@ -174,10 +178,12 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
   let state=store.state,latest=[],active=null,stopped=false,lastCatalogAt=0,catalog={routes:[],complete:true},notice=null;
   const records=WorkRecord.createWorkRecords({file:recordsFile,now,log});
   const factsOf=WorkRecord.factsCache(factsFor,now);
+  // Facts, handover, spend and PR are kept per run: a folded Hermes cron card looks them up by its latest run.
+  const run=o=>o.run_id?{...o,session_id:o.run_id}:o;
   const shareSalt=()=>crypto.createHash('sha256').update(`work-record:${state.install_id}`).digest('hex').slice(0,16);
   const call=(fn,o)=>{try{return typeof fn==='function'?fn(o)??null:null;}catch{return null;}};
-  const recordFor=(o,raw,entry=null)=>WorkRecord.build({install_id:state.install_id,o,raw,facts:factsOf(o),repo_id:entry?.destination.kind==='team'?entry.destination.repo_id:null,
-    handover:entry?call(handoverFor,o):null,spend:entry?call(spendFor,o):null,home});
+  const recordFor=(o,raw,entry=null)=>WorkRecord.build({install_id:state.install_id,o,raw,facts:factsOf(run(o)),repo_id:entry?.destination.kind==='team'?entry.destination.repo_id:null,
+    handover:entry?call(handoverFor,run(o)):null,spend:entry?call(spendFor,run(o)):null,home});
   const shows=rec=>!!(rec&&(rec.goal||rec.summary||rec.files.edited.length));
   const placeless=cwd=>typeof cwd!=='string'||!path.isAbsolute(cwd)||path.resolve(cwd)===path.parse(path.resolve(cwd)).root||typeof home==='string'&&home!==''&&path.resolve(cwd)===path.resolve(home);
   const changed=()=>{try{onChange();}catch{/* UI updates do not affect capture */}};
@@ -262,8 +268,9 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       const currentRoute=routesByKey.get(routeKey(entry.destination));
       const {title,summary}=cardText(o,raw,entry,currentRoute);
       const local=entry.destination.kind==='local';
-      const cost=local?costBody(call(spendFor,o)):null;
-      const body={install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id:o.task_id,repo_id:entry.destination.repo_id??null,title,status:o.status,...(summary!==null?{summary}: {}),...(cost?{cost}:{}),...(local&&typeof prFor==='function'?{pr:prBody(call(prFor,o))}:{})};
+      if(o.run_id&&entry.run_id!==o.run_id&&commit(next=>{next.tasks[key].run_id=o.run_id;}))entry=state.tasks[key];
+      const cost=local?costBody(call(spendFor,run(o))):null;
+      const body={install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id:o.task_id,repo_id:entry.destination.repo_id??null,title,status:o.status,...(summary!==null?{summary}: {}),...(cost?{cost}:{}),...(local&&typeof prFor==='function'?{pr:prBody(call(prFor,run(o)))}:{})};
       // A repeated UI poll is not a new activity report. The hook's bounded
       // change marker detects new observations, never verified liveness.
       const marker=typeof raw.updatedAt==='string'?raw.updatedAt.slice(0,100):null;
@@ -307,12 +314,12 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
         const recordId=`${state.install_id}:${e.provider}:${e.session_id}`;
         // Reported since the change: the live path already wrote this card.
         if(records.get(recordId)||BACKGROUND_TITLE.test(String(e.title??'').trim())){mark(key);continue;}
-        const o={provider:e.provider,session_id:e.session_id,task_id:e.task_id,title:e.title,status:e.status,summary:null,cwd:null,personal:false};
-        const facts=call(factsFor,o)??call(docFactsFor,o);
+        const o={provider:e.provider,session_id:e.session_id,...(e.run_id?{run_id:e.run_id}:{}),task_id:e.task_id,title:e.title,status:e.status,summary:null,cwd:null,personal:false};
+        const facts=call(factsFor,run(o))??call(docFactsFor,run(o));
         const told=facts&&(facts.firstPrompt||facts.lastPrompt||facts.lastAssistant||Object.keys(facts.files??{}).length);
         if(!told){mark(key);continue;}
-        const spend=call(spendFor,o),cost=costBody(spend);
-        const rec=WorkRecord.build({install_id:state.install_id,o,raw:{taskTitle:FALLBACK_TITLE.test(e.title??'')?null:e.title},facts,handover:call(handoverFor,o),spend,home});
+        const spend=call(spendFor,run(o)),cost=costBody(spend);
+        const rec=WorkRecord.build({install_id:state.install_id,o,raw:{taskTitle:FALLBACK_TITLE.test(e.title??'')?null:e.title},facts,handover:call(handoverFor,run(o)),spend,home});
         if(!rec){mark(key);continue;}
         const stored=records.upsert(rec)??rec;
         const title=stored.title||e.title,summary=WorkRecord.cardBody(stored);
@@ -363,7 +370,8 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       }
       const route=entry.destination.kind==='team'?(catalog.routes??[]).find(r=>routeKey(r)===routeKey(entry.destination)):null;
       const {title,summary}=cardText(o,raw,entry,route);
-      const cost=entry.destination.kind==='local'?costBody(call(spendFor,o)):null;
+      if(o.run_id&&entry.run_id!==o.run_id&&commit(next=>{next.tasks[key].run_id=o.run_id;}))entry=state.tasks[key];
+      const cost=entry.destination.kind==='local'?costBody(call(spendFor,run(o))):null;
       await send(key,{install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id:o.task_id,repo_id:entry.destination.repo_id??null,title,status:o.status,...(summary!==null?{summary}:{}),...(cost?{cost}:{})},{title,force:true});
       const done=state.tasks[key];
       return done?.card_id?{ok:true,card_id:done.card_id,destination:{...done.destination}}:{ok:false,reason:done?.untracked?(done.reason||'untracked'):'send_failed'};
@@ -404,9 +412,9 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     },
     choices(){return !catalog.complete?[]:(catalog.routes??[]).filter(r=>safeCanonical(r.canonical_url)&&['owner','admin','member'].includes(r.role)).map(r=>({key:routeKey(r),repo:r.canonical_url,team_name:clean(r.team_name??'Team',60),board_name:clean(r.board_name??'Board',60)}));},
     // Main-only identity join for Overview; never forwarded to a renderer.
-    overviewSnapshot(){return Object.values(state.tasks).map(e=>({provider:e.provider,session_id:e.session_id,task_id:e.task_id,card_id:e.card_id,untracked:!!e.untracked,destination:{...e.destination}}));},
+    overviewSnapshot(){return Object.values(state.tasks).map(e=>({provider:e.provider,session_id:e.run_id??e.session_id,task_id:e.task_id,card_id:e.card_id,untracked:!!e.untracked,destination:{...e.destination}}));},
     // Main-only: the listed sessions a local handover is kept for (src/session-handover-main.js).
-    handoverRows(){return Object.values(state.tasks).filter(e=>!BACKGROUND_TITLE.test(String(e.title??'').trim())).map(e=>({provider:e.provider,session_id:e.session_id,title:e.title,last_seen:e.last_seen??null}));},
+    handoverRows(){return Object.values(state.tasks).filter(e=>!BACKGROUND_TITLE.test(String(e.title??'').trim())).map(e=>({provider:e.provider,session_id:e.run_id??e.session_id,title:e.title,last_seen:e.last_seen??null}));},
     // The This Mac list: background entries saved before capture filtered them are hidden,
     // and repeats of one piece of work collapse to a single row with a count.
     snapshot(){

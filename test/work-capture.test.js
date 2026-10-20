@@ -48,6 +48,24 @@ test('remote/demo/board-backed/owned source and malformed identity ignored; spoo
  for(const extra of [{remote:true},{demo:true},{boardRunId:'run'},{owned:{launcher:'board'}},{source:'admin'},{sessionId:'../escape'},{host:'foreign'}])assert.equal(observation(event(extra),{host:'mac'}),null);
  assert.equal(observation(event(),{ownedRoots:['/working']}),null);assert.equal(observation(event({taskId:'../escape'})),null);
 });
+test('Claude Code sessions (no source, hook event in via) get a card; a Hermes cron job keeps one card across runs',async t=>{
+ const claude=observation(event({source:undefined,via:'tool-use',sessionId:'9481b72e-735a-4941-8aca-39c5d63799f8'}));
+ assert.equal(claude.provider,'claude');assert.equal(claude.status,observation(event()).status);
+ assert.equal(observation(event({source:undefined,via:'session-start'})).provider,'claude');
+ const run=(id)=>observation(event({source:'hermes',sessionId:id,cwd:'/Users/me/.hermes'}));
+ assert.equal(run('cron_6580dc10167b_20261020_092529').session_id,'cron_6580dc10167b');
+ assert.equal(run('cron_6580dc10167b_20261020_113129').session_id,'cron_6580dc10167b');
+ assert.equal(run('chat-1').session_id,'chat-1');
+ assert.equal(observation(event({sessionId:'cron_6580dc10167b_20261020_092529'})).session_id,'cron_6580dc10167b_20261020_092529','only Hermes runs fold');
+ const looked=[];const r=rig(t,{factsFor:o=>{looked.push(o.session_id);return null;}});
+ await r.router.observe([event({source:'hermes',sessionId:'cron_abc_20261020_092529',cwd:'/Users/me/.hermes',taskTitle:'Nightly digest',signal:'stop'})]);
+ r.advance(3600000);
+ await r.router.observe([event({source:'hermes',sessionId:'cron_abc_20261020_113129',cwd:'/Users/me/.hermes',taskTitle:'Nightly digest',signal:'stop',updatedAt:new Date(3700000).toISOString()})]);
+ assert.equal(new Set(r.calls.map(c=>c.body.session_id)).size,1);assert.equal(r.router.snapshot().length,1);
+ assert.deepEqual(r.router.overviewSnapshot().map(x=>x.session_id),['cron_abc_20261020_113129'],'joins see the latest real run');
+ assert.deepEqual(r.router.handoverRows().map(x=>x.session_id),['cron_abc_20261020_113129']);
+ assert.ok(looked.length&&looked.every(id=>/^cron_abc_\d{8}_\d{6}$/.test(id)),'facts are looked up by the real run id');
+});
 test('reported text scrubs credentials, source paths, URL secrets and controls',()=>{
  const token='pfi_'+'a'.repeat(43),s=clean(`hello\u202e ${token} password=abcdef /Users/real/private https://user:secret@example.test/path?token=abcdef#secret`,2000);
  assert.ok(!s.includes(token)&&!s.includes('abcdef')&&!s.includes('/Users')&&!s.includes('user:secret')&&!s.includes('\u202e'));
