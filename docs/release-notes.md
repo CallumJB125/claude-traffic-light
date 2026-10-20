@@ -1,3 +1,20 @@
+Plexiform app update — 20 October 2026 (1.0.2-beta.101)
+
+For macOS (Apple silicon and Intel) and Linux (x64).
+
+What changed
+
+- Your Claude Code sessions are back on the board. Since beta.98, sessions started in Claude Code got no card, so "In progress" stayed empty while you worked. They show up again and move between columns as they work, wait and finish.
+- Less clutter from scheduled Hermes jobs. Each scheduled (cron) Hermes job now keeps one card that every run updates, instead of a new card per run. Older cards from past runs can be cleared with "Clear all" on the Idle column.
+
+What has been verified
+
+Desktop (5,586 tests) and privacy test suites pass on this build, with new tests for both fixes.
+
+Current limits
+
+- The limits listed for earlier betas below still apply.
+
 Plexiform app update — 20 October 2026 (1.0.2-beta.100)
 
 For macOS (Apple silicon and Intel) and Linux (x64).
