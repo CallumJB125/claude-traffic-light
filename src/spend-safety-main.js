@@ -21,6 +21,22 @@ const MAX_FILES = 40;
 
 let current = { alerts: [] };
 const alerts = () => current.alerts.slice();
+// "Pause nudges" (a rule action on the runaway signal): sessionId → {firedAt, rule}
+// while held. Nudges for a held session are dropped, not replayed; acknowledging
+// the burn (resumeNudges) lets them through again until the next burn.
+const paused = new Map();
+const acked = new Set();
+const nudgesPaused = (sessionId) => typeof sessionId === 'string' && paused.has(sessionId);
+function resumeNudges(sessionId) {
+  const p = typeof sessionId === 'string' ? paused.get(sessionId) : null;
+  if (!p) return { ok: false };
+  acked.add(`${sessionId}|${p.firedAt}`);
+  if (acked.size > 500) acked.delete(acked.values().next().value);
+  paused.delete(sessionId);
+  current = { alerts: current.alerts.map((a) => (a.sessionId === sessionId && a.paused ? { ...a, paused: false, text: a.text.replace(PAUSED_TAIL, '') } : a)) };
+  return { ok: true };
+}
+const PAUSED_TAIL = '. Other nudges for it are paused until you resume them';
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
@@ -132,9 +148,13 @@ function install(deps) {
       for (const p of v.projects) if (p.level === 'over') notify(`cap|${p.project}|${day}`, 'Project over its daily cap', `${p.text}${v.subscriber ? ' (API-price equivalent)' : ''}.`, null);
       const snap = deps.spend ? deps.spend() : null;
       const burns = (snap && snap.runaway) || [];
+      for (const p of S.nudgePauses((deps.config() || {}).rules, burns, acked)) {
+        if (!paused.has(p.sessionId)) log(`[spend-safety] nudges paused for a burning session (rule: ${p.rule})`);
+        paused.set(p.sessionId, p);
+      }
       current = {
         alerts: [
-          ...burns.map((r) => ({ key: `burn|${r.sessionId}|${r.firedAt || 0}`, kind: 'needs-you', sessionId: r.sessionId, text: S.burnText(r, v.subscriber) })),
+          ...burns.map((r) => ({ key: `burn|${r.sessionId}|${r.firedAt || 0}`, kind: 'needs-you', sessionId: r.sessionId, paused: paused.has(r.sessionId), text: `${S.burnText(r, v.subscriber)}${paused.has(r.sessionId) ? PAUSED_TAIL : ''}` })),
           ...v.projects.filter((p) => p.level === 'over').map((p) => ({ key: `cap|${p.project}|${day}`, kind: 'needs-you', sessionId: `cap:${p.project}`, text: `${p.project} is over its daily cap` })),
           ...loops.map((l) => ({ key: `loop|${l.sessionId}|${l.since}`, kind: 'stuck', sessionId: l.sessionId, text: l.text })),
         ],
@@ -153,7 +173,7 @@ function install(deps) {
     } catch (err) { return { error: `Could not save: ${err.message}` }; }
   });
   if (deps.tick !== false) { const h = setInterval(tick, TICK_MS); if (h.unref) h.unref(); }
-  return { tick, view, alerts };
+  return { tick, view, alerts, nudgesPaused, resumeNudges };
 }
 
-module.exports = { install, alerts, recentTranscripts, tailLines, cwdOf, FILE };
+module.exports = { install, alerts, nudgesPaused, resumeNudges, recentTranscripts, tailLines, cwdOf, FILE };

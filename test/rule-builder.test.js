@@ -60,7 +60,7 @@ test('describeRule: one plain sentence for every template', () => {
     nap: 'When no sessions running, show the sleep pose, give Claude sleepy eyes and add stars.',
     'over-budget': 'When spend is over your budget or a session is burning money fast, show the banner pose reading "OVER BUDGET", give Claude money eyes and send a desktop notification.',
     'question-2': 'When Claude asks permission, and it stays that way for over 2 minutes, show the wave pose, play the Ping sound and send a desktop notification.',
-    'burn-alert': 'When a session is burning money fast, show the banner pose reading "BURNING", give Claude money eyes and send a desktop notification.',
+    'burn-alert': 'When a session is burning money fast, show the banner pose reading "BURNING", give Claude money eyes, send a desktop notification and pause its other nudges until you acknowledge it.',
   };
   for (const t of T.list()) {
     const s = W.describeRule(R.normalizeRule(T.instantiate(t.id)), R.SIGNALS);

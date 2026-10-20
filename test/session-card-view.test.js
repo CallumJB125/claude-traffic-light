@@ -59,3 +59,20 @@ test('words is coarse', () => {
   assert.equal(V.words(3 * 86400000), '3 days');
   assert.equal(V.words(-1), '');
 });
+
+test('the card carries the latest recap, stuck help, the deploy line and a paused-nudges action', () => {
+  const c = V.sessionCard({ sessionId: 's1', cwd: '/p/shop', signal: 'stop' }, { now: NOW,
+    explain: { recap: { headline: 'What your AI just did in shop', line: 'Changed 2 files.' }, help: [{ label: 'Ask what went wrong', handle: 'abc_DEF-1' }, { label: 'bad', handle: '<x>' }], why: 'A command failed in the last turn.' },
+    deploy: { label: 'Vercel', name: 'shop', state: 'failed', summary: 'Build failed' }, nudgesPaused: true });
+  assert.deepEqual(c.recap, { headline: 'What your AI just did in shop', line: 'Changed 2 files.' });
+  assert.deepEqual(c.help, [{ label: 'Ask what went wrong', handle: 'abc_DEF-1' }]);
+  assert.equal(c.helpWhy, 'A command failed in the last turn.');
+  assert.equal(c.deploy, 'Vercel · shop: failed: Build failed');
+  assert.ok(c.actions.includes('resume-nudges'));
+  assert.equal(V.deployLine({ label: 'Netlify', name: 'x', state: 'live' }), 'Netlify · x: live');
+  assert.equal(V.deployLine({ state: 'unknown' }), '');
+  const mate = V.sessionCard({ sessionId: 's2', cwd: '/p' }, { now: NOW, teammate: { name: 'Ann' }, explain: { recap: { headline: 'h' } }, deploy: { state: 'live' }, nudgesPaused: true });
+  assert.equal(mate.recap, null);
+  assert.equal(mate.deploy, '');
+  assert.ok(!mate.actions.includes('resume-nudges'));
+});

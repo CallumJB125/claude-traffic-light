@@ -744,6 +744,7 @@
         clicks: normalizeClicks(r.then?.clicks),
         ...(BUSY_PINGS.includes(r.then?.busyPing) ? { busyPing: r.then.busyPing } : {}),
         ...(NOTIFY_TARGETS.includes(r.then?.notify) ? { notify: r.then.notify } : {}),
+        ...(r.then?.pauseNudges === true ? { pauseNudges: true } : {}),
       },
     };
   }

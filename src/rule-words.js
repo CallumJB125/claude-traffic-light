@@ -49,6 +49,7 @@
     if (t.celebrate) out.push('burst confetti');
     if (NOTIFY[t.notify]) out.push(NOTIFY[t.notify]);
     if (BUSY[t.busyPing]) out.push(BUSY[t.busyPing]);
+    if (t.pauseNudges) out.push('pause its other nudges until you acknowledge it');
     return out;
   }
 
