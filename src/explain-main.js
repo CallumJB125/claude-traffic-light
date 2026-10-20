@@ -5,15 +5,44 @@
 //   explain:recaps     Home: "What did my AI just do?" recaps + stuck help
 //   explain:copy       Home: copies one suggested prompt to the clipboard
 //   explain:open-test  Home: opens the localhost address a recap found
+// Recaps are also kept, scrubbed, in explain-recaps.json (the last 50) so they
+// survive a restart; the widget's session card shows a session's latest one.
 // Local rules answer first (src/explain.js); only what they don't know goes to
 // the user's own claude (src/explain-ai.js), scrubbed, one call at a time.
 
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 const path = require('node:path');
 const Explain = require('./explain.js');
 const ExplainAi = require('./explain-ai.js');
 
 const MAX_RECAPS = 10;
+const MAX_STORED = 50;
+const FILE = 'explain-recaps.json';
+const LOCAL_URL = /^http:\/\/localhost:\d{2,5}\/$/;
+
+// What may be kept on disk: text scrubbed (secrets, emails, the home folder), clipped, no paths beyond the folder name.
+function storable(r, scrub) {
+  if (!r || typeof r !== 'object' || typeof r.sessionId !== 'string' || !ID_RE.test(r.sessionId) || !Number.isFinite(r.at)) return null;
+  const clean = (t, max) => scrub(String(t || '')).slice(0, max);
+  return {
+    sessionId: r.sessionId, at: r.at, failed: !!r.failed,
+    headline: clean(r.headline, 200),
+    lines: (Array.isArray(r.lines) ? r.lines : []).slice(0, 8).map((l) => clean(l, 300)),
+    risky: (Array.isArray(r.risky) ? r.risky : []).slice(0, 8).map((l) => clean(l, 300)),
+    testUrl: typeof r.testUrl === 'string' && LOCAL_URL.test(r.testUrl) ? r.testUrl : null,
+  };
+}
+function loadStored(file, scrub) {
+  try { const v = JSON.parse(fs.readFileSync(file, 'utf8')); return (Array.isArray(v) ? v : []).map((r) => storable(r, scrub)).filter(Boolean).slice(0, MAX_STORED); } catch { return []; }
+}
+function saveStored(file, recaps, log) {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify(recaps), { mode: 0o600 });
+    fs.renameSync(`${file}.tmp`, file);
+  } catch (e) { log(`[explain] could not save recaps: ${e?.message ?? e}`); }
+}
 const NOTIFY_GAP_MS = 2 * 60 * 1000;
 const FAIL_FRESH_MS = 15 * 60 * 1000;
 const ID_RE = /^[\w.:-]{1,100}$/;
@@ -28,10 +57,10 @@ function readFacts({ locator, Transcripts, adapter, sessionId }) {
 }
 
 function create({ config, inputs = () => [], sessions = () => [], runner = ExplainAi.createRunner(), home = null, clipboard = null, openUrl = null, notify = null, now = Date.now, log = () => {},
-  readSession = () => ({ facts: null, ports: [] }), turnFiles = async () => null } = {}) {
+  readSession = () => ({ facts: null, ports: [] }), turnFiles = async () => null, file = null, scrub = (t) => t } = {}) {
   const on = () => { try { return config()?.explainMode === true; } catch { return false; } };
   const cache = new Map();
-  const recaps = [];
+  const recaps = file ? loadStored(file, scrub) : [];
   const lastNotified = new Map();
   const handles = new Map();
   const handle = (value) => { const h = crypto.randomBytes(9).toString('base64url'); handles.set(h, value); while (handles.size > 200) handles.delete(handles.keys().next().value); return h; };
@@ -61,12 +90,14 @@ function create({ config, inputs = () => [], sessions = () => [], runner = Expla
     let files = null;
     try { files = await turnFiles(sessionId); } catch { files = null; }
     const project = path.basename(String(cwd || read.facts?.cwd || '')) || 'your project';
-    const recap = { ...Explain.buildRecap({ project, facts: read.facts, turnFiles: files, ports: read.ports }), sessionId, at: now(),
-      failed: !!read.facts?.lastToolFailed };
+    const recap = storable({ ...Explain.buildRecap({ project, facts: read.facts, turnFiles: files, ports: read.ports }), sessionId, at: now(),
+      failed: !!read.facts?.lastToolFailed }, scrub);
+    if (!recap) return null;
     const i = recaps.findIndex((r) => r.sessionId === sessionId);
     if (i >= 0) recaps.splice(i, 1);
     recaps.unshift(recap);
-    recaps.length = Math.min(recaps.length, MAX_RECAPS);
+    recaps.length = Math.min(recaps.length, MAX_STORED);
+    if (file) saveStored(file, recaps, log);
     if (notify && (!lastNotified.has(sessionId) || now() - lastNotified.get(sessionId) >= NOTIFY_GAP_MS)) {
       lastNotified.set(sessionId, now());
       try { notify({ title: recap.headline, body: recap.lines.slice(0, 2).join(' ').slice(0, 240) }); } catch { /* no notifications */ }
@@ -76,7 +107,7 @@ function create({ config, inputs = () => [], sessions = () => [], runner = Expla
 
   function view() {
     if (!on()) return { on: false, recaps: [], help: [] };
-    const out = recaps.map((r) => ({ headline: r.headline, lines: r.lines, risky: r.risky, at: r.at, test: r.testUrl ? { label: `Test it now (${r.testUrl.replace(/\/$/, '')})`, handle: handle({ url: r.testUrl }) } : null }));
+    const out = recaps.slice(0, MAX_RECAPS).map((r) => ({ headline: r.headline, lines: r.lines, risky: r.risky, at: r.at, test: r.testUrl ? { label: `Test it now (${r.testUrl.replace(/\/$/, '')})`, handle: handle({ url: r.testUrl }) } : null }));
     const help = [];
     const t = now();
     for (const s of sessions() || []) {
@@ -90,6 +121,18 @@ function create({ config, inputs = () => [], sessions = () => [], runner = Expla
     return { on: true, recaps: out, help: help.slice(0, 5) };
   }
 
+  const helpFor = (opts) => Explain.stuckHelp(opts).map((p) => ({ label: p.label, handle: handle({ prompt: p.id }) }));
+  // The widget card's slice for one session: its latest recap and, when it looks
+  // stuck or its last command failed, the stuck-help prompts. null when off or nothing.
+  function cardFor(session) {
+    if (!on() || !session || typeof session.sessionId !== 'string') return null;
+    const r = recaps.find((x) => x.sessionId === session.sessionId) || null;
+    const failed = !!(r && r.failed && now() - r.at <= FAIL_FRESH_MS);
+    const help = session.stuck ? helpFor({ stuck: session.stuck }) : failed ? helpFor({ failed: true }) : [];
+    if (!r && !help.length) return null;
+    return { recap: r ? { headline: r.headline, line: r.lines[0] || '', at: r.at } : null, help: help.slice(0, 3), why: session.stuck ? 'It has gone quiet. It may be stuck.' : failed ? 'A command failed in the last turn.' : null };
+  }
+
   function copy(h) {
     const v = typeof h === 'string' ? handles.get(h) : null;
     const p = v?.prompt ? Explain.promptById(v.prompt) : null;
@@ -100,12 +143,12 @@ function create({ config, inputs = () => [], sessions = () => [], runner = Expla
 
   function openTest(h) {
     const v = typeof h === 'string' ? handles.get(h) : null;
-    if (!v?.url || !/^http:\/\/localhost:\d{2,5}\/$/.test(v.url) || !openUrl) return { ok: false };
+    if (!v?.url || !LOCAL_URL.test(v.url) || !openUrl) return { ok: false };
     openUrl(v.url);
     return { ok: true };
   }
 
-  return { explainInput, turnEnded, view, copy, openTest, on };
+  return { explainInput, turnEnded, view, cardFor, copy, openTest, on };
 }
 
 // Wires the channels and the turn watcher into the app. main.js calls this once.
@@ -115,6 +158,7 @@ function install({ ipcMain, rootDir, home, config, inputs, sessions, inputAllowe
   let cps = null;
   const svc = create({
     config, inputs, sessions, home, clipboard, log,
+    file: path.join(rootDir, FILE), scrub: (t) => require('./scrub.js').scrub(t, { home }),
     openUrl: (url) => shell.openExternal(url), // privacy-flow: explain-mode
     notify: Notification && Notification.isSupported?.() ? ({ title, body }) => { const n = new Notification({ title, body }); n.on('click', () => openHome?.()); n.show(); } : null,
     readSession: ({ adapter, sessionId }) => readFacts({ locator, Transcripts, adapter, sessionId }),
@@ -135,4 +179,4 @@ function install({ ipcMain, rootDir, home, config, inputs, sessions, inputAllowe
   return svc;
 }
 
-module.exports = { create, install, readFacts };
+module.exports = { create, install, readFacts, storable, FILE, MAX_STORED };

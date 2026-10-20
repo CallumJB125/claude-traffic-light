@@ -31,6 +31,7 @@ function createRuleNotify(deps) {
   const env = deps.env || (() => ({}));
   const phoneReady = deps.phoneReady || (() => false);
   const busy = deps.busy || (() => false);
+  const paused = deps.paused || (() => false);
   let active = null; // Set of `${ruleId}\n${sessionKey}` live last tick; null until primed
   const lastFired = new Map();
 
@@ -54,6 +55,7 @@ function createRuleNotify(deps) {
         if (!active || active.has(key)) continue; // first tick primes; still active is not an edge
         if (Q.reason(c, { now: t, cwd: s.cwd || null })) continue;
         if (busy()) continue; // in a meeting: held, and not replayed afterwards (edge-triggered)
+        if (!rule.then.pauseNudges && s.sessionId && paused(s.sessionId)) continue; // a "pause nudges" rule holds this burning session: dropped
         if (t - (lastFired.get(rule.id) ?? -Infinity) < RATE_MS) continue;
         lastFired.set(rule.id, t);
         const body = `${label(R.sessionSignal(s) || s.signal)}${s.cwd ? ` in ${R.folderOf(s.cwd)}` : ''}`;
@@ -76,9 +78,9 @@ function createRuleNotify(deps) {
 
 // main.js: one line. Polls every 15 s and answers the Lights page's
 // `rule-notify:status` so it can grey out the phone choices.
-function install({ Notification, handle, allowed, config, sessions, env, busy, log }) {
+function install({ Notification, handle, allowed, config, sessions, env, busy, paused, log }) {
   const notifier = createRuleNotify({
-    config, sessions, env, busy,
+    config, sessions, env, busy, paused,
     desktop: (title, body) => {
       try { if (Notification.isSupported()) new Notification({ title, body, silent: true }).show(); } catch (err) { if (log) log('[rule-notify]', err.message); }
     },

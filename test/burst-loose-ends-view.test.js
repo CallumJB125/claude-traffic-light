@@ -80,7 +80,7 @@ test('the client normalizer\'s shape (counts, path) is accepted as well as the r
   ] } };
   const n = normalizeLooseEnds(withRepos);
   assert.equal(n.kind, 'ok');
-  const v = LE.looseEndsView(n);
+  const v = LE.looseEndsView(n, { now: () => AT * 1000 });
   assert.ok(v, 'normalized shape is a report too');
   assert.deepEqual([...v.byRepo.keys()], ['/Users/me/app']);
   assert.deepEqual(v.byRepo.get('/Users/me/app'), { uncommitted: 1, unpushed: 2, stashes: 1, branch: 'main', noRemote: false, stale: false });

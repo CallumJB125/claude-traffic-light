@@ -807,6 +807,7 @@ const CARD_ACTIONS = {
   }),
   pin: (c) => cardButton('Pin', async () => { await window.trafficLight.pinSession(c.id).catch(() => null); loadCards(true); }),
   unpin: () => cardButton('Unpin', async () => { await window.trafficLight.pinSession(null).catch(() => null); loadCards(true); }),
+  'resume-nudges': (c) => cardButton('Resume nudges', async () => { await window.trafficLight.resumeNudges?.(c.id).catch(() => null); loadCards(true); }),
 };
 function showCard(row, anchor) {
   const c = row.card;
@@ -818,6 +819,20 @@ function showCard(row, anchor) {
   const st = document.createElement('div'); st.className = 'card-state'; st.textContent = c.state; lines.push(st);
   if (c.spend) { const sp = document.createElement('div'); sp.className = 'card-spend'; sp.textContent = c.spend; lines.push(sp); }
   if (c.teammate) { const who = document.createElement('div'); who.className = 'card-spend'; who.textContent = c.teammate.name; lines.push(who); }
+  if (c.deploy) { const d = document.createElement('div'); d.className = 'card-spend card-deploy'; d.textContent = c.deploy; lines.push(d); }
+  if (c.nudgesPaused) { const p = document.createElement('div'); p.className = 'card-spend card-paused'; p.textContent = 'Nudges paused: it crossed your spend line'; lines.push(p); }
+  if (c.recap) {
+    const rc = document.createElement('div'); rc.className = 'card-recap';
+    const h = document.createElement('div'); h.className = 'card-recap-head'; h.textContent = c.recap.headline; rc.append(h);
+    if (c.recap.line) { const l = document.createElement('div'); l.textContent = c.recap.line; rc.append(l); }
+    lines.push(rc);
+  }
+  if (c.help && c.help.length) {
+    if (c.helpWhy) { const w = document.createElement('div'); w.className = 'card-spend'; w.textContent = c.helpWhy; lines.push(w); }
+    const box = document.createElement('div'); box.className = 'card-acts card-help';
+    box.append(...c.help.map((h) => cardButton(h.label, async () => { const r = await window.trafficLight.cardHelp?.(h.handle).catch(() => null); showFeedback(r && r.ok ? 'Copied. Paste it into your AI.' : 'Could not copy that.'); })));
+    lines.push(box);
+  }
   const acts = c.actions.map((a) => CARD_ACTIONS[a] && CARD_ACTIONS[a](c)).filter(Boolean);
   if (acts.length) { const box = document.createElement('div'); box.className = 'card-acts'; box.append(...acts); lines.push(box); }
   cardEl.replaceChildren(...lines);

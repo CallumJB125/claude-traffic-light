@@ -1,4 +1,4 @@
-Plexiform app update — 20 October 2026 (1.0.2-beta.99)
+Plexiform app update — 20 October 2026 (1.0.2-beta.100)
 
 For macOS (Apple silicon and Intel) and Linux (x64).
 
@@ -13,17 +13,17 @@ What changed
 - Deploys. Plexiform finds Vercel, Netlify and Cloudflare projects and shows building, live with a link, or failed next to the session, using the command-line tools you are already signed in to or a token you paste. A failed build gets a plain-English reason and "Send this error to Claude", which copies a ready prompt. Claude celebrates when a deploy goes live.
 - Easier for people new to coding. Setup asks "Just me, building an app" or "Developer / team", explains in plain words what it adds to Claude Code, and gives a test prompt to copy with help if nothing shows up. Simple mode hides team and developer settings and keeps Home to what matters. Each light colour now means one thing, with a key in Help, Preferences and the More menu. Rule templates read as wishes, such as "Chime when it's done".
 - Build logs and starter kits. Turn a session into a build log, review every line before anything leaves your Mac, then save it as a file or publish a link with "Made with Plexiform — remix this". Anyone can "Start from this" to install a starter kit (repo, CLAUDE.md, skills, MCP servers) after a consent sheet that lists what it may do. Discover now has one catalogue for starters, skills and MCP servers.
+- Smaller follow-ups. When a session crosses your spend line, the "Session crossed my spend line" rule now holds its other nudges until you press "Resume nudges" on its widget card. The widget card shows the latest "What did my AI just do?" recap, a help line and the deploy status. Plexiform keeps the last 50 recaps, scrubbed of secrets, so they survive a restart.
 - Fixes. Light-mode text is readable again in the widget bubble, the Waiting page, Settings and Lights. A saved sign-in is restored when you enter a hub address.
 
 What has been verified
 
-Desktop, remote, site and board test suites pass on this build (desktop 5,570 tests, board 3,282, 0 failures), with the privacy census and the hub tenancy matrix. The team hubs already run this build's hub code.
+Desktop, remote, site and board test suites pass on this build (desktop 5,585 tests, board 3,282, 0 failures), with the privacy census and the hub tenancy matrix. The team hubs already run this build's hub code.
 
 Current limits
 
 - Claude limit bars are estimates from this Mac's usage. Anthropic does not publish the limits, and use on other devices is not counted.
 - Deploy status has been tested with simulated Vercel, Netlify and Cloudflare responses, not live accounts.
-- "What did my AI just do?" recaps are kept until Plexiform quits.
 - Mac builds remain ad-hoc signed and are not Apple-notarized.
 - The limits listed for earlier betas below still apply.
 

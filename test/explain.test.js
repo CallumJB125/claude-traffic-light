@@ -159,3 +159,25 @@ test('readFacts finds ports in a Claude transcript', () => {
     assert.deepEqual(r.facts.commands, ['npm run dev']);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+test('recaps are kept scrubbed in a capped file and come back after a restart', async () => {
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recaps-'));
+  const file = path.join(dir, ExplainMain.FILE);
+  const scrub = require('../src/scrub.js');
+  let t = 1000;
+  const mk = () => ExplainMain.create({ config: () => ({ explainMode: true }), now: () => t, file, scrub: (x) => scrub.scrub(x, { home: '/Users/me' }),
+    readSession: () => ({ facts: { lastPrompt: 'use key sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA in /Users/me/p', files: {}, commands: [], lastToolFailed: { tool: 'Bash' } }, ports: [] }) });
+  const a = mk();
+  for (let i = 0; i < ExplainMain.MAX_STORED + 5; i++) { t += 1; await a.turnEnded({ sessionId: `s${i}`, cwd: '/Users/me/p' }); }
+  const raw = fs.readFileSync(file, 'utf8');
+  assert.equal(JSON.parse(raw).length, ExplainMain.MAX_STORED);
+  assert.ok(!raw.includes('sk-ant-api03') && !raw.includes('/Users/me'), 'secrets and the home folder are scrubbed');
+  const b = mk();
+  assert.equal(b.view().recaps.length, 10);
+  const card = b.cardFor({ sessionId: `s${ExplainMain.MAX_STORED + 4}` });
+  assert.match(card.recap.headline, /What your AI just did in p/);
+  assert.ok(card.help.length > 0, 'a fresh failed command offers stuck help');
+  assert.equal(b.cardFor({ sessionId: 'unknown' }), null);
+  assert.equal(ExplainMain.create({ config: () => ({}), file }).cardFor({ sessionId: 's1' }), null, 'off: nothing');
+});

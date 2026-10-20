@@ -531,6 +531,8 @@
     $('busy-ping').value = r.then.busyPing || '';
     $('for-minutes').value = r.when.forMinutes || '';
     $('notify').value = r.then.notify || '';
+    $('pause-nudges-row').hidden = !(r.when.signal || []).includes('runaway');
+    $('pause-nudges').checked = r.then.pauseNudges === true;
     $('rule-words').textContent = ruleWords(r);
     $('text-row').hidden = !(r.then.pose === 'banner' || r.then.pose === 'bubble');
     $('text-row').querySelector('.lbl').textContent = r.then.pose === 'bubble' ? 'Bubble says' : 'Banner says';
@@ -561,6 +563,7 @@
   $('cwd').addEventListener('input', (e) => { const r = selected(); if (!r) return; r.when.cwd = e.target.value.trim() || null; setDirty(true); renderList(); });
   $('busy-ping').addEventListener('change', (e) => { const r = selected(); if (!r) return; if (e.target.value) r.then.busyPing = e.target.value; else delete r.then.busyPing; touch(); });
   $('for-minutes').addEventListener('input', (e) => { const r = selected(); if (!r) return; const n = Number(e.target.value); if (Number.isInteger(n) && n >= 1 && n <= R.FOR_MINUTES_MAX) r.when.forMinutes = n; else delete r.when.forMinutes; setDirty(true); renderList(); $('rule-words').textContent = ruleWords(r); });
+  $('pause-nudges').addEventListener('change', (e) => { const r = selected(); if (!r) return; if (e.target.checked) r.then.pauseNudges = true; else delete r.then.pauseNudges; touch(); });
   $('notify').addEventListener('change', (e) => { const r = selected(); if (!r) return; if (e.target.value) r.then.notify = e.target.value; else delete r.then.notify; touch(); });
   // Phone choices stay greyed out until main says a paired device can take them.
   (async () => {

@@ -5,6 +5,10 @@
 //                          with one card per row (src/session-card-view.js)
 //   widget:pin-session   → remember one session as pinned (config
 //                          `widgetPinnedSession`), or null to unpin
+//   widget:card-help     → copy one stuck-help prompt (explain mode) by handle
+//   widget:resume-nudges → acknowledge a burn: a "pause nudges" rule lets that
+//                          session's nudges through again
+// Cards also carry the latest explain recap and the project's deploy line.
 // Everything read here is local session metadata and the person's own usage
 // record; nothing leaves the computer. // privacy-flow: widget-session-card
 const Strip = require('./widget-strip.js');
@@ -19,7 +23,10 @@ const idOf = (v) => (typeof v === 'string' && ID.test(v) ? v : null);
  * async. config: {load(): object, save(partial)}. allowed(e): sender gate (default: all).
  * now(): clock for tests. → { cards(), pin(id), pinned() }
  */
-function install({ ipcMain, getSessions = () => [], getSpend = () => null, config, allowed = () => true, now = Date.now, collapseAfter } = {}) {
+/* getExplain(session) → card slice | null; getDeploy(cwd) → deploy row | null;
+ * nudgesPaused(id) → bool; copyHelp(handle) → {ok}; resumeNudges(id) → {ok}. All optional. */
+function install({ ipcMain, getSessions = () => [], getSpend = () => null, config, allowed = () => true, now = Date.now, collapseAfter,
+  getExplain = () => null, getDeploy = () => null, nudgesPaused = () => false, copyHelp = () => ({ ok: false }), resumeNudges = () => ({ ok: false }) } = {}) {
   if (!config || typeof config.load !== 'function' || typeof config.save !== 'function') throw new Error('widget-cards-main: config {load, save} required');
   const pinned = () => idOf(config.load().widgetPinnedSession);
 
@@ -35,7 +42,12 @@ function install({ ipcMain, getSessions = () => [], getSpend = () => null, confi
       if (r.kind !== 'session') return r;
       let spend = null;
       if (!r.team && r.id) { try { spend = (await getSpend(r.id)) || null; } catch { spend = null; } }
-      const card = sessionCard(r.session, { now: at, spend, teammate: r.team ? { name: r.name } : null });
+      const own = !r.team && r.session;
+      const quiet = (fn) => { try { return fn() || null; } catch { return null; } };
+      const card = sessionCard(r.session, { now: at, spend, teammate: r.team ? { name: r.name } : null,
+        explain: own ? quiet(() => getExplain(r.session)) : null,
+        deploy: own && typeof r.session.cwd === 'string' ? quiet(() => getDeploy(r.session.cwd)) : null,
+        nudgesPaused: !!(own && r.id && quiet(() => nudgesPaused(r.id))) });
       // The raw row stays in main; the card is what the renderer paints.
       const { session, ...rest } = r;
       return { ...rest, card };
@@ -52,6 +64,8 @@ function install({ ipcMain, getSessions = () => [], getSpend = () => null, confi
 
   ipcMain.handle('widget:session-cards', (e) => (allowed(e) ? cards() : null));
   ipcMain.handle('widget:pin-session', (e, id) => (allowed(e) ? pin(id) : { ok: false, pinned: null }));
+  ipcMain.handle('widget:card-help', (e, h) => (allowed(e) && typeof h === 'string' && h.length <= 40 ? copyHelp(h) : { ok: false }));
+  ipcMain.handle('widget:resume-nudges', (e, id) => (allowed(e) && idOf(id) ? resumeNudges(id) : { ok: false }));
   return { cards, pin, pinned };
 }
 

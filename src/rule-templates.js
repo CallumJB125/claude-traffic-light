@@ -63,8 +63,8 @@
     },
     {
       id: 'burn-alert', name: 'Alert when a session crosses $N',
-      description: 'A session spends more than your runaway amount in a short time (set $N in Preferences → Spend): a BURNING banner and a desktop notification.',
-      rule: { name: 'Session crossed my spend line', when: { signal: ['runaway'] }, then: { pose: 'banner', text: 'BURNING', eyes: 'money', notify: 'desktop' } },
+      description: 'A session spends more than your runaway amount in a short time (set $N in Preferences → Spend): a BURNING banner and a desktop notification. Its other nudges wait until you press Resume nudges on its widget card; nudges held meanwhile are dropped, not replayed.',
+      rule: { name: 'Session crossed my spend line', when: { signal: ['runaway'] }, then: { pose: 'banner', text: 'BURNING', eyes: 'money', notify: 'desktop', pauseNudges: true } },
     },
     {
       id: 'question-2', name: 'Nudge me when a question sits for 2 minutes',

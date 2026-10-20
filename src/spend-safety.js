@@ -206,4 +206,17 @@ function burnText(r, subscriber) {
   return `This session burned ${r.burn}${subscriber && !/tokens/.test(r.burn) ? ' (API-price equivalent)' : ''}`;
 }
 
-module.exports = { PLANS, PLAN_LABEL, REFERENCE, LOOP_MIN, normalize, detectPlan, effectivePlan, projectCaps, projectedToday, limitEstimate, openWindow, countdown, toolCalls, retryLoop, loopText, burnText, folderOf };
+// Runaway sessions whose nudges a "pause nudges" rule holds: every enabled
+// rule listening for 'runaway' with then.pauseNudges pauses each runaway
+// session until the person acknowledges that burn (acked: Set of
+// `${sessionId}|${firedAt}`). → [{sessionId, firedAt, rule}]
+function nudgePauses(rules, runaway, acked = new Set()) {
+  const rule = (Array.isArray(rules) ? rules : []).find((r) => r && r.enabled !== false && r.then && r.then.pauseNudges === true
+    && r.when && (Array.isArray(r.when.signal) ? r.when.signal : [r.when.signal]).includes('runaway'));
+  if (!rule) return [];
+  return (Array.isArray(runaway) ? runaway : [])
+    .filter((r) => r && typeof r.sessionId === 'string' && !acked.has(`${r.sessionId}|${r.firedAt || 0}`))
+    .map((r) => ({ sessionId: r.sessionId, firedAt: r.firedAt || 0, rule: rule.name || 'Pause nudges' }));
+}
+
+module.exports = { nudgePauses, PLANS, PLAN_LABEL, REFERENCE, LOOP_MIN, normalize, detectPlan, effectivePlan, projectCaps, projectedToday, limitEstimate, openWindow, countdown, toolCalls, retryLoop, loopText, burnText, folderOf };

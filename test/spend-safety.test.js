@@ -137,3 +137,26 @@ test('wiring: one-line require in main, preload channels, panels shipped, templa
   assert.match(fs.readFileSync(path.join(root, 'onboarding.html'), 'utf8'), /aren't charged per token/);
   assert.doesNotMatch(fs.readFileSync(path.join(root, 'onboarding.html'), 'utf8'), /We'll show API-price equivalents/);
 });
+
+test('a "pause nudges" runaway rule holds a burning session until its burn is acknowledged', async () => {
+  const rule = { name: 'Session crossed my spend line', enabled: true, when: { signal: ['runaway'] }, then: { pauseNudges: true } };
+  assert.deepEqual(S.nudgePauses([rule], [{ sessionId: 's9', firedAt: 5 }]), [{ sessionId: 's9', firedAt: 5, rule: 'Session crossed my spend line' }]);
+  assert.deepEqual(S.nudgePauses([{ ...rule, then: {} }], [{ sessionId: 's9', firedAt: 5 }]), []);
+  assert.deepEqual(S.nudgePauses([{ ...rule, enabled: false }], [{ sessionId: 's9', firedAt: 5 }]), []);
+  assert.deepEqual(S.nudgePauses([rule], [{ sessionId: 's9', firedAt: 5 }], new Set(['s9|5'])), []);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pause-'));
+  let burns = [{ sessionId: 's9', firedAt: 5, burn: '$12 in 10 min' }];
+  const api = Main.install({ handle: () => {}, allowed: () => true, rootDir: root, home: root, config: () => ({ rules: [rule] }), turns: async () => [], spend: () => ({ runaway: burns }), tick: false, silent: true, now: () => NOW });
+  await api.tick();
+  assert.equal(Main.nudgesPaused('s9'), true);
+  assert.match(Main.alerts().find((a) => a.sessionId === 's9').text, /paused until you resume/);
+  assert.deepEqual(Main.resumeNudges('s9'), { ok: true });
+  assert.equal(Main.nudgesPaused('s9'), false);
+  await api.tick();
+  assert.equal(Main.nudgesPaused('s9'), false, 'the same burn stays acknowledged');
+  burns = [{ sessionId: 's9', firedAt: 9, burn: '$30 in 10 min' }];
+  await api.tick();
+  assert.equal(Main.nudgesPaused('s9'), true, 'a new burn pauses again');
+  Main.resumeNudges('s9');
+  assert.deepEqual(Main.resumeNudges('nope'), { ok: false });
+});
