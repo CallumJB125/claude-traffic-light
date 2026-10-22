@@ -25,7 +25,15 @@ const gitInit = (dir) => {
   return fs.realpathSync(dir);
 };
 
-// A fake process table behind /bin/ps and /usr/sbin/lsof; git runs for real.
+// Plexiform's own server as it registers itself (mcp-install.js launch, packaged): the only command line that binds.
+const PLEX = '/Applications/Plexiform.app/Contents/MacOS/Plexiform';
+const ASAR = '/Applications/Plexiform.app/Contents/Resources/app.asar/mcp-server.js';
+const SERVER_ARGS = `${PLEX} ${ASAR} --profile bus`;
+const SERVERS = [{ command: PLEX, args: [ASAR, '--profile', 'bus'] }, { command: PLEX, args: [ASAR] }];
+
+// A fake process table behind /bin/ps, /usr/sbin/lsof and /usr/bin/codesign; git runs for real. It answers the
+// call shapes of this branch and of the commit the review looked at (71283064), so the review's proofs of concept
+// below run against both.
 function world(t, { platform = 'darwin' } = {}) {
   const dir = fs.realpathSync(testTempDir('pf-bind-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -39,39 +47,53 @@ function world(t, { platform = 'darwin' } = {}) {
   const procs = new Map();
   const calls = [];
   let caller = null;
+  const ports = new Map(); // remote port → pid, for callers made with callAs()
   const CLAUDE = path.join(home, '.local/share/claude/versions/2.1.308');
   const CODEX = '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex';
   let nextAddr = 0x1000;
   const addr = () => `0x${(nextAddr++).toString(16)}`;
-  // fd 0 and 1 of `child` as stream ends whose other ends `parent` holds (type PIPE for Codex, unix for Claude).
+  // fd 0, 1 and 2 of `child` as stream ends whose other ends `parent` holds (type PIPE for Codex, unix for Claude).
   const stdio = (child, parent, type) => {
-    for (const fd of ['0', '1']) {
+    for (const fd of ['0', '1', '2']) {
       const a = addr(); const b = addr();
       child.fds[fd] = { type, addr: a, peer: b };
       parent.fds[String(40 + Object.keys(parent.fds).length)] = { type, addr: b, peer: a };
     }
   };
-  const proc = (pid, p) => { const v = { ppid: 1, start: START, exe: '/bin/sleep', cwd: home, command: '', args: '', fds: {}, files: [], ...p }; procs.set(pid, v); return v; };
+  // signed: 'claude' | 'codex' | null, the requirement the running process satisfies. args: its command line; env: its environment.
+  const proc = (pid, p) => { const v = { ppid: 1, start: START, exe: '/bin/sleep', cwd: home, args: '', env: '', signed: null, fds: {}, files: [], ...p }; procs.set(pid, v); return v; };
   const fdLines = (p, only) => Object.entries(p.fds).filter(([fd]) => !only || only.includes(fd)).map(([fd, f]) => `f${fd}\nt${f.type}\n${f.addr ? `d${f.addr}\n` : ''}n${f.peer ? `->${f.peer}` : f.name || ''}\n`).join('');
+  const fileLines = (p) => p.files.map(({ file: f }, i) => { const st = fs.statSync(f); return `f${30 + i}\nD0x${st.dev.toString(16)}\ni${st.ino}\nn${f}\n`; }).join('');
+  const argvOf = (p) => p.args || path.basename(p.exe);
   const fakeExec = (file, args, opts, cb) => {
     calls.push([file, ...args]);
     if (file === 'git') return execFile(file, args, opts, cb);
     const none = () => cb(Object.assign(new Error('none'), { code: 1 }), '');
-    if (file === '/usr/sbin/lsof' && args.some((a) => a.startsWith('-iTCP@127.0.0.1:'))) return caller ? cb(null, `p${caller}\nf5\np${SELF}\nf9\n`) : none();
+    const tcp = args.find((a) => a.startsWith('-iTCP@127.0.0.1:'));
+    if (file === '/usr/sbin/lsof' && tcp) {
+      const who = ports.get(Number(tcp.split(':').pop())) ?? caller;
+      return who ? cb(null, `p${who}\nf5\np${SELF}\nf9\n`) : none();
+    }
+    if (file === '/usr/bin/codesign') {
+      const q = procs.get(Number(args[args.length - 1]));
+      return q && q.signed && args.includes(`-R=${PeerPid.REQUIREMENT[q.signed]}`) ? cb(null, '') : cb(Object.assign(new Error('failed to satisfy'), { code: 3 }), '');
+    }
     const pid = Number(args[args.indexOf('-p') + 1]);
     const p = procs.get(pid);
     if (!p) return none();
     if (file === '/bin/ps') {
       if (args.includes('ppid=,lstart=')) return cb(null, `${p.ppid} ${p.start}\n`);
       if (args.includes('lstart=')) return cb(null, `${p.start}\n`);
-      if (args.includes('command=')) return cb(null, `${p.command}\n`);
-      return cb(null, `${p.args}\n`);
+      if (args.includes('command=')) return cb(null, `${argvOf(p)}${p.env ? ` ${p.env}` : ''}\n`);
+      return cb(null, `${argvOf(p)}\n`);
     }
     if (file === '/usr/sbin/lsof') {
-      if (args.includes('-FDi')) return cb(null, `p${pid}\n${p.files.map(({ file: f }, i) => { const st = fs.statSync(f); return `f${30 + i}\nD0x${st.dev.toString(16)}\ni${st.ino}\nn${f}\n`; }).join('')}`);
-      const d = args[args.indexOf('-d') + 1];
-      if (args.includes('-d') && d === 'txt,cwd') return cb(null, `p${pid}\nfcwd\nn${p.cwd}\nftxt\nn${p.exe}\n`);
-      if (args.includes('-d') && d === '0,1,cwd') return cb(null, `p${pid}\n${fdLines(p, ['0', '1'])}fcwd\ntDIR\nn${p.cwd}\n`);
+      const head = `p${pid}\nfcwd\ntDIR\nn${p.cwd}\nftxt\ntREG\nn${p.exe}\n`;
+      if (args.includes('-FDi')) return cb(null, `p${pid}\n${fileLines(p)}`);
+      if (args.includes('ftdnDi')) return cb(null, `${head}${fdLines(p)}${fileLines(p)}`);
+      const d = args.includes('-d') ? args[args.indexOf('-d') + 1] : null;
+      if (d === 'txt,cwd') return cb(null, `p${pid}\nfcwd\nn${p.cwd}\nftxt\nn${p.exe}\n`);
+      if (d === '0,1,cwd') return cb(null, `p${pid}\n${fdLines(p, ['0', '1'])}fcwd\ntDIR\nn${p.cwd}\n`);
       return cb(null, `p${pid}\n${fdLines(p)}`);
     }
     return none();
@@ -87,23 +109,26 @@ function world(t, { platform = 'darwin' } = {}) {
     return f;
   };
   const make = (opts = {}) => A.create({ rootDir: root, host: HOST, home, codexHome, dataDirs: [root], config: () => state.config, sessions: () => state.sessions, execFile: fakeExec,
-    platform, startedAt: now - 60_000, selfPid: SELF, handleKey: Buffer.alloc(32, 7), log: (m) => logs.push(m), bindRetryMs: 5, ...opts });
+    platform, startedAt: now - 60_000, selfPid: SELF, handleKey: Buffer.alloc(32, 7), log: (m) => logs.push(m), bindRetryMs: 5, servers: () => SERVERS, bindCacheMs: 0, ...opts });
   const iso = new Date(now).toISOString();
 
   // One interactive Claude Code session X in repoA (claude 100, our MCP child 101) and one Codex TUI thread T in
   // repoB on the shared daemon (server 200, our MCP child 201).
-  const claude = proc(100, { exe: CLAUDE, cwd: repoA });
-  const claudeMcp = proc(101, { ppid: 100, exe: '/opt/homebrew/bin/node', cwd: repoA, command: `node ${repoA}/mcp-server.js --profile bus PLEXIFORM_MCP=bus-v1:packaged CLAUDE_CODE_ENTRYPOINT=cli CLAUDE_CODE_SESSION_ID=X CLAUDE_PID=100` });
+  const claude = proc(100, { exe: CLAUDE, cwd: repoA, signed: 'claude', args: 'claude' });
+  const claudeMcp = proc(101, { ppid: 100, exe: PLEX, cwd: repoA, args: SERVER_ARGS, env: 'ELECTRON_RUN_AS_NODE=1 PLEXIFORM_MCP=bus-v1:packaged CLAUDE_CODE_ENTRYPOINT=cli CLAUDE_CODE_SESSION_ID=X CLAUDE_PID=100' });
   stdio(claudeMcp, claude, 'unix');
   const T = '019a0000-0000-7000-8000-00000000000t';
-  const server = proc(200, { exe: CODEX, cwd: home, files: [{ file: rollout(T, repoB) }] });
-  const codexMcp = proc(201, { ppid: 200, exe: '/Applications/Plexiform.app/Contents/MacOS/Plexiform', cwd: repoB, command: '/Applications/Plexiform.app/Contents/MacOS/Plexiform /Applications/Plexiform.app/Contents/Resources/app.asar/mcp-server.js --profile bus ELECTRON_RUN_AS_NODE=1 PLEXIFORM_MCP=bus-v1:packaged' });
+  const server = proc(200, { exe: CODEX, cwd: home, signed: 'codex', args: `${CODEX} app-server`, files: [{ file: rollout(T, repoB) }] });
+  const codexMcp = proc(201, { ppid: 200, exe: PLEX, cwd: repoB, args: SERVER_ARGS, env: 'ELECTRON_RUN_AS_NODE=1 PLEXIFORM_MCP=bus-v1:packaged' });
   stdio(codexMcp, server, 'PIPE');
   const claudeSession = (id = 'X', extra = {}) => ({ source: 'claude', sessionId: id, host: HOST, cwd: repoA, signal: 'prompt-submit', updatedAt: iso, claudePid: 100, interactive: true, ...extra });
   const codexSession = (id = T, extra = {}) => ({ source: 'codex', sessionId: id, host: HOST, cwd: repoB, signal: 'stop', updatedAt: iso, codexHookAt: iso, codexServerPid: 200, codexInteractive: true, codexTranscript: path.join(codexHome, 'sessions', '2026', '10', '22', `rollout-${id}.jsonl`), ...extra });
   state.sessions = [claudeSession(), codexSession()];
-  return { dir, home, root, codexHome, repoA, repoB, repoC, procs, proc, stdio, calls, state, logs, make, rollout, T, CLAUDE, CODEX, claudeSession, codexSession, iso,
-    call: (pid) => { caller = pid; return { remotePort: 51234 }; } };
+  // A copy of our MCP child under another parent: same program, command line and environment.
+  const mcpChild = (pid, ppid, cwd, like = codexMcp) => proc(pid, { ppid, exe: like.exe, cwd, args: like.args, env: like.env });
+  return { dir, home, root, codexHome, repoA, repoB, repoC, procs, proc, stdio, mcpChild, calls, state, logs, make, rollout, T, CLAUDE, CODEX, claudeSession, codexSession, iso,
+    call: (pid) => { caller = pid; return { remotePort: 51234 }; },
+    callAs: (pid) => { const port = 52000 + ports.size; ports.set(port, pid); return { remotePort: port }; }, exec: fakeExec };
 }
 
 test('a Claude Code MCP child bound by its parent, its stdio and its own env; a Codex MCP child by its server, its stdio, its folder and Codex\'s thread id', async (t) => {
@@ -117,8 +142,8 @@ test('a Claude Code MCP child bound by its parent, its stdio and its own env; a 
   assert.equal(x.bound, true, x.reason);
   assert.equal(x.provider, 'codex');
   assert.equal(x.key, `codex|${w.T}`);
-  // ps and lsof only by absolute path; never a PATH lookup.
-  assert.ok(w.calls.every(([f]) => f === 'git' || f === '/bin/ps' || f === '/usr/sbin/lsof'));
+  // ps, lsof and codesign only by absolute path; never a PATH lookup.
+  assert.ok(w.calls.every(([f]) => f === 'git' || f === '/bin/ps' || f === '/usr/sbin/lsof' || f === '/usr/bin/codesign'));
   // The log has outcomes, never an id or a folder.
   assert.ok(w.logs.some((l) => /\[awareness\] caller codex bound/.test(l)));
   assert.ok(!w.logs.some((l) => l.includes(w.T) || l.includes(w.repoA) || l.includes('X ')));
@@ -128,7 +153,7 @@ test('AW11: forged body fields are never identity: a detached process naming ano
   const w = world(t);
   const aw = w.make();
   // A detached `nohup` reparented to launchd (ppid 1), carrying a copy of our server's command line.
-  w.proc(300, { ppid: 1, exe: '/opt/homebrew/bin/node', cwd: w.repoA, command: 'node /x/mcp-server.js --profile bus CLAUDE_CODE_ENTRYPOINT=cli CLAUDE_CODE_SESSION_ID=X CLAUDE_PID=100' });
+  w.proc(300, { ppid: 1, exe: '/opt/homebrew/bin/node', cwd: w.repoA, args: 'node /x/mcp-server.js --profile bus', env: 'CLAUDE_CODE_ENTRYPOINT=cli CLAUDE_CODE_SESSION_ID=X CLAUDE_PID=100' });
   const r = await aw.bindCaller({ ...w.call(300), threadId: w.T });
   assert.equal(r.bound, false);
   assert.equal(r.reason, 'NO_PARENT');
@@ -151,7 +176,8 @@ test('AW11: a command the model ran through Codex\'s shell tool (a direct child,
   const w = world(t);
   const aw = w.make();
   const server = w.procs.get(200);
-  const sh = w.proc(202, { ppid: 200, exe: '/opt/homebrew/bin/node', cwd: w.repoB, command: '/opt/homebrew/bin/node /tmp/mcp-server.js --profile bus' });
+  // Worst case: the model runs Plexiform's exact server command line.
+  const sh = w.mcpChild(202, 200, w.repoB);
   w.stdio(sh, server, 'PIPE');
   sh.fds['0'] = { type: 'CHR', addr: null, peer: null, name: '/dev/null' };
   const r = await aw.bindCaller({ ...w.call(202), threadId: w.T });
@@ -163,12 +189,12 @@ test('AW11: a command the model ran through Codex\'s shell tool (a direct child,
   assert.equal((await aw.bindCaller({ ...w.call(202), threadId: w.T })).reason, 'NOT_STDIO');
   // Claude's Bash tool: stdin /dev/null, stdout a file. Its env still says cli and names the session (inherited).
   const claude = w.procs.get(100);
-  const bash = w.proc(102, { ppid: 100, exe: '/opt/homebrew/bin/node', cwd: w.repoA, command: 'node /tmp/mcp-server.js CLAUDE_CODE_ENTRYPOINT=cli CLAUDE_CODE_SESSION_ID=X CLAUDE_PID=100' });
+  const bash = w.mcpChild(102, 100, w.repoA, w.procs.get(101));
   bash.fds = { 0: { type: 'CHR', name: '/dev/null' }, 1: { type: 'REG', name: '/private/tmp/claude-501/tasks/x.output' } };
   assert.equal((await aw.bindCaller(w.call(102))).reason, 'NOT_STDIO');
   // stdio pipes held by some other process, not this parent.
   const other = w.proc(250, { exe: '/bin/cat' });
-  const fake = w.proc(203, { ppid: 100, exe: '/opt/homebrew/bin/node', cwd: w.repoA, command: 'node /tmp/mcp-server.js CLAUDE_CODE_ENTRYPOINT=cli CLAUDE_CODE_SESSION_ID=X' });
+  const fake = w.mcpChild(203, 100, w.repoA, w.procs.get(101));
   w.stdio(fake, other, 'unix');
   assert.equal((await aw.bindCaller(w.call(203))).reason, 'NOT_STDIO');
   assert.ok(claude);
@@ -178,11 +204,11 @@ test('AW11: a grandchild (a server an agent started from its shell, under our ow
   const w = world(t);
   const aw = w.make();
   const parent = w.procs.get(201);
-  const g = w.proc(204, { ppid: 201, exe: '/opt/homebrew/bin/node', cwd: w.repoB, command: 'node /x/mcp-server.js --profile bus' });
+  const g = w.mcpChild(204, 201, w.repoB);
   w.stdio(g, parent, 'PIPE');
   assert.equal((await aw.bindCaller({ ...w.call(204), threadId: w.T })).reason, 'NOT_AI_CHILD');
   const zsh = w.proc(110, { ppid: 100, exe: '/bin/zsh', cwd: w.repoA });
-  const g2 = w.proc(111, { ppid: 110, exe: '/opt/homebrew/bin/node', cwd: w.repoA, command: 'node /x/mcp-server.js CLAUDE_CODE_ENTRYPOINT=cli CLAUDE_CODE_SESSION_ID=X CLAUDE_PID=100' });
+  const g2 = w.mcpChild(111, 110, w.repoA, w.procs.get(101));
   w.stdio(g2, zsh, 'unix');
   assert.equal((await aw.bindCaller(w.call(111))).reason, 'NOT_AI_CHILD');
 });
@@ -190,7 +216,7 @@ test('AW11: a grandchild (a server an agent started from its shell, under our ow
 test('AW11: a fabricated session file with a detached `sleep` pid is not listed and cannot bind; a rewritten pid fails the executable check', async (t) => {
   const w = world(t);
   w.proc(400, { ppid: 1, exe: '/bin/sleep', cwd: path.join(w.home, 'Desktop') });
-  const kid = w.proc(401, { ppid: 400, exe: '/opt/homebrew/bin/node', cwd: w.repoA, command: 'node /x/mcp-server.js CLAUDE_CODE_ENTRYPOINT=cli CLAUDE_CODE_SESSION_ID=fake CLAUDE_PID=400' });
+  const kid = w.proc(401, { ppid: 400, exe: PLEX, cwd: w.repoA, args: SERVER_ARGS, env: 'CLAUDE_CODE_ENTRYPOINT=cli CLAUDE_CODE_SESSION_ID=fake CLAUDE_PID=400' });
   w.stdio(kid, w.procs.get(400), 'unix');
   w.state.sessions.push(w.claudeSession('fake', { claudePid: 400, cwd: w.repoA }));
   const aw = w.make();
@@ -219,7 +245,7 @@ test('AW13: two Codex threads on one server bind individually, each through its 
   const T2 = '019a0000-0000-7000-8000-0000000000t2';
   const server = w.procs.get(200);
   server.files.push({ file: w.rollout(T2, w.repoC) });
-  const m2 = w.proc(205, { ppid: 200, exe: w.procs.get(201).exe, cwd: w.repoC, command: w.procs.get(201).command });
+  const m2 = w.mcpChild(205, 200, w.repoC);
   w.stdio(m2, server, 'PIPE');
   w.state.sessions.push(w.codexSession(T2, { cwd: w.repoC }));
   const aw = w.make();
@@ -244,8 +270,8 @@ test('AW13: a second live claimant for one thread leaves both unbound; when one 
   const aw = w.make();
   assert.equal((await aw.bindCaller({ ...w.call(201), threadId: w.T })).bound, true);
   // A second genuine MCP child for thread T (an agent's own app-server resuming it, recorded as T's server now).
-  const rogue = w.proc(210, { exe: w.CODEX, cwd: w.home, files: [{ file: w.procs.get(200).files[0].file }] });
-  const p2 = w.proc(211, { ppid: 210, exe: w.procs.get(201).exe, cwd: w.repoB, command: w.procs.get(201).command });
+  const rogue = w.proc(210, { exe: w.CODEX, cwd: w.home, signed: 'codex', files: [{ file: w.procs.get(200).files[0].file }] });
+  const p2 = w.mcpChild(211, 210, w.repoB);
   w.stdio(p2, rogue, 'PIPE');
   w.state.sessions = [w.claudeSession(), w.codexSession(w.T, { codexServerPid: 210 })];
   const second = await aw.bindCaller({ ...w.call(211), threadId: w.T });
@@ -254,7 +280,7 @@ test('AW13: a second live claimant for one thread leaves both unbound; when one 
   assert.equal((await aw.bindCaller({ ...w.call(201), threadId: w.T })).bound, false, 'the first claimant is unbound too');
   // Two children of the same server claiming one thread: both unbound as well.
   w.state.sessions = [w.claudeSession(), w.codexSession()];
-  const twin = w.proc(212, { ppid: 200, exe: w.procs.get(201).exe, cwd: w.repoB, command: w.procs.get(201).command });
+  const twin = w.mcpChild(212, 200, w.repoB);
   w.stdio(twin, w.procs.get(200), 'PIPE');
   w.procs.delete(211);
   assert.equal((await aw.bindCaller({ ...w.call(212), threadId: w.T })).reason, 'CONTESTED');
@@ -266,29 +292,31 @@ test('AW13: a second live claimant for one thread leaves both unbound; when one 
 
 test('AW13: Claude /clear: with SessionEnd the child binds to the new session; with the old file lingering it is unbound', async (t) => {
   const w = world(t);
+  const aw = w.make();
+  assert.equal((await aw.bindCaller(w.call(101))).key, 'claude|X', 'main saw X running in claude 100');
   // SessionEnd removed X; the new session X2 runs in the same claude process, and the MCP child still says X.
   w.state.sessions = [w.claudeSession('X2'), w.codexSession()];
-  const aw = w.make();
   const r = await aw.bindCaller(w.call(101));
   assert.equal(r.bound, true, r.reason);
   assert.equal(r.key, 'claude|X2');
   // No SessionEnd: X lingers beside X2, both naming claude 100.
   w.state.sessions = [w.claudeSession('X'), w.claudeSession('X2'), w.codexSession()];
   assert.equal((await aw.bindCaller(w.call(101))).reason, 'TIE');
-  // A child whose own id names a different, live session of another process is not bound to this one.
-  w.state.sessions = [w.claudeSession('X2'), w.claudeSession('X', { claudePid: 900 }), w.codexSession()];
+  // A child whose own id was never a session of this claude process is not bound to it.
+  w.state.sessions = [w.claudeSession('X2'), w.codexSession()];
+  w.procs.get(101).env = w.procs.get(101).env.replace('SESSION_ID=X', 'SESSION_ID=Z');
   assert.equal((await aw.bindCaller(w.call(101))).reason, 'ID_MISMATCH');
 });
 
 test('headless callers are never bound: claude -p (sdk-cli), a codex exec thread', async (t) => {
   const w = world(t);
-  w.procs.get(101).command = w.procs.get(101).command.replace('ENTRYPOINT=cli', 'ENTRYPOINT=sdk-cli');
+  w.procs.get(101).env = w.procs.get(101).env.replace('ENTRYPOINT=cli', 'ENTRYPOINT=sdk-cli');
   w.state.sessions = [w.claudeSession(), w.codexSession(w.T, { codexInteractive: false })];
   const aw = w.make();
   assert.equal((await aw.bindCaller(w.call(101))).reason, 'HEADLESS');
   assert.equal((await aw.bindCaller({ ...w.call(201), threadId: w.T })).reason, 'HEADLESS');
   // An env value with spaces that smuggles a second CLAUDE_CODE_ENTRYPOINT: ambiguous, so not interactive.
-  w.procs.get(101).command = w.procs.get(101).command.replace('ENTRYPOINT=sdk-cli', 'ENTRYPOINT=cli FOO=x CLAUDE_CODE_ENTRYPOINT=cli');
+  w.procs.get(101).env = w.procs.get(101).env.replace('ENTRYPOINT=sdk-cli', 'ENTRYPOINT=cli FOO=x CLAUDE_CODE_ENTRYPOINT=cli');
   assert.equal((await aw.bindCaller(w.call(101))).reason, 'HEADLESS');
 });
 
@@ -309,7 +337,7 @@ test('bus_session binds a Codex thread at start and reports it; excluded, off an
   const aw = w.make();
   let hooks = 0;
   const opts = { forward: async () => ({}), onCodexSession: async () => { hooks += 1; } };
-  const r = await aw.relay('session', {}, {}, { ...w.call(201), threadId: w.T }, opts);
+  const r = await aw.relay('session', {}, {}, { ...w.call(201), threadId: w.T, hook: true }, opts);
   assert.equal(r.bound, true);
   assert.match(r.handle, /^codex-site-[0-9a-f]{4}$/);
   await new Promise((resolve) => setImmediate(resolve));
@@ -427,4 +455,307 @@ test('roster caps.mcp follows the registered bus tools per provider (the hook\'s
   assert.equal(r.self['claude|X'].caps.notes, false, 'no notes before step 4');
   const broken = w.make({ mcpCaps: () => { throw new Error('x'); } });
   assert.equal((await broken.build()).self['claude|X'].caps.mcp, false);
+});
+
+// ── PR #34 security review: each proof of concept as a regression ───────────
+
+// A stream end of `child` on fd whose other end `parent` holds; `same` reuses an end the child already has (a dup).
+const end = (child, fd, parent, addr, type = 'PIPE') => {
+  child.fds[fd] = { type, addr, peer: `${addr}0` };
+  parent.fds[`9${addr.slice(-3)}`] = { type, addr: `${addr}0`, peer: addr };
+};
+
+test('review #1 (PoC A): a node process whose command line merely names claude-code\'s cli.js is not Claude: never listed, its child never bound', async (t) => {
+  const w = world(t);
+  const fake = w.proc(600, { exe: '/opt/homebrew/bin/node', cwd: w.repoA, args: 'node -e spawn() /nope/node_modules/@anthropic-ai/claude-code/cli.js' });
+  const kid = w.mcpChild(601, 600, w.repoA, w.procs.get(101));
+  kid.env = kid.env.replace('SESSION_ID=X', 'SESSION_ID=forged-claude-1').replace('CLAUDE_PID=100', 'CLAUDE_PID=600');
+  w.stdio(kid, fake, 'unix');
+  w.state.sessions.push(w.claudeSession('forged-claude-1', { claudePid: 600 }));
+  const aw = w.make();
+  const r = await aw.bindCaller(w.call(601));
+  assert.deepEqual([r.bound, r.reason], [false, 'NOT_AI_CHILD']);
+  assert.equal((await aw.build()).self['claude|forged-claude-1'].verified, false);
+});
+
+test('review #1 (PoC B): an unsigned binary at an allow-listed path (a clone of node as node_modules/@openai/codex/codex, or under ~/.local/share/claude) is neither Codex nor Claude', async (t) => {
+  const w = world(t);
+  const T2 = '019a0000-0000-7000-8000-00000000beef';
+  const fakeCodex = w.proc(610, { exe: path.join(w.dir, 'x/node_modules/@openai/codex/codex'), cwd: w.home, files: [{ file: w.rollout(T2, w.repoC) }] });
+  const kid = w.mcpChild(611, 610, w.repoC);
+  w.stdio(kid, fakeCodex, 'PIPE');
+  w.state.sessions.push(w.codexSession(T2, { cwd: w.repoC, codexServerPid: 610 }));
+  // A node clone at Claude's own install path, with a forged session file naming it.
+  const fakeClaude = w.proc(620, { exe: path.join(w.home, '.local/share/claude/versions/9.9.9'), cwd: w.repoC });
+  const kid2 = w.mcpChild(621, 620, w.repoC, w.procs.get(101));
+  kid2.env = kid2.env.replace('SESSION_ID=X', 'SESSION_ID=forged-2').replace('CLAUDE_PID=100', 'CLAUDE_PID=620');
+  w.stdio(kid2, fakeClaude, 'unix');
+  w.state.sessions.push(w.claudeSession('forged-2', { claudePid: 620, cwd: w.repoC }));
+  const aw = w.make();
+  assert.equal((await aw.bindCaller({ ...w.call(611), threadId: T2 })).reason, 'NOT_AI_CHILD');
+  assert.equal((await aw.bindCaller(w.call(621))).reason, 'NOT_AI_CHILD');
+  const roster = await aw.build();
+  assert.deepEqual([roster.self[`codex|${T2}`].verified, roster.self['claude|forged-2'].verified], [false, false]);
+  assert.equal(roster.peers.length, 2, 'only the two real sessions are listed');
+  // The signature is checked on the running process, by pid, with each maker's requirement.
+  const asked = w.calls.filter(([f]) => f === '/usr/bin/codesign');
+  assert.ok(asked.some((c) => c.includes('-R=' + PeerPid.REQUIREMENT.codex) && c[c.length - 1] === '200'));
+  assert.ok(asked.some((c) => c.includes('-R=' + PeerPid.REQUIREMENT.claude) && c[c.length - 1] === '100'));
+  // PRIVACY.md no longer claims more than this proves.
+  const privacy = fs.readFileSync(path.join(__dirname, '..', 'PRIVACY.md'), 'utf8');
+  assert.ok(!privacy.includes('A program an AI started from its shell fails those checks'));
+  assert.ok(!privacy.includes('it cannot make Plexiform list a session no real Claude Code or Codex program is running'));
+});
+
+test('review #1: Claude Code\'s signed binary run with BUN_OPTIONS (a preload) is not trusted as Claude', async (t) => {
+  const w = world(t);
+  w.procs.get(100).env = 'HOME=/x BUN_OPTIONS=--preload=/tmp/evil.js';
+  const aw = w.make();
+  assert.equal((await aw.bindCaller(w.call(101))).reason, 'NOT_AI_CHILD');
+  assert.equal((await aw.build()).self['claude|X'].verified, false);
+});
+
+test('review #2: a command the model ran as a direct child of the shared Codex server, claiming another thread, is unbound (stdin a copy of its stdout, a look-alike command line, injected NODE_OPTIONS)', async (t) => {
+  const w = world(t);
+  const server = w.procs.get(200);
+  // Thread B on the same daemon, its rollout held open by that daemon, in repoC. Its id is in file names: not secret.
+  const B = '019a0000-0000-7000-8000-0000000000bb';
+  server.files.push({ file: w.rollout(B, w.repoC) });
+  w.state.sessions.push(w.codexSession(B, { cwd: w.repoC }));
+  // From thread A: `cd <B's cwd> && exec 0<&1 node -e '<POST /bus op=session meta.thread_id=B>' mcp-server.js`.
+  const atk = w.proc(250, { ppid: 200, exe: '/opt/homebrew/bin/node', cwd: w.repoC, args: '/opt/homebrew/bin/node -e post() mcp-server.js', env: 'PATH=/usr/bin:/bin' });
+  end(atk, '1', server, '0xa01');
+  end(atk, '2', server, '0xa02');
+  atk.fds['0'] = { ...atk.fds['1'] };
+  const aw = w.make();
+  const r = await aw.bindCaller({ ...w.call(250), threadId: B });
+  assert.equal(r.bound, false);
+  assert.equal(r.reason, 'NOT_OUR_SERVER');
+  // The same with Plexiform's exact command line: fd 0 is the same end as fd 1.
+  atk.exe = PLEX;
+  atk.args = SERVER_ARGS;
+  assert.equal((await aw.bindCaller({ ...w.call(250), threadId: B })).reason, 'NOT_STDIO');
+  assert.equal(PeerPid.stdioPeered(atk.fds, server.fds), false);
+  // ... or a copy of stderr's end on fd 0 while stderr stays open.
+  atk.fds['0'] = { ...atk.fds['2'] };
+  assert.equal((await aw.bindCaller({ ...w.call(250), threadId: B })).reason, 'NOT_STDIO');
+  // A genuine-looking stdio child whose environment loads other code into our program (--require, --inspect).
+  const inj = w.mcpChild(251, 200, w.repoC);
+  w.stdio(inj, server, 'PIPE');
+  inj.env = `${inj.env} NODE_OPTIONS=--require=/tmp/x.js`;
+  assert.equal((await aw.bindCaller({ ...w.call(251), threadId: B })).reason, 'INJECTED');
+  inj.env = inj.env.replace('NODE_OPTIONS=--require=/tmp/x.js', 'DYLD_INSERT_LIBRARIES=/tmp/x.dylib');
+  assert.equal((await aw.bindCaller({ ...w.call(251), threadId: B })).reason, 'INJECTED');
+  // Without any of that, B's own child binds, and the earlier attempts left no pin behind to contest it.
+  inj.env = w.procs.get(201).env;
+  const ok = await aw.bindCaller({ ...w.call(251), threadId: B });
+  assert.equal(ok.bound, true, ok.reason);
+  // Codex's children are pipes; a socketpair there (some other channel to the daemon) is not what Codex makes.
+  const sock = w.mcpChild(252, 200, w.repoC);
+  w.stdio(sock, server, 'unix');
+  assert.equal((await aw.bindCaller({ ...w.call(252), threadId: B })).reason, 'NOT_STDIO');
+});
+
+test('review #2: the command line must be exactly a registered launch; a dev launch is found on PATH', async (t) => {
+  const w = world(t);
+  const kid = w.procs.get(201);
+  for (const args of [`${SERVER_ARGS} --extra`, `${PLEX} /tmp/mcp-server.js --profile bus`, `${PLEX} -e x ${ASAR} --profile bus`]) {
+    kid.args = args;
+    assert.equal((await w.make().bindCaller({ ...w.call(201), threadId: w.T })).reason, 'NOT_OUR_SERVER', args);
+  }
+  kid.args = SERVER_ARGS;
+  kid.exe = '/opt/homebrew/bin/node';
+  assert.equal((await w.make().bindCaller({ ...w.call(201), threadId: w.T })).reason, 'NOT_OUR_SERVER', 'another executable');
+  // Dev: `node <dir>/mcp-server.js --profile bus`, node resolved on main's PATH.
+  const bin = path.join(w.dir, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'node'), '', { mode: 0o755 });
+  kid.exe = path.join(bin, 'node');
+  kid.args = 'node /repo/mcp-server.js --profile bus';
+  const dev = w.make({ servers: () => [{ command: 'node', args: ['/repo/mcp-server.js', '--profile', 'bus'] }], envPath: `/nonexistent${path.delimiter}${bin}` });
+  assert.equal((await dev.bindCaller({ ...w.call(201), threadId: w.T })).bound, true);
+  // A registered path with a space in it could be split another way: never matched.
+  const spaced = w.make({ servers: () => [{ command: PLEX, args: ['/Users/u/Application Support/mcp-server.js'] }] });
+  kid.exe = PLEX;
+  kid.args = `${PLEX} /Users/u/Application Support/mcp-server.js`;
+  assert.equal((await spaced.bindCaller({ ...w.call(201), threadId: w.T })).reason, 'NOT_OUR_SERVER');
+});
+
+test('review #3: a signed claude in ~ (hooks off) cannot claim a repository session; a rewritten session file cannot move a live session; an id with no file is not this session', async (t) => {
+  const w = world(t);
+  const aw = w.make();
+  await aw.build(); // main has seen X running in claude 100
+  // A second, genuine claude started in ~ with hooks off, its --mcp-config naming our server.
+  const homeClaude = w.proc(700, { exe: w.CLAUDE, cwd: w.home, signed: 'claude', args: 'claude --setting-sources' });
+  const kid = w.mcpChild(701, 700, w.home, w.procs.get(101));
+  kid.env = kid.env.replace('SESSION_ID=X', 'SESSION_ID=Y').replace('CLAUDE_PID=100', 'CLAUDE_PID=700');
+  w.stdio(kid, homeClaude, 'unix');
+  // X's session file rewritten to name it.
+  w.state.sessions = [w.claudeSession('X', { claudePid: 700 }), w.codexSession()];
+  assert.equal((await aw.bindCaller(w.call(701))).reason, 'CWD');
+  assert.equal((await aw.build()).self['claude|X'].verified, false);
+  // The same from a signed claude inside the repository: X still belongs to claude 100, which lives.
+  homeClaude.cwd = w.repoA;
+  kid.cwd = w.repoA;
+  const aw2 = w.make();
+  w.state.sessions = [w.claudeSession('X'), w.codexSession()];
+  await aw2.build();
+  w.state.sessions = [w.claudeSession('X', { claudePid: 700 }), w.codexSession()];
+  assert.equal((await aw2.bindCaller(w.call(701))).reason, 'OWNER');
+  assert.equal((await aw2.build()).self['claude|X'].verified, false);
+  // Once claude 100 is gone the session may move (a resumed session in a new process).
+  w.procs.delete(100);
+  kid.env = kid.env.replace('SESSION_ID=Y', 'SESSION_ID=X');
+  assert.equal((await aw2.bindCaller(w.call(701))).bound, true);
+  // A fabricated session S naming that claude, while its child carries its own id Y, which has no file: not S.
+  w.state.sessions = [w.claudeSession('S', { claudePid: 700 }), w.codexSession()];
+  kid.env = kid.env.replace('SESSION_ID=X', 'SESSION_ID=Y');
+  assert.equal((await w.make().bindCaller(w.call(701))).reason, 'ID_MISMATCH');
+});
+
+test('review #6: a caller\'s environment is read only after the parent, program and stdio checks pass, and only three names leave the reader', async (t) => {
+  const w = world(t);
+  const aw = w.make();
+  const envReads = (pid) => w.calls.filter((c) => c[0] === '/bin/ps' && c.includes('eww') && c[c.length - 1] === String(pid)).length;
+  w.proc(300, { ppid: 1, exe: '/opt/homebrew/bin/node', cwd: w.repoA, args: 'node x', env: 'SECRET_TOKEN=abc' });
+  assert.equal((await aw.bindCaller(w.call(300))).reason, 'NO_PARENT');
+  const g = w.mcpChild(204, 201, w.repoB);
+  w.stdio(g, w.procs.get(201), 'PIPE');
+  assert.equal((await aw.bindCaller(w.call(204))).reason, 'NOT_AI_CHILD');
+  const other = w.proc(205, { ppid: 200, exe: '/opt/homebrew/bin/node', cwd: w.repoB, args: 'node other.js', env: 'SECRET_TOKEN=abc' });
+  w.stdio(other, w.procs.get(200), 'PIPE');
+  assert.equal((await aw.bindCaller(w.call(205))).reason, 'NOT_OUR_SERVER');
+  const sh = w.mcpChild(206, 200, w.repoB);
+  sh.fds = { 0: { type: 'CHR', name: '/dev/null' } };
+  assert.equal((await aw.bindCaller(w.call(206))).reason, 'NOT_STDIO');
+  assert.deepEqual([300, 204, 205, 206].map(envReads), [0, 0, 0, 0]);
+  // The parser keeps the named variables and a yes/no for injection, nothing else; argv never counts as env.
+  const e = PeerPid.parseEnv('node x CLAUDE_CODE_ENTRYPOINT=cli', 'node x CLAUDE_CODE_ENTRYPOINT=cli SECRET_TOKEN=abc CLAUDE_PID=7', ['CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_PID']);
+  assert.deepEqual(e, { args: 'node x CLAUDE_CODE_ENTRYPOINT=cli', vars: { CLAUDE_CODE_ENTRYPOINT: null, CLAUDE_PID: '7' }, injected: false });
+  assert.equal(PeerPid.parseEnv('a', 'b X=1', []), null, 'an environment that does not follow the command line is not read');
+});
+
+test('review #7: at most four callers are checked at once, a repeat within 2 s is answered from cache, and the server is listed once per check', async (t) => {
+  const w = world(t);
+  const aw = w.make({ bindCacheMs: 2000 });
+  const before = w.calls.length;
+  const rs = await Promise.all(Array.from({ length: 20 }, () => aw.bindCaller({ ...w.call(201), threadId: w.T })));
+  assert.ok(rs.every((r) => r.bound));
+  const serverLsof = w.calls.slice(before).filter((c) => c[0] === '/usr/sbin/lsof' && c[c.indexOf('-p') + 1] === '200');
+  assert.ok(serverLsof.length <= 2, `${serverLsof.length} lsof runs of the server for 20 calls`);
+  // One check lists the server once: its stdio ends and its open files come from the same listing.
+  const once = w.make();
+  const mark = w.calls.length;
+  assert.equal((await once.bindCaller({ ...w.call(201), threadId: w.T })).bound, true);
+  // (The executable and folder lookup, `-d txt,cwd`, is cached per process; the full listing is the costly one.)
+  assert.equal(w.calls.slice(mark).filter((c) => c[0] === '/usr/sbin/lsof' && c[c.indexOf('-p') + 1] === '200' && !c.includes('-d')).length, 1);
+  // Ten different children at once: never more than four checked together.
+  const w2 = world(t);
+  const kids = [];
+  for (let i = 0; i < 10; i += 1) { const k = w2.mcpChild(800 + i, 200, w2.repoB); w2.stdio(k, w2.procs.get(200), 'PIPE'); kids.push(800 + i); }
+  let inFlight = 0;
+  let peak = 0;
+  const slow = (file, args, opts, cb) => {
+    const p = args.indexOf('-p') >= 0 ? Number(args[args.indexOf('-p') + 1]) : null;
+    const hit = file === '/usr/sbin/lsof' && kids.includes(p) && !args.includes('-d');
+    if (hit) { inFlight += 1; peak = Math.max(peak, inFlight); }
+    setTimeout(() => w2.exec(file, args, opts, (...r) => { if (hit) inFlight -= 1; cb(...r); }), 10);
+  };
+  const aw2 = w2.make({ execFile: slow });
+  await Promise.all(kids.map((pid) => aw2.bindCaller({ ...w2.callAs(pid), threadId: w2.T })));
+  assert.ok(peak >= 1 && peak <= 4, `peak ${peak}`);
+});
+
+test('review #8: a headless Claude session never binds, whatever its child\'s environment says', async (t) => {
+  const w = world(t);
+  w.state.sessions = [w.claudeSession('X', { interactive: false }), w.codexSession()];
+  assert.equal((await w.make().bindCaller(w.call(101))).reason, 'HEADLESS');
+  // An env value with spaces that smuggles a second CLAUDE_CODE_ENTRYPOINT: ambiguous, so not interactive.
+  w.state.sessions = [w.claudeSession(), w.codexSession()];
+  w.procs.get(101).env = w.procs.get(101).env.replace('CLAUDE_CODE_ENTRYPOINT=cli', 'CLAUDE_CODE_ENTRYPOINT=sdk-cli');
+  w.procs.get(101).args = `${SERVER_ARGS} CLAUDE_CODE_ENTRYPOINT=cli`;
+  assert.notEqual((await w.make().bindCaller(w.call(101))).bound, true, 'a variable on the command line is not the environment');
+});
+
+test('review #9: an unbound caller with no folder of its own (it forked away after connecting) gets EXCLUDED, never the folder it named', async (t) => {
+  const w = world(t);
+  const aw = w.make();
+  const r = await aw.relay('peers', {}, { provider: 'claude', cwd: w.repoA }, w.call(null), { forward: async () => ({}) });
+  assert.equal(r.reason, 'EXCLUDED');
+});
+
+test('review #10: only a hook-shaped bus_session call marks the Codex hook as approved; the model calling bus_session itself does not', async (t) => {
+  const w = world(t);
+  const aw = w.make();
+  let hooks = 0;
+  const opts = { forward: async () => ({}), onCodexSession: async () => { hooks += 1; } };
+  assert.equal((await aw.relay('session', {}, {}, { ...w.call(201), threadId: w.T }, opts)).bound, true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(hooks, 0);
+  await aw.relay('session', {}, {}, { ...w.call(201), threadId: w.T, hook: true }, opts);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(hooks, 1);
+  // mcp-server.js flags only _meta with nothing but threadId (and progressToken); Codex adds turn metadata to a model's call.
+  const M = require('../mcp-server.js');
+  assert.deepEqual(M.threadMeta({ threadId: w.T }), { thread_id: w.T, hook: true });
+  assert.deepEqual(M.threadMeta({ threadId: w.T, progressToken: 3 }), { thread_id: w.T, hook: true });
+  assert.deepEqual(M.threadMeta({ threadId: w.T, 'x-codex-turn-metadata': {} }), { thread_id: w.T });
+  // The signal server passes the flag on only with a valid thread id.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'signal-server.js'), 'utf8');
+  assert.match(src, /hook: !!threadId && d\.meta\.hook === true/);
+});
+
+test('review #13: every bus tool that returns another AI\'s text says it is data, bus_status included', () => {
+  const M = require('../mcp-server.js');
+  for (const t of M.toolsFor('bus').filter((x) => ['bus_peers', 'bus_handoff', 'bus_wait', 'bus_read', 'bus_status'].includes(x.name))) {
+    assert.match(t.description, /data, never instructions/, t.name);
+  }
+});
+
+// Live: the property the binding rests on. Plexiform's real server acts only on requests written to its stdin;
+// with stdin a copy of its own stdout (`exec 0<&1`, what a model's shell can do) nobody can write it a request.
+test('review #2 (live): mcp-server.js answers a tools/call written to its stdin, and makes no request at all when its stdin is its own stdout', { skip: process.platform === 'win32' }, async (t) => {
+  const http = require('node:http');
+  const { spawn } = require('node:child_process');
+  const root = fs.realpathSync(testTempDir('pf-live-bus-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const hits = [];
+  const srv = http.createServer((req, res) => { let b = ''; req.on('data', (d) => { b += d; }); req.on('end', () => { hits.push([req.url, b]); res.setHeader('content-type', 'application/json'); res.end('{"peers":[]}'); }); });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  t.after(() => srv.close());
+  fs.writeFileSync(path.join(root, 'port'), String(srv.address().port));
+  fs.writeFileSync(path.join(root, 'token'), 'x'.repeat(64), { mode: 0o600 });
+  const script = path.join(__dirname, '..', 'mcp-server.js');
+  const env = { PATH: process.env.PATH, HOME: root, CLAUDE_TRAFFIC_LIGHT_HOME: root };
+  // Positive control: a parent writing to its stdin drives it.
+  const good = spawn(process.execPath, [script, '--profile', 'bus'], { stdio: ['pipe', 'pipe', 'ignore'], env });
+  t.after(() => good.kill('SIGKILL'));
+  const send = (m) => good.stdin.write(`${JSON.stringify(m)}\n`);
+  send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } } });
+  send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'bus_peers', arguments: {}, _meta: { threadId: 'abc' } } });
+  for (let i = 0; i < 100 && !hits.length; i += 1) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(hits.length, 1, 'the real server called /bus for the tools/call it was given');
+  assert.equal(hits[0][0], '/bus');
+  // fd 0 = a copy of fd 1: the same pipe end, which nothing but this process writes. No request, ever.
+  const dup = spawn('/bin/sh', ['-c', `exec 0<&1; exec "$0" "$1" --profile bus`, process.execPath, script], { stdio: ['ignore', 'pipe', 'ignore'], env });
+  t.after(() => dup.kill('SIGKILL'));
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.equal(hits.length, 1, 'nothing more reached /bus');
+});
+
+test('mcp-server.js turns off the SIGUSR1 inspector, so no other program can run code inside a bound server', { skip: process.platform === 'win32' }, async (t) => {
+  const { spawn } = require('node:child_process');
+  const root = fs.realpathSync(testTempDir('pf-usr1-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const kid = spawn(process.execPath, [path.join(__dirname, '..', 'mcp-server.js'), '--profile', 'bus'], { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH, HOME: root, CLAUDE_TRAFFIC_LIGHT_HOME: root } });
+  t.after(() => kid.kill('SIGKILL'));
+  let err = '';
+  kid.stderr.on('data', (d) => { err += d; });
+  kid.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } } })}\n`);
+  await new Promise((resolve) => kid.stdout.once('data', resolve));
+  kid.kill('SIGUSR1');
+  await new Promise((r) => setTimeout(r, 700));
+  assert.ok(!/Debugger listening/.test(err), 'no inspector started');
+  assert.equal(kid.exitCode, null, 'and the server is still running');
 });

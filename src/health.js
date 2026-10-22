@@ -183,8 +183,9 @@ function busRow(which) {
     switch (b.state) {
       case 'ours': return { status: 'ok', detail: which === 'claude' ? 'Registered as plexiform-bus.' : `Registered with Codex as plexiform-bus. ${BUS_APPROVALS}` };
       case 'full': return { status: 'ok', detail: "Plexiform's Claude integration is on and already carries the bus tools." };
-      case 'off': return { status: 'info', detail: 'Off (agent awareness and the agent bus are off, or you pressed Undo).' };
+      case 'off': return { status: 'info', detail: "Off (agent awareness and the agent bus are off, you pressed Undo, or you turned Plexiform's Claude integration off)." };
       case 'missing': return { status: 'info', detail: 'Codex CLI not found.' };
+      case 'untrusted': return { status: 'warn', detail: "The codex Plexiform found is not OpenAI's signed Codex, so Plexiform did not run it.", next: 'Install Codex from OpenAI (ChatGPT.app, Homebrew or npm), or remove the codex in ~/.local/bin, then restart Plexiform.' };
       case 'foreign': return { status: 'warn', detail: `An MCP server named plexiform-bus in ${where} is not Plexiform's. Plexiform left it alone.`, next: 'Rename or remove that entry to let Plexiform add its bus tools.' };
       case 'other-channel': return { status: 'info', detail: 'plexiform-bus belongs to another copy of Plexiform (a development checkout or the installed app). Left alone.' };
       case 'mismatch': return { status: 'warn', detail: 'Codex did not keep plexiform-bus as Plexiform wrote it (ChatGPT.app manages the same file).', next: 'Quit ChatGPT.app and Codex, then restart Plexiform.' };

@@ -70,14 +70,16 @@ async function readHead(fsp, file, max) {
   } catch { return null; } finally { if (fh) await fh.close().catch(() => {}); }
 }
 
-// Real claude and codex binaries only (findings §7).
-function allowedExe(provider, exe, { home, codexHome, args = '' } = {}) {
+// Where real claude and codex binaries live (findings §7). A path any program running as the person can
+// write to is not proof on its own: the running process must also carry its maker's code signature
+// (PeerPid.signedAs). Claude Code installed with npm runs as plain node, which nothing signs for
+// Anthropic, so it is never verified.
+function allowedExe(provider, exe, { home, codexHome } = {}) {
   if (typeof exe !== 'string' || !path.isAbsolute(exe)) return false;
   const h = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   if (provider === 'claude') {
     if (new RegExp(`^${h}/\\.local/share/claude/versions/[0-9][\\w.+-]*$`).test(exe)) return true;
-    if (/^\/(?:opt\/homebrew|usr\/local)\/Caskroom\/claude-code\/[\w.+-]+\/claude$/.test(exe)) return true;
-    return /(?:^|\/)node$/.test(exe) && /\/node_modules\/@anthropic-ai\/claude-code\/cli\.js(?:\s|$)/.test(args);
+    return /^\/(?:opt\/homebrew|usr\/local)\/Caskroom\/claude-code\/[\w.+-]+\/claude$/.test(exe);
   }
   if (provider === 'codex') {
     if (exe === '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex') return true;
@@ -133,7 +135,8 @@ function interactiveOf(s, provider) {
  */
 function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), dataDirs = [], config, sessions, execFile = require('child_process').execFile, fsp = require('fs').promises,
   now = () => Date.now(), startedAt = now(), halted = () => 'unknown', platform = process.platform, log = () => {}, setTimer = setTimeout, clearTimer = clearTimeout,
-  handleKey = crypto.randomBytes(32), buildTimeoutMs = BUILD_TIMEOUT_MS, mcpCaps = () => ({}), selfPid = process.pid, bindRetryMs = 400 }) {
+  handleKey = crypto.randomBytes(32), buildTimeoutMs = BUILD_TIMEOUT_MS, mcpCaps = () => ({}), selfPid = process.pid, bindRetryMs = 400,
+  servers = () => [], envPath = process.env.PATH || '', bindCacheMs = 2000 }) {
   const rosterDir = path.join(rootDir, 'awareness');
   const rosterFile = path.join(rosterDir, 'roster.json');
   const run = (file, args, timeout = EXEC_TIMEOUT_MS) => new Promise((resolve, reject) => {
@@ -219,9 +222,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
       const value = await (async () => {
         const f = parseLsof(await run('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-d', 'txt,cwd', '-Fn'])); // privacy-flow: agent-awareness-local
         if (!f.txt) return null;
-        const exe = await realOr(f.txt);
-        const args = /(?:^|\/)node$/.test(exe) ? await run('/bin/ps', ['-o', 'args=', '-p', String(pid)]).catch(() => '') : '';
-        return { exe, cwd: f.cwd ? await realOr(f.cwd) : null, args };
+        return { exe: await realOr(f.txt), cwd: f.cwd ? await realOr(f.cwd) : null, start };
       })().catch(() => null);
       procs.set(String(pid), { start, value });
       return value;
@@ -234,8 +235,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
         if (hit && hit.start === start) return hit.value;
         const exe = await fsp.readlink(`/proc/${pid}/exe`);
         const cwd = await fsp.readlink(`/proc/${pid}/cwd`).catch(() => null);
-        const args = /(?:^|\/)node$/.test(exe) ? String(await fsp.readFile(`/proc/${pid}/cmdline`, 'utf8')).split('\0').join(' ') : '';
-        const value = { exe, cwd, args };
+        const value = { exe, cwd, start };
         procs.set(String(pid), { start, value });
         return value;
       } catch { return null; }
@@ -275,28 +275,62 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     return (await realOr(s.cwd)) === (await realOr(meta.cwd));
   }
 
-  // Verified (plan §3.1): a recent event, a real claude or codex binary behind
-  // the recorded pid, and (Claude) that process in the recorded folder or one
-  // above it, (Codex) the thread bound to that server by its own rollout. The
-  // event time comes from the session file, which any program running as the
-  // person can write: the process checks are what a forged file cannot pass.
-  async function verify(s, provider, pidCount) {
+  const Peer = PeerPid.create({ run, platform, selfPid });
+  const startOf = (pid) => run('/bin/ps', ['-o', 'lstart=', '-p', String(pid)]).then((o) => o.trim() || null, () => null);
+  const signatures = new Map(); // `${provider}|${pid}|${start}` → Promise<boolean>
+  const injections = new Map(); // `${pid}|${start}` → Promise<boolean>
+  const once = (m, k, f) => { if (!m.has(k)) { if (m.size > 500) m.clear(); m.set(k, f()); } return m.get(k); };
+
+  // A real claude or codex process behind pid, or null: its executable where that tool installs, its
+  // maker's code signature on the running process, for Claude no code loaded through its environment
+  // (the signed binary honours BUN_OPTIONS=--preload), and the same process throughout (no pid reuse).
+  // Only whether such a variable is set is kept, never the environment.
+  async function aiProcess(pid, provider) {
+    const p = await inspect(pid);
+    if (!p || !allowedExe(provider, p.exe, { home, codexHome })) return null;
+    if (!(await once(signatures, `${provider}|${pid}|${p.start}`, () => Peer.signedAs(pid, provider)))) return null;
+    if (provider === 'claude' && await once(injections, `${pid}|${p.start}`, () => Peer.env(pid).then((e) => !e || e.injected, () => true))) return null;
+    return (await startOf(pid)) === p.start ? p : null;
+  }
+
+  // A Claude session belongs to the process first seen running it: a session file rewritten to name
+  // another process is refused while the first one lives. Every id seen on one process is remembered,
+  // so a child /clear did not respawn still matches.
+  const owners = new Map();  // Claude session id → { pid, start }
+  const procIds = new Map(); // `${pid}|${start}` → Set of session ids
+  async function ownerOk(sessionId, pid, start) {
+    const o = owners.get(sessionId);
+    if (o && (o.pid !== pid || o.start !== start) && (await startOf(o.pid)) === o.start) return false;
+    if (owners.size > 2000) owners.clear();
+    owners.set(sessionId, { pid, start });
+    once(procIds, `${pid}|${start}`, () => new Set()).add(sessionId);
+    return true;
+  }
+  // Claude's own folder: inside the session's repository (its git top, or the folder itself outside one),
+  // at or above the session's folder (a cd inside Bash). Not $HOME or / above every repository.
+  const claudeCwdOk = async (s, procCwd, top) => !!procCwd && !!top && within(procCwd, top) && within(await realOr(s.cwd), procCwd);
+
+  // Verified (plan §3.1): a recent event, a real, signed claude or codex process behind the recorded
+  // pid and (Claude) that process in the session's repository and the first one seen running it,
+  // (Codex) the thread bound to that server by its own rollout. The event time comes from the session
+  // file, which any program running as the person can write: the process checks are what a forged
+  // file cannot pass.
+  async function verify(s, provider, pidCount, top) {
     const seen = Math.max(Date.parse(s.updatedAt || '') || 0, Date.parse(s.codexHookAt || '') || 0);
     if (seen < startedAt) return false;
     const pid = Number(provider === 'claude' ? s.claudePid : provider === 'codex' ? s.codexServerPid : NaN);
     if (!Number.isInteger(pid) || pid <= 1) return false;
     // One Claude process is one session: a second file naming the same pid makes neither a peer.
     if (provider === 'claude' && pidCount.get(pid) > 1) return false;
-    // A busy turn rebuilds every second: the process checks are repeated at most once a minute per (pid, folder, thread).
-    const memo = `${provider}|${pid}|${s.cwd}|${provider === 'codex' ? `${s.sessionId}|${s.codexTranscript}` : ''}`;
+    // A busy turn rebuilds every second: the process checks are repeated at most once a minute per (pid, folder, session).
+    const memo = `${provider}|${pid}|${s.cwd}|${s.sessionId}|${provider === 'codex' ? s.codexTranscript : ''}`;
     const hit = procChecks.get(memo);
     if (hit && now() - hit.at < VERIFY_TTL_MS) return hit.ok;
     const ok = await (async () => {
-      const p = await inspect(pid);
-      if (!p || !allowedExe(provider, p.exe, { home, codexHome, args: p.args })) return false;
+      const p = await aiProcess(pid, provider);
+      if (!p) return false;
       if (provider === 'codex') return codexThread(s, pid);
-      if (!p.cwd) return false;
-      return within(await realOr(s.cwd), p.cwd);
+      return (await claudeCwdOk(s, p.cwd, top)) && ownerOk(s.sessionId, pid, p.start);
     })().catch(() => false);
     procChecks.set(memo, { ok, at: now() });
     return ok;
@@ -306,38 +340,69 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
 
   // ── Caller binding (plan §3.1, findings §1 "Binding recipe") ────────────────
   // Who made a /bus request, from the process table only: the socket's peer
-  // pid is one of our MCP server processes, a direct child of a real claude
-  // or codex process, spawned over stdio (fd 0 and 1 peered to that parent).
-  // Then, for Codex, the thread id Codex itself stamps on every tools/call
+  // pid is Plexiform's own MCP server program, run exactly as Plexiform
+  // registers it, with nothing in its environment that loads other code into
+  // it; a direct child of a real, signed claude or codex process; spawned over
+  // stdio (fd 0 and 1 distinct ends held by that parent). That program acts
+  // only on requests its parent writes to its stdin, so a command the model ran
+  // cannot drive it, whatever it does to its own file descriptors. Then, for
+  // Codex, the thread id Codex itself stamps on every tools/call
   // (_meta.threadId, forwarded by our server) names a live, hook-observed
   // thread of exactly that server, in exactly the child's folder; for Claude,
   // the one live session of that claude process (its id from the child's own
   // env, which Claude sets). Body fields such as ppid, session_id or provider
   // are never read. Anything short of all of it is unbound.
-  const Peer = PeerPid.create({ run, platform, selfPid });
   const pins = new Map(); // `${pid}|${start}` → { key, pid, start, at }: one MCP child is one Codex thread for its lifetime
   const keyOf = (s) => `${String(s.source || 'claude')}|${s.sessionId}`;
-  const freshFiles = (pid) => run('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-FDi']).then(lsofFiles, () => new Set()); // privacy-flow: agent-awareness-local
+  const CLAUDE_ENV = ['CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_PID'];
 
-  async function bindOnce(remotePort, threadId) {
-    if (!Peer.supported) return { bound: false, reason: 'UNSUPPORTED' };
-    const pid = await Peer.peerOf(remotePort);
-    if (!pid) return { bound: false, reason: 'NO_PEER' };
-    const [me, cmd, fds] = await Promise.all([Peer.proc(pid), Peer.command(pid), Peer.fds(pid, '0,1,cwd')]);
+  async function onPath(cmd) {
+    for (const d of String(envPath).split(path.delimiter)) {
+      if (!path.isAbsolute(d)) continue;
+      const f = path.join(d, cmd);
+      if (await fsp.access(f, fs.constants.X_OK).then(() => true, () => false)) return realOr(f);
+    }
+    return null;
+  }
+  // The server launches Plexiform registers (mcp-install.js launch()) as { exe realpath, command line }.
+  // A part with whitespace in it could be split differently into the same line: never matched.
+  async function ourServers() {
+    const out = [];
+    for (const l of (() => { try { return servers() || []; } catch { return []; } })()) {
+      if (!l || typeof l.command !== 'string' || !Array.isArray(l.args)) continue;
+      const argv = [l.command, ...l.args.map(String)];
+      if (argv.some((x) => !x || /\s/.test(x))) continue;
+      const exe = path.isAbsolute(l.command) ? await realOr(l.command) : await onPath(l.command);
+      if (exe) out.push({ exe, args: argv.join(' ') });
+    }
+    return out;
+  }
+
+  async function bindOnce(pid, me, threadId) {
+    const [childText, args] = await Promise.all([Peer.lsof(pid), Peer.args(pid)]);
+    const fds = PeerPid.parseFds(childText);
     const cwd = fds.cwd && typeof fds.cwd.name === 'string' && path.isAbsolute(fds.cwd.name) ? await realOr(fds.cwd.name) : null;
     const base = { bound: false, pid, cwd };
     if (!me || me.ppid <= 1) return { ...base, reason: 'NO_PARENT' };
-    const parent = await inspect(me.ppid);
-    const provider = parent ? ['claude', 'codex'].find((p) => allowedExe(p, parent.exe, { home, codexHome, args: parent.args })) : null;
+    let provider = null;
+    let parent = null;
+    for (const p of ['claude', 'codex']) { parent = await aiProcess(me.ppid, p); if (parent) { provider = p; break; } }
     // A grandchild (a server an agent started from its shell) has a shell or node as its parent.
     if (!provider) return { ...base, reason: 'NOT_AI_CHILD' };
-    if (!/mcp-server\.js(?:\s|$)/.test(cmd)) return { ...base, provider, reason: 'NOT_OUR_SERVER' };
-    // A command the model ran is a direct child too, but its stdin is /dev/null, a pty or a file.
-    if (!PeerPid.stdioPeered(fds, await Peer.fds(me.ppid))) return { ...base, provider, reason: 'NOT_STDIO' };
+    const exe = fds.txt && typeof fds.txt.name === 'string' && path.isAbsolute(fds.txt.name) ? await realOr(fds.txt.name) : null;
+    if (!exe || !(await ourServers()).some((o) => o.exe === exe && o.args === args)) return { ...base, provider, reason: 'NOT_OUR_SERVER' };
+    // A command the model ran is a direct child too, but its stdin is /dev/null, a pty, a file or a copy of its stdout.
+    const serverText = await Peer.lsof(me.ppid);
+    if (!PeerPid.stdioPeered(fds, PeerPid.parseFds(serverText), provider === 'codex' ? 'PIPE' : 'unix')) return { ...base, provider, reason: 'NOT_STDIO' };
+    // Only now its environment, and only three names from it plus whether code is injected.
+    const env = await Peer.env(pid, CLAUDE_ENV);
+    if (!env || env.args !== args || env.injected) return { ...base, provider, reason: 'INJECTED' };
     const list = liveSessions();
     const count = (key) => list.filter((x) => keyOf(x) === key).length;
     // A session file left from before this start is not trusted until its session's next hook event.
     const observed = (x) => Math.max(Date.parse(x.updatedAt || '') || 0, Date.parse(x.codexHookAt || '') || 0) >= startedAt;
+    // The same child throughout: not a pid reused while it was checked.
+    const same = async () => { const again = await Peer.proc(pid); return !!again && again.start === me.start && again.ppid === me.ppid; };
     if (provider === 'codex') {
       if (typeof threadId !== 'string' || !/^[\w.-]{1,120}$/.test(threadId)) return { ...base, provider, reason: 'NO_THREAD' };
       const key = `codex|${threadId}`;
@@ -348,7 +413,8 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
       if (Number(s.codexServerPid) !== me.ppid) return { ...base, provider, reason: 'OTHER_SERVER' };
       if (!interactiveOf(s, 'codex')) return { ...base, provider, reason: 'HEADLESS' };
       if (!cwd || cwd !== await realOr(s.cwd)) return { ...base, provider, reason: 'CWD' };
-      if (!(await codexThread(s, me.ppid, freshFiles))) return { ...base, provider, reason: 'UNVERIFIED' };
+      const files = lsofFiles(serverText);
+      if (!(await codexThread(s, me.ppid, async () => files))) return { ...base, provider, reason: 'UNVERIFIED' };
       // Pinned for the child's lifetime; a second live child claiming the thread (an agent's own
       // app-server resuming it) leaves every claimant unbound until only one is left.
       const pinKey = `${pid}|${me.start}`;
@@ -364,14 +430,15 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
         if (alive && alive.start === v.start) claimants += 1; else pins.delete(k);
       }
       if (claimants > 1) return { ...base, provider, reason: 'CONTESTED' };
+      if (!(await same())) return { ...base, provider, reason: 'NO_PARENT' };
       return { bound: true, provider, key, sessionId: threadId, session: s, pid, cwd };
     }
     // Claude: the child's own env (Claude sets it; any shell the model runs inherits it too, which is why
-    // the stdio check above is what counts). Interactive only; one live session per claude process.
-    if (PeerPid.envValue(cmd, 'CLAUDE_CODE_ENTRYPOINT', /^[\w.-]{1,40}$/) !== 'cli') return { ...base, provider, reason: 'HEADLESS' };
-    const claudePid = PeerPid.envValue(cmd, 'CLAUDE_PID', /^\d{1,9}$/);
-    if (claudePid !== null && Number(claudePid) !== me.ppid) return { ...base, provider, reason: 'PID_MISMATCH' };
-    const envId = PeerPid.envValue(cmd, 'CLAUDE_CODE_SESSION_ID', /^[\w.-]{1,120}$/);
+    // the checks above are what count). Interactive only; one live session per claude process.
+    if (env.vars.CLAUDE_CODE_ENTRYPOINT !== 'cli') return { ...base, provider, reason: 'HEADLESS' };
+    const claudePid = env.vars.CLAUDE_PID;
+    if (claudePid !== null && (!/^\d{1,9}$/.test(claudePid) || Number(claudePid) !== me.ppid)) return { ...base, provider, reason: 'PID_MISMATCH' };
+    const envId = typeof env.vars.CLAUDE_CODE_SESSION_ID === 'string' && /^[\w.-]{1,120}$/.test(env.vars.CLAUDE_CODE_SESSION_ID) ? env.vars.CLAUDE_CODE_SESSION_ID : null;
     const mine = list.filter((x) => String(x.source || 'claude') === 'claude' && Number(x.claudePid) === me.ppid);
     // Two live files for one process (after /clear without SessionEnd, or a copy): unbound until one goes.
     if (mine.length !== 1) return { ...base, provider, reason: mine.length ? 'TIE' : 'NO_SESSION' };
@@ -379,17 +446,48 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     const key = keyOf(s);
     if (count(key) > 1) return { ...base, provider, reason: 'TIE' };
     if (!observed(s)) return { ...base, provider, reason: 'UNOBSERVED' };
-    // The child's id is this session, or one that ended (/clear keeps the old id in a child it did not respawn).
-    if (envId && envId !== s.sessionId && list.some((x) => keyOf(x) === `claude|${envId}`)) return { ...base, provider, reason: 'ID_MISMATCH' };
-    if (!parent.cwd || !within(await realOr(s.cwd), parent.cwd)) return { ...base, provider, reason: 'CWD' };
+    if (!interactiveOf(s, 'claude')) return { ...base, provider, reason: 'HEADLESS' };
+    const { exclude } = settings();
+    if (!(await claudeCwdOk(s, parent.cwd, (await classify(s.cwd, exclude)).top))) return { ...base, provider, reason: 'CWD' };
+    if (!(await ownerOk(s.sessionId, me.ppid, parent.start))) return { ...base, provider, reason: 'OWNER' };
+    // The child's id is this session, or one this same claude process ran before (/clear keeps the old id in a child it did not respawn).
+    const seenHere = procIds.get(`${me.ppid}|${parent.start}`);
+    if (!envId || (envId !== s.sessionId && !(seenHere && seenHere.has(envId)))) return { ...base, provider, reason: 'ID_MISMATCH' };
+    if (!(await same())) return { ...base, provider, reason: 'NO_PARENT' };
     return { bound: true, provider, key, sessionId: s.sessionId, session: s, pid, cwd };
   }
 
-  // ident: { remotePort, threadId } from the signal server. Logs the outcome, never a value.
+  // At most four callers checked at once, and one answer per (child, thread) for bindCacheMs: one agent
+  // calling in a loop cannot multiply the ps and lsof runs.
+  let active = 0;
+  const waiting = [];
+  const acquire = () => (active < 4 ? (active += 1, Promise.resolve()) : new Promise((resolve) => waiting.push(resolve)));
+  const release = () => { const next = waiting.shift(); if (next) next(); else active -= 1; };
+  const bindCache = new Map(); // `${pid}|${start}|${threadId}` → { at, p: Promise<result> }, shared by calls in flight too
+  async function bindChecked(remotePort, threadId) {
+    if (!Peer.supported) return { bound: false, reason: 'UNSUPPORTED' };
+    const pid = await Peer.peerOf(remotePort);
+    if (!pid) return { bound: false, reason: 'NO_PEER' };
+    const me = await Peer.proc(pid);
+    const k = `${pid}|${me ? me.start : '-'}|${threadId || ''}`;
+    const hit = bindCache.get(k);
+    if (hit && now() - hit.at < bindCacheMs) return hit.p;
+    const p = (async () => { await acquire(); try { return await bindOnce(pid, me, threadId); } finally { release(); } })();
+    if (bindCacheMs > 0) {
+      for (const [ck, v] of bindCache) if (now() - v.at >= bindCacheMs) bindCache.delete(ck);
+      bindCache.set(k, { at: now(), p });
+      // Not yet in Plexiform's list is retried (a SessionStart hook can be early): never cached.
+      const drop = () => { if (bindCache.get(k)?.p === p) bindCache.delete(k); };
+      p.then((r) => { if (r.reason === 'NO_SESSION') drop(); }, drop);
+    }
+    return p;
+  }
+
+  // ident: { remotePort, threadId, hook } from the signal server. Logs the outcome, never a value.
   async function bindCaller(ident = {}, { retries = 0 } = {}) {
     let r;
     for (let i = 0; ; i += 1) {
-      r = await bindOnce(ident.remotePort, ident.threadId).catch(() => ({ bound: false, reason: 'ERROR' }));
+      r = await bindChecked(ident.remotePort, ident.threadId).catch(() => ({ bound: false, reason: 'ERROR' }));
       // A SessionStart hook can call before Plexiform has that session's file.
       if (r.bound || r.reason !== 'NO_SESSION' || i >= retries) break;
       await new Promise((resolve) => setTimer(resolve, bindRetryMs));
@@ -421,8 +519,8 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     if (op !== 'peers') return { reason: 'VALIDATION', message: 'unknown bus op' };
     if (!aw.enabled) return { reason: 'AWARENESS_OFF', message: 'Your person turned off "Let my AI sessions see each other" in Plexiform.' };
     const b = await bindCaller(ident);
-    // Unbound: the folder the calling process really runs in, else the one it named.
-    const viewCwd = b.bound ? b.session.cwd : b.cwd || (typeof caller.cwd === 'string' ? caller.cwd : null);
+    // Unbound: the folder the calling process really runs in; with none, nothing (never the folder it named).
+    const viewCwd = b.bound ? b.session.cwd : b.cwd || null;
     const cls = typeof viewCwd === 'string' && path.isAbsolute(viewCwd) ? await classify(viewCwd, exclude) : { allowed: false };
     if (!cls.allowed) return { reason: 'EXCLUDED', message: 'Plexiform does not show other AI sessions to this folder.' };
     const roster = await current(b.bound ? b.key : null);
@@ -442,7 +540,8 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   async function relay(op, args, caller, ident, { forward, onCodexSession = async () => {} }) {
     if (op === 'peers' || op === 'session') {
       const r = await busOp(op, ident, caller);
-      if (op === 'session' && r && r.bound && r.provider === 'codex') Promise.resolve().then(onCodexSession).catch(() => {});
+      // Only a call shaped as Codex's hook makes it (src/mcp-server.js hookShaped): the model calling bus_session itself does not.
+      if (op === 'session' && ident.hook === true && r && r.bound && r.provider === 'codex') Promise.resolve().then(onCodexSession).catch(() => {});
       return r;
     }
     if (op === 'handoff' || op === 'hello') {
@@ -536,7 +635,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
       if (!cls.allowed) { self[key] = { allowed: false }; continue; }
       if (!CONTEXT_PROVIDERS.has(provider)) continue;
       const interactive = interactiveOf(s, provider);
-      const verified = interactive && (provider === 'claude' || provider === 'codex') ? await verify(s, provider, pidCount).catch(() => false) : false;
+      const verified = interactive && (provider === 'claude' || provider === 'codex') ? await verify(s, provider, pidCount, cls.top).catch(() => false) : false;
       const entry = { allowed: true, interactive, verified, bound: false, caps: { mcp: caps[provider] === true, notes: false }, notices: [], repo_key: cls.repoKey || null };
       self[key] = entry;
       if (!verified) continue;

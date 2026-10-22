@@ -140,7 +140,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
           const caller = { provider: typeof raw.provider === 'string' ? raw.provider.slice(0, 12) : null, cwd: typeof cwd === 'string' ? cwd.slice(0, 1024) : null };
           // Who is calling comes from this socket's peer process, which main looks up; the body only carries Codex's thread claim.
           const threadId = d.meta && typeof d.meta === 'object' && typeof d.meta.thread_id === 'string' && THREAD_ID.test(d.meta.thread_id) ? d.meta.thread_id : null;
-          const ident = { remotePort: req.socket.remotePort, threadId };
+          const ident = { remotePort: req.socket.remotePort, threadId, hook: !!threadId && d.meta.hook === true };
           // bus_wait holds the call; the relay's own deadline (timeout_s + 5 s) means it can never hang.
           const deadlineMs = op === 'wait' ? (Math.min(120, Math.max(0, Number(raw.timeout_s ?? 60) || 0)) + 5) * 1000 : busDeadlineMs;
           // Only a helper that was never reached means nothing was handed off.

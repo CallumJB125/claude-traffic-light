@@ -185,17 +185,20 @@ const busHook = () => ({ type: 'mcp_tool', server: BUS_SERVER, tool: BUS_TOOL, i
 const isBusHookOurs = (h) => object(h) && Object.keys(h).sort().join(',') === 'input,server,timeout,tool,type' && h.type === 'mcp_tool'
   && h.server === BUS_SERVER && h.tool === BUS_TOOL && h.timeout === 5 && object(h.input) && Object.keys(h.input).length === 0;
 
+// Codex keys hook trust by position (findings §2): taking a group out shifts every group after it, and
+// the person would silently lose the trust of those hooks. So ours goes only while it is the very last
+// SessionStart handler; anywhere else it stays and the caller says so ({ kept: true }).
 function stripBusHook(config) {
   validateActivity(config);
   const groups = config.hooks?.SessionStart;
-  if (!groups) return config;
-  const kept = [];
-  for (const g of groups) {
-    const handlers = g.hooks.filter((h) => !isBusHookOurs(h));
-    if (handlers.length === g.hooks.length) kept.push(g);
-    else if (handlers.length || Object.keys(g).some((k) => !['matcher', 'hooks'].includes(k))) kept.push({ ...g, hooks: handlers });
-  }
-  return { ...config, hooks: { ...config.hooks, SessionStart: kept } };
+  if (!groups || !groups.some((g) => g.hooks.some(isBusHookOurs))) return { config, kept: false };
+  const last = groups[groups.length - 1];
+  const ours = last.hooks.findIndex(isBusHookOurs);
+  const elsewhere = groups.slice(0, -1).some((g) => g.hooks.some(isBusHookOurs)) || last.hooks.filter(isBusHookOurs).length > 1;
+  if (ours !== last.hooks.length - 1 || elsewhere) return { config, kept: true };
+  const handlers = last.hooks.slice(0, -1);
+  const keep = handlers.length || Object.keys(last).some((k) => !['matcher', 'hooks'].includes(k));
+  return { config: { ...config, hooks: { ...config.hooks, SessionStart: [...groups.slice(0, -1), ...(keep ? [{ ...last, hooks: handlers }] : [])] } }, kept: false };
 }
 
 function checkBusHook(config) {
@@ -204,14 +207,16 @@ function checkBusHook(config) {
   return ours.length === 1 && (!ours[0].matcher || ours[0].matcher === '');
 }
 
-// A group of its own at the end of SessionStart: every existing group and handler keeps its place (Codex keys trust by position).
+// A group of its own at the end of SessionStart: every existing group and handler keeps its place (Codex keys trust by
+// position). One of ours already anywhere is left as it is, for the same reason.
 function installBusHook({ home, fs: fsImpl = fs }) {
   const file = lifecycleConfigPath(home);
   try {
     const cur = activitySnapshot(file, fsImpl);
-    if (checkBusHook(cur.data)) return { ok: true, file, changed: false };
-    const next = stripBusHook(cur.data);
-    next.hooks = { ...(next.hooks || {}), SessionStart: [...(next.hooks?.SessionStart || []), { hooks: [busHook()] }] };
+    validateActivity(cur.data);
+    if ((cur.data.hooks?.SessionStart || []).some((g) => g.hooks.some(isBusHookOurs))) return { ok: true, file, changed: false };
+    const next = { ...cur.data, hooks: { ...(cur.data.hooks || {}) } };
+    next.hooks.SessionStart = [...(next.hooks.SessionStart || []), { hooks: [busHook()] }];
     writeActivity(file, cur, next, fsImpl);
     return { ok: true, file, changed: true };
   } catch (err) { return { ok: false, file, changed: false, error: err.message }; }
@@ -221,10 +226,10 @@ function uninstallBusHook({ home, fs: fsImpl = fs }) {
   const file = lifecycleConfigPath(home);
   try {
     const cur = activitySnapshot(file, fsImpl);
-    const next = stripBusHook(cur.data);
+    const { config: next, kept } = stripBusHook(cur.data);
     const changed = JSON.stringify(next) !== JSON.stringify(cur.data) && !!cur.stat;
     if (changed) writeActivity(file, cur, next, fsImpl);
-    return { ok: true, file, changed };
+    return { ok: true, file, changed, kept };
   } catch (err) { return { ok: false, file, changed: false, error: err.message }; }
 }
 

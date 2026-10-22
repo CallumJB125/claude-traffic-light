@@ -2,7 +2,9 @@
 // src/peer-pid.js against the real process table (macOS only): the socket peer
 // of a loopback connection, its parent, and whether its stdin and stdout are
 // the ends of streams its parent holds. A stdio child passes; a child whose
-// stdin is /dev/null (what a model's shell command gets) and a grandchild do not.
+// stdin is /dev/null (what a model's shell command gets), one whose stdin is a
+// copy of its own stdout (`exec 0<&1`, review #2) and a grandchild do not; and
+// an unsigned node is neither Anthropic's nor OpenAI's program (review #1).
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
@@ -23,35 +25,51 @@ test('live: peer pid, parent and stdio peering from lsof and ps', { skip: proces
     const node = process.execPath;
     const stdio = spawn(node, ['-e', ${JSON.stringify(`${dial('stdio')};require('child_process').spawn(process.execPath,['-e',${JSON.stringify(dial('grandchild'))}],{stdio:['pipe','pipe','inherit']})`)}], { stdio: ['pipe', 'pipe', 'inherit'] });
     const shell = spawn(node, ['-e', ${JSON.stringify(dial('shell'))}], { stdio: ['ignore', 'pipe', 'inherit'] });
-    process.stdout.write(JSON.stringify({ stdio: stdio.pid, shell: shell.pid }) + '\\n');
+    const dup = spawn('/bin/sh', ['-c', 'exec 0<&1; exec "$0" -e "$1"', node, ${JSON.stringify(dial('dup'))}], { stdio: ['ignore', 'pipe', 'pipe'] });
+    process.stdout.write(JSON.stringify({ stdio: stdio.pid, shell: shell.pid, dup: dup.pid }) + '\\n');
     setTimeout(() => {}, 20000);`;
   const parent = spawn(process.execPath, ['-e', parentCode], { stdio: ['ignore', 'pipe', 'inherit'] });
-  t.after(() => { try { process.kill(parent.pid); } catch {} for (const p of kids) { try { process.kill(p); } catch {} } server.close(); });
+  t.after(() => { try { process.kill(parent.pid); } catch {} for (const p of kids) { try { process.kill(p); } catch {} } server.closeAllConnections(); server.close(); });
   let kids = [];
-  const pids = await new Promise((resolve) => parent.stdout.once('data', (d) => resolve(JSON.parse(String(d)))));
-  kids = [pids.stdio, pids.shell];
-  for (let i = 0; i < 100 && seen.size < 3; i += 1) await new Promise((r) => setTimeout(r, 50));
-  assert.equal(seen.size, 3, 'all three connected');
   const P = PeerPid.create({ run, platform: 'darwin' });
+  const pids = await new Promise((resolve) => parent.stdout.once('data', (d) => resolve(JSON.parse(String(d)))));
+  kids = [pids.stdio, pids.shell, pids.dup];
+  for (let i = 0; i < 100 && seen.size < 4; i += 1) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(seen.size, 4, 'all four connected');
+  const fdsOf = async (pid) => PeerPid.parseFds(await P.lsof(pid));
 
   const stdioPid = await P.peerOf(seen.get('stdio'));
   assert.equal(stdioPid, pids.stdio);
   const me = await P.proc(stdioPid);
   assert.equal(me.ppid, parent.pid);
   assert.ok(me.start.length > 10);
-  const fds = await P.fds(stdioPid, '0,1,cwd');
+  const fds = await fdsOf(stdioPid);
   assert.ok(fds.cwd && fds.cwd.name.startsWith('/'));
-  assert.equal(PeerPid.stdioPeered(fds, await P.fds(parent.pid)), true, 'a stdio child of its parent');
+  assert.ok(fds.txt && fds.txt.name.startsWith('/'), 'the executable is the first txt entry');
+  assert.equal(PeerPid.stdioPeered(fds, await fdsOf(parent.pid)), true, 'a stdio child of its parent');
+  assert.equal(PeerPid.stdioPeered(fds, await fdsOf(parent.pid), 'unix'), true, 'node spawns over socketpairs');
+  assert.equal(PeerPid.stdioPeered(fds, await fdsOf(parent.pid), 'PIPE'), false);
 
   const shellPid = await P.peerOf(seen.get('shell'));
   assert.equal(shellPid, pids.shell);
   assert.equal((await P.proc(shellPid)).ppid, parent.pid, 'a direct child too');
-  assert.equal(PeerPid.stdioPeered(await P.fds(shellPid, '0,1,cwd'), await P.fds(parent.pid)), false, 'but its stdin is /dev/null');
+  assert.equal(PeerPid.stdioPeered(await fdsOf(shellPid), await fdsOf(parent.pid)), false, 'but its stdin is /dev/null');
+
+  // `exec 0<&1`: fd 0 and fd 1 are one end, whose other end the parent holds. Review #2: this passed before.
+  const dupPid = await P.peerOf(seen.get('dup'));
+  assert.equal((await P.proc(dupPid)).ppid, parent.pid);
+  const dfds = await fdsOf(dupPid);
+  assert.equal(dfds['0'].addr, dfds['1'].addr, 'lsof shows the same end twice');
+  assert.equal(PeerPid.stdioPeered(dfds, await fdsOf(parent.pid)), false);
+
+  // The real codesign on a running, unsigned node: neither Anthropic's nor OpenAI's.
+  assert.equal(await P.signedAs(stdioPid, 'claude'), false);
+  assert.equal(await P.signedAs(stdioPid, 'codex'), false);
 
   const gPid = await P.peerOf(seen.get('grandchild'));
   kids.push(gPid);
   assert.equal((await P.proc(gPid)).ppid, pids.stdio, 'its parent is the child, not the server');
-  assert.equal(PeerPid.stdioPeered(await P.fds(gPid, '0,1,cwd'), await P.fds(parent.pid)), false);
+  assert.equal(PeerPid.stdioPeered(await fdsOf(gPid), await fdsOf(parent.pid)), false);
 
   // Our own end of the connection is never the answer.
   assert.equal(await P.peerOf(server.address().port), null);

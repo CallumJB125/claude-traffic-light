@@ -9,6 +9,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFile, execFileSync } = require('node:child_process');
 const A = require('../src/agent-awareness.js');
+const PeerPid = require('../src/peer-pid.js');
 const Hook = require('../hooks/awareness.js');
 const { testTempDir } = require('./helpers/tmp');
 
@@ -33,11 +34,19 @@ function world(t) {
   const fakeExec = (file, args, opts, cb) => {
     calls.push([file, ...args]);
     if (file === 'git') return execFile(file, args, opts, cb);
+    // codesign on a running process: Anthropic's requirement for the claude binary, OpenAI's for codex.
+    if (file === '/usr/bin/codesign') {
+      const q = procs.get(Number(args[args.length - 1]));
+      const want = q && !q.unsigned ? (q.exe === claudeExe ? 'claude' : q.exe === codexExe ? 'codex' : null) : null;
+      return want && args.includes(`-R=${PeerPid.REQUIREMENT[want]}`) ? cb(null, '') : cb(Object.assign(new Error('failed to satisfy'), { code: 3 }), '');
+    }
     const pid = Number(args[args.indexOf('-p') + 1]);
     const p = procs.get(pid);
     if (file === '/bin/ps') {
       if (!p) return cb(Object.assign(new Error('no such process'), { code: 1 }), '');
-      return cb(null, args.includes('lstart=') ? `${p.start}\n` : `${p.args || ''}\n`);
+      if (args.includes('lstart=')) return cb(null, `${p.start}\n`);
+      const argv = p.args || path.basename(p.exe);
+      return cb(null, args.includes('command=') ? `${argv}${p.env ? ` ${p.env}` : ''}\n` : `${argv}\n`);
     }
     if (file === '/usr/sbin/lsof') return p ? cb(null, `p${pid}\nfcwd\nn${p.cwd}\nftxt\nn${p.exe}\n${args.includes('-d') ? '' : (p.files || []).map(({ path: f, st }, i) => `f${30 + i}\nD0x${st.dev.toString(16)}\ni${st.ino}\nn${f}\n`).join('')}`) : cb(Object.assign(new Error('none'), { code: 1 }), '');
     return cb(Object.assign(new Error(`unexpected ${file}`), { code: 'ENOENT' }));
@@ -145,16 +154,17 @@ test('verification: a session file is not a peer without an observed event, a re
   fs.mkdirSync(sub);
   w.claude('cd-inside', sub, { procCwd: repo });
   assert.equal((await w.make().build()).self['claude|cd-inside'].verified, true);
-  assert.ok(w.calls.every(([f]) => f === 'git' || f === '/bin/ps' || f === '/usr/sbin/lsof'), 'ps and lsof by absolute path only');
+  assert.ok(w.calls.every(([f]) => f === 'git' || f === '/bin/ps' || f === '/usr/sbin/lsof' || f === '/usr/bin/codesign'), 'ps, lsof and codesign by absolute path only');
 });
 
-test('executable allow-list: Claude native and Homebrew, Claude Code cli.js under node, ChatGPT.app and the managed daemon copy of Codex', () => {
+test('executable allow-list: Claude native and Homebrew, ChatGPT.app and the managed daemon copy of Codex; never node (npm Claude Code is unverifiable)', () => {
   const home = '/Users/u';
   const o = { home, codexHome: '/Users/u/.codex' };
   assert.ok(A.allowedExe('claude', '/Users/u/.local/share/claude/versions/2.1.308', o));
   assert.ok(A.allowedExe('claude', '/opt/homebrew/Caskroom/claude-code/2.1.308/claude', o));
-  assert.ok(A.allowedExe('claude', '/usr/local/bin/node', { ...o, args: 'node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js' }));
-  assert.ok(!A.allowedExe('claude', '/usr/local/bin/node', { ...o, args: 'node /tmp/cli.js' }));
+  // Review #1: any node whose command line merely mentions cli.js passed; nothing signs node for Anthropic.
+  assert.ok(!A.allowedExe('claude', '/usr/local/bin/node', { ...o, args: 'node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js' }));
+  assert.ok(!A.allowedExe('claude', '/usr/local/bin/node', { ...o, args: 'node -e x /nope/node_modules/@anthropic-ai/claude-code/cli.js' }));
   assert.ok(!A.allowedExe('claude', '/bin/sleep', o));
   assert.ok(!A.allowedExe('claude', '/Users/u/.local/share/claude/versions/../../../../tmp/x', o));
   assert.ok(A.allowedExe('codex', '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex', o));

@@ -27,7 +27,7 @@ function loadCodexBin() {
 function main({ home = os.homedir(), mcp = loadMcp(), codexBin = loadCodexBin(), log = console.log } = {}) {
   const results = UninstallAll.run({ home, mcp, codexBin });
   if (!mcp) results.push({ id: 'mcp', file: path.join(home, '.claude.json'), changed: false, error: 'MCP uninstall helper unavailable' });
-  for (const r of results) log(`[uninstall-hooks] ${r.id}: ${Object.hasOwn(r, 'error') ? `left alone (${r.error})` : r.changed ? 'removed' : 'nothing to remove'} ${r.file}`);
+  for (const r of results) log(`[uninstall-hooks] ${r.id}: ${Object.hasOwn(r, 'error') ? `left alone (${r.error})` : r.kept ? `left in place (${r.kept})` : r.changed ? 'removed' : 'nothing to remove'} ${r.file}`);
   return results;
 }
 

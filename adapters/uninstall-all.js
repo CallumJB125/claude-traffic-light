@@ -11,6 +11,8 @@ const Adapters = require('./index.js');
 const Runtime = require('./runtime.js');
 
 // Every hook `command` string anywhere in a JSON config's hooks block.
+const KEPT_BUS_HOOK = "Plexiform's bus_session hook stays: hooks after it would lose their approval in Codex. Remove it from ~/.codex/hooks.json yourself if you like; Codex then asks again about the hooks after it.";
+
 function commandsIn(node, out = []) {
   if (Array.isArray(node)) node.forEach((n) => commandsIn(n, out));
   else if (node && typeof node === 'object') {
@@ -80,7 +82,8 @@ function run({ home, mcp = null, codexBin = null, execFileSync }) {
     const r = codex.uninstallActivity({ home });
     results.push({ id: 'codex-activity', file: activity, changed: !!r.changed, ...(r.error ? { error: r.error } : {}) });
     const b = codex.uninstallBusHook({ home });
-    results.push({ id: 'codex-bus-hook', file: activity, changed: !!b.changed, ...(b.error ? { error: b.error } : {}) });
+    // Not the last SessionStart hook: taking it out would cost the hooks after it their approval in Codex.
+    results.push({ id: 'codex-bus-hook', file: activity, changed: !!b.changed, ...(b.error ? { error: b.error } : {}), ...(b.kept ? { kept: KEPT_BUS_HOOK } : {}) });
   }
   if (mcp && codexBin) results.push(removeCodexMcp({ bin: codexBin, mcp, home, ...(execFileSync ? { execFileSync } : {}) }));
   if (mcp) {

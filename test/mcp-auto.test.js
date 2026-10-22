@@ -29,7 +29,9 @@ function world(t, { launch = PACKAGED, config = ON, codex = true, mode = '' } = 
   const state = { config: { ...config } };
   const logs = [];
   const make = (o = {}) => McpAuto.create({ rootDir: root, home, config: () => state.config, launch: o.launch || launch, codexBin: () => (codex ? bin : null),
-    codexEnv: { PATH: '/usr/bin:/bin', CODEX_HOME: codexHome, FAKE_CODEX_MODE: o.mode ?? mode }, log: (m) => logs.push(m) });
+    codexEnv: { PATH: '/usr/bin:/bin', CODEX_HOME: codexHome, FAKE_CODEX_MODE: o.mode ?? mode }, log: (m) => logs.push(m),
+    // The fake CLI stands in for OpenAI's signed codex; the real check (trustedCodex) has its own test below.
+    ...(o.realTrust ? {} : { trustCodexBin: async (b) => b }), ...(o.extra || {}) });
   const claudeJson = () => { try { return JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')); } catch { return null; } };
   const record = () => JSON.parse(fs.readFileSync(path.join(root, 'mcp-auto.json'), 'utf8'));
   return { dir, home, root, codexHome, bin, state, logs, make, claudeJson, record, codexServers: () => Fake.servers(codexHome), codexCalls: () => Fake.calls(codexHome) };
@@ -83,7 +85,7 @@ test('the bus_session hook is a separate SessionStart group; the lifecycle handl
   for (const ev of Codex.LIFECYCLE_EVENTS) assert.deepEqual(after.hooks[ev][0], lifecycle.hooks[ev][0], ev);
   assert.deepEqual(after.hooks.SessionStart[1], { hooks: [{ type: 'mcp_tool', server: 'plexiform-bus', tool: 'bus_session', input: {}, timeout: 5 }] });
   assert.ok(Codex.checkActivity(after, rt), 'the lifecycle install still checks out');
-  // Uninstalling activity leaves the bus hook alone, and the reverse.
+  // Uninstalling activity leaves the bus hook alone, and the reverse (ours is the last SessionStart group here).
   assert.equal(Codex.uninstallBusHook({ home: w.home }).changed, true);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(w.codexHome, 'hooks.json'), 'utf8')), lifecycle);
 });
@@ -120,11 +122,11 @@ test('AW6: a foreign plexiform-bus (no marker) is reported and never touched, in
   assert.ok(w.codexServers()['plexiform-bus']);
 });
 
-test('AW15: Undo persists the opt-out, removes what was added, and nothing re-adds it; an existing full-server opt-out is honoured', async (t) => {
-  const w = world(t, { config: { ...ON, mcpUserOff: true } });
+test('AW15: Undo persists the opt-out, removes what was added, and nothing re-adds it', async (t) => {
+  const w = world(t);
   const auto = w.make();
   await auto.sync();
-  assert.ok(!(McpInstall.NAME in w.claudeJson().mcpServers), 'the full server is never added, opted out or not');
+  assert.ok(!(McpInstall.NAME in w.claudeJson().mcpServers), 'the full server is never added');
   let undone = 0;
   const r = await auto.act('bus-added', 'undo', { undo: async () => { undone += 1; w.state.config = { ...w.state.config, mcpBusUserOff: true }; } });
   assert.equal(r.ok, true);
@@ -223,4 +225,113 @@ test('main wires it once per start after ready, deferred, and only the installed
   // src/mcp-auto.js itself does only async fs; its sync writes are mcp-install.js and the Codex adapter's.
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'mcp-auto.js'), 'utf8');
   assert.ok(!/\b[a-zA-Z]+Sync\s*\(/.test(src));
+});
+
+// ── PR #34 security review regressions ──────────────────────────────────────
+
+test('review #5: turning Plexiform\'s Claude integration off (mcpUserOff) keeps plexiform-bus out of Claude Code too, and takes a recorded one out', async (t) => {
+  const w = world(t, { config: { ...ON, mcpUserOff: true } });
+  const s = await w.make().sync();
+  assert.equal(s.claude.state, 'off');
+  assert.ok(!w.claudeJson() || !('plexiform-bus' in (w.claudeJson().mcpServers || {})), 'nothing written to ~/.claude.json');
+  assert.equal(s.codex.state, 'ours', 'Codex is not covered by the Claude opt-out');
+  assert.equal(McpAuto.claudeOn(w.state.config), false);
+  // Opting out after it was added removes ours in the same sync.
+  const w2 = world(t);
+  await w2.make().sync();
+  assert.ok('plexiform-bus' in w2.claudeJson().mcpServers);
+  w2.state.config = { ...ON, mcpUserOff: true };
+  const s2 = await w2.make().sync();
+  assert.equal(s2.claude.state, 'off');
+  assert.ok(!('plexiform-bus' in w2.claudeJson().mcpServers));
+  assert.equal(w2.record().claude, null);
+  const a2 = w2.make();
+  await a2.sync();
+  assert.deepEqual(a2.caps(), { claude: false, codex: true });
+});
+
+test('review #4: Undo, off and uninstall never move a SessionStart group: our bus hook goes only while it is the last one', async (t) => {
+  const w = world(t);
+  await w.make().sync();
+  const file = path.join(w.codexHome, 'hooks.json');
+  // The person adds a hook after ours (or applyActivity re-appends the lifecycle group after an app move).
+  const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const theirs = { hooks: [{ type: 'command', command: '/usr/local/bin/my-start-hook', timeout: 5 }] };
+  cfg.hooks.SessionStart.push(theirs);
+  fs.writeFileSync(file, JSON.stringify(cfg, null, 2));
+  const before = fs.readFileSync(file, 'utf8');
+  const idx = (c) => c.hooks.SessionStart.findIndex((g) => g.hooks[0].command === '/usr/local/bin/my-start-hook');
+  const r = Codex.uninstallBusHook({ home: w.home });
+  assert.deepEqual([r.ok, r.changed, r.kept], [true, false, true]);
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'nothing written: their hook keeps its index, so Codex keeps its approval');
+  // Off: kept, recorded as kept, and Home says what to do.
+  w.state.config = { ...ON, mcpBusUserOff: true };
+  const auto = w.make();
+  await auto.sync();
+  assert.equal(idx(JSON.parse(fs.readFileSync(file, 'utf8'))), idx(cfg));
+  assert.equal(w.record().codexHook.kept, true);
+  assert.deepEqual(auto.notices().map((n) => n.handle), ['bus-codex-hook-kept']);
+  assert.equal((await auto.act('bus-codex-hook-kept', 'dismiss')).ok, true);
+  assert.deepEqual(auto.notices(), []);
+  // Install with ours already present somewhere: never stripped and re-appended.
+  assert.equal(Codex.installBusHook({ home: w.home }).changed, false);
+  assert.equal(idx(JSON.parse(fs.readFileSync(file, 'utf8'))), idx(cfg));
+  // Uninstall-all reports it as left in place, not removed.
+  const UninstallAll = require('../adapters/uninstall-all.js');
+  const res = UninstallAll.run({ home: w.home, mcp: null, codexBin: null }).find((x) => x.id === 'codex-bus-hook');
+  assert.equal(res.changed, false);
+  assert.match(res.kept, /lose their approval/);
+  // Last again (their hook removed by the person): ours goes.
+  const now = JSON.parse(fs.readFileSync(file, 'utf8'));
+  now.hooks.SessionStart.pop();
+  fs.writeFileSync(file, JSON.stringify(now, null, 2));
+  assert.deepEqual((({ changed, kept }) => [changed, kept])(Codex.uninstallBusHook({ home: w.home })), [true, false]);
+  assert.ok(!Codex.isBusHookInstalled({ home: w.home }));
+});
+
+test('review #11: main runs only OpenAI\'s signed codex; an unsigned codex in ~/.local/bin is never run', async (t) => {
+  const w = world(t);
+  const s = await w.make({ realTrust: true }).sync();
+  assert.equal(s.codex.state, 'untrusted');
+  assert.deepEqual(w.codexCalls(), [], 'the fake codex was never executed');
+  assert.equal(s.claude.state, 'ours');
+  // trustedCodex: ChatGPT.app's launcher script resolves to the binary beside it, and only a signed one passes.
+  const root = path.join(w.dir, 'x', 'node_modules', '@openai', 'codex', 'codex-cli');
+  const real = path.join(root, 'CodexCLI.app', 'Contents', 'MacOS', 'codex');
+  fs.mkdirSync(path.dirname(real), { recursive: true });
+  fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
+  fs.writeFileSync(real, 'binary', { mode: 0o755 });
+  fs.writeFileSync(path.join(root, 'bin', 'codex'), '#!/bin/sh\n', { mode: 0o755 });
+  const realReal = fs.realpathSync(real);
+  const asked = [];
+  const run = async (file, args) => { asked.push([file, ...args]); if (args[args.length - 1] !== realReal) throw new Error('unsigned'); return ''; };
+  const opts = { home: w.home, codexHome: w.codexHome, run, platform: 'darwin' };
+  assert.equal(await McpAuto.trustedCodex(path.join(root, 'bin', 'codex'), opts), realReal);
+  assert.deepEqual(asked[0].slice(0, 3), ['/usr/bin/codesign', '--verify', '--strict']);
+  assert.match(asked[0][3], /^-R=identifier "codex" and anchor apple generic and certificate leaf\[subject\.OU\] = "2DC432GLL2"$/);
+  assert.equal(await McpAuto.trustedCodex(path.join(root, 'bin', 'codex'), { ...opts, run: async () => { throw new Error('unsigned'); } }), null);
+  assert.equal(await McpAuto.trustedCodex(w.bin, opts), null, 'not where codex installs');
+  assert.equal(await McpAuto.trustedCodex(path.join(root, 'bin', 'codex'), { ...opts, platform: 'linux' }), null, 'no signature to check elsewhere: not run');
+  // The real ChatGPT.app codex on this Mac, when there is one (codesign only; codex is never run).
+  const app = '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex';
+  if (process.platform === 'darwin' && fs.existsSync(app)) {
+    const execRun = (file, args) => new Promise((resolve, reject) => require('node:child_process').execFile(file, args, (e, o) => (e ? reject(e) : resolve(o))));
+    assert.equal(await McpAuto.trustedCodex(app, { home: w.home, codexHome: w.codexHome, run: execRun }), '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex');
+  }
+});
+
+test('review #12: Home actions and the hook-seen mark wait for a running sync, so neither loses the other\'s record change', async (t) => {
+  const w = world(t);
+  const { execFile } = require('node:child_process');
+  const slow = (file, args, opts, cb) => setTimeout(() => execFile(file, args, opts, cb), 150);
+  const auto = w.make({ extra: { execFile: slow } });
+  const sync = auto.sync();
+  await new Promise((r) => setTimeout(r, 40));
+  const acted = auto.act('bus-codex-hook', 'dismiss');
+  const seen = auto.codexHookSeen();
+  await Promise.all([sync, acted, seen]);
+  const rec = w.record();
+  assert.equal(rec.codex && rec.codex.name, 'plexiform-bus', 'the sync\'s Codex entry is recorded');
+  assert.equal(rec.hookNoticeDismissed, true, 'the dismissal is kept');
+  assert.match(String(rec.codexHookSeenAt), /^\d{4}-/, 'the hook-seen mark is kept');
 });
