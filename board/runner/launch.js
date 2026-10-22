@@ -57,6 +57,14 @@ export const DENY_READ = Object.freeze([
   '~/.ssh', '~/.aws', '~/.config/gh', '~/Library/Keychains', '~/.claude', '~/.claude.json', '~/.codex', '~/.claude-traffic-light',
 ]);
 
+// Ghostty Dock (a third-party terminal) takes requests, typing into live
+// sessions among them, as files in this folder from any process running as the
+// user. A run must never write there, whatever else it may write (the worktree
+// or a repo's allow_write_extra could cover the home folder), or a run could
+// type into the user's terminals and escape the sandbox through it. Nor may it
+// replace the Ghostty Dock programs Plexiform itself runs on a click.
+export const DENY_WRITE = Object.freeze(['~/.local/state/ghostty-dock', '~/.local/bin/ghostty-dock', '~/.local/bin/ghostty-dock-open']);
+
 export const CACHE_WRITE = Object.freeze(['~/.npm', '~/.cache', '~/Library/Caches', '~/Library/pnpm', '~/.yarn']);
 
 export const DEFAULT_MAX_TURNS = 200;
@@ -120,7 +128,7 @@ export function buildSettings({ worktree, tmpdir, node = process.execPath, repo 
       filesystem: {
         allowWrite: [worktree, tmpdir, ...cacheWrite, ...(repo.allow_write_extra ?? [])].filter(Boolean),
         denyRead: [...DENY_READ, ...boardHomeRules(boardHome).denyRead, ...extraDenyRead],
-        ...(extraDenyWrite.length ? { denyWrite: extraDenyWrite } : {}),
+        denyWrite: [...DENY_WRITE, ...extraDenyWrite],
       },
       // A bus run never gets a domain, whatever the repo allows: no push, no PR, no exfiltration.
       network: { allowedDomains: bus ? [] : [...new Set(repo.allowed_domains ?? [])], strictAllowlist: true },

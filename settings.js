@@ -25,6 +25,7 @@
       document.getElementById('showWidget').checked = config.showWidget !== false;
       document.getElementById('menuBarMode').checked = !!config.menuBarMode;
       document.getElementById('lowPower').value = ['auto', 'on', 'off'].includes(config.lowPower) ? config.lowPower : 'auto';
+      document.getElementById('ghosttyDock').value = config.integrations?.ghosttyDock === 'off' ? 'off' : 'auto';
       document.getElementById('seasonal').checked = config.seasonal !== false;
       document.getElementById('askFromWidget').checked = !!config.askFromWidget;
       document.getElementById('oneKeyApprove').checked = config.oneKeyApprove === true;
@@ -195,6 +196,7 @@
         showWidget: document.getElementById('showWidget').checked,
         menuBarMode: document.getElementById('menuBarMode').checked,
         lowPower: document.getElementById('lowPower').value,
+        integrations: { ghosttyDock: document.getElementById('ghosttyDock').value },
         seasonal: document.getElementById('seasonal').checked,
         askFromWidget: document.getElementById('askFromWidget').checked,
         oneKeyApprove: document.getElementById('oneKeyApprove').checked,

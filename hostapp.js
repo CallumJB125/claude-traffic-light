@@ -6,7 +6,10 @@
 // process is `Code`. Matching those case-sensitively meant the roamer never
 // recognised Ghostty was running, so it never knocked at all.
 
+// Ghostty Dock's binary is also `ghostty`, so the bare `ghostty` alias can't
+// tell it from stock Ghostty: pickTerminal relies on the recorded hostApp.
 const APP_ALIASES = {
+  'Ghostty Dock': ['Ghostty Dock'],
   Ghostty: ['ghostty'],
   iTerm2: ['iTerm2', 'iTerm'],
   Terminal: ['Terminal'],

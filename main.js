@@ -46,6 +46,7 @@ const NativeBoard = require('./native-board/service');
 const Setup = require('./setup.js');
 const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
+const GhosttyDock = require('./src/ghostty-dock.js');
 const Voice = require('./src/voice.js');
 const Compaction = require('./src/compaction.js');
 const Health = require('./src/health.js');
@@ -63,7 +64,7 @@ const UpdateView = require('./src/update-view.js');
 const Feedback = require('./src/feedback');
 const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
-const Terminal = require('./src/terminal.js')({ getSessions: () => localSessions(aggregateState().sessions), getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST });
+const Terminal = require('./src/terminal.js')({ getSessions: () => localSessions(aggregateState().sessions), getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST, getGhosttyDockMode: () => GhosttyDock.modeOf(loadConfig()) });
 const {
   TERMINAL_APPS, escapeForAppleScript, activateTerminalApp, jumpToSession, isRemote, osa, frontmostApp,
   dockIconRect, clampToDisplay, runningProcessNames, terminalForSessions,
@@ -310,6 +311,8 @@ const DEFAULT_CONFIG = {
   persona: null,
   // Simple mode hides the team, rule fields, helper chips, session timers and token knobs.
   simpleMode: false,
+  // Third-party apps Plexiform can call (src/ghostty-dock.js): 'auto' uses Ghostty Dock when it is installed and trusted, 'off' never.
+  integrations: { ghosttyDock: 'auto' },
 };
 const REQUESTS_DIR = path.join(ROOT_DIR, 'requests');
 const git = GitSignals.create({ stateFile: path.join(ROOT_DIR, 'git-signals.json'), log: (m) => console.log(m) });
@@ -354,6 +357,7 @@ function buildConfig() {
   config.spend = Spend.normalize(saved.spend);
   config.voice = Voice.normalizeConfig(saved.voice);
   config.compaction = Compaction.normalizeSettings(saved.compaction);
+  config.integrations = { ...(saved.integrations && typeof saved.integrations === 'object' && !Array.isArray(saved.integrations) ? saved.integrations : {}), ghosttyDock: GhosttyDock.normalizeMode(saved.integrations && saved.integrations.ghosttyDock) };
   // Rules are stored whole; a config from before rules existed gets the
   // defaults, which reproduce the old fixed behaviour exactly.
   config.rules = (Array.isArray(saved.rules) ? saved.rules : Rules.defaultRules()).map(Rules.normalizeRule);
@@ -387,6 +391,7 @@ function saveConfig(partial) {
   if (partial.presets) next.presets = partial.presets.map((p) => ({ ...p, rulesVersion: Rules.RULES_VERSION }));
   // A renderer can't save a rule the UI would refuse.
   // `sealed` is reserved for the rules' safeStorage HMAC (src/auto-rules.js); null until the evaluator ships.
+  if (partial.integrations) next.integrations = { ...loadConfig().integrations, ...partial.integrations, ghosttyDock: GhosttyDock.normalizeMode(partial.integrations.ghosttyDock) };
   if (partial.agentBus) next.agentBus = require('./src/agent-bus-main.js').normalize(partial.agentBus);
   if (partial.autoAnswer) next.autoAnswer = { v: 1, sealed: null, rules: AutoRules.sanitize(partial.autoAnswer.rules).rules };
   fs.mkdirSync(ROOT_DIR, { recursive: true });
@@ -2136,7 +2141,9 @@ function getTasks() {
     busContext: () => AgentBusMain.context(),
     onBusReady: () => { AgentBusMain.refresh(); },
     copy: (text) => clipboard.writeText(text),
-    ...(IS_MAC ? { launchTerminal: (descriptor, current) => require('./src/tasks-terminal').launchTaskTerminal(descriptor, { current }) } : {}),
+    // Ghostty Dock when it is on and trusted; the native confirmation names whichever app it is.
+    ...(IS_MAC ? { terminalApp: () => (GhosttyDock.modeOf(loadConfig()) !== 'off' && GhosttyDock.detect().canOpen ? GhosttyDock.APP : 'Terminal') } : {}),
+    ...(IS_MAC ? { launchTerminal: (descriptor, current, appName) => { const T = require('./src/tasks-terminal'); return T.launchTaskTerminal(descriptor, { current, ...(appName === GhosttyDock.APP ? { launch: T.ghosttyDockLauncher() } : {}) }); } } : {}),
     onChange: (snap) => {
       for (const wc of tasksPages()) wc.send('tasks:changed', snap);
       for (const id of AgentMail.acceptedTasks()) { const t = (snap?.tasks || []).find((x) => x && String(x.id) === id); if (t && ['done', 'in_review', 'failed'].includes(t.state)) AgentMail.taskEnded(id, t.state, t.reason || '').catch(() => {}); }
@@ -4919,6 +4926,7 @@ function healthReport() {
     signal: { listening: !!signalServer?.listening, port: SIGNAL_PORT, error: signalServerError },
     burst: BurstIpc.status(),
     burstFacts: BurstIpc.healthFacts(),
+    ghosttyDock: IS_MAC ? GhosttyDock.healthRow(GhosttyDock.current(), GhosttyDock.modeOf(loadConfig())) : null,
   });
   // Dev runs share the machine with a real install and never rewrite its hooks.
   report.checks = report.checks.map(({ fix, fixLabel, ...c }) =>

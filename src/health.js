@@ -426,6 +426,8 @@ const CHECKS = [
   ['burst-secondary', 'Burst secondary provider', checkBurstSecondary],
   ['burst-version', 'Burst version', checkBurstVersion],
   ['burst-console', 'Burst console', checkBurstConsole],
+  // Only main passes this (src/ghostty-dock.js healthRow); the MCP health tool never loads that module.
+  ['ghostty-dock', 'Ghostty Dock', (c) => c.ghosttyDock || null],
   ['version', 'App version', checkVersion],
 ];
 
