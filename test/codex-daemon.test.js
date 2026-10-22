@@ -446,3 +446,23 @@ test('the socket is checked again after connecting: a swapped socket is refused 
     assert.equal(a.calls.length, 0);
   } finally { await a.close(); await b.close(); }
 });
+
+test('threadMeta: Codex 0.163 TUI shape and legacy cli shape are interactive; exec, sub-agent and other shapes are not', () => {
+  const base = { id: 'x', ephemeral: false, cwd: '/a/b', name: 'n', status: { type: 'idle' }, updatedAt: 1 };
+  const want = { id: 'x', title: 'n', project: 'b', status: 'idle', updatedAt: 1 };
+  assert.deepEqual(threadMeta({ ...base, source: 'cli' }), want, 'legacy');
+  assert.deepEqual(threadMeta({ ...base, source: 'vscode', originator: 'codex-tui', threadSource: 'user' }), want, '0.163 TUI');
+  assert.deepEqual(threadMeta({ ...base, source: 'vscode', originator: 'codex_work_desktop', threadSource: 'user' }), want, '0.163 desktop');
+  for (const t of [
+    { source: 'vscode', originator: 'codex-tui', threadSource: 'subagent' },
+    { source: 'vscode', originator: 'codex-tui' },
+    { source: 'vscode', originator: 'codex_exec', threadSource: 'user' },
+    { source: 'vscode', originator: 'custom-client', threadSource: 'user' },
+    { source: 'vscode', threadSource: 'user' },
+    { source: 'exec', originator: 'codex_exec', threadSource: 'user' },
+    { source: { subAgent: { thread_spawn: { parent_thread_id: 'p' } } }, originator: 'codex-tui', threadSource: 'subagent' },
+    { source: 'vscode', originator: 'codex-tui', threadSource: 'user', parentThreadId: 'p' },
+    { source: 'vscode', originator: 'codex-tui', threadSource: 'user', ephemeral: true },
+    { source: 'vscode', originator: 'codex-tui', threadSource: 'user', agentRole: 'worker' },
+  ]) assert.equal(threadMeta({ ...base, ...t }), null, JSON.stringify(t));
+});
