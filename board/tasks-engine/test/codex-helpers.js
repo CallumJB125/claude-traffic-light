@@ -15,7 +15,8 @@ export async function startCodexFixture(scenario, extra = {}) {
   fs.writeFileSync(bin, `#!/bin/sh\nexport PLEXIFORM_FAKE_CODEX_SCENARIO=${quote(scenarioFile)}\nexport PLEXIFORM_FAKE_CODEX_LOG=${quote(log)}\nexec ${quote(process.execPath)} ${quote(fixture)} "$@"\n`, { mode: 0o755 });
   class FakeCodex extends CodexBackend { static async detect() { return { id: 'codex', installed: true, version: '0.159.2', signedIn: true, bin }; } }
   class ForbiddenClaude { static async detect() { throw new Error('Claude was invoked'); } }
-  const engineOpts = { backends: { codex: FakeCodex, claude: ForbiddenClaude }, enabledAis: ['codex'], defaultAi: 'codex', ...extra };
+  // maxParallel defaults by RAM (1 slot under 16 GB, as on CI runners); bus tests hold one run while starting another.
+  const engineOpts = { maxParallel: 4, backends: { codex: FakeCodex, claude: ForbiddenClaude }, enabledAis: ['codex'], defaultAi: 'codex', ...extra };
   let h = await startEngine({ dir, engineOpts });
   return {
     dir, repo, setScenario,

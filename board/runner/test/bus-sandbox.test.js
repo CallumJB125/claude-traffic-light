@@ -22,7 +22,8 @@ test('buildSettings: bus forces allowedDomains [] over the repo allowlist; other
 test('a bus Claude run is launched with no domains and the push/PR backup disallows', async () => {
   const dir = tmpDir();
   const repo = makeRepo(dir);
-  const m = await startEngine({ dir, scenario: { steps: [{ tool: 'Read', input: { file_path: 'README.md' }, ms: 60000 }] } });
+  // Explicit slots: the bus run holds one for 60 s while the local run starts (RAM-based default is 1 on CI).
+  const m = await startEngine({ dir, scenario: { steps: [{ tool: 'Read', input: { file_path: 'README.md' }, ms: 60000 }] }, engineOpts: { maxParallel: 4 } });
   try {
     writePolicy(m.dataDir, { repos: { [repo.checkout]: { bus_auto: true, allowed_domains: ['example.com'] } } });
     const { id } = await m.eng.engine.createTask({ requestId: rid('sbx'), spec: { text: 'x', cwd: repo.checkout, ai: 'claude', source: 'bus',
