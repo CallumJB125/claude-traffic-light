@@ -71,6 +71,19 @@ function emitAdapter(payload) {
   // (the desktop orders events by it), and each event is dispatched.
   const Remote = fs.existsSync(path.join(ROOT_DIR, 'remote.json')) ? require('./remote.js') : null;
   const fallbackSession = process.env.CLAUDE_SESSION_ID || `${adapter.id}-${process.ppid}`;
+  // Agent awareness (plan-agent-awareness §3.1, findings §9): a Codex hook is spawned by the app server that runs
+  // the thread (the shared daemon, ChatGPT.app's server, or exec), so its parent is that server's pid. Whether the
+  // thread is a person's (TUI or desktop app) comes from the rollout's session_meta, never from argv.
+  const codexAwareness = adapter.id === 'codex' && opt('lifecycle') ? (next, prev) => {
+    if (event === 'SessionStart') {
+      if (Number.isInteger(process.ppid) && process.ppid > 1) next.codexServerPid = process.ppid;
+      if (payload.source !== 'compact') next.codexStartedAt = new Date().toISOString();
+    }
+    if (event === 'SessionStart' || typeof prev?.codexInteractive !== 'boolean') {
+      const meta = require('./awareness.js').codexSessionMeta(payload.transcript_path);
+      next.codexInteractive = meta ? meta.interactive : false;
+    }
+  } : null;
   const accepted = [];
   for (const e of events) {
     e.sessionId = SessionState.safeSessionId(e.sessionId || fallbackSession);
@@ -78,18 +91,29 @@ function emitAdapter(payload) {
     const before = Remote ? SessionState.readJson(file) : null;
     if (Remote && !e.pid && !e.codexLifecycle) e.pid = Remote.agentPid(before?.claudePid);
     if (Remote && e.signal === 'session-end') e.seq = Remote.nextSeq(before?.remoteSeq);
-    const applied = SessionState.applyAdapterEvent(SESSIONS_DIR, { host: HOST_TAG, source: adapter.id, event: e, fallbackSession, fallbackCwd: process.cwd(), decorate: Remote && ((next, prev) => { next.remoteSeq = e.seq = Remote.nextSeq(prev?.remoteSeq); }) });
+    const remoteDecorate = Remote && ((next, prev) => { next.remoteSeq = e.seq = Remote.nextSeq(prev?.remoteSeq); });
+    const decorate = codexAwareness || remoteDecorate ? (next, prev) => { if (codexAwareness) codexAwareness(next, prev); if (remoteDecorate) remoteDecorate(next, prev); } : null;
+    const applied = SessionState.applyAdapterEvent(SESSIONS_DIR, { host: HOST_TAG, source: adapter.id, event: e, fallbackSession, fallbackCwd: process.cwd(), decorate });
     if (!applied) continue;
     try { require('./handover-tap.js').record({ rootDir: ROOT_DIR, adapter: adapter.id, signal: e.signal, sessionId: e.sessionId, cwd: e.cwd || process.cwd(), data: payload }); } catch { /* best effort */ }
     if (Remote && !e.cwd) e.cwd = process.cwd();
     accepted.push(e);
   }
   const exit = () => { if (Remote) Remote.dispatchThenExit(adapter.id, accepted); else process.exit(0); };
-  // Opt-in team brief as SessionStart context (hooks/team-brief.js), for the
-  // adapters whose SessionStart output reaches the model.
-  if (event === 'SessionStart' && (adapter.id === 'gemini' || (adapter.id === 'codex' && opt('lifecycle')))) {
+  // Model context, for the adapters whose hook output reaches the model: the
+  // agent awareness roster (hooks/awareness.js; Codex SessionStart and each
+  // turn, Gemini SessionStart) and the opt-in team brief (SessionStart), in
+  // one output. The installed Codex handlers are unchanged (Codex re-asks
+  // trust for a changed handler): all of this is inside emit.js.
+  const codexLifecycle = adapter.id === 'codex' && opt('lifecycle');
+  const context = (adapter.id === 'gemini' && event === 'SessionStart') || (codexLifecycle && (event === 'SessionStart' || event === 'UserPromptSubmit'));
+  if (context) {
     const Brief = require('./team-brief.js');
-    Brief.run({ adapter: adapter.id, event, payload, root: ROOT_DIR }).then((out) => { Brief.print(out); exit(); }, exit);
+    const Awareness = require('./awareness.js');
+    Promise.all([
+      Awareness.run({ adapter: adapter.id, event, payload, root: ROOT_DIR }),
+      event === 'SessionStart' ? Brief.run({ adapter: adapter.id, event, payload, root: ROOT_DIR }) : null,
+    ]).then(([aware, brief]) => { Brief.print(Awareness.combine(event, aware, brief)); exit(); }, exit);
   } else exit();
 }
 

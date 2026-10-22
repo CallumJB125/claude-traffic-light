@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
 import { taskFace, AI_LABEL } from '../tasks-api/face.js';
 import { validate } from '../tasks-api/validate.js';
@@ -91,8 +92,10 @@ const DETECT_EVERY_MS = 24 * 60 * 60 * 1000;
 const RING_MAX_BYTES = 64 * 1024 * 1024;   // the in-memory replay ring is capped by bytes too (older seqs → reset gap)
 // Folders a local in-place task may never use: $HOME itself, anything above
 // it, and dot-dirs or Library directly under it (~/.ssh, ~/.claude,
-// ~/.local/bin, ~/Library/LaunchAgents…).
-const PROTECTED_IN_PLACE = /^(?:\.|Library$)/;
+// ~/.local/bin, ~/Library/LaunchAgents…): hooks/repo-scope.js isProtected,
+// one file shared with main's awareness roster and its hook (packaged beside
+// this one in app.asar, and as Resources/hooks for the hooks).
+const RepoScope = createRequire(import.meta.url)('../../hooks/repo-scope.js');
 // In-place tasks: paths the agent's file tools never touch.
 const PROTECTED_SEGMENTS = new Set(['.git', '.claude']);
 const PROTECTED_NAMES = new Set(['.mcp.json', 'CLAUDE.md', 'AGENTS.md']);
@@ -762,35 +765,23 @@ export class TasksEngine extends EventEmitter {
     if (!top) return false;
     let home;
     try { home = await fs.promises.realpath(this.env.HOME ?? os.homedir()); } catch { home = this.env.HOME ?? os.homedir(); }
-    const within = (dir, base) => dir === base || dir.startsWith(`${base}${path.sep}`);
-    if (top === path.parse(top).root || within(home, top)) return false;
-    let data = this.dataDir;
-    try { data = await fs.promises.realpath(data); } catch { /* as given */ }
-    if (within(top, data) || within(data, top)) return false;
-    if (DENY_READ.some((p) => within(top, path.join(home, p.replace(/^~\//, ''))))) return false;
     const ctx = this.agentBus?.context ?? {};
+    // The "never" half is hooks/repo-scope.js, shared with main's awareness roster and its hook.
+    if (await RepoScope.neverReason(top, { home, dataDirs: [this.dataDir], denyRead: DENY_READ, exclude: ctx.exclude ?? [],
+      git: (dir, args) => this.git(dir, args), realpath: (p) => fs.promises.realpath(p), normalize: normalizeRemoteUrl })) return false;
     const url = await this.git(top, ['config', '--get', 'remote.origin.url']).then((x) => x.trim(), () => null);
     const canon = url ? normalizeRemoteUrl(url) : null;
-    const commonDir = async (dir) => this.git(dir, ['rev-parse', '--git-common-dir'])
-      .then((x) => fs.promises.realpath(path.resolve(dir, x.trim())), () => null);
-    // under: an excluded folder covers everything below it and every worktree of the repo it holds.
-    const matches = async (keys, under = false) => {
-      let common;
+    const matches = async (keys) => {
       for (const key of keys) {
         if (!path.isAbsolute(key)) { if (canon && (normalizeRemoteUrl(key) ?? key) === canon) return true; continue; }
         let real = key;
         try { real = await fs.promises.realpath(key); } catch { /* as given */ }
-        if (under ? within(top, real) : real === top) return true;
-        if (under) {
-          common ??= await commonDir(top);
-          if (common && common === (await commonDir(real))) return true;
-        }
+        if (real === top) return true;
       }
       return false;
     };
-    if (await matches(ctx.exclude ?? [], true)) return false;
     if (await matches(Object.entries(policy.repos).filter(([, v]) => v?.bus_auto === true).map(([k]) => k))) return true;
-    if (this.#protectedFolder(top) || (path.dirname(top) !== home && this.#protectedFolder(path.dirname(top)))) return false;
+    if (RepoScope.protectedReason(top, home)) return false;
     if (ctx.scope === 'listed' || ctx.repos?.length) return matches(ctx.repos ?? []);
     return !!(await this.agentBus?.sessionRepo(top));
   }
@@ -812,9 +803,7 @@ export class TasksEngine extends EventEmitter {
   #protectedFolder(dir) {
     let home;
     try { home = fs.realpathSync(this.env.HOME ?? os.homedir()); } catch { home = this.env.HOME ?? os.homedir(); }
-    if (dir === '/' || dir === home || home.startsWith(`${dir}${path.sep}`)) return true;
-    if (!dir.startsWith(`${home}${path.sep}`)) return false;
-    return PROTECTED_IN_PLACE.test(path.relative(home, dir).split(path.sep)[0]);
+    return RepoScope.isProtected(dir, home);
   }
 
   // §9.3: the user's words go in only inside the untrusted envelope.

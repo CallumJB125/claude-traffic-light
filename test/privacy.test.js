@@ -351,3 +351,17 @@ test('every BrowserWindow turns spellcheck off and every embedded session is cov
   assert.match(policy, /ses\.setSpellCheckerEnabled\(false\)/);
   assert.match(policy, /ses\.setSpellCheckerDictionaryDownloadURL\(NOWHERE\)/);
 });
+
+// Agent awareness (plan-agent-awareness §3.7): the roster's contents, what is never in it, and who is never shown.
+test('PRIVACY.md documents the agent awareness roster: metadata only, local only, excluded sessions never shown', () => {
+  const entry = privacy.split('\n').find((l) => l.includes('flow:agent-awareness-local'));
+  assert.ok(entry, 'flow:agent-awareness-local');
+  for (const f of ['src/agent-awareness.js', 'hooks/awareness.js', 'src/signal-server.js', 'mcp-server.js']) assert.ok(flows.get('agent-awareness-local').has(f), f);
+  assert.match(entry, /~\/\.claude-traffic-light\/awareness\/roster\.json/);
+  assert.match(entry, /Never a prompt, transcript, title, summary or note/);
+  assert.match(entry, /branch name is shown only to sessions in the same repository/);
+  assert.match(entry, /Headless runs[^.]*never listed/);
+  assert.match(entry, /never shown to other AI sessions/);
+  assert.match(entry, /`GET \/status`[^.]*`buddy_sessions`/);
+  assert.match(entry, /Nothing leaves this computer/);
+});

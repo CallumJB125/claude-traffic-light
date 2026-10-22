@@ -39,12 +39,13 @@ function contextOf(cfg, folders = []) {
 /** tasks(): the started tasks service; started(): whether it exists yet (settings changes never start the helper). */
 function register({ ipcMain, sessionsAllowed, tasks, started = () => true, config, folders = () => [], onChange = () => {} }) {
   // The tray keeps its default size: Stop appears once an AI has handed off this session, or while halted.
-  let halted = false, used = false, sent = null;
+  // known: the helper has said whether it is halted (refresh() asks at its start); until then halted() is 'unknown'.
+  let halted = false, known = false, used = false, sent = null;
   const call = (op, args, caller) => tasks().bus(op, args, caller);
   const context = () => contextOf(config().agentBus, folders());
   // Marked sent only once the helper has it, so a failed push is retried on the next hello or handoff.
   const push = (ctx = context()) => call('busSetContext', ctx).then((r) => { sent = JSON.stringify(ctx); return r; });
-  const track = (r) => { if (r && typeof r.halted === 'boolean' && r.halted !== halted) { halted = r.halted; onChange(); } return r; };
+  const track = (r) => { if (r && typeof r.halted === 'boolean') { known = true; if (r.halted !== halted) { halted = r.halted; onChange(); } } return r; };
   const halt = () => call('halt', {}).then(track);
   const resume = () => call('resume', {}).then(track);
   const unavailable = { available: false, reason: 'tasks_helper_unavailable' };
@@ -64,6 +65,8 @@ function register({ ipcMain, sessionsAllowed, tasks, started = () => true, confi
     // Once the helper is up (after a restart while halted the tray must offer Resume before Sessions is opened).
     refresh: () => call('status', {}).then(track, () => {}),
     halt, resume,
+    // Last known; 'unknown' counts as halted wherever it matters (plan §3.3).
+    halted: () => (known ? halted : 'unknown'),
     trayItems: () => (normalize(config().agentBus).enabled && (used || halted)
       ? [halted ? { label: 'Resume agent bus', click: () => resume().catch(() => {}) } : { label: 'Stop agent bus', sublabel: 'Stops every run AIs handed to each other', click: () => halt().catch(() => {}) }]
       : []),

@@ -51,10 +51,13 @@ function tokenMatches(sent) {
 // `rootDir`, `sessionsDir`, `requestsDir` are the same paths main.js computes;
 // `aggregateState` and `broadcastStatus` are the live core callbacks; tests
 // pass their own port, retry timing and app.
-module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus, teamActivity = null, agentMail = null, agentBus = null, port = SIGNAL_PORT, retries = 20, retryMs = 500, busDeadlineMs = BUS_DEADLINE_MS, app: electronApp = app }) => {
+module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus, teamActivity = null, agentMail = null, agentBus = null, cwdVisible = () => false, port = SIGNAL_PORT, retries = 20, retryMs = 500, busDeadlineMs = BUS_DEADLINE_MS, app: electronApp = app }) => {
   // Per-request answer keys from the blocking hooks: memory only, never on
   // disk, so nothing that can write requests/ can also sign an answer.
   const requestKeys = Answer.requestKeys();
+  // Unauthenticated, so any local program (an AI's shell among them) can read it: a session's folder only when
+  // agent awareness resolved it as allowed (src/agent-awareness.js); excluded or not yet resolved, null.
+  const visible = (x) => { try { return cwdVisible(x) === true; } catch { return false; } };
   function readBody(req, done, then) {
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 65536) req.destroy(); });
@@ -86,7 +89,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       const done = (code, body) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
       const host = String(req.headers.host || '').replace(/:\d+$/, '');
       if (req.headers.origin !== undefined || !['127.0.0.1', 'localhost', '[::1]'].includes(host)) return done(403, { error: 'browser requests are not accepted' });
-      if (req.method === 'GET' && req.url === '/status') { const st = aggregateState(); return done(200, { look: st.look, sessions: st.sessions.map((x) => ({ source: x.source || 'claude', signal: x.signal, cwd: x.cwd, updatedAt: x.updatedAt })), spend: st.spend ? { level: st.spend.budget.level, runaway: st.spend.runaway.length } : null }); }
+      if (req.method === 'GET' && req.url === '/status') { const st = aggregateState(); return done(200, { look: st.look, sessions: st.sessions.map((x) => ({ source: x.source || 'claude', signal: x.signal, cwd: visible(x) ? x.cwd : null, updatedAt: x.updatedAt })), spend: st.spend ? { level: st.spend.budget.level, runaway: st.spend.runaway.length } : null }); }
       // Unauthenticated on purpose: the hook asks before it trusts this
       // listener with the token (hooks/answer-file.js requestKeyProof).
       if (req.method === 'POST' && req.url === '/request-key/challenge') { // privacy-flow: request-key

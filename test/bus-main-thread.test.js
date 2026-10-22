@@ -44,3 +44,18 @@ test('the bus engine side stays in the utility process: bus.db is opened only by
   // The utility process entry is the only way in: main forks it (src/tasks-process.js), never imports it.
   assert.match(read('main.js'), /board', 'tasks-engine', 'utility-entry\.js'/);
 });
+
+// AW10 (plan-agent-awareness): the awareness roster builder and the exclusion resolver run in main, so they use
+// only fs.promises and async execFile; main's awareness lines do no sync work.
+test('agent awareness in main is async only: src/agent-awareness.js, hooks/repo-scope.js and main\'s awareness lines', () => {
+  const builder = read('src/agent-awareness.js');
+  assert.ok(!SYNC.test(builder), 'src/agent-awareness.js');
+  assert.deepEqual([...builder.matchAll(/require\(([^)]*)\)/g)].map((m) => m[1]).sort(), ["'../hooks/awareness.js'", "'../hooks/repo-scope.js'", "'child_process'", "'crypto'", "'fs'", "'path'"].sort());
+  assert.match(builder, /require\('fs'\)\.promises/);
+  assert.match(builder, /execFile = require\('child_process'\)\.execFile/);
+  assert.ok(!SYNC.test(read('hooks/repo-scope.js')), 'hooks/repo-scope.js');
+  const t = read('main.js');
+  const lines = t.split('\n').filter((l) => /AgentAwareness|agentAwareness|agent-awareness/.test(l));
+  assert.ok(lines.length >= 4);
+  for (const line of lines) assert.ok(!SYNC.test(line), line.trim().slice(0, 120));
+});

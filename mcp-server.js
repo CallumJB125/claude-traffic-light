@@ -16,6 +16,7 @@ const os = require('os');
 const http = require('http'); // privacy-flow: local-mcp
 const Rules = require('./rules.js');
 const SessionState = require('./hooks/session-state.js');
+const Awareness = require('./hooks/awareness.js');
 const GitSignals = require('./src/github-signals.js');
 const BurstSnapshot = require('./src/burst-snapshot.js');
 
@@ -158,6 +159,19 @@ function computeState({ root, now = Date.now(), online = guessOnline() }) {
   }
   if (asked) return { ...base, look: shown, fired: asked.fired, owned: asked.owned, reason: 'pending-permission', sessionResolution: { fired, owned } };
   return { ...base, look, fired, owned, reason: sessions.length ? 'session' : 'idle' };
+}
+
+// The buddy_sessions tool, for an AI (agent awareness, src/agent-awareness.js): never a session in an excluded folder;
+// one the app has not resolved (or with no fresh roster: the app is not running) keeps its row but not its folder.
+// The person's own `plexiform sessions` command reads buddySessions() unfiltered.
+function aiSessions({ root, now = Date.now() } = {}) {
+  const roster = Awareness.readRoster(root, now);
+  const verdict = (s) => {
+    const key = `${s.source || 'claude'}|${s.sessionId}`;
+    return roster && Object.prototype.hasOwnProperty.call(roster.self, key) ? roster.self[key]?.allowed : undefined;
+  };
+  const all = buddySessions({ root, now });
+  return { ...all, sessions: all.sessions.filter((s) => s.sessionId === undefined || verdict(s) !== false).map((s) => (s.sessionId === undefined ? s : { ...s, cwd: verdict(s) === true ? s.cwd : '(hidden)' })) };
 }
 
 const ruleName = (rules, id) => (rules.find((r) => r.id === id) || {}).name || null;
@@ -604,7 +618,7 @@ const TEAM_NOTE = ' Needs "Give my AI the team brief" on in Plexiform Preference
 
 const TOOLS = [
   { name: 'buddy_status', description: 'What the Plexiform widget is showing right now and why: lamp, pose, eyes, costume, effect, pet, cameo; which rule owns each channel; session/agent counts; current tool; online state; and whether the running app agrees.', run: (a, c) => buddyStatus(c) },
-  { name: 'buddy_sessions', description: 'Every session file the widget sees: signal (raw and as presented), cwd, tool, agents with kind/status/heartbeat, age, and how long until it goes stale — including the ones the widget is ignoring and why.', run: (a, c) => buddySessions(c) },
+  { name: 'buddy_sessions', description: 'Every session file the widget sees: signal (raw and as presented), cwd, tool, agents with kind/status/heartbeat, age, and how long until it goes stale — including the ones the widget is ignoring and why.', run: (a, c) => aiSessions(c) },
   { name: 'buddy_why', description: 'Explain why a rule is or is not firing, or who owns a look channel, against the live session set. `query` is a rule id, a rule name (or part of one), or a channel: lamp, pose, eyes, costume, cameo, effect, pet, body, sign, sound, …', input: (z) => ({ query: z.string().describe('rule id, rule name, or channel name') }), run: (a, c) => buddyWhy({ ...c, query: a.query }) },
   { name: 'buddy_rules', description: 'The configured light rules in priority order: id, name, enabled, locked, and a when/then summary.', run: (a, c) => buddyRules(c) },
   { name: 'buddy_recent_transitions', description: 'The latest session state changes from app.log, parsed: time, session, project, from → to, fail kind, and cause (hook signal, hysteresis-held, promoted-agents, …). Newest first.', input: (z) => ({ limit: z.number().int().min(1).max(500).optional().describe('how many (default 20)'), session: z.string().optional().describe('only this session id (or its first 8 chars)') }), run: (a, c) => buddyRecentTransitions({ ...c, limit: a.limit, session: a.session }) },
