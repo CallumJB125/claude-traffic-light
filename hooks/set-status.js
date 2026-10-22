@@ -108,23 +108,7 @@ function fullPath() {
 // are free and cover the common cases; if the session is inside tmux (which
 // overwrites TERM_PROGRAM) we walk up the process tree instead. The answer is
 // cached in the session file, so the walk happens once per session at most.
-const BUNDLE_APPS = {
-  'com.mitchellh.ghostty': 'Ghostty',
-  'com.googlecode.iterm2': 'iTerm2',
-  'com.apple.terminal': 'Terminal',
-  'dev.warp.warp': 'Warp',
-  'dev.warp.warp-stable': 'Warp',
-  'com.microsoft.vscode': 'Visual Studio Code',
-  'com.microsoft.vscodeinsiders': 'Visual Studio Code - Insiders',
-  'com.visualstudio.code.oss': 'Code - OSS',
-  'com.todesktop.230313mzl4w4u92': 'Cursor',
-  'com.exafunction.windsurf': 'Windsurf',
-  'net.kovidgoyal.kitty': 'kitty',
-  'com.github.wez.wezterm': 'WezTerm',
-  'org.alacritty': 'Alacritty',
-  'co.zeit.hyper': 'Hyper',
-  'com.jetbrains.intellij': 'IntelliJ IDEA',
-};
+const { BUNDLE_APPS, appOfExe } = require('./host-app.js');
 const TERM_PROGRAM_APPS = {
   ghostty: 'Ghostty',
   'iterm.app': 'iTerm2',
@@ -138,26 +122,6 @@ const TERM_PROGRAM_APPS = {
   wezterm: 'WezTerm',
   kitty: 'kitty',
   alacritty: 'Alacritty',
-};
-// Process (executable) names as they appear in `ps -o comm=`, lowercased.
-const PROCESS_APPS = {
-  ghostty: 'Ghostty',
-  iterm2: 'iTerm2',
-  iterm: 'iTerm2',
-  terminal: 'Terminal',
-  warp: 'Warp',
-  stable: 'Warp',
-  code: 'Visual Studio Code',
-  'code helper': 'Visual Studio Code',
-  electron: 'Visual Studio Code',
-  cursor: 'Cursor',
-  windsurf: 'Windsurf',
-  kitty: 'kitty',
-  'kitty-wrapper': 'kitty',
-  'wezterm-gui': 'WezTerm',
-  wezterm: 'WezTerm',
-  alacritty: 'Alacritty',
-  hyper: 'Hyper',
 };
 
 // Inside tmux the pane's own tree dead-ends at the tmux *server*, which is
@@ -195,17 +159,8 @@ function appFromProcessTree() {
     const m = /^\s*(\d+)\s+(.*)$/.exec(line);
     if (!m) return null;
     const parent = Number(m[1]);
-    const exe = m[2];
-    // `/Applications/Ghostty.app/Contents/MacOS/ghostty` → both "Ghostty" (the
-    // bundle) and "ghostty" (the binary) are worth testing.
-    const bundle = /\/([^/]+)\.app\//.exec(exe);
-    if (bundle && Object.values(BUNDLE_APPS).includes(bundle[1])) return bundle[1];
-    const base = (exe.split('/').pop() || '').toLowerCase();
-    if (PROCESS_APPS[base]) return PROCESS_APPS[base];
-    if (bundle) {
-      const hit = Object.values(BUNDLE_APPS).find((n) => n.toLowerCase() === bundle[1].toLowerCase());
-      if (hit) return hit;
-    }
+    const hit = appOfExe(m[2]);
+    if (hit) return hit;
     pid = parent;
   }
   return null;

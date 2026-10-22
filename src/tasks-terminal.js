@@ -6,10 +6,17 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { takeoverCommand, resolveBin } = require('./tasks-guard');
+const GhosttyDock = require('./ghostty-dock');
 const quote = value => `'${String(value).replace(/'/g, "'\\''")}'`;
 const openTerminal = file => new Promise((resolve, reject) => {
   execFile('/usr/bin/open', ['-a', 'Terminal', file], { timeout: 10000 }, error => error ? reject(error) : resolve()); // privacy-flow: tasks-terminal
 });
+// Ghostty Dock's `open <dir> --command <cmd>` runs <cmd> in a shell, so it gets
+// only the quoted path of the same one-use 0700 file, never the command itself.
+const ghosttyDockLauncher = ({ detect = GhosttyDock.detect, run = GhosttyDock.run } = {}) => async (file, cwd) => {
+  const r = await run('open', [cwd, '--command', quote(file)], { dock: detect() });
+  if (!r.ok) throw new Error(r.reason || 'Ghostty Dock did not open the tab');
+};
 
 async function launchTaskTerminal(descriptor, { current = () => true, platform = process.platform, launch = openTerminal, resolve = resolveBin, tempDir = os.tmpdir() } = {}) {
   if (platform !== 'darwin') throw Object.assign(new Error('Automatic terminal launch is available on macOS.'), { code: 'CAPABILITY_MISSING' });
@@ -35,7 +42,7 @@ async function launchTaskTerminal(descriptor, { current = () => true, platform =
   fs.writeFileSync(file, body, { mode: 0o700, flag: 'wx' });
   if (current() !== true) { cleanup(); throw Object.assign(new Error('The task view changed.'), { code: 'CONFLICT' }); }
   try {
-    await launch(file); // This confirms only the OS launch request, never a model reply.
+    await launch(file, descriptor.cwd); // This confirms only the OS launch request, never a model reply.
     return { status: 'requested', cancelPending: cleanup };
   } catch {
     cleanup(); // Retire the file even after a timeout; never repeat an uncertain launch.
@@ -43,4 +50,4 @@ async function launchTaskTerminal(descriptor, { current = () => true, platform =
   }
 }
 
-module.exports = { launchTaskTerminal };
+module.exports = { launchTaskTerminal, ghosttyDockLauncher };

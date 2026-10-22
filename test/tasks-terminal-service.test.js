@@ -13,7 +13,7 @@ test.before(async () => {
   ({ startCodexFixture: fixture } = await import('../board/tasks-engine/test/codex-helpers.js'));
   ({ waitFor } = await import('../board/tasks-engine/test/helpers.js'));
 });
-async function setup(t, { confirm = async () => true, renderer = false, launch } = {}) {
+async function setup(t, { confirm = async () => true, renderer = false, launch, terminalApp } = {}) {
   const h = await fixture({ wait: true, waitFirstOnly: true }); let svc, dom;
   const listeners = new Map(), launched = [];
   t.after(async () => { svc?.stop(); listeners.clear(); await h.cleanup(); dom?.window.close(); });
@@ -22,7 +22,8 @@ async function setup(t, { confirm = async () => true, renderer = false, launch }
   const authority = createTasksWindowAuthority({ service: () => svc, confirm });
   const send = (name, ...args) => { for (const fn of listeners.get(name) ?? []) fn({}, ...structuredClone(args)); };
   svc = createTasksService({ boardHome: h.dataDir, confirmDialog: authority.confirmDialog,
-    launchTerminal: async (descriptor, current) => { assert.equal(current(), true); launched.push(structuredClone(descriptor)); return launch ? launch(descriptor) : { status: 'requested' }; },
+    ...(terminalApp ? { terminalApp } : {}),
+    launchTerminal: async (descriptor, current, app) => { assert.equal(current(), true); launched.push({ ...structuredClone(descriptor), app }); return launch ? launch(descriptor) : { status: 'requested' }; },
     onChange: snap => send('tasks:changed', snap), onEvent: (_wc, taskId, event) => send('tasks:event', { id: taskId, event }) });
   svc.start(); await waitFor(() => svc.snapshot().conn.status === 'connected');
   let api;
@@ -86,4 +87,16 @@ local('Claude terminal takeover retains an unapproved plan restriction', async t
   const result = await h.client.act(id, 'takeover', { mode: 'print' });
   const mode = result.takeover.argv.indexOf('--permission-mode');
   assert.equal(result.takeover.argv[mode + 1], 'plan');
+});
+
+local('with Ghostty Dock chosen, the native confirmation names it and the launcher is told which app was confirmed', async t => {
+  const seen = [];
+  const f = await setup(t, { terminalApp: () => 'Ghostty Dock', confirm: async options => { seen.push(options); return true; } });
+  await f.api.act({ id: f.id, action: 'takeover', payload: {} });
+  assert.equal((await f.api.openTerminal(f.id)).status, 'requested');
+  const sheet = seen.find(o => o.message === 'Open in Ghostty Dock?');
+  assert.ok(sheet, 'the sheet says Open in Ghostty Dock');
+  assert.match(sheet.detail, /session in Ghostty Dock with its existing permissions/);
+  assert.equal(f.launched.length, 1);
+  assert.equal(f.launched[0].app, 'Ghostty Dock');
 });

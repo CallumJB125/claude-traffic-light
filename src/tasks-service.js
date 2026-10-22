@@ -595,8 +595,9 @@ function createTasksService(opts) {
     e.busy = true;
     try {
       const row = tasks.get(id);
-      const yes = await opts.confirmDialog?.({ action: 'openTerminal', label: 'Open in Terminal', title: row.title || 'Untitled task', where: row.where,
-        detail: `Continue the same ${TV.AI_NAME[e.ai]} session in Terminal with its existing permissions. Exit it before choosing Hand back in Tasks. Opening Terminal does not confirm an AI response.\n\n${briefCommand(takeoverCommand(e.t, { mask: true, resolve: opts.resolveBin }))}` }, wcId);
+      const app = opts.terminalApp?.() || 'Terminal';
+      const yes = await opts.confirmDialog?.({ action: 'openTerminal', label: `Open in ${app}`, title: row.title || 'Untitled task', where: row.where,
+        detail: `Continue the same ${TV.AI_NAME[e.ai]} session in ${app} with its existing permissions. Exit it before choosing Hand back in Tasks. Opening ${app} does not confirm an AI response.\n\n${briefCommand(takeoverCommand(e.t, { mask: true, resolve: opts.resolveBin }))}` }, wcId);
       if (yes !== true) return { ok: false, code: 'CONFIRM_REQUIRED', text: '', cancelled: true };
       if (!alive() || takeovers.get(id) !== e) return failure({ code: 'CONFLICT' });
       const raw = await e.channel.getTask(id);
@@ -605,7 +606,7 @@ function createTasksService(opts) {
       // Consume before the OS request. An uncertain response must never launch a duplicate.
       takeovers.delete(id);
       terminalLaunching.add(id);
-      const result = await opts.launchTerminal(e.t, alive);
+      const result = await opts.launchTerminal(e.t, alive, app);
       if (typeof result?.cancelPending === 'function') terminalLaunches.set(id, result.cancelPending);
       if (!connected() || client !== e.channel || tasks.get(id)?.state !== 'handed_over') retireTerminal(id);
       // Terminal taking focus is expected after dispatch. The exact document is

@@ -11,6 +11,7 @@ const HostApp = require('../hostapp.js');
 const Focus = require('./focus/index.js');
 const Permission = require('./focus/permission.js');
 const Jump = require('./focus/jump.js');
+const GhosttyDock = require('./ghostty-dock.js');
 const { writeJsonAtomic } = require('../hooks/session-state.js');
 const PowerShell = require('./powershell.js');
 const LinuxActivate = require('./linux-activate.js');
@@ -24,7 +25,7 @@ const WAITING_SIGNALS = Rules.WAITING_ON_YOU;
 // mentions the target folder via the Accessibility API.
 const TERMINAL_APPS = process.platform === 'win32'
   ? ['WindowsTerminal', 'wt', 'Windows Terminal', 'powershell', 'cmd', 'Alacritty', 'WezTerm', 'Code', 'Cursor']
-  : ['Ghostty', 'iTerm2', 'iTerm', 'Terminal', 'Warp', 'Alacritty', 'kitty', 'WezTerm'];
+  : ['Ghostty Dock', 'Ghostty', 'iTerm2', 'iTerm', 'Terminal', 'Warp', 'Alacritty', 'kitty', 'WezTerm'];
 
 function escapeForAppleScript(str) {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
@@ -191,7 +192,7 @@ function showNote({ title, body, onClick }) {
 
 // Getters, because main.js requires this module before it has worked out its
 // home folder (a demo run moves it) or its host tag.
-module.exports = ({ getSessions, getRootDir, getLocalHost }) => {
+module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = () => 'auto' }) => {
   // ── Jump to the exact tab ─────────────────────────────────────────────────
   // The session file says where the session's tab is (hooks/terminal-id.js);
   // src/focus/ has one adapter per terminal. On macOS, anything short of a
@@ -211,7 +212,8 @@ module.exports = ({ getSessions, getRootDir, getLocalHost }) => {
     jumper = jumper || Jump.createJumper({
       localHost: getLocalHost(),
       platform: process.platform,
-      focus: Focus.focusSession,
+      // Ghostty Dock's trust is checked afresh on every click, right before its CLI runs.
+      focus: (s, over) => Focus.focusSession(s, { ...over, ghosttyDock: getGhosttyDockMode() === 'off' ? null : GhosttyDock.detect() }),
       activate: activateTerminalApp,
       explainer,
       log: (msg) => console.log(`[jump] ${msg}`),

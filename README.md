@@ -328,6 +328,19 @@ second display all still work: the target is clamped back onto a real display.
 Tray → **Knock now** does it on demand, and `npx electron . --demo knock`
 runs the whole thing once and prints what it found.
 
+### Ghostty Dock
+
+[Ghostty Dock](https://github.com/andrewbakercloudscale/ghossty-dock) is a
+third-party terminal built on Ghostty. It has no license, so Plexiform ships
+none of it; if you install it yourself, Plexiform records its sessions as
+**Ghostty Dock** (never as stock Ghostty) and a click on one runs
+`~/.local/bin/ghostty-dock focus <session id>`, which goes to the exact tab
+even with several tabs in one folder, with no Automation prompt. A task you
+take over can open in it too. Plexiform only asks it to focus or open a tab,
+never to type, press keys or read the screen, and task and agent bus runs
+can't write to its request folder. Preferences → **Ghostty Dock** turns it
+off; Health shows whether it was found.
+
 ## Program the clicks
 
 Each rule has an **On click** section: what a click, a double-click and an

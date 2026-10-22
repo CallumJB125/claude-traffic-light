@@ -17,6 +17,9 @@ const ADAPTERS = [
   require('./tmux.js'),
   require('./iterm.js'),
   require('./terminal-app.js'),
+  // Before ghostty.js: Ghostty Dock is built on Ghostty, but a different app.
+  require('./ghostty-dock.js').cli,
+  require('./ghostty-dock.js').script,
   require('./ghostty.js'),
   require('./kitty.js'),
   require('./wezterm.js'),

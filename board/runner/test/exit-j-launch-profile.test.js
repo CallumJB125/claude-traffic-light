@@ -77,6 +77,7 @@ test('settings.json: sandbox, permissions, git allow rules, hook shim on every e
       allowWrite: ['/wt', '/tmp/x/', '~/.npm', '~/.cache', '~/Library/Caches', '~/Library/pnpm', '~/.yarn', '~/.m2'],
       denyRead: ['~/.ssh', '~/.aws', '~/.config/gh', '~/Library/Keychains', '~/.claude', '~/.claude.json', '~/.codex', '~/.claude-traffic-light',
         '~/.board/device.json', '~/.board/policy.json', '~/.board/ledger.json', '~/.board/outbox', '~/.board/run'],
+      denyWrite: ['~/.local/state/ghostty-dock'],
     },
     network: { allowedDomains: ['registry.npmjs.org'], strictAllowlist: true },
   });

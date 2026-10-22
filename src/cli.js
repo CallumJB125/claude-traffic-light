@@ -11,6 +11,7 @@ const path = require('path');
 const Mcp = require('../mcp-server.js');
 const Rules = require('../rules.js');
 const Tap = require('../hooks/handover-tap.js');
+const GhosttyDock = require('./ghostty-dock.js');
 
 const EXIT = { OK: 0, NOT_RUNNING: 1, ERROR: 2 };
 const DEFAULT_PORT = 47172;
@@ -280,12 +281,21 @@ async function cmdDoctor(args, ctx) {
     problems: health.problems,
     checks: health.checks.map((c) => ({ id: c.id, label: c.label, status: c.status, detail: c.detail, ...(c.next ? { next: c.next } : {}) })),
   };
+  // Read-only: whether Ghostty Dock is there and trusted. Nothing is sent to it.
+  if (ctx.platform === 'darwin') {
+    let config = null;
+    try { config = JSON.parse(fs.readFileSync(path.join(ctx.root, 'config.json'), 'utf8')); } catch { /* defaults */ }
+    const row = GhosttyDock.healthRow(GhosttyDock.detect({ home: ctx.home }), GhosttyDock.modeOf(config));
+    data.checks.push({ id: 'ghostty-dock', label: 'Ghostty Dock', ...row });
+  }
   const human = () => {
     const lines = [
       `App:   ${live ? `running (port ${ctx.port})` : 'not running'}`,
       `Hook:  ${hook ? `${hook.status} · ${hook.detail}` : 'unknown'}`,
       `Data:  ${tilde(ctx.root, ctx.home)}${data.dataDirExists ? '' : ' (missing)'}`,
     ];
+    const dock = data.checks.find((c) => c.id === 'ghostty-dock');
+    if (dock) lines.push(`Ghostty Dock: ${dock.detail.split('. ')[0].replace(/\.$/, '')}`);
     const bad = data.checks.filter((c) => c.status === 'fail' || c.status === 'warn');
     if (bad.length) lines.push('', ...bad.map((c) => `${c.status.toUpperCase()}  ${c.label}: ${c.detail}${c.next ? `\n      ${c.next}` : ''}`));
     else lines.push('', 'All checks passed.');
@@ -307,7 +317,7 @@ function painter(color) {
 async function run({
   argv = [], env = process.env, home = os.homedir(), cwd = process.cwd(), now = Date.now(),
   out = (s) => process.stdout.write(s), err = (s) => process.stderr.write(s), color = false,
-  fetchLive = (port) => Mcp.fetchLive(port), health = (o) => Mcp.buddyHealth(o), projectsDir = null,
+  fetchLive = (port) => Mcp.fetchLive(port), health = (o) => Mcp.buddyHealth(o), projectsDir = null, platform = process.platform,
 } = {}) {
   let args;
   try { args = parseArgs(argv); } catch (e) {
@@ -316,7 +326,7 @@ async function run({
   }
   if (args.command === 'help') { out(`${USAGE}\n`); return EXIT.OK; }
   const root = env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(home, '.claude-traffic-light');
-  const ctx = { root, home, cwd, now, port: portOf(root, env), fetchLive, health, projectsDir, paint: painter(color) };
+  const ctx = { root, home, cwd, now, port: portOf(root, env), fetchLive, health, projectsDir, paint: painter(color), platform };
   try {
     const r = await RUN[args.command](args, ctx);
     const asked = r.live !== undefined;
