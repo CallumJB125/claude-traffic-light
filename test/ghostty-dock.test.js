@@ -139,6 +139,14 @@ test('the op allow-list is frozen to focus, list, notify and open; anything else
 const ENV = { HOME: '/Users/me', PATH: '/usr/bin:/bin', TMPDIR: '/tmp' };
 const DOCK = { trusted: true, canOpen: true, cli: '/x/ghostty-dock', env: ENV };
 
+test('run uses its own copy of the checked argv, so the caller cannot change it during the running check', async () => {
+  const args = [SID];
+  const calls = [];
+  const exec = async (file, a) => { calls.push([file, a]); if (file === '/usr/bin/osascript') { args[0] = '--evil'; return { ok: true, stdout: 'true' }; } return { ok: true }; };
+  await GhosttyDock.run('focus', args, { dock: DOCK, exec });
+  assert.deepEqual(calls[1], ['/x/ghostty-dock', ['focus', SID]]);
+});
+
 test('focus checks the app is running first, then runs argv only with the checked env and SIGTERM', async () => {
   const calls = [];
   const exec = async (file, args, opts) => { calls.push([file, args, opts]); return (await RUNNING(file)) || { ok: true, stdout: '', stderr: '' }; };

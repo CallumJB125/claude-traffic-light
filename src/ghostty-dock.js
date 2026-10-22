@@ -138,14 +138,14 @@ function oneUseFile(cmd, tmpRoot) {
 
 function shaped(op, args, tmpRoot) {
   if (!Array.isArray(args) || args.some((a) => typeof a !== 'string')) return null;
-  if (op === 'focus') return args.length === 1 && validSessionId(args[0]) ? args : null;
-  if (op === 'list') return args.length === 0 ? args : null;
+  if (op === 'focus') return args.length === 1 && validSessionId(args[0]) ? [args[0]] : null;
+  if (op === 'list') return args.length === 0 ? [] : null;
   if (op === 'notify') {
     if (args.length !== 1) return null;
     const title = args[0].replace(/[\0-\x1f\x7f]/g, ' ').trim().slice(0, TITLE_MAX);
     return title && !title.startsWith('-') ? [title] : null;
   }
-  if (op === 'open') return args.length === 3 && okPath(args[0]) && args[1] === '--command' && oneUseFile(args[2], tmpRoot) ? args : null;
+  if (op === 'open') return args.length === 3 && okPath(args[0]) && args[1] === '--command' && oneUseFile(args[2], tmpRoot) ? [args[0], args[1], args[2]] : null;
   return null;
 }
 
