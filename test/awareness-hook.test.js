@@ -245,6 +245,7 @@ test('Codex: lifecycle SessionStart prints the roster, each turn only on change,
   const file = JSON.parse(fs.readFileSync(State.sessionFileFor(path.join(w.root, 'sessions'), HOST, 'codex', 't1'), 'utf8'));
   assert.equal(file.codexServerPid, process.pid, 'the hook\'s parent: the server that ran it');
   assert.equal(file.codexInteractive, true);
+  assert.ok(path.isAbsolute(file.codexTranscript) && file.codexTranscript.endsWith('.jsonl'), 'the rollout main checks the server holds open');
   assert.ok(Date.parse(file.codexStartedAt) > 0);
   assert.equal(w.codex('UserPromptSubmit', { prompt: 'PRIVATE' }).stdout, '', 'unchanged turn');
   w.roster.peers.push({ handle: 'claude-new-0001', provider: 'claude', folder: 'new', status: 'working' });

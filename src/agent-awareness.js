@@ -12,6 +12,7 @@
 // enums, folder and branch names cut to short labels, hashes. Never a prompt,
 // title, summary, transcript or note text: the builder reads only the fields
 // in SESSION_FIELDS (test/agent-awareness.test.js checks that statically).
+const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const RepoScope = require('../hooks/repo-scope.js');
@@ -26,9 +27,12 @@ const BURST_MIN = 3;
 const GROUP_BUMP_MS = 5 * 60 * 1000;
 const EXEC_TIMEOUT_MS = 3000;
 const VERIFY_TTL_MS = 60 * 1000;
+// One hung step (a FIFO, a stuck mount) must not hold every later rebuild.
+const BUILD_TIMEOUT_MS = 15 * 1000;
+const OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0);
 const CONTEXT_PROVIDERS = new Set(['claude', 'codex', 'gemini']);
 // The only session-file fields the roster is built from.
-const SESSION_FIELDS = Object.freeze(['source', 'sessionId', 'host', 'remote', 'cwd', 'signal', 'updatedAt', 'codexHookAt', 'claudePid', 'codexServerPid', 'interactive', 'codexInteractive', 'startedAt', 'codexStartedAt', 'signalSince', 'taskId']);
+const SESSION_FIELDS = Object.freeze(['source', 'sessionId', 'host', 'remote', 'cwd', 'signal', 'updatedAt', 'codexHookAt', 'claudePid', 'codexServerPid', 'codexTranscript', 'interactive', 'codexInteractive', 'startedAt', 'codexStartedAt', 'signalSince', 'taskId']);
 // Plexiform's own bus and task worktrees (main.js folders()): never peers.
 const OWN_WORKTREE = /-buddy-[0-9a-f]{12}(?:[\\/]|$)/;
 
@@ -40,10 +44,28 @@ function normalize(cfg) {
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const within = RepoScope.within;
 
-// <provider>-<folder≤16>-<4 hex>: a short id, not a secret (plan §3.1).
-function handleFor({ provider, folder, host, source, sessionId }, len = 4) {
+// <provider>-<folder≤16>-<4 hex>: a short id, not a secret (plan §3.1). The hex
+// is keyed with a secret only main holds, so no session id can be ground offline
+// to land on another session's handle.
+function handleFor({ provider, folder, host, source, sessionId }, len = 4, key = null) {
   const f = String(folder || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-+/, '').slice(0, 16).replace(/-+$/, '') || 'unnamed';
-  return `${provider}-${f}-${sha(`${host}|${source}|${sessionId}`).slice(0, len)}`;
+  const id = `${host}|${source}|${sessionId}`;
+  const hex = key ? crypto.createHmac('sha256', key).update(id).digest('hex') : sha(id);
+  return `${provider}-${f}-${hex.slice(0, len)}`;
+}
+
+// A bounded regular file, opened without following a symlink and without
+// blocking on a FIFO, or null.
+async function readHead(fsp, file, max) {
+  let fh;
+  try {
+    fh = await fsp.open(file, OPEN_FLAGS);
+    const st = await fh.stat();
+    if (!st.isFile()) return null;
+    const buf = Buffer.alloc(Math.min(max, st.size));
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    return { text: buf.toString('utf8', 0, bytesRead), size: st.size, mtimeMs: st.mtimeMs };
+  } catch { return null; } finally { if (fh) await fh.close().catch(() => {}); }
 }
 
 // Real claude and codex binaries only (findings §7).
@@ -66,6 +88,9 @@ function allowedExe(provider, exe, { home, codexHome, args = '' } = {}) {
 }
 
 // `lsof -F` output: "p<pid>", "f<fd>", "n<name>" lines.
+// Every file name in `lsof -Fn` output.
+const lsofNames = (text) => new Set(String(text || '').split('\n').filter((l) => l[0] === 'n').map((l) => l.slice(1)));
+
 function parseLsof(text) {
   const out = {};
   let fd = null;
@@ -96,7 +121,8 @@ function interactiveOf(s, provider) {
  * execFile(file, args, opts, cb) and fsp (fs.promises) are injected for tests.
  */
 function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), dataDirs = [], config, sessions, execFile = require('child_process').execFile, fsp = require('fs').promises,
-  now = () => Date.now(), startedAt = now(), halted = () => 'unknown', platform = process.platform, log = () => {}, setTimer = setTimeout, clearTimer = clearTimeout }) {
+  now = () => Date.now(), startedAt = now(), halted = () => 'unknown', platform = process.platform, log = () => {}, setTimer = setTimeout, clearTimer = clearTimeout,
+  handleKey = crypto.randomBytes(32), buildTimeoutMs = BUILD_TIMEOUT_MS }) {
   const rosterDir = path.join(rootDir, 'awareness');
   const rosterFile = path.join(rosterDir, 'roster.json');
   const run = (file, args, timeout = EXEC_TIMEOUT_MS) => new Promise((resolve, reject) => {
@@ -136,7 +162,9 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
       if (broken) return { allowed: false, reason: 'UNRESOLVED' };
       let top; let gitDir = null; let commonDir = null;
       try {
-        if (info && info.length >= 3) {
+        // A path with a newline in it shifts every line after it: anything but three answers is unresolved.
+        if (info && info.length !== 3) return { allowed: false, reason: 'UNRESOLVED' };
+        if (info) {
           top = await realpath(info[0]);
           gitDir = await realOr(info[1]);
           commonDir = await realOr(path.resolve(cwd, info[2]));
@@ -160,17 +188,14 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
 
   async function branchOf(gitDir) {
     if (!gitDir) return null;
-    try {
-      const head = path.join(gitDir, 'HEAD');
-      const st = await fsp.stat(head);
-      const hit = heads.get(gitDir);
-      if (hit && hit.mtimeMs === st.mtimeMs) return hit.branch;
-      const text = String(await fsp.readFile(head, 'utf8')).slice(0, 1024);
-      const m = /^ref: refs\/heads\/(.+)$/m.exec(text);
-      const branch = m ? m[1].trim().slice(0, 200) : null;
-      heads.set(gitDir, { mtimeMs: st.mtimeMs, branch });
-      return branch;
-    } catch { return null; }
+    const head = await readHead(fsp, path.join(gitDir, 'HEAD'), 1024);
+    if (!head || head.size > 1024) return null;
+    const hit = heads.get(gitDir);
+    if (hit && hit.mtimeMs === head.mtimeMs) return hit.branch;
+    const m = /^ref: refs\/heads\/(.+)$/m.exec(head.text);
+    const branch = m ? m[1].trim().slice(0, 200) : null;
+    heads.set(gitDir, { mtimeMs: head.mtimeMs, branch });
+    return branch;
   }
 
   // The executable and cwd of a pid, cached per (pid, start time).
@@ -207,26 +232,44 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     return null; // Windows: not verifiable in v1, so never a peer.
   }
 
-  // Verified (plan §3.1): an event observed since main started, a real claude
-  // or codex binary behind the recorded pid, and (Claude) that process in the
-  // recorded folder or one above it. The Codex pid is its app server, whose
-  // cwd is not the thread's, so that check is skipped there.
-  async function verify(s, provider) {
+  // Codex: the server behind the recorded pid holds this thread's rollout open,
+  // and the rollout itself (Codex's file, not ours) names this thread, as a
+  // person's, in the recorded folder or one below it.
+  async function codexThread(s, pid) {
+    if (typeof s.codexTranscript !== 'string' || !path.isAbsolute(s.codexTranscript) || !s.codexTranscript.endsWith('.jsonl')) return false;
+    const t = await realpath(s.codexTranscript).catch(() => null);
+    if (!t || !within(t, await realOr(codexHome))) return false;
+    const open = await run('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-Fn']).then(lsofNames, () => new Set()); // privacy-flow: agent-awareness-local
+    if (!open.has(t) && !open.has(s.codexTranscript)) return false;
+    const head = await readHead(fsp, t, Hook.META_MAX_BYTES);
+    const meta = head && Hook.sessionMetaOf(head.text);
+    if (!meta || meta.interactive !== true || meta.id !== s.sessionId || !meta.cwd || !path.isAbsolute(meta.cwd)) return false;
+    return within(await realOr(s.cwd), await realOr(meta.cwd));
+  }
+
+  // Verified (plan §3.1): a recent event, a real claude or codex binary behind
+  // the recorded pid, and (Claude) that process in the recorded folder or one
+  // above it, (Codex) the thread bound to that server by its own rollout. The
+  // event time comes from the session file, which any program running as the
+  // person can write: the process checks are what a forged file cannot pass.
+  async function verify(s, provider, pidCount) {
     const seen = Math.max(Date.parse(s.updatedAt || '') || 0, Date.parse(s.codexHookAt || '') || 0);
     if (seen < startedAt) return false;
     const pid = Number(provider === 'claude' ? s.claudePid : provider === 'codex' ? s.codexServerPid : NaN);
     if (!Number.isInteger(pid) || pid <= 1) return false;
-    // A busy turn rebuilds every second: the process checks are repeated at most once a minute per (pid, folder).
-    const memo = `${provider}|${pid}|${s.cwd}`;
+    // One Claude process is one session: a second file naming the same pid makes neither a peer.
+    if (provider === 'claude' && pidCount.get(pid) > 1) return false;
+    // A busy turn rebuilds every second: the process checks are repeated at most once a minute per (pid, folder, thread).
+    const memo = `${provider}|${pid}|${s.cwd}|${provider === 'codex' ? `${s.sessionId}|${s.codexTranscript}` : ''}`;
     const hit = procChecks.get(memo);
     if (hit && now() - hit.at < VERIFY_TTL_MS) return hit.ok;
     const ok = await (async () => {
       const p = await inspect(pid);
       if (!p || !allowedExe(provider, p.exe, { home, codexHome, args: p.args })) return false;
-      if (provider === 'codex') return true;
+      if (provider === 'codex') return codexThread(s, pid);
       if (!p.cwd) return false;
       return within(await realOr(s.cwd), p.cwd);
-    })();
+    })().catch(() => false);
     procChecks.set(memo, { ok, at: now() });
     return ok;
   }
@@ -289,28 +332,47 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     const self = {};
     const entries = [];
     const nextVerdicts = new Map();
-    const handles = new Map();
+    // Ties fail closed for every claimant: two files with one session id (a
+    // copy could borrow an excluded session's verdict or hide an allowed one),
+    // or two Claude sessions naming one process.
+    const keyCount = new Map();
+    const pidCount = new Map();
+    const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+    for (const s of list) {
+      const provider = String(s.source || 'claude');
+      bump(keyCount, `${provider}|${s.sessionId}`);
+      if (provider === 'claude' && Number.isInteger(Number(s.claudePid)) && s.claudePid != null) bump(pidCount, Number(s.claudePid));
+    }
     for (const s of list) {
       const provider = String(s.source || 'claude');
       const key = `${provider}|${s.sessionId}`;
       if (!firstSeen.has(key)) firstSeen.set(key, at);
+      if (keyCount.get(key) > 1) { nextVerdicts.set(key, false); self[key] = { allowed: false }; continue; }
       const cls = await classify(s.cwd, exclude);
       nextVerdicts.set(key, cls.allowed === true);
-      if (!CONTEXT_PROVIDERS.has(provider)) continue;
+      // Every excluded session, whatever its tool, is only {allowed:false}: AI-facing views drop it.
       if (!cls.allowed) { self[key] = { allowed: false }; continue; }
+      if (!CONTEXT_PROVIDERS.has(provider)) continue;
       const interactive = interactiveOf(s, provider);
-      const verified = interactive && (provider === 'claude' || provider === 'codex') ? await verify(s, provider).catch(() => false) : false;
+      const verified = interactive && (provider === 'claude' || provider === 'codex') ? await verify(s, provider, pidCount).catch(() => false) : false;
       const entry = { allowed: true, interactive, verified, bound: false, caps: { mcp: false, notes: false }, notices: [], repo_key: cls.repoKey || null };
       self[key] = entry;
       if (!verified) continue;
-      let handle = handleFor({ provider, folder: cls.folder, host, source: provider, sessionId: s.sessionId });
-      if (handles.has(handle) && handles.get(handle) !== key) handle = handleFor({ provider, folder: cls.folder, host, source: provider, sessionId: s.sessionId }, 6);
-      handles.set(handle, key);
-      entry.handle = handle;
+      const handle = handleFor({ provider, folder: cls.folder, host, source: provider, sessionId: s.sessionId }, 4, handleKey);
       const since = Date.parse(s.signalSince || s.updatedAt || '');
       const peer = { handle, provider, folder: Hook.folderLabel(cls.folder), repo_key: cls.repoKey || null, branch: cls.repoKey ? Hook.branchLabel(await branchOf(cls.gitDir)) || null : null,
         ...statusOf(s.signal), since_min: Number.isFinite(since) ? Math.max(0, Math.floor((at - since) / 60000)) : null };
-      entries.push({ key, peer, entry, updated: Date.parse(s.updatedAt || '') || 0, started: Date.parse(s.startedAt || s.codexStartedAt || '') || firstSeen.get(key) });
+      entries.push({ key, peer, entry, long: handleFor({ provider, folder: cls.folder, host, source: provider, sessionId: s.sessionId }, 6, handleKey), updated: Date.parse(s.updatedAt || '') || 0, started: Date.parse(s.startedAt || s.codexStartedAt || '') || firstSeen.get(key) });
+    }
+    // A 4-hex collision lengthens every colliding handle, so no session keeps the short one by being read first.
+    const shortCount = new Map();
+    for (const e of entries) bump(shortCount, e.peer.handle);
+    for (const e of entries) if (shortCount.get(e.peer.handle) > 1) e.peer.handle = e.long;
+    const longCount = new Map();
+    for (const e of entries) bump(longCount, e.peer.handle);
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const e = entries[i];
+      if (longCount.get(e.peer.handle) > 1) { e.entry.verified = false; entries.splice(i, 1); } else e.entry.handle = e.peer.handle;
     }
     for (const k of firstSeen.keys()) if (!nextVerdicts.has(k)) firstSeen.delete(k);
     for (const [k, v] of procChecks) if (at - v.at >= VERIFY_TTL_MS) procChecks.delete(k);
@@ -334,7 +396,13 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
 
   async function write(roster) {
     await fsp.mkdir(rosterDir, { recursive: true, mode: 0o700 });
-    await fsp.chmod(rosterDir, 0o700).catch(() => {});
+    // The folder itself, never a symlink planted in its place: chmod goes through the open handle.
+    const dir = await fsp.open(rosterDir, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_DIRECTORY || 0));
+    try {
+      const st = await dir.stat();
+      if (!st.isDirectory() || (typeof process.getuid === 'function' && st.uid !== process.getuid())) throw Object.assign(new Error('roster folder'), { code: 'EUNSAFE' });
+      await dir.chmod(0o700).catch(() => {});
+    } finally { await dir.close().catch(() => {}); }
     const tmp = `${rosterFile}.${crypto.randomBytes(8).toString('hex')}.tmp`;
     try {
       await fsp.writeFile(tmp, JSON.stringify(roster), { flag: 'wx', mode: 0o600 });
@@ -348,7 +416,9 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     running = (async () => {
       try {
         const { aw } = settings();
-        const roster = await build();
+        let hung;
+        const roster = await Promise.race([build(), new Promise((_, reject) => { hung = setTimeout(() => reject(Object.assign(new Error('build'), { code: 'ETIMEDOUT' })), buildTimeoutMs); if (hung.unref) hung.unref(); })])
+          .finally(() => clearTimeout(hung));
         if (stopped) return;
         if (!aw.enabled) { await fsp.rm(rosterFile, { force: true }).catch(() => {}); lastVersion = null; return; }
         await write(roster);
@@ -383,4 +453,4 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   return { build, refresh, schedule, start, stop, invalidate, visible, rosterFile, classify };
 }
 
-module.exports = { create, normalize, handleFor, allowedExe, parseLsof, statusOf, interactiveOf, DEFAULTS, SESSION_FIELDS, HEARTBEAT_MS, DEBOUNCE_MS, BURST_WINDOW_MS, GROUP_BUMP_MS };
+module.exports = { create, normalize, handleFor, allowedExe, parseLsof, lsofNames, statusOf, interactiveOf, DEFAULTS, SESSION_FIELDS, HEARTBEAT_MS, DEBOUNCE_MS, BUILD_TIMEOUT_MS, BURST_WINDOW_MS, GROUP_BUMP_MS };

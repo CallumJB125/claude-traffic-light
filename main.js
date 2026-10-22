@@ -1657,7 +1657,7 @@ if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_COLLISION_HOOK ===
 const ProviderStatus = require('./src/provider-status.js');
 // Agent awareness (src/agent-awareness.js, plan-agent-awareness): the roster file every interactive AI session's hooks
 // read. Async only; rebuilt on session changes (debounced), on exclude changes, and every 2 minutes as a heartbeat.
-const AgentAwareness = require('./src/agent-awareness.js').create({ rootDir: ROOT_DIR, host: LOCAL_HOST, home: os.homedir(), dataDirs: [ROOT_DIR, path.join(app.getPath('userData'), 'tasks')], config: () => loadConfig(), sessions: () => localSessions(aggregateState().sessions || []), halted: () => AgentBusMain.halted(), log: (m) => console.log(m) });
+const AgentAwareness = require('./src/agent-awareness.js').create({ rootDir: ROOT_DIR, host: LOCAL_HOST, home: os.homedir(), codexHome: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), dataDirs: [ROOT_DIR, path.join(app.getPath('userData'), 'tasks')], config: () => loadConfig(), sessions: () => localSessions(aggregateState().sessions || []), halted: () => AgentBusMain.halted(), log: (m) => console.log(m) });
 app.whenReady().then(() => { if (!DEMO) AgentAwareness.start(); });
 onQuit(app, () => AgentAwareness.stop());
 const sessionsSender = e => fromUtilityPage(e, 'sessions');

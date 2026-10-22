@@ -50,7 +50,7 @@ test('the bus engine side stays in the utility process: bus.db is opened only by
 test('agent awareness in main is async only: src/agent-awareness.js, hooks/repo-scope.js and main\'s awareness lines', () => {
   const builder = read('src/agent-awareness.js');
   assert.ok(!SYNC.test(builder), 'src/agent-awareness.js');
-  assert.deepEqual([...builder.matchAll(/require\(([^)]*)\)/g)].map((m) => m[1]).sort(), ["'../hooks/awareness.js'", "'../hooks/repo-scope.js'", "'child_process'", "'crypto'", "'fs'", "'path'"].sort());
+  assert.deepEqual([...builder.matchAll(/require\(([^)]*)\)/g)].map((m) => m[1]).sort(), ["'../hooks/awareness.js'", "'../hooks/repo-scope.js'", "'child_process'", "'crypto'", "'fs'", "'fs'", "'path'"].sort()); // fs: the async API and the open flags (O_NOFOLLOW, O_NONBLOCK)
   assert.match(builder, /require\('fs'\)\.promises/);
   assert.match(builder, /execFile = require\('child_process'\)\.execFile/);
   assert.ok(!SYNC.test(read('hooks/repo-scope.js')), 'hooks/repo-scope.js');

@@ -168,10 +168,56 @@ function aiSessions({ root, now = Date.now() } = {}) {
   const roster = Awareness.readRoster(root, now);
   const verdict = (s) => {
     const key = `${s.source || 'claude'}|${s.sessionId}`;
-    return roster && Object.prototype.hasOwnProperty.call(roster.self, key) ? roster.self[key]?.allowed : undefined;
+    return roster && Object.hasOwn(roster.self, key) ? roster.self[key]?.allowed : undefined;
   };
   const all = buddySessions({ root, now });
   return { ...all, sessions: all.sessions.filter((s) => s.sessionId === undefined || verdict(s) !== false).map((s) => (s.sessionId === undefined ? s : { ...s, cwd: verdict(s) === true ? s.cwd : '(hidden)' })) };
+}
+
+// The same verdicts for the other AI-facing tools, which know a session only by
+// its id (or, in app.log, its first 8 characters): 'drop' an excluded one,
+// 'show' an allowed one, 'hide' (keep, folder hidden) anything else.
+function aiScope({ root, now = Date.now() } = {}) {
+  const roster = Awareness.readRoster(root, now);
+  const ids = new Map();
+  for (const [k, v] of Object.entries(roster ? roster.self : {})) {
+    const id = k.slice(k.indexOf('|') + 1);
+    if (!(v && v.allowed === true)) ids.set(id, 'drop');
+    else if (!ids.has(id)) ids.set(id, 'show');
+  }
+  const of = (id) => (typeof id === 'string' && ids.get(id)) || 'hide';
+  const ofPrefix = (p) => {
+    if (typeof p !== 'string' || p.length < 8) return 'hide';
+    let out = 'hide';
+    for (const [id, v] of ids) if (id.startsWith(p)) { if (v === 'drop') return 'drop'; out = 'show'; }
+    return out;
+  };
+  return { of, ofPrefix };
+}
+
+const HIDDEN = '(hidden)';
+// buddy_why for an AI: excluded sessions left out, other folders hidden unless allowed.
+function aiWhy(c) {
+  const r = buddyWhy(c);
+  const scope = aiScope(c);
+  const scrub = (list) => (Array.isArray(list) ? list.filter((e) => !e.sessionId || scope.of(e.sessionId) !== 'drop').map((e) => (e.cwd && scope.of(e.sessionId) !== 'show'
+    ? { ...e, cwd: HIDDEN, ...(Array.isArray(e.failed) ? { failed: e.failed.map((f) => (f.startsWith('project ') ? `project ${HIDDEN}` : f)) } : {}) } : e)) : list);
+  if (r && r.context && Array.isArray(r.context.resolvedAgainst)) r.context = { ...r.context, resolvedAgainst: scrub(r.context.resolvedAgainst) };
+  if (r && Array.isArray(r.sessions)) r.sessions = scrub(r.sessions);
+  return r;
+}
+// buddy_pending_requests for an AI: an excluded session's request is left out, an unresolved one keeps no folder or summary.
+function aiPendingRequests(c) {
+  const r = buddyPendingRequests(c);
+  const scope = aiScope(c);
+  return { ...r, requests: r.requests.filter((q) => scope.of(q.sessionId) !== 'drop').map((q) => (scope.of(q.sessionId) === 'show' ? q : { ...q, cwd: HIDDEN, summary: HIDDEN })) };
+}
+// buddy_recent_transitions for an AI: matched by the logged id prefix the same way.
+function aiRecentTransitions(c) {
+  const r = buddyRecentTransitions(c);
+  const scope = aiScope(c);
+  const transitions = r.transitions.filter((t) => scope.ofPrefix(t.session) !== 'drop').map((t) => (scope.ofPrefix(t.session) === 'show' ? t : { ...t, project: t.project ? HIDDEN : t.project }));
+  return { ...r, total: r.total - (r.transitions.length - transitions.length), transitions };
 }
 
 const ruleName = (rules, id) => (rules.find((r) => r.id === id) || {}).name || null;
@@ -619,15 +665,15 @@ const TEAM_NOTE = ' Needs "Give my AI the team brief" on in Plexiform Preference
 const TOOLS = [
   { name: 'buddy_status', description: 'What the Plexiform widget is showing right now and why: lamp, pose, eyes, costume, effect, pet, cameo; which rule owns each channel; session/agent counts; current tool; online state; and whether the running app agrees.', run: (a, c) => buddyStatus(c) },
   { name: 'buddy_sessions', description: 'Every session file the widget sees: signal (raw and as presented), cwd, tool, agents with kind/status/heartbeat, age, and how long until it goes stale — including the ones the widget is ignoring and why.', run: (a, c) => aiSessions(c) },
-  { name: 'buddy_why', description: 'Explain why a rule is or is not firing, or who owns a look channel, against the live session set. `query` is a rule id, a rule name (or part of one), or a channel: lamp, pose, eyes, costume, cameo, effect, pet, body, sign, sound, …', input: (z) => ({ query: z.string().describe('rule id, rule name, or channel name') }), run: (a, c) => buddyWhy({ ...c, query: a.query }) },
+  { name: 'buddy_why', description: 'Explain why a rule is or is not firing, or who owns a look channel, against the live session set. `query` is a rule id, a rule name (or part of one), or a channel: lamp, pose, eyes, costume, cameo, effect, pet, body, sign, sound, …', input: (z) => ({ query: z.string().describe('rule id, rule name, or channel name') }), run: (a, c) => aiWhy({ ...c, query: a.query }) },
   { name: 'buddy_rules', description: 'The configured light rules in priority order: id, name, enabled, locked, and a when/then summary.', run: (a, c) => buddyRules(c) },
-  { name: 'buddy_recent_transitions', description: 'The latest session state changes from app.log, parsed: time, session, project, from → to, fail kind, and cause (hook signal, hysteresis-held, promoted-agents, …). Newest first.', input: (z) => ({ limit: z.number().int().min(1).max(500).optional().describe('how many (default 20)'), session: z.string().optional().describe('only this session id (or its first 8 chars)') }), run: (a, c) => buddyRecentTransitions({ ...c, limit: a.limit, session: a.session }) },
+  { name: 'buddy_recent_transitions', description: 'The latest session state changes from app.log, parsed: time, session, project, from → to, fail kind, and cause (hook signal, hysteresis-held, promoted-agents, …). Newest first.', input: (z) => ({ limit: z.number().int().min(1).max(500).optional().describe('how many (default 20)'), session: z.string().optional().describe('only this session id (or its first 8 chars)') }), run: (a, c) => aiRecentTransitions({ ...c, limit: a.limit, session: a.session }) },
   { name: 'buddy_model_mix', description: 'Which models your Claude Code turns ran on and what they cost (today and the last 7 days), plus one read-only recommendation: the share of Opus turns that looked routine and an estimated Sonnet saving range. Reads the Claude Code transcripts, so the first call can take a few seconds.', run: (a, c) => buddyModelMix(c) },
   { name: 'buddy_git_status', description: 'Git and CI signals: which GitHub repos the widget watches (from session folders\' git remotes and Preferences), as which gh login, the PR/CI/deploy events showing now and the last few that fired, the GitHub rate limit left, and when it polls next. Read-only; reads what the app last wrote.', run: (a, c) => buddyGitStatus(c) },
   { name: 'buddy_spend', description: 'How much you have spent on Claude Code today and this week (priced per turn at API list prices from the transcripts), against the daily/weekly budgets set in Plexiform, plus any runaway session burning faster than the threshold (e.g. "$47.20 in 18 min"). Answers "how much have I spent today?".', run: (a, c) => buddySpend(c) },
   { name: 'buddy_usage_history', description: 'Spend and token history from the permanent daily record, which reaches back further than the transcripts Claude Code keeps: "how much did I spend on Opus in August?". `range` is today, 7d, 30d, 90d, 1y, all, YYYY-MM, or YYYY-MM-DD..YYYY-MM-DD (at most 400 days). `groupBy` is day, model, family, project or source. Project names are folder names only.', input: (z) => ({ range: z.string().optional().describe('default 30d'), groupBy: z.enum(['day', 'model', 'family', 'project', 'source']).optional().describe('default day') }), run: (a, c) => buddyUsageHistory({ ...c, range: a.range, groupBy: a.groupBy }) },
   { name: 'buddy_health', description: 'Is Plexiform set up right? Checks that the Claude Code hooks are installed and point at this copy of the app (not a moved app or an old checkout), the last hook event and its age, the signal server, this MCP registration, session files and stale locks, transcripts, disk space and the app version. Each problem comes with the one-click fix Plexiform offers or the step to take by hand.', run: (a, c) => buddyHealth({ ...c, mcpConnected: true }) },
-  { name: 'buddy_pending_requests', description: 'Permission requests currently blocked waiting for an answer from the widget (PermissionRequest hook), with how long the hook will keep waiting.', run: (a, c) => buddyPendingRequests(c) },
+  { name: 'buddy_pending_requests', description: 'Permission requests currently blocked waiting for an answer from the widget (PermissionRequest hook), with how long the hook will keep waiting.', run: (a, c) => aiPendingRequests(c) },
   { name: 'buddy_burst_status', description: 'Claude Burst, if installed and running: which route requests take (primary or secondary), whether the secondary is ready, rate-limited models and when they come back, and primary failures. Says "Burst not present" when Burst is not running. Read-only; reads a snapshot the app wrote.', run: (a, c) => buddyBurstStatus(c) },
   { name: 'buddy_burst_coordination', description: 'Burst session coordination: which session masters which file ("who masters path X?"). `path` is a file path or its tail; omit it for every session and the files it masters. Says "Burst not present" when Burst is not running.', input: (z) => ({ path: z.string().optional().describe('file path (or its tail) to look up') }), run: (a, c) => buddyBurstCoordination({ ...c, path: a.path }) },
   { name: 'buddy_burst_requests', description: 'The last requests Burst routed: time, session, route, destination host, model, status, latency, tokens, API-equivalent USD. Metadata only. `session` filters by session id (or its first characters); `limit` is at most 50.', input: (z) => ({ session: z.string().optional().describe('session id or its first characters'), limit: z.number().int().min(1).max(50).optional().describe('how many (default 20)') }), run: (a, c) => buddyBurstRequests({ ...c, session: a.session, limit: a.limit }) },
@@ -671,7 +717,7 @@ async function main() {
   await server.connect(new StdioServerTransport());
 }
 
-module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, buddyGitStatus, buddySpend, buddyUsageHistory, buddyHealth, buddyBurstStatus, buddyBurstCoordination, buddyBurstRequests, hookRuntime, teamCall, mailCall, busCall, BUS_TIMEOUT_MS, fetchLive };
+module.exports = { TOOLS, CHANNELS, rootDir, loadConfig, readRequests, classifySession, scanSessions, computeState, parseTransition, buddyStatus, buddySessions, buddyWhy, buddyRules, buddyRecentTransitions, buddyModelMix, buddyPendingRequests, aiSessions, aiWhy, aiPendingRequests, aiRecentTransitions, buddyGitStatus, buddySpend, buddyUsageHistory, buddyHealth, buddyBurstStatus, buddyBurstCoordination, buddyBurstRequests, hookRuntime, teamCall, mailCall, busCall, BUS_TIMEOUT_MS, fetchLive };
 
 if (require.main === module) {
   main().catch((err) => { process.stderr.write(`plexiform mcp: ${err.stack || err}\n`); process.exit(1); });

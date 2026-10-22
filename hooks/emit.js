@@ -82,6 +82,8 @@ function emitAdapter(payload) {
     if (event === 'SessionStart' || typeof prev?.codexInteractive !== 'boolean') {
       const meta = require('./awareness.js').codexSessionMeta(payload.transcript_path);
       next.codexInteractive = meta ? meta.interactive : false;
+      // Main lists the thread only if its server holds this rollout open and the rollout names this thread.
+      if (meta) next.codexTranscript = payload.transcript_path;
     }
   } : null;
   const accepted = [];
