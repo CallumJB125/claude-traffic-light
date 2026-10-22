@@ -42,14 +42,17 @@ export function scrubRun(text, max, root = null) {
 export function createAgentBus({ engine, dataDir, now = Date.now, log: logger }) {
   const log = openBusLog(path.join(dataDir, 'bus.db'), { now });
   const deviceId = log.state('device_id') ?? (() => { const id = crypto.randomBytes(8).toString('hex'); log.setState('device_id', id); return id; })();
-  const context = { settings: null, repos: [], folders: [], self: null };
+  // ready: main has pushed its Preferences (busSetContext) since this helper started. Until then nothing
+  // starts, so a reopened claim or a queued offer never runs on defaults or misses a Preferences-ticked repo.
+  const context = { ready: false, settings: null, repos: [], folders: [], self: null };
+  const halting = new Set(); // task ids being stopped by a halt mid-start: their end posts no result
   const waiters = new Map(); // handoff_id → Set(resolve)
   const failures = new Map(); // offset → tries
   let pumping = null, closed = false;
 
   const settings = () => strictSettings(engine.busPolicy().bus, context.settings);
-  // Halted, or turned off in Preferences or policy.json: nothing new starts.
-  const stopped = () => log.state('halted', false) || !settings().enabled;
+  // Halted, turned off in Preferences or policy.json, or Preferences not received yet: nothing new starts.
+  const stopped = () => !context.ready || log.state('halted', false) || !settings().enabled;
   const agentFor = (provider, repoRoot) => `${provider}:local:${sha(`${deviceId}\n${provider}\n${repoRoot}`).slice(0, 16)}`;
   const runAgent = (task) => `${task.ai.id}:run:${task.id.replace(/^tsk_/, '')}`;
   // Hop inheritance is keyed on what the caller cannot choose: this Mac and the repo of its working folder.
@@ -141,25 +144,34 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     if (!claim) return;
     log.setClaim(ev.handoff_id, claim.fence, { reserved_usd: ev.data.reservation ?? 0 });
     append(envelope({ topic: 'claim', kind: 'claim.granted', handoff: ev, source: systemSource, data: { fence: claim.fence } }));
-    const s = settings();
-    const provider = ev.to.provider;
-    const spec = {
-      text: taskText(ev), title: ev.data.title.slice(0, 120), cwd: ev.repo.root, ai: provider, surface: 'background', permissionLevel: 'auto-edits', planFirst: false,
-      source: 'bus', sourceMeta: { displayName: 'Agent bus', handoffId: ev.handoff_id, fence: claim.fence, originTier: ev.source.tier, scope: 'local', ...(ev.card_id ? { cardId: ev.card_id } : {}) },
-      wallClockMs: s.wall_clock_min * 60_000,
-      ...(provider === 'claude' && (s.caps.enabled || ev.data.budget_usd != null) ? { budgetUsd: ev.data.budget_usd ?? (ev.data.reservation || s.caps.handoff_usd) } : {}),
-    };
+    // Everything after the claim is inside the try: a granted claim always ends in a start or a result.
     try {
+      const s = settings();
+      const provider = ev.to.provider;
+      const spec = {
+        text: taskText(ev), title: ev.data.title.slice(0, 120), cwd: ev.repo.root, ai: provider, surface: 'background', permissionLevel: 'auto-edits', planFirst: false,
+        source: 'bus', sourceMeta: { displayName: 'Agent bus', handoffId: ev.handoff_id, fence: claim.fence, originTier: ev.source.tier, scope: 'local', ...(ev.card_id ? { cardId: ev.card_id } : {}) },
+        wallClockMs: s.wall_clock_min * 60_000,
+        ...(provider === 'claude' && (s.caps.enabled || ev.data.budget_usd != null) ? { budgetUsd: ev.data.budget_usd ?? (ev.data.reservation || s.caps.handoff_usd) } : {}),
+      };
       const { id } = await engine.createTask({ requestId: `bus-${ev.handoff_id}-${claim.fence}`, spec });
       if (closed) return;
       log.setClaim(ev.handoff_id, claim.fence, { state: 'started', task_id: id, lease_until: now() + LEASE_MS });
       append(envelope({ topic: 'claim', kind: 'claim.started', handoff: ev, source: systemSource, data: { fence: claim.fence, task_id: id } }));
-      // Halted while it was starting: release the claim first (so the stop posts no result), then stop the run.
-      // The handoff starts again on resume.
+      // Halted while it was starting: stop the run (its end posts no result), then release the claim so the
+      // handoff starts again on resume. A stop that fails leaves a run that may still be going: lost, never rerun.
       if (stopped()) {
-        log.setClaim(ev.handoff_id, claim.fence, { state: 'reopened', task_id: null });
-        append(envelope({ topic: 'claim', kind: 'claim.released', handoff: ev, source: systemSource, data: { fence: claim.fence } }));
-        await engine.act({ id, action: 'stop', requestId: `bus-halt-${id}-${now()}` }).catch(() => {});
+        halting.add(id);
+        const ok = await engine.act({ id, action: 'stop', requestId: `bus-halt-${id}-${now()}` }).then(() => true, () => false);
+        halting.delete(id);
+        if (closed) return;
+        if (ok) {
+          log.setClaim(ev.handoff_id, claim.fence, { state: 'reopened', task_id: null });
+          append(envelope({ topic: 'claim', kind: 'claim.released', handoff: ev, source: systemSource, data: { fence: claim.fence } }));
+        } else {
+          append(envelope({ topic: 'claim', kind: 'claim.lost', handoff: ev, source: systemSource, data: { fence: claim.fence } }));
+          finish(ev, claim.fence, 'outcome_unknown', { summary: 'The agent bus was stopped while this run started, and the run could not be stopped. It is not retried.', cost_usd: 0, cost_basis: 'estimated', task_id: id });
+        }
         return;
       }
       const t = engine.tasks.get(id);
@@ -197,7 +209,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     const ev = log.handoff(task.sourceMeta.handoffId);
     if (!ev) return;
     const c = log.claimOf(ev.handoff_id);
-    if (c?.task_id !== task.id) return; // a released claim's run (halt mid-start) reports nothing
+    if (c?.task_id !== task.id || halting.has(task.id)) return; // a run halted mid-start reports nothing
     let report = null;
     try { report = c?.report ? JSON.parse(c.report) : null; } catch { report = null; }
     const own = outcome === 'done' ? task.evidence?.summary ?? task.lastAssistant ?? 'Done.' : task.failReason ?? task.parkReason ?? 'The run stopped.';
@@ -226,6 +238,8 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     try {
       do {
         pumping.again = false;
+        // Expiry runs whatever the switch: an offer that can no longer start releases its reservation now.
+        for (const ev of log.expiredOpen(now())) expire(ev);
         if (stopped()) break;
         // Claims reopened by a restart or a halt mid-start: the cursor is already past their offers.
         let busy = false;
@@ -253,6 +267,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
               if (n < DEAD_AFTER) break;
               log.deadLetter(ev.offset, 'dispatcher', e?.code ?? 'error');
               failures.delete(ev.offset);
+              if (!log.result(ev.handoff_id)) finish(ev, log.claimOf(ev.handoff_id)?.fence ?? 0, 'failed', { summary: 'Not started: the agent bus could not start this handoff.', cost_usd: 0, cost_basis: 'native' });
             }
           }
           if (closed) return;
@@ -375,6 +390,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       case 'busSetContext': {
         const a = rawArgs ?? {};
         if (a.settings && typeof a.settings === 'object') context.settings = a.settings;
+        context.ready = true;
         const abs = (l) => (Array.isArray(l) ? l.filter((p) => typeof p === 'string' && p.length <= 1024).slice(0, 200) : null);
         context.repos = abs(a.repos) ?? context.repos;
         context.folders = abs(a.folders) ?? context.folders;

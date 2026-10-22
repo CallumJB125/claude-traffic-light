@@ -101,6 +101,7 @@ test('hop inheritance: a session that waited on a result hands off at hop+1, and
   const root = realpathSync(repo.checkout);
   const engine = stubEngine(root);
   const bus = createAgentBus({ engine, dataDir: dir });
+  await bus.op('busSetContext', {}); // what main does on every helper connection
   const caller = { provider: 'claude', cwd: root };
   const hand = (title) => bus.op('handoff', { request_id: `req-${title.replace(/\W/g, '')}-0001`, to: { provider: 'codex' }, title, provider: 'claude' }, caller);
   const until = async (fn) => { for (let i = 0; i < 200 && !fn(); i++) await new Promise((r) => setTimeout(r, 10)); return fn(); };
@@ -140,6 +141,7 @@ test('100 ping-pong attempts between two sessions start at most max_hops runs pe
   const root = realpathSync(repo.checkout);
   const engine = stubEngine(root);
   const bus = createAgentBus({ engine, dataDir: dir });
+  await bus.op('busSetContext', {}); // what main does on every helper connection
   try {
     let starts = 0;
     for (let i = 0; i < 100; i++) {
@@ -186,6 +188,7 @@ async function stubBus(policyBus = {}) {
   engine.busPolicy = () => ({ bus: policyBus, repos: { [root]: { bus_auto: true } } });
   const clock = { t: Date.parse('2026-10-22T23:59:00Z') };
   const bus = createAgentBus({ engine, dataDir: dir, now: () => clock.t });
+  await bus.op('busSetContext', {});
   const caller = { provider: 'claude', cwd: root };
   let n = 0;
   const hand = (extra = {}) => bus.op('handoff', { request_id: `req-stub-${++n}-000`, to: { provider: 'codex' }, title: `Job ${n}`, provider: 'claude', ...extra }, caller);
@@ -295,5 +298,58 @@ test('caps on: a start that fails, and an offer that expires, release their rese
     assert.equal(b.bus.log.result(queued.handoff_id).kind, 'result.expired');
     assert.equal(b.taskOf(queued.handoff_id), undefined, 'never started');
     assert.equal({ ...b.bus.log.spend('2026-10-23') }.reserved, 0, 'the expired offer released its reservation');
+  } finally { b.cleanup(); }
+});
+
+test('a halt mid-start whose stop fails marks the claim lost (outcome_unknown) and never starts it again', async () => {
+  const b = await stubBus();
+  try {
+    const create = b.engine.createTask;
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    b.engine.act = async () => { throw new Error('stop failed'); };
+    b.engine.createTask = async (a) => { await gate; return create(a); };
+    const offer = await b.hand();
+    await b.until(() => b.bus.log.claimOf(offer.handoff_id)?.state === 'granted', 'claim granted');
+    await b.bus.op('halt');
+    release();
+    await b.until(() => b.bus.log.result(offer.handoff_id), 'result');
+    assert.equal(b.bus.log.result(offer.handoff_id).kind, 'result.outcome_unknown');
+    assert.equal(b.bus.log.claimOf(offer.handoff_id).state, 'lost');
+    await b.bus.op('resume');
+    await b.settle();
+    assert.equal([...b.engine.tasks.values()].length, 1, 'no second run beside the one that would not stop');
+  } finally { b.cleanup(); }
+});
+
+test('while halted, an offer that expires still gets result.expired and releases its reservation', async () => {
+  const b = await stubBus({ caps: { enabled: true, handoff_usd: 5, member_usd: 20 }, max_parallel: 1 });
+  try {
+    const first = await b.hand();
+    await b.until(() => b.taskOf(first.handoff_id), 'first started');
+    const queued = await b.hand({ ttl_s: 60 });
+    await b.bus.op('halt');
+    await b.until(() => b.bus.log.result(first.handoff_id), 'halted run ended');
+    b.clock.t += 61_000;
+    await b.bus.op('busSetContext', {}); // any pump pass
+    await b.until(() => b.bus.log.result(queued.handoff_id), 'expired while halted');
+    assert.equal(b.bus.log.result(queued.handoff_id).kind, 'result.expired');
+    assert.equal(b.bus.log.state('halted'), true);
+    assert.equal({ ...b.bus.log.spend('2026-10-22') }.reserved, 0, 'nothing held while halted');
+  } finally { b.cleanup(); }
+});
+
+test('a granted claim whose start throws before createTask still ends in a result (never stuck granted)', async () => {
+  const b = await stubBus({ caps: { enabled: true, handoff_usd: 5, member_usd: 20 } });
+  try {
+    const at = b.clock.t;
+    const bad = b.bus.log.append({ v: 1, topic: 'handoff', kind: 'handoff.offer', request_id: null, scope: 'local', card_id: null, repo: { root: b.root }, handoff_id: 'hof_badbadbadbad0001',
+      source: { device_id: 'd', agent_id: 'claude:local:aaaa', provider: 'claude', tier: 'local_attested', identity_source: 'local_token' }, to: { provider: 'codex' },
+      body: null, data: { title: 'Malformed', reservation: 5 }, hop: 1, visited: [], caused_by: null, created_at: at, expires_at: at + 3_600_000, grants_execution: false, approval: false });
+    b.bus.log.reserve('2026-10-22', 5);
+    await b.bus.op('busSetContext', {});
+    await b.until(() => b.bus.log.result(bad.handoff_id), 'result');
+    assert.equal(b.bus.log.result(bad.handoff_id).kind, 'result.failed');
+    assert.deepEqual({ ...b.bus.log.spend('2026-10-22') }, { reserved: 0, spent: 0 });
   } finally { b.cleanup(); }
 });

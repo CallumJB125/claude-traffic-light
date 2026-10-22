@@ -12,7 +12,11 @@ export async function startBus(scenario = { text: 'Done' }, { policy, engineOpts
   writePolicy(h.dataDir, policy ? policy(h.repo.checkout) : { repos: { [h.repo.checkout]: { bus_auto: true } } });
   const caller = { provider: 'claude', cwd: h.repo.checkout };
   const clients = [];
+  // What main does on every helper connection: until it has, the dispatcher starts nothing.
+  const ready = () => h.client.bus('busSetContext', {}, null);
+  await ready();
   return {
+    ready,
     h, caller,
     get engine() { return h.eng.engine; },
     bus: (op, args = {}, c = caller) => h.client.bus(op, args, c, { timeoutMs: 150_000 }),

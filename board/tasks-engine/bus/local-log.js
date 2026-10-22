@@ -112,6 +112,12 @@ export function openBusLog(file, { now = Date.now } = {}) {
       return r.changes === 1;
     },
     openClaims() { return st("SELECT * FROM bus_claims WHERE state IN ('granted', 'started')").all(); },
+    /** Offers past their expiry with no result that never started (unclaimed or reopened). */
+    expiredOpen(at) {
+      return st(`SELECT e.* FROM bus_events e LEFT JOIN bus_claims c ON c.handoff_id = e.handoff_id
+        WHERE e.kind = 'handoff.offer' AND e.expires_at <= ? AND (c.handoff_id IS NULL OR c.state = 'reopened')
+        AND NOT EXISTS (SELECT 1 FROM bus_events r WHERE r.handoff_id = e.handoff_id AND r.topic = 'result') ORDER BY e.offset LIMIT 100`).all(at).map(row);
+    },
     reopenedClaims() { return st("SELECT * FROM bus_claims WHERE state = 'reopened' ORDER BY updated_at").all(); },
 
     // Spend (local reservation and measured cost per calendar day).
