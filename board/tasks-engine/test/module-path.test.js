@@ -20,6 +20,9 @@ test('engine imports its complete schema from an escaped installation directory'
     fs.copyFileSync(path.join(board, 'package.json'), path.join(fixtureBoard, 'package.json'));
     fs.mkdirSync(path.join(fixture, 'src'));
     fs.copyFileSync(path.join(board, '../src/result-cards.js'), path.join(fixture, 'src/result-cards.js'));
+    // The bus "never" rule, shared with the hooks (hooks/repo-scope.js), ships beside board/ as src/ does.
+    fs.mkdirSync(path.join(fixture, 'hooks'));
+    fs.copyFileSync(path.join(board, '../hooks/repo-scope.js'), path.join(fixture, 'hooks/repo-scope.js'));
     // Existing source and dependencies stay read-only. Junctions also let the
     // same import fixture run on Windows without symbolic-link privileges.
     for (const name of ['tasks-api', 'shared', 'runner', 'mcp']) {

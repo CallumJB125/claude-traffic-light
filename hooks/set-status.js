@@ -93,8 +93,13 @@ const Fast = require('./fast-hook.js');
 // The fast path intentionally discards stdout; a prompt brief must reach the
 // real provider hook, not the in-process status reporter.
 const needsTurnBrief = signal === 'prompt-submit' && require('./team-brief.js').enabled(ROOT_DIR);
+// Agent awareness (hooks/awareness.js) likewise: a changed roster takes the full path, decided from files alone, so
+// an unchanged one costs a few small reads and the fast path is still taken. The app's in-process run (NO_FAST)
+// never prints it: its stdout goes nowhere, and a receipt there would hide the change.
+const awarenessTurn = signal === 'prompt-submit' && !gateDeny && !process.env.PLEXIFORM_NO_FAST
+  ? require('./awareness.js').check({ adapter: 'claude', event: 'UserPromptSubmit', payload: data, root: ROOT_DIR }) : null;
 // The app's own in-process run sets NO_FAST: it must never forward to itself.
-const fastEndpoint = !gateDeny && !needsTurnBrief && !process.env.PLEXIFORM_NO_FAST && Fast.eligible(signal, data) ? Fast.readEndpoint(ROOT_DIR) : null;
+const fastEndpoint = !gateDeny && !needsTurnBrief && !awarenessTurn && !process.env.PLEXIFORM_NO_FAST && Fast.eligible(signal, data) ? Fast.readEndpoint(ROOT_DIR) : null;
 if (fastEndpoint) {
   Fast.forward(Fast.build({ signal, payload, env: process.env, ppid: process.ppid, cwd: process.cwd(), token: fastEndpoint.token }), fastEndpoint)
     .then((handled) => (handled ? process.exit(0) : fullPath()), () => fullPath());
@@ -482,6 +487,9 @@ function nextSession(prev, { hostApp, pid, terminal, owned }) {
     deployAt: (resolved === 'tool-done' || resolved === 'tool-failed') && deployCommandOf(data) ? now : prev?.deployAt,
     // Buddy launched this session (owned.js): decided at SessionStart only.
     owned: owned !== undefined ? (owned || undefined) : prev?.owned,
+    // Agent awareness: only the interactive CLI is a peer (`claude -p` and the SDK are not), and when it started.
+    interactive: typeof process.env.CLAUDE_CODE_ENTRYPOINT === 'string' ? process.env.CLAUDE_CODE_ENTRYPOINT === 'cli' : prev?.interactive,
+    startedAt: resolved === 'session-start' ? now : prev?.startedAt,
   };
 }
 
@@ -614,7 +622,7 @@ if (signal === 'tool-use' && tool === 'AskUserQuestion' && !data?.agent_id && as
 // `workingSince` marks when the current turn began (for the "working over N
 // minutes" signal) and resets on each new prompt.
 // Judged on the unlocked read: skipping is only ever safe, never a lost write.
-if (prevOnEntry && !needsTurnBrief && signal !== 'session-start' && resolved !== 'subagent-start' && resolved !== 'subagent-done' && tool !== 'TaskStop'
+if (prevOnEntry && !needsTurnBrief && !awarenessTurn && signal !== 'session-start' && resolved !== 'subagent-start' && resolved !== 'subagent-done' && tool !== 'TaskStop'
     && !Machine.claudeInputPending(prevOnEntry) && !(resolved === 'permission-ask' && typeof data?.tool_use_id === 'string')) {
   const prev = prevOnEntry;
   const agentChurn = fromSubagent && stepOf(prev, new Date().toISOString()).bookkeeping;
@@ -658,7 +666,21 @@ writeSession({ hostApp: detectHostApp(starting ? null : prevOnEntry?.hostApp), p
 // Opt-in team brief (hooks/team-brief.js): the session is already recorded, and
 // it gives up after 800 ms, so the light never waits on the hub. With it off
 // the hook stays synchronous and exits here, as every other event does.
+// The awareness roster comes first in the same output (hooks/awareness.js combine); at SessionStart it may classify
+// this folder itself (at most 300 ms of git) when the app has not yet.
+const turnEvent = resolved === 'prompt-submit' ? 'UserPromptSubmit' : 'SessionStart';
 const TeamBrief = !gateDeny && (signal === 'session-start' || resolved === 'prompt-submit') ? require('./team-brief.js') : null;
-if (TeamBrief && TeamBrief.enabled(ROOT_DIR)) TeamBrief.run({ adapter: 'claude', event: resolved === 'prompt-submit' ? 'UserPromptSubmit' : 'SessionStart', payload: data, root: ROOT_DIR }).then((out) => { hookOutput = out; finish(); }, finish);
-else finish();
+const briefOn = !!TeamBrief && TeamBrief.enabled(ROOT_DIR);
+// Files first; only a SessionStart the app has no verdict for yet needs the async self-check.
+const awarenessStart = signal === 'session-start' && !process.env.PLEXIFORM_NO_FAST ? require('./awareness.js').decideSync({ adapter: 'claude', event: 'SessionStart', payload: data, root: ROOT_DIR }) : null;
+const awarenessNow = awarenessStart ? awarenessStart.out : awarenessTurn;
+if (briefOn || awarenessStart?.miss) {
+  Promise.all([
+    awarenessStart?.miss ? require('./awareness.js').run({ adapter: 'claude', event: 'SessionStart', payload: data, root: ROOT_DIR, env: process.env }) : awarenessNow,
+    briefOn ? TeamBrief.run({ adapter: 'claude', event: turnEvent, payload: data, root: ROOT_DIR }) : null,
+  ]).then(([aware, brief]) => { hookOutput = require('./awareness.js').combine(turnEvent, aware, brief); finish(); }, finish);
+} else {
+  if (awarenessNow) hookOutput = awarenessNow;
+  finish();
+}
 }

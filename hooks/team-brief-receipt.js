@@ -1,6 +1,8 @@
 'use strict';
 // A receipt means stdout was written to the provider hook, not that an agent
 // read, agreed with, or acted on it. Store only an opaque version, never text.
+// One hook output can carry several receipts (the awareness roster and the
+// team brief in one additionalContext), each written once the output is.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -29,15 +31,21 @@ function read(file, now = Date.now()) {
   } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
-function prepare(out, file, version, at = Date.now()) {
-  if (out && file && VERSION.test(version)) prepared.set(out, { file, version, at });
+function prepareMany(out, entries) {
+  if (!out || typeof out !== 'object') return out;
+  const list = (prepared.get(out) || []).concat((entries || []).filter((e) => e && e.file && VERSION.test(e.version)).map((e) => ({ file: e.file, version: e.version, at: Number.isSafeInteger(e.at) ? e.at : Date.now() })));
+  if (list.length) prepared.set(out, list);
   return out;
 }
 
-function recordDelivered(out) {
-  const r = prepared.get(out);
-  if (!r) return false;
-  prepared.delete(out);
+function prepare(out, file, version, at = Date.now()) {
+  return prepareMany(out, [{ file, version, at }]);
+}
+
+// The receipts an output carries, to move onto a combined output.
+const preparedOf = (out) => (out && typeof out === 'object' ? [...(prepared.get(out) || [])] : []);
+
+function writeOne(r) {
   let tmp;
   try {
     const dir = path.dirname(r.file);
@@ -52,4 +60,13 @@ function recordDelivered(out) {
   } catch { return false; } finally { if (tmp) { try { fs.unlinkSync(tmp); } catch {} } }
 }
 
-module.exports = { fileFor, read, prepare, recordDelivered, VERSION };
+function recordDelivered(out) {
+  const list = out && typeof out === 'object' ? prepared.get(out) : null;
+  if (!list) return false;
+  prepared.delete(out);
+  let ok = true;
+  for (const r of list) ok = writeOne(r) && ok;
+  return ok;
+}
+
+module.exports = { fileFor, read, prepare, prepareMany, preparedOf, recordDelivered, VERSION };

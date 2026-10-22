@@ -300,6 +300,10 @@ const DEFAULT_CONFIG = {
   // Agent bus (src/agent-bus-main.js, board/AGENT-BUS.md): local AI-to-AI handoffs run automatically in any checkout a
   // Claude or Codex session here works in; repos non-empty means only those, exclude keeps repos off the bus.
   agentBus: { enabled: true, autoAccept: true, scope: 'auto', repos: [], exclude: [], wallClockMin: 20, caps: { enabled: false, memberUsd: 20, handoffUsd: 5 } },
+  // Agent awareness (src/agent-awareness.js): every interactive AI session here is told about its peers. On by default.
+  agentAwareness: { enabled: true, notes: true, midTurnNotices: false },
+  // The bus-only MCP registration, once it ships (plan-agent-awareness §3.9): true after Undo or turning it off.
+  mcpBusUserOff: false,
   // A role reset the team hub never acknowledged ({origin, userId}; no token): retried at start.
   remoteInteractionResetPending: null,
   // Existing Codex CLI sessions on Codex's shared daemon (src/codex-daemon.js): off until ticked in Preferences.
@@ -355,6 +359,8 @@ function buildConfig() {
   config.agentKinds = { ...DEFAULT_CONFIG.agentKinds, ...(saved.agentKinds && typeof saved.agentKinds === 'object' ? saved.agentKinds : {}) };
   config.notifyStates = { ...DEFAULT_CONFIG.notifyStates, ...(saved.notifyStates && typeof saved.notifyStates === 'object' ? saved.notifyStates : {}) };
   config.spend = Spend.normalize(saved.spend);
+  config.agentAwareness = require('./src/agent-awareness.js').normalize(saved.agentAwareness);
+  config.mcpBusUserOff = saved.mcpBusUserOff === true;
   config.voice = Voice.normalizeConfig(saved.voice);
   config.compaction = Compaction.normalizeSettings(saved.compaction);
   config.integrations = { ...(saved.integrations && typeof saved.integrations === 'object' && !Array.isArray(saved.integrations) ? saved.integrations : {}), ghosttyDock: GhosttyDock.normalizeMode(saved.integrations && saved.integrations.ghosttyDock) };
@@ -393,6 +399,8 @@ function saveConfig(partial) {
   // `sealed` is reserved for the rules' safeStorage HMAC (src/auto-rules.js); null until the evaluator ships.
   if (partial.integrations) next.integrations = { ...loadConfig().integrations, ...partial.integrations, ghosttyDock: GhosttyDock.normalizeMode(partial.integrations.ghosttyDock) };
   if (partial.agentBus) next.agentBus = require('./src/agent-bus-main.js').normalize(partial.agentBus);
+  if (partial.agentAwareness) next.agentAwareness = require('./src/agent-awareness.js').normalize(partial.agentAwareness);
+  if ('mcpBusUserOff' in partial) next.mcpBusUserOff = partial.mcpBusUserOff === true;
   if (partial.autoAnswer) next.autoAnswer = { v: 1, sealed: null, rules: AutoRules.sanitize(partial.autoAnswer.rules).rules };
   fs.mkdirSync(ROOT_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2));
@@ -518,6 +526,8 @@ const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = 
   teamActivity: (op, args) => TeamActivity.call(op, args),
   agentMail: (op, args) => (op === 'request_handoff' || op === 'hand_off_status' ? localHandoffOp(op, args) : AgentMail.op(op, args)),
   agentBus: (op, args, caller) => AgentBusMain.relay(op, args, caller),
+  // GET /status names a session's folder only when awareness has resolved it as allowed.
+  cwdVisible: (s) => AgentAwareness.visible(s),
 });
 // A remote session's folder names a directory on another machine: it is
 // shown, never opened, copied as a path, knocked on or used to find a
@@ -1645,6 +1655,11 @@ app.whenReady().then(() => {
 });
 if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_COLLISION_HOOK === '1') global.__collisionInject = handleActivityEvent;
 const ProviderStatus = require('./src/provider-status.js');
+// Agent awareness (src/agent-awareness.js, plan-agent-awareness): the roster file every interactive AI session's hooks
+// read. Async only; rebuilt on session changes (debounced), on exclude changes, and every 2 minutes as a heartbeat.
+const AgentAwareness = require('./src/agent-awareness.js').create({ rootDir: ROOT_DIR, host: LOCAL_HOST, home: os.homedir(), codexHome: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), dataDirs: [ROOT_DIR, path.join(app.getPath('userData'), 'tasks')], config: () => loadConfig(), sessions: () => localSessions(aggregateState().sessions || []), halted: () => AgentBusMain.halted(), log: (m) => console.log(m) });
+app.whenReady().then(() => { if (!DEMO) AgentAwareness.start(); });
+onQuit(app, () => AgentAwareness.stop());
 const sessionsSender = e => fromUtilityPage(e, 'sessions');
 // Bus folders: task folders and the Claude and Codex sessions main sees, never a task run's worktree (*-buddy-<id>).
 // Claude Code's own hook (hooks/set-status.js) writes no source, so no source means Claude here as everywhere else;
@@ -3789,6 +3804,9 @@ function commitConfig(partial) {
   })) backupFirst();
   const next = saveConfig(partial);
   applyConfigEffects(prev, next, (k) => k in partial);
+  // A changed exclude list drops every cached awareness verdict; the switch rebuilds (or removes) the roster.
+  if ('agentBus' in partial && JSON.stringify(prev.agentBus?.exclude) !== JSON.stringify(next.agentBus?.exclude)) AgentAwareness.invalidate();
+  else if ('agentAwareness' in partial) AgentAwareness.schedule();
   if ('compaction' in partial) InteractionMain.hub.compactionSettingsChanged().catch(() => {});
   // Opting out disconnects at once; attached daemon sessions end in Plexiform (they keep running in Codex).
   if (next.codexDaemonMessaging !== true) CodexDaemon.stop();
@@ -5409,6 +5427,7 @@ app.whenReady().then(() => {
     if (watchTimer) return;
     watchTimer = setTimeout(() => {
       watchTimer = null;
+      AgentAwareness.schedule();
       broadcastStatusIfChanged();
       saveLastHook();
       maybePlayAlertSound();
