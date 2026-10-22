@@ -446,3 +446,47 @@ test('the socket is checked again after connecting: a swapped socket is refused 
     assert.equal(a.calls.length, 0);
   } finally { await a.close(); await b.close(); }
 });
+
+test('threadMeta: Codex 0.163 TUI shape and legacy cli shape are interactive; exec, sub-agent and other shapes are not', () => {
+  const base = { id: 'x', ephemeral: false, cwd: '/a/b', name: 'n', status: { type: 'idle' }, updatedAt: 1 };
+  const want = { id: 'x', title: 'n', project: 'b', status: 'idle', updatedAt: 1 };
+  assert.deepEqual(threadMeta({ ...base, source: 'cli' }), want, 'legacy');
+  assert.deepEqual(threadMeta({ ...base, source: 'vscode', originator: 'codex-tui', threadSource: 'user' }), want, '0.163 TUI');
+  assert.deepEqual(threadMeta({ ...base, source: 'vscode', originator: 'codex_work_desktop', threadSource: 'user' }), want, '0.163 desktop');
+  for (const t of [
+    { source: 'vscode', originator: 'codex-tui', threadSource: 'subagent' },
+    { source: 'vscode', originator: 'codex-tui' },
+    { source: 'vscode', originator: 'codex_exec', threadSource: 'user' },
+    { source: 'vscode', originator: 'custom-client', threadSource: 'user' },
+    { source: 'vscode', threadSource: 'user' },
+    { source: 'exec', originator: 'codex_exec', threadSource: 'user' },
+    { source: { subAgent: { thread_spawn: { parent_thread_id: 'p' } } }, originator: 'codex-tui', threadSource: 'subagent' },
+    { source: 'vscode', originator: 'codex-tui', threadSource: 'user', parentThreadId: 'p' },
+    { source: 'vscode', originator: 'codex-tui', threadSource: 'user', ephemeral: true },
+    { source: 'vscode', originator: 'codex-tui', threadSource: 'user', agentRole: 'worker' },
+  ]) assert.equal(threadMeta({ ...base, ...t }), null, JSON.stringify(t));
+});
+
+const TUI_0163 = { source: 'vscode', originator: 'codex-tui', threadSource: 'user' };
+
+test('attach: a 0.163-shaped thread (vscode / codex-tui / user) is discovered and attached, resume carries the same fields', async () => {
+  const r = await rig({ withThread: false });
+  try {
+    const A = r.fake.addThread(TUI_0163);
+    const at = await r.attach(A);
+    assert.equal(at.ok, true);
+    assert(r.fake.calls.some((c) => c.method === 'thread/resume' && c.params.threadId === A));
+  } finally { await r.done(); }
+});
+
+test('attach: a resume response with a null originator is refused and released (fail-closed; Thread.originator is nullable in the 0.163 schema)', async () => {
+  const r = await rig({ withThread: false });
+  try {
+    const A = r.fake.addThread(TUI_0163);
+    const handle = await r.handleOf(A);
+    r.fake.resumeOverrides.set(A, { originator: null });
+    const at = await r.hub.attach({ provider: 'codex-daemon', handle, board: null }, ACTOR);
+    assert.notEqual(at.ok, true);
+    assert(r.fake.calls.some((c) => c.method === 'thread/unsubscribe' && c.params.threadId === A), 'subscription released');
+  } finally { await r.done(); }
+});

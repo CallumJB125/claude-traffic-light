@@ -59,8 +59,11 @@ function checkSocket(socketPath, { fsImpl = fs, uid = process.getuid?.() } = {})
 const clean = (v, max) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max) : '');
 // Metadata allowlist. `preview`, `path`, `gitInfo`, `turns` and every other field are dropped here.
 // Only interactive CLI threads: sub-agent, exec, app-server, ephemeral and unknown-source threads are never listed or attached.
+// Codex < 0.163 reports TUI threads as source "cli"; 0.163+ reports source "vscode" with originator codex-tui / codex_work_desktop and threadSource "user".
+const INTERACTIVE_ORIGINATORS = new Set(['codex-tui', 'codex_work_desktop']);
+const isInteractive = (t) => t.source === 'cli' || (t.source === 'vscode' && t.threadSource === 'user' && INTERACTIVE_ORIGINATORS.has(t.originator));
 function threadMeta(t) {
-  if (!t || typeof t.id !== 'string' || !t.id || t.id.length > 100 || t.parentThreadId || t.ephemeral !== false || t.source !== 'cli' || t.agentNickname || t.agentRole) return null;
+  if (!t || typeof t.id !== 'string' || !t.id || t.id.length > 100 || t.parentThreadId || t.ephemeral !== false || !isInteractive(t) || t.agentNickname || t.agentRole) return null;
   return { id: t.id, title: clean(t.name, 120), project: clean(path.basename(clean(t.cwd, 1000)), 120), status: clean(t.status?.type, 20) || 'unknown', updatedAt: Number.isSafeInteger(t.updatedAt) ? t.updatedAt : null };
 }
 // The session's own permissions, as Codex reports them on resume (never changed by Plexiform).
@@ -198,6 +201,7 @@ function createCodexDaemon({ bin, enabled = () => false, socketPath = defaultSoc
     const result = await request('thread/resume', { threadId: target, excludeTurns: true });
     if (result?.thread?.id !== target) throw new Error('Codex resumed a different thread');
     subs.set(target, (subs.get(target) ?? 0) + 1);
+    // Fail-closed: ThreadResumeResponse.thread is the same Thread type as thread/list (codex_app_server_protocol.v2.schemas.json, 0.163), whose originator and threadSource are optional and nullable. A resume response that omits or nulls them is refused, even if thread/list vouched for the thread.
     if (!threadMeta(result.thread)) { await release({ target }).catch(() => {}); throw new Error('Plexiform only messages interactive Codex CLI sessions'); }
     return { target, status: clean(result.thread.status?.type, 20) || 'unknown', permissions: permissionsOf(result) };
   }

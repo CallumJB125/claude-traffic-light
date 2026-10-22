@@ -26,7 +26,7 @@ marked *source* were read in `main`, which can be newer than 0.159.2.
 | `thread/loaded/list` → `{data: [threadId], nextCursor}` = threads loaded in the daemon's memory. | 0.159.2 schema |
 | `thread/list` returns `Thread` objects including **`preview` ("usually the first user message")**, `path`, `gitInfo`, `name`, `cwd`, `status`, `source`. `turns` is empty except on resume/fork/read. | 0.159.2 schema |
 | `thread/resume {threadId, excludeTurns: true}` returns metadata without `thread.turns`; any other field (model, sandbox, approvalPolicy, cwd, ...) is an **override** of the thread's settings. The response reports the thread's effective `approvalPolicy` (`untrusted` / `on-request` / `never` / `{granular}`) and `sandbox` (`{type: readOnly / workspaceWrite / externalSandbox / dangerFullAccess}`), both required. | 0.159.2 schema (`ThreadResumeResponse`) |
-| `Thread.source` (required) is `cli` / `vscode` / `exec` / `appServer` / `unknown` / `{custom}` / `{subAgent}`; `Thread.ephemeral` is required; sub-agent threads also carry `parentThreadId`, `agentNickname`, `agentRole`. | 0.159.2 schema |
+| `Thread.source` (required) is `cli` / `vscode` / `exec` / `appServer` / `unknown` / `{custom}` / `{subAgent}`; `Thread.ephemeral` is required; sub-agent threads also carry `parentThreadId`, `agentNickname`, `agentRole`. On **0.163** TUI threads report `source:"vscode"`, `originator:"codex-tui"`, `threadSource:"user"` (`source:"cli"` no longer appears); Plexiform accepts both shapes. | 0.159.2 schema; 0.163 observed |
 | `thread/read`, `thread/turns/list`, `thread/items/list` return transcript content. | 0.159.2 schema |
 | `turn/start {threadId, input, clientUserMessageId}` → `{turn: {id}}`; `turn/steer {threadId, expectedTurnId, input, clientUserMessageId}` → `{turnId}`, fails when `expectedTurnId` is not the active turn; `turn/interrupt {threadId, turnId}` → turn ends `interrupted`. | 0.159.2 schema; docs |
 | Notifications (`turn/started`, `item/*`, `turn/completed`, `thread/status/changed`, `thread/closed`) for a thread go to **every subscribed connection**, including other clients' turns. | docs; *source* `outgoing_message.rs` (thread-scoped `connection_ids`) |
@@ -54,7 +54,9 @@ marked *source* were read in `main`, which can be newer than 0.159.2.
   Transcript methods cannot be sent.
 - **Discovery** = loaded thread ids ∩ `thread/list`, keeping only id, name,
   cwd basename, status, updatedAt; `preview`, `path`, `gitInfo`, turns are
-  dropped at parse. Only `source: "cli"`, `ephemeral: false` threads without
+  dropped at parse. Only interactive threads (`source: "cli"` on Codex < 0.163; on 0.163+
+  `source: "vscode"` with `threadSource: "user"` and `originator` `codex-tui` or
+  `codex_work_desktop`), `ephemeral: false`, without
   `parentThreadId` / `agentNickname` / `agentRole` are kept; a loaded id
   without such metadata is not listed at all (sub-agent, exec, app-server,
   ephemeral, custom and unknown-source threads never appear). The renderer
@@ -132,7 +134,8 @@ Expected: `send: acknowledged`, then `state: completed`, `recorded: true`,
 - Steering or interrupting any turn Plexiform did not start (the human's own
   turns, other apps' turns, turns already running before Plexiform
   subscribed). Send refuses as busy until such a turn finishes.
-- Sub-agent, `codex exec`, app-server, ephemeral or other non-CLI threads on
-  the daemon.
+- Sub-agent, `codex exec`, app-server, ephemeral or other non-interactive
+  threads on the daemon (including `source: "vscode"` threads from any other
+  originator).
 - Knowing whether a Codex terminal is still attached to a session.
 - Answering approvals, reading history, changing a session's settings.
