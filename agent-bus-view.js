@@ -23,6 +23,7 @@
     'result.done': (e) => `Finished${e.cost_usd ? ` · about $${e.cost_usd.toFixed(2)}` : ''}`,
     'result.failed': () => 'Did not finish',
     'result.outcome_unknown': () => 'Ended with no known outcome (not retried)',
+    'result.expired': () => 'Expired before it started',
     'control.halt': () => 'You stopped the agent bus',
     'control.resume': () => 'You resumed the agent bus',
   };

@@ -33,7 +33,10 @@ test('a run hands on once at hop 2 (run_capability, inherited visited); its chil
 
     const bTask = await waitFor(() => b.taskOf(child.handoff_id)?.state === 'running' && b.taskOf(child.handoff_id), { label: 'run B running' });
     const ipcB = await b.ipc(bTask.id);
-    const grandchild = await ipcB.request('tool', { name: 'bus_handoff', args: { request_id: rid('gc'), to: { provider: 'gemini' }, title: 'One more' } });
+    // Gemini has no OS sandbox: never a bus target.
+    const gem = await ipcB.request('tool', { name: 'bus_handoff', args: { request_id: rid('gem'), to: { provider: 'gemini' }, title: 'One more' } });
+    assert.equal(gem.reason, 'NO_ELIGIBLE_AGENT');
+    const grandchild = await ipcB.request('tool', { name: 'bus_handoff', args: { request_id: rid('gc'), to: { provider: 'claude' }, title: 'One more' } });
     assert.equal(grandchild.reason, 'LOOP', 'hop 3 > max_hops 2');
     // Only bus runs have bus tools; a refused handoff starts nothing.
     assert.equal([...b.engine.tasks.values()].filter((t) => t.source === 'bus').length, 2);

@@ -11,10 +11,10 @@ const { testTempDir } = require('./tmp');
 const board = (f) => pathToFileURL(path.join(__dirname, '..', '..', 'board', f)).href;
 const until = async (fn, ms = 10000) => { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 20)); } };
 
-async function startAppBus(scenario = { text: 'Done' }, { ensureSupervisor } = {}) {
+async function startAppBus(scenario = { text: 'Done' }, { ensureSupervisor, busContext, onBusReady } = {}) {
   const { startBus } = await import(board('tasks-engine/test/bus-helpers.js'));
   const b = await startBus(scenario);
-  const svc = createTasksService({ boardHome: b.h.dataDir, homeDir: '/Users/nobody', ensureSupervisor, copy: () => {}, confirmDialog: async () => { throw new Error('a dialog was shown'); } });
+  const svc = createTasksService({ boardHome: b.h.dataDir, homeDir: '/Users/nobody', ensureSupervisor, busContext, onBusReady, copy: () => {}, confirmDialog: async () => { throw new Error('a dialog was shown'); } });
   const rootDir = testTempDir('ctl-bus-');
   const S = require('../../src/signal-server.js')({ rootDir, sessionsDir: rootDir, requestsDir: rootDir, aggregateState: () => ({ sessions: [] }), broadcastStatus: () => {}, port: 0, app: { on: () => {} },
     agentBus: (op, args, caller) => svc.bus(op, args, caller) });

@@ -2126,6 +2126,7 @@ function getTasks() {
     detectedTools: () => AiTools.quick(),
     startGuard: (cwd) => (taskStartGuard ? taskStartGuard(cwd) : null),
     busContext: () => AgentBusMain.context(),
+    onBusReady: () => { AgentBusMain.refresh(); },
     copy: (text) => clipboard.writeText(text),
     ...(IS_MAC ? { launchTerminal: (descriptor, current) => require('./src/tasks-terminal').launchTaskTerminal(descriptor, { current }) } : {}),
     onChange: (snap) => {

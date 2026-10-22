@@ -31,7 +31,8 @@ import { runAllowKey } from '../runner/policy.js';
 import { makeGit, resolveGit } from './git.js';
 import { createCollaboration, collaborationReceipts } from './collaboration.js';
 import { createAgentBus, BusRefusal } from './bus/dispatcher.js';
-import { mergeSettings } from './bus/guard.js';
+import { strictSettings } from './bus/guard.js';
+import { BUS_RUN_PROVIDERS } from '../shared/bus-schema.js';
 import { TASK_TOOL_NAMES } from '../mcp/task-tools.js';
 import { createTaskIntegration } from './integration.js';
 import { createTaskPullRequest } from './pull-request.js';
@@ -638,6 +639,8 @@ export class TasksEngine extends EventEmitter {
     if (spec.baseBranch != null && !REF_RE.test(spec.baseBranch)) throw new ApiError('VALIDATION', 'baseBranch is not a branch name');
     if (spec.budgetUsd != null && !(spec.budgetUsd > 0)) throw new ApiError('VALIDATION', 'budgetUsd must be more than 0');
     const ai = this.#chooseAi(spec.ai ?? 'auto', level);
+    // Only backends with an OS sandbox and no network can take a bus run (Gemini has neither).
+    if (source === 'bus' && !BUS_RUN_PROVIDERS.includes(ai.id)) throw new ApiError('POLICY_DENIED', `${AI_LABEL[ai.id]} cannot take agent bus runs`, { reason: 'NO_ELIGIBLE_AGENT' });
     if (spec.budgetUsd != null && this.backends[ai.id].describe().capabilities.budget !== 'native') throw new ApiError('CAPABILITY_MISSING', `${AI_LABEL[ai.id]} does not offer a native spend cap`, { capability: 'budget' });
 
     if (!path.isAbsolute(spec.cwd)) throw new ApiError('VALIDATION', 'cwd must be an absolute path');
@@ -742,8 +745,8 @@ export class TasksEngine extends EventEmitter {
     } catch { return { acceptFrom: new Set(), repos: {}, bus: null }; }
   }
 
-  // policy.json's bus keys, then what main pushed from Preferences (busSetContext).
-  #busSettings(policy = this.#policy()) { return mergeSettings(policy.bus, this.agentBus?.context.settings); }
+  // policy.json's bus keys and what main pushed from Preferences (busSetContext); the stricter wins.
+  #busSettings(policy = this.#policy()) { return strictSettings(policy.bus, this.agentBus?.context.settings); }
 
   busPolicy() { const p = this.#policy(); return { bus: p.bus, repos: p.repos }; }
 

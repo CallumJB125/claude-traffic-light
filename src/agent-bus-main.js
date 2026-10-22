@@ -53,6 +53,8 @@ function register({ ipcMain, sessionsAllowed, tasks, started = () => true, confi
       return call(op, args, caller);
     },
     sync: () => { if (started()) call('busSetContext', context()).catch(() => {}); },
+    // Once the helper is up (after a restart while halted the tray must offer Resume before Sessions is opened).
+    refresh: () => call('status', {}).then(track, () => {}),
     halt, resume,
     trayItems: () => (normalize(config().agentBus).enabled && (used || halted)
       ? [halted ? { label: 'Resume agent bus', click: () => resume().catch(() => {}) } : { label: 'Stop agent bus', sublabel: 'Stops every run AIs handed to each other', click: () => halt().catch(() => {}) }]

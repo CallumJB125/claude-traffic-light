@@ -26,6 +26,11 @@ const KNOWN_SIGNALS = new Set(Rules.SIGNALS.filter((x) => x.hook).map((x) => x.i
 const BUS_AGENT_OPS = new Set(['hello', 'handoff', 'read', 'wait', 'status']);
 const BUS_LIMITS = { title: 200, brief: 3200, file: 300, branch: 200 };
 const BUS_UNAVAILABLE = { available: false, reason: 'tasks_helper_unavailable', message: 'Plexiform could not reach its Tasks helper. Nothing was handed off.' };
+// A handoff that timed out, or whose helper went away mid-call, may have been posted.
+const BUS_UNKNOWN = { available: false, reason: 'tasks_helper_unavailable', outcome: 'unknown',
+  message: 'Plexiform did not answer in time, so it is unknown whether this was handed off. Retry with the same request_id: a handoff that was posted comes back as a duplicate, never a second run.' };
+// Above the Tasks service's own worst case for one op (10 s to connect, 5 s for context, 12 s for the op).
+const BUS_DEADLINE_MS = 30_000;
 
 // Handoff text is scrubbed here, before it leaves main: secrets out, home folder shown as ~ (handoff-packet.js clean),
 // then cut to the limit, so scrubbing never makes it longer than the bus accepts.
@@ -46,7 +51,7 @@ function tokenMatches(sent) {
 // `rootDir`, `sessionsDir`, `requestsDir` are the same paths main.js computes;
 // `aggregateState` and `broadcastStatus` are the live core callbacks; tests
 // pass their own port, retry timing and app.
-module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus, teamActivity = null, agentMail = null, agentBus = null, port = SIGNAL_PORT, retries = 20, retryMs = 500, app: electronApp = app }) => {
+module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus, teamActivity = null, agentMail = null, agentBus = null, port = SIGNAL_PORT, retries = 20, retryMs = 500, busDeadlineMs = BUS_DEADLINE_MS, app: electronApp = app }) => {
   // Per-request answer keys from the blocking hooks: memory only, never on
   // disk, so nothing that can write requests/ can also sign an answer.
   const requestKeys = Answer.requestKeys();
@@ -127,11 +132,13 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
           const args = op === 'handoff' ? busScrub(raw) : raw;
           const caller = { provider: typeof raw.provider === 'string' ? raw.provider.slice(0, 12) : null, cwd: typeof cwd === 'string' ? cwd.slice(0, 1024) : null };
           // bus_wait holds the call; the relay's own deadline (timeout_s + 5 s) means it can never hang.
-          const deadlineMs = (op === 'wait' ? Math.min(120, Math.max(0, Number(raw.timeout_s ?? 60) || 0)) + 5 : 25) * 1000;
+          const deadlineMs = op === 'wait' ? (Math.min(120, Math.max(0, Number(raw.timeout_s ?? 60) || 0)) + 5) * 1000 : busDeadlineMs;
+          // Only a helper that was never reached means nothing was handed off.
+          const lost = (e) => (op === 'handoff' && e?.code !== 'SUPERVISOR_UNREACHABLE' ? BUS_UNKNOWN : BUS_UNAVAILABLE);
           let timer;
-          const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(BUS_UNAVAILABLE), deadlineMs); });
+          const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(lost(null)), deadlineMs); });
           Promise.race([Promise.resolve().then(() => agentBus(op, args, caller)), deadline])
-            .then((r) => done(200, r && typeof r === 'object' ? r : BUS_UNAVAILABLE), (e) => done(200, e?.code === 'VALIDATION' ? { reason: 'VALIDATION', message: String(e.message).slice(0, 300) } : BUS_UNAVAILABLE))
+            .then((r) => done(200, r && typeof r === 'object' ? r : lost(null)), (e) => done(200, e?.code === 'VALIDATION' ? { reason: 'VALIDATION', message: String(e.message).slice(0, 300) } : lost(e)))
             .finally(() => clearTimeout(timer));
         });
       }

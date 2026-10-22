@@ -7,11 +7,13 @@ export const BUS_VERSION = 1;
 export const TOPICS = Object.freeze(['handoff', 'claim', 'result', 'control']);
 export const TIERS = Object.freeze(['person', 'run_capability', 'local_attested']);
 export const PROVIDERS = Object.freeze(['claude', 'codex', 'gemini']);
+// The providers a bus run may start on: the ones with an OS sandbox and network off (AC7).
+export const BUS_RUN_PROVIDERS = Object.freeze(['claude', 'codex']);
 export const REASONS = Object.freeze(['HALTED', 'SPEND_CAP', 'LOOP', 'RATE', 'NOT_MEMBER', 'TIER_NOT_ACCEPTED', 'NO_ELIGIBLE_AGENT', 'NO_LOCAL_CHECKOUT', 'NOT_FOUND', 'VALIDATION']);
 export const KINDS = Object.freeze({
   handoff: ['handoff.offer', 'handoff.refused'],
   claim: ['claim.granted', 'claim.denied', 'claim.started', 'claim.released', 'claim.lost'],
-  result: ['result.done', 'result.failed', 'result.outcome_unknown'],
+  result: ['result.done', 'result.failed', 'result.outcome_unknown', 'result.expired'],
   control: ['control.halt', 'control.resume', 'control.cap_reached', 'control.policy_changed', 'control.card_paused'],
 });
 export const LIMITS = Object.freeze({ title: 200, brief: 3200, summary: 2000, file: 300, files: 50, branch: 200, evidence: 10 });

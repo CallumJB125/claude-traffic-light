@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { openBusLog, DEAD_AFTER } from './local-log.js';
-import { admit, mergeSettings, dayOf } from './guard.js';
+import { admit, strictSettings, dayOf } from './guard.js';
 import { runCost } from './pricing.js';
 import { BUS_VERSION, Envelope, HelloArgs, HandoffArgs, ReadArgs, WaitArgs, StatusArgs, RunHandoffArgs, ResultArgs, LIMITS, issue } from '../../shared/bus-schema.js';
 import { redactSecrets } from '../../shared/secret-patterns.mjs';
@@ -47,9 +47,13 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   const failures = new Map(); // offset → tries
   let pumping = null, closed = false;
 
-  const settings = () => mergeSettings(engine.busPolicy().bus, context.settings);
+  const settings = () => strictSettings(engine.busPolicy().bus, context.settings);
+  // Halted, or turned off in Preferences or policy.json: nothing new starts.
+  const stopped = () => log.state('halted', false) || !settings().enabled;
   const agentFor = (provider, repoRoot) => `${provider}:local:${sha(`${deviceId}\n${provider}\n${repoRoot}`).slice(0, 16)}`;
   const runAgent = (task) => `${task.ai.id}:run:${task.id.replace(/^tsk_/, '')}`;
+  // Hop inheritance is keyed on what the caller cannot choose: this Mac and the repo of its working folder.
+  const hopDomain = async (caller) => `local:${sha(`${deviceId}\n${(await gitTop(caller?.cwd)) ?? caller?.cwd ?? ''}`).slice(0, 16)}`;
 
   function envelope({ topic, kind, handoff, source, to = null, body = null, data = null, request_id = null, hop, visited, caused_by = null, ttlS = null }) {
     const at = now();
@@ -132,8 +136,10 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
 
   // Claim → engine.createTask. Exactly one start per handoff: the claim CAS hands out one fence.
   async function dispatch(ev) {
+    if (stopped()) return;
     const claim = log.claim(ev.handoff_id, deviceId, LEASE_MS);
     if (!claim) return;
+    log.setClaim(ev.handoff_id, claim.fence, { reserved_usd: ev.data.reservation ?? 0 });
     append(envelope({ topic: 'claim', kind: 'claim.granted', handoff: ev, source: systemSource, data: { fence: claim.fence } }));
     const s = settings();
     const provider = ev.to.provider;
@@ -146,14 +152,22 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     try {
       const { id } = await engine.createTask({ requestId: `bus-${ev.handoff_id}-${claim.fence}`, spec });
       if (closed) return;
-      log.setClaim(ev.handoff_id, claim.fence, { state: 'started', task_id: id, lease_until: now() + LEASE_MS, reserved_usd: ev.data.reservation ?? 0 });
+      log.setClaim(ev.handoff_id, claim.fence, { state: 'started', task_id: id, lease_until: now() + LEASE_MS });
       append(envelope({ topic: 'claim', kind: 'claim.started', handoff: ev, source: systemSource, data: { fence: claim.fence, task_id: id } }));
+      // Halted while it was starting: release the claim first (so the stop posts no result), then stop the run.
+      // The handoff starts again on resume.
+      if (stopped()) {
+        log.setClaim(ev.handoff_id, claim.fence, { state: 'reopened', task_id: null });
+        append(envelope({ topic: 'claim', kind: 'claim.released', handoff: ev, source: systemSource, data: { fence: claim.fence } }));
+        await engine.act({ id, action: 'stop', requestId: `bus-halt-${id}-${now()}` }).catch(() => {});
+        return;
+      }
       const t = engine.tasks.get(id);
       if (t && !ACTIVE.has(t.state)) onTaskState(t);
     } catch (e) {
       // Shutting down mid-start: the claim stays granted and reopens on the next start (recover()).
       if (closed) return;
-      const code = typeof e?.code === 'string' ? e.code : 'INTERNAL';
+      const code = typeof e?.details?.reason === 'string' ? e.details.reason : typeof e?.code === 'string' ? e.code : 'INTERNAL';
       log.setClaim(ev.handoff_id, claim.fence, { state: 'released' });
       append(envelope({ topic: 'claim', kind: 'claim.denied', handoff: ev, source: systemSource, data: { fence: claim.fence, reason: code } }));
       finish(ev, claim.fence, 'failed', { summary: `Not started: ${scrubRun(e?.message ?? 'the run could not start', 300)}`, cost_usd: 0, cost_basis: 'native' });
@@ -164,7 +178,8 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     if (log.result(ev.handoff_id)?.data?.fence === fence) return;
     const c = log.claimOf(ev.handoff_id);
     if (c && c.fence !== fence) return; // a stale fence's result is refused
-    log.settle(dayOf(now()), c?.reserved_usd ?? ev.data.reservation ?? 0, cost_usd);
+    // Settled against the day it was reserved, so a run that crosses midnight strands nothing.
+    log.settle(dayOf(ev.created_at), c?.reserved_usd ?? ev.data.reservation ?? 0, cost_usd);
     log.setClaim(ev.handoff_id, fence, { state: outcome === 'outcome_unknown' ? 'lost' : 'done' });
     const r = append(envelope({ topic: 'result', kind: `result.${outcome}`, handoff: ev, source: systemSource,
       data: { fence, summary, evidence, cost_usd, cost_basis, branch, task_id } }));
@@ -182,6 +197,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     const ev = log.handoff(task.sourceMeta.handoffId);
     if (!ev) return;
     const c = log.claimOf(ev.handoff_id);
+    if (c?.task_id !== task.id) return; // a released claim's run (halt mid-start) reports nothing
     let report = null;
     try { report = c?.report ? JSON.parse(c.report) : null; } catch { report = null; }
     const own = outcome === 'done' ? task.evidence?.summary ?? task.lastAssistant ?? 'Done.' : task.failReason ?? task.parkReason ?? 'The run stopped.';
@@ -193,23 +209,43 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   const onEvent = (e) => { if (e.type === 'state') { const t = engine.tasks.get(e.taskId); if (t) onTaskState(t); } };
   engine.on('event', onEvent);
 
+  // An offer that expired before it started: one result, and its reservation is released.
+  function expire(ev) {
+    if (log.result(ev.handoff_id)) return;
+    finish(ev, log.claimOf(ev.handoff_id)?.fence ?? 0, 'expired', { summary: 'Expired before it started.', cost_usd: 0, cost_basis: 'native' });
+  }
+
   // The dispatcher's own consumer over the handoff topic (local-log cursor): in order, at-least-once,
-  // a row that keeps failing is dead-lettered. max_parallel bus runs at a time; halted means nothing new starts.
+  // a row that keeps failing is dead-lettered. max_parallel bus runs at a time; halted or turned off means
+  // nothing new starts (checked before every start, and again inside dispatch).
   async function pump() {
     if (closed) return;
     if (pumping) { pumping.again = true; return; }
     pumping = { again: false };
+    const full = () => [...engine.tasks.values()].filter((t) => t.source === 'bus' && ACTIVE.has(t.state)).length >= settings().max_parallel;
     try {
       do {
         pumping.again = false;
-        if (log.state('halted', false)) break;
-        const s = settings();
+        if (stopped()) break;
+        // Claims reopened by a restart or a halt mid-start: the cursor is already past their offers.
+        let busy = false;
+        for (const c of log.reopenedClaims()) {
+          if (closed) return;
+          const ev = log.handoff(c.handoff_id);
+          if (!ev) continue;
+          if (ev.expires_at <= now()) { expire(ev); continue; }
+          if (stopped() || full()) { busy = true; break; }
+          await dispatch(ev).catch((e) => logger?.warn?.('bus dispatch failed', { code: e?.code ?? null }));
+        }
+        if (busy) break;
         let from = log.offsetOf('dispatcher', 'handoff', { fromHead: false });
         for (const ev of log.read({ topics: ['handoff'], after: from, limit: 50 })) {
           if (closed) return;
-          if (ev.kind === 'handoff.offer' && [undefined, 'reopened'].includes(log.claimOf(ev.handoff_id)?.state) && ev.expires_at > now()) {
-            const running = [...engine.tasks.values()].filter((t) => t.source === 'bus' && ACTIVE.has(t.state)).length;
-            if (running >= s.max_parallel) break;
+          if (stopped()) break;
+          const open = ev.kind === 'handoff.offer' && [undefined, 'reopened'].includes(log.claimOf(ev.handoff_id)?.state);
+          if (open && ev.expires_at <= now()) expire(ev);
+          else if (open) {
+            if (full()) break;
             try { await dispatch(ev); } catch (e) {
               const n = (failures.get(ev.offset) ?? 0) + 1;
               failures.set(ev.offset, n);
@@ -235,9 +271,9 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       if (!ev) continue;
       const t = c.task_id ? engine.tasks.get(c.task_id) : null;
       if (c.state === 'granted' && !t) {
+        // Reopened only: pump() starts it again, and pump honours halt and the off switch.
         log.setClaim(c.handoff_id, c.fence, { state: 'reopened' });
         append(envelope({ topic: 'claim', kind: 'claim.released', handoff: ev, source: systemSource, data: { fence: c.fence } }));
-        if (ev.expires_at > now()) setImmediate(() => { if (!closed) dispatch(ev).catch(() => {}); });
         continue;
       }
       if (t && ACTIVE.has(t.state)) continue;
@@ -258,10 +294,6 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   // ── ops ────────────────────────────────────────────────────────────────────
   const parse = (S, a) => { const r = S.safeParse(a ?? {}); if (!r.success) throw new BusRefusal('VALIDATION', issue(r)); return r.data; };
   const callerProvider = (args, caller) => args.provider ?? caller?.provider ?? 'agent';
-  async function callerDomain(args, caller) {
-    const root = (await gitTop(caller?.cwd)) ?? caller?.cwd ?? '';
-    return agentFor(callerProvider(args, caller), root);
-  }
   const consume = (domain, events) => { const hop = Math.max(0, ...events.map((e) => e.hop ?? 0)); if (hop) log.consumed(domain, hop, now() - HOUR_MS); };
   function view(ev) {
     const text = ev.topic === 'result' ? ev.data?.summary : ev.body;
@@ -298,13 +330,13 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
         const agent_id = agentFor(provider, repo.root);
         return post({ ...a, requestKey: `${agent_id}|${a.request_id}`, repoRoot: repo.root, brief: a.brief ?? '',
           source: { device_id: deviceId, agent_id, provider, tier: 'local_attested', identity_source: 'local_token' },
-          hop: log.hopOf(agent_id, now() - HOUR_MS) + 1, visited: [agent_id] });
+          hop: log.hopOf(await hopDomain(caller), now() - HOUR_MS) + 1, visited: [agent_id] });
       }
       case 'read': {
         const a = parse(ReadArgs, rawArgs);
         const rows = log.read({ topics: [a.topic], after: a.after_offset ?? 0, limit: a.limit ?? 20, cardId: a.card_id ?? null });
         const events = rows.filter((e) => e.kind === 'handoff.offer' || e.topic === 'result');
-        consume(await callerDomain(a, caller), events);
+        consume(await hopDomain(caller), events);
         return { events: events.map(view), next_offset: rows.at(-1)?.offset ?? a.after_offset ?? 0 };
       }
       case 'wait': {
@@ -321,7 +353,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
           });
         }
         if (!r) return { handoff_id: a.handoff_id, state: 'pending', detail: stateOf(a.handoff_id) };
-        consume(await callerDomain(a, caller), [r]);
+        consume(await hopDomain(caller), [r]);
         return { handoff_id: a.handoff_id, state: r.kind.slice('result.'.length), result: view(r), task_id: r.data.task_id };
       }
       case 'status': {

@@ -76,3 +76,38 @@ test('/bus: the helper exiting mid-bus_wait answers tasks_helper_unavailable at 
     else await a.cleanup();
   }
 });
+
+test('/bus: a handoff that times out, or loses its helper mid-call, says the outcome is unknown and to retry with the same request_id', async () => {
+  const errs = { hang: () => new Promise(() => {}), gone: () => Promise.reject(Object.assign(new Error('closed'), { code: 'INTERNAL' })), never: () => Promise.reject(Object.assign(new Error('x'), { code: 'SUPERVISOR_UNREACHABLE' })) };
+  let mode = 'hang';
+  const rootDir = testTempDir('ctl-bus-dl-');
+  const S = require('../src/signal-server.js')({ rootDir, sessionsDir: rootDir, requestsDir: rootDir, aggregateState: () => ({ sessions: [] }), broadcastStatus: () => {}, port: 0, app: { on: () => {} }, busDeadlineMs: 200, agentBus: () => errs[mode]() });
+  const server = S.startSignalServer();
+  await new Promise((resolve) => server.once('listening', resolve));
+  await until(() => fs.existsSync(path.join(rootDir, 'token')));
+  const token = fs.readFileSync(path.join(rootDir, 'token'), 'utf8');
+  const post = (op) => fetch(`http://127.0.0.1:${server.address().port}/bus`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-buddy-token': token }, body: JSON.stringify({ op, args: {} }) }).then((r) => r.json());
+  try {
+    for (const m of ['hang', 'gone']) {
+      mode = m;
+      const r = await post('handoff');
+      assert.equal(r.outcome, 'unknown', m);
+      assert.match(r.message, /same request_id/);
+      assert.doesNotMatch(r.message, /Nothing was handed off/);
+    }
+    mode = 'never';
+    assert.match((await post('handoff')).message, /Nothing was handed off/, 'a helper never reached posted nothing');
+    mode = 'hang';
+    assert.equal((await post('status')).outcome, undefined, 'only a handoff can be half-done');
+  } finally { server.close(); fs.rmSync(rootDir, { recursive: true, force: true }); }
+});
+
+test('every helper connection gets the bus context at once, with no bus call, and the tray hears the helper is up', async () => {
+  let ready = 0;
+  const a = await startAppBus({ wait: true }, { busContext: () => ({ settings: { wall_clock_min: 7 }, repos: ['/prefs/repo'], folders: [] }), onBusReady: () => { ready++; } });
+  try {
+    a.svc.start();
+    await until(() => a.b.engine.agentBus.context.settings?.wall_clock_min === 7 && ready === 1);
+    assert.deepEqual(a.b.engine.agentBus.context.repos, ['/prefs/repo']);
+  } finally { await a.cleanup(); }
+});

@@ -16,7 +16,7 @@ AI tools hand bounded work to each other. A handoff is claimed and started autom
 |---|---|---|
 | `handoff` | `handoff.offer`, `handoff.refused` | 30 d |
 | `claim` | `claim.granted`, `claim.denied`, `claim.started`, `claim.released`, `claim.lost` | 30 d |
-| `result` | `result.done`, `result.failed`, `result.outcome_unknown` | 30 d |
+| `result` | `result.done`, `result.failed`, `result.outcome_unknown`, `result.expired` | 30 d |
 | `control` | `control.halt`, `control.resume`, `control.policy_changed`, `control.cap_reached`, `control.card_paused` | 90 d |
 
 Delivery is at-least-once; dedupe by `(source agent, request_id)` and by `(card_id or repo, title + brief)` within an hour. Exactly one start per handoff: the claim CAS hands out a fence; a stale fence changes nothing and its result is refused. Leases (120 s) are renewed while the run lives; after a restart a granted claim with no task reopens (fence + 1), a started one whose run is gone becomes `outcome_unknown` and is never retried.
@@ -49,12 +49,14 @@ Refusal reasons: `HALTED`, `SPEND_CAP`, `LOOP`, `RATE`, `NOT_MEMBER`, `TIER_NOT_
 
 - **Opt-in per repo, on this Mac**: `policy.repos[<realpath|canonical remote>].bus_auto === true` in the engine's `policy.json`, or the repo listed in Preferences → Advanced → Agent bus. `remote_tasks` never counts for the bus. Repos are resolved only from those keys and folders already registered as task folders; no picker. No match: `NO_LOCAL_CHECKOUT`.
 - **Start with no human gate**: `planFirst` is false unless the spec asks; `awaitingConfirm` is false under `bus.auto_accept` (default on) for local scope; no budget dialog. The remote rules still apply: at most `auto-edits`, always a new worktree.
+- **Providers**: bus runs start only on Claude or Codex, the backends with an OS sandbox and network off; anything else (Gemini runs `--approval-mode yolo` with no sandbox) is `NO_ELIGIBLE_AGENT`, at admission and again in the engine.
+- **Settings**: `policy.json` `bus` and Preferences may both set `enabled`, `auto_accept`, `wall_clock_min` and `caps`; the stricter wins (off, the shorter clock, caps on, the lower cap).
 - **Sandbox**: no network. Claude: `allowedDomains: []` whatever the repo allows, WebFetch/WebSearch disallowed, `Bash(git push*)`/`Bash(gh pr*)` as a backup only. Codex: `network.enabled=false`, user config ignored. The network block is the control against push and PR (`allow_pr` false).
 - **Wall clock**: every bus run stops after `wall_clock_min` (20, on by default) through the stop recipe.
-- **Spend caps** (default **off**; owner decision 2026-10-22): when on, a claim needs `member remaining ≥ reservation` (reservation = `budget_usd`, default $5, per-handoff max $5); Claude runs get `--max-budget-usd`; Codex runs are priced after the run from tokens (`cost_basis: 'estimated'`) and can overshoot their reservation by one run's cost.
-- **Loops**: hop = 1 + the highest hop the caller's hop domain consumed (`bus_wait`/`bus_read`) in the last hour; runs inherit their handoff's hop + 1. Refused with `LOOP`: hop > `max_hops` (2), a target already in `visited`, handing straight back to the provider that handed over. A result never triggers a handoff.
+- **Spend caps** (default **off**; owner decision 2026-10-22): when on, a claim needs `member remaining ≥ reservation` (reservation = `budget_usd`, default $5, per-handoff max $5); Claude runs get `--max-budget-usd`; Codex runs are priced after the run from tokens (`cost_basis: 'estimated'`) and can overshoot their reservation by one run's cost. The reservation is recorded at claim and settled against the day it was made: to the measured cost, or to 0 for a start that fails or an offer that expires (`result.expired`).
+- **Loops**: hop = 1 + the highest hop the caller's hop domain (this Mac and the repo of the caller's working folder; never the provider or target repo it declares) consumed (`bus_wait`/`bus_read`) in the last hour; runs inherit their handoff's hop + 1. Refused with `LOOP`: hop > `max_hops` (2), a target already in `visited`, handing straight back to the provider that handed over. A result never triggers a handoff.
 - **Rates**: per agent 20 handoffs/h, per Mac 60/h, per card 6 runs/day, per repo 12 runs/day, 3 failures/h on a card or repo pauses it.
-- **Kill switch**: tray "Stop agent bus" (shown once an AI has handed off, and while halted) and Sessions → Agent bus set halted, append `control.halt` and stop every `source: 'bus'` task; resume is a person's action.
+- **Kill switch**: tray "Stop agent bus" (shown once an AI has handed off, and while halted) and Sessions → Agent bus set halted, append `control.halt` and stop every `source: 'bus'` task. Halt (or the bus turned off) is checked before every start and again once a start returns, which then stops that run and reopens its claim; a restart only reopens claims, and starting them is left to the dispatcher, which honours halt. Resume is a person's action.
 - **Scrubbing**: handoff text in main's relay (`src/scrub.js`, home → `~`); run-originated text (results, onward handoffs) in the utility process (`secret-patterns.mjs` + `packet-text.js`), both before `bus.db`.
 
 ## 6. MESSAGING v1 deltas

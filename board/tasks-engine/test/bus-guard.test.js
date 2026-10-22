@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { openBusLog } from '../bus/local-log.js';
-import { admit, mergeSettings, DEFAULT_SETTINGS } from '../bus/guard.js';
+import { admit, mergeSettings, strictSettings, DEFAULT_SETTINGS } from '../bus/guard.js';
 import { createAgentBus } from '../bus/dispatcher.js';
 import { tmpDir, rm, makeRepo } from './helpers.js';
 
@@ -119,8 +119,14 @@ test('hop inheritance: a session that waited on a result hands off at hop+1, and
     const read = await bus.op('read', { topic: 'result', provider: 'claude' }, caller);
     assert.ok(read.events.length >= 2 && read.next_offset > 0);
     assert.equal((await hand('Third')).reason, 'LOOP', 'hop 3 > max_hops 2');
-    // Another tool in the same repo is its own hop domain.
-    assert.equal((await bus.op('handoff', { request_id: 'req-gemini-0001', to: { provider: 'codex' }, title: 'From gemini', provider: 'gemini' }, { provider: 'gemini', cwd: root })).hop, 1);
+    // The hop domain is this Mac and the caller's own repo: a self-declared provider, or another target repo, does not reset it.
+    assert.equal((await bus.op('handoff', { request_id: 'req-spoof-0001', to: { provider: 'codex' }, title: 'Spoofed', provider: 'zz' }, { provider: 'zz', cwd: root })).reason, 'LOOP');
+    const elsewhere = tmpDir('pxbh2-');
+    try {
+      const other = realpathSync(makeRepo(elsewhere).checkout);
+      assert.equal((await bus.op('handoff', { request_id: 'req-elsewhere-01', to: { provider: 'codex' }, repo: other, title: 'Elsewhere', provider: 'claude' }, caller)).reason, 'LOOP');
+      assert.equal((await bus.op('handoff', { request_id: 'req-fromother-1', to: { provider: 'codex' }, title: 'From the other repo', provider: 'claude' }, { provider: 'claude', cwd: other })).hop, 1, 'a session in another repo is its own domain');
+    } finally { rm(elsewhere); }
     // Same content again within the hour: the same handoff, no second run.
     const dup = await bus.op('handoff', { request_id: 'req-other-0001', to: { provider: 'codex' }, title: 'First', provider: 'claude' }, caller);
     assert.deepEqual([dup.handoff_id, dup.duplicate], [first.handoff_id, true]);
@@ -150,7 +156,144 @@ test('100 ping-pong attempts between two sessions start at most max_hops runs pe
       } else assert.equal(r.reason, 'LOOP');
       await bus.op('read', { topic: 'result', limit: 50, provider: p }, caller);
     }
-    // Two interactive hop domains (device, provider, repo), each capped at max_hops: AC8's expected bound.
-    assert.ok(starts >= 2 && starts <= 2 * DEFAULT_SETTINGS.max_hops, `runs started: ${starts}`);
+    // One hop domain (this Mac, this repo) whatever each side calls itself: at most max_hops runs (AC8).
+    assert.ok(starts >= 1 && starts <= DEFAULT_SETTINGS.max_hops, `runs started: ${starts}`);
   } finally { bus.close(); rm(dir); }
+});
+
+test('gemini is never a bus target: NO_ELIGIBLE_AGENT at admission', () => withLog((log) => {
+  const s = mergeSettings();
+  assert.equal(admit(h({ to: { provider: 'gemini' } }), { log, settings: s, now: Date.now }).reason, 'NO_ELIGIBLE_AGENT');
+  assert.equal(admit(h({ to: { provider: 'claude' } }), { log, settings: s, now: Date.now }), null);
+}));
+
+test('policy.json and Preferences: the stricter of the two wins for enabled, auto_accept, wall clock and caps', () => {
+  const s = strictSettings({ enabled: false, auto_accept: true, wall_clock_min: 5, caps: { enabled: true, member_usd: 30 } },
+    { enabled: true, auto_accept: false, wall_clock_min: 20, caps: { enabled: false, member_usd: 10, handoff_usd: 2 } });
+  assert.deepEqual([s.enabled, s.auto_accept, s.wall_clock_min, s.caps.enabled, s.caps.member_usd, s.caps.handoff_usd], [false, false, 5, true, 10, 2]);
+  const prefsOnly = strictSettings(null, { wall_clock_min: 45, caps: { enabled: true, member_usd: 50 } });
+  assert.deepEqual([prefsOnly.wall_clock_min, prefsOnly.caps.member_usd, prefsOnly.enabled], [45, 50, true], 'a key only one side sets comes from it');
+  assert.equal(strictSettings({ wall_clock_min: 60 }, { wall_clock_min: 20 }).wall_clock_min, 20);
+});
+
+// A stub-engine bus with a clock, max_parallel and caps from policy.json, and whatever Preferences pushed.
+async function stubBus(policyBus = {}) {
+  const dir = tmpDir('pxbd-');
+  const repo = makeRepo(dir);
+  const { realpathSync } = await import('node:fs');
+  const root = realpathSync(repo.checkout);
+  const engine = stubEngine(root);
+  engine.busPolicy = () => ({ bus: policyBus, repos: { [root]: { bus_auto: true } } });
+  const clock = { t: Date.parse('2026-10-22T23:59:00Z') };
+  const bus = createAgentBus({ engine, dataDir: dir, now: () => clock.t });
+  const caller = { provider: 'claude', cwd: root };
+  let n = 0;
+  const hand = (extra = {}) => bus.op('handoff', { request_id: `req-stub-${++n}-000`, to: { provider: 'codex' }, title: `Job ${n}`, provider: 'claude', ...extra }, caller);
+  const taskOf = (id) => [...engine.tasks.values()].find((t) => t.sourceMeta.handoffId === id);
+  const until = async (fn, label = 'condition') => { for (let i = 0; i < 300; i++) { const v = fn(); if (v) return v; await new Promise((r) => setTimeout(r, 10)); } throw new Error(`timed out: ${label}`); };
+  const settle = () => new Promise((r) => setTimeout(r, 60));
+  return { engine, bus, clock, hand, taskOf, until, settle, root, cleanup() { bus.close(); rm(dir); } };
+}
+
+test('turning the bus off stops queued offers from starting; turning it on starts them', async () => {
+  const b = await stubBus({ max_parallel: 1 });
+  try {
+    const first = await b.hand();
+    const second = await b.hand();
+    const t1 = await b.until(() => b.taskOf(first.handoff_id), 'first started');
+    await b.bus.op('busSetContext', { settings: { enabled: false } });
+    b.engine.end(t1.id);
+    await b.settle();
+    assert.equal(b.bus.log.claimOf(second.handoff_id), null, 'off: no claim for the queued offer');
+    assert.equal((await b.hand()).reason, 'HALTED');
+    await b.bus.op('busSetContext', { settings: { enabled: true } });
+    await b.until(() => b.taskOf(second.handoff_id), 'second starts once on');
+  } finally { b.cleanup(); }
+});
+
+test('a halt that lands while a run is starting stops it and releases the claim; resume starts it again', async () => {
+  const b = await stubBus();
+  try {
+    const create = b.engine.createTask;
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const stopped = [];
+    b.engine.act = async ({ id }) => { stopped.push(id); b.engine.end(id, 'failed'); };
+    b.engine.createTask = async (a) => { await gate; return create(a); };
+    const offer = await b.hand();
+    await b.until(() => b.bus.log.claimOf(offer.handoff_id)?.state === 'granted', 'claim granted');
+    await b.bus.op('halt');
+    release();
+    await b.until(() => stopped.length === 1, 'the new run is stopped');
+    const c = b.bus.log.claimOf(offer.handoff_id);
+    assert.deepEqual([c.state, c.task_id, c.fence], ['reopened', null, 1]);
+    assert.equal(b.bus.log.result(offer.handoff_id), null, 'a released start posts no result');
+    b.engine.createTask = create;
+    await b.bus.op('resume');
+    await b.until(() => b.bus.log.claimOf(offer.handoff_id)?.state === 'started' && b.bus.log.claimOf(offer.handoff_id).fence === 2, 'restarted on resume');
+  } finally { b.cleanup(); }
+});
+
+test('wall clock: the shorter of policy.json and Preferences reaches the run', async () => {
+  const b = await stubBus({ wall_clock_min: 5 });
+  try {
+    await b.bus.op('busSetContext', { settings: { wall_clock_min: 20 } });
+    const offer = await b.hand();
+    assert.equal((await b.until(() => b.taskOf(offer.handoff_id))).spec.wallClockMs, 5 * 60_000);
+  } finally { b.cleanup(); }
+});
+
+test('caps on: reservation at claim, settled to the measured cost on the day it was reserved', async () => {
+  const b = await stubBus({ caps: { enabled: true, handoff_usd: 5, member_usd: 20 } });
+  try {
+    const offer = await b.hand();
+    const t = await b.until(() => b.taskOf(offer.handoff_id));
+    assert.equal(b.bus.log.claimOf(offer.handoff_id).reserved_usd, 5);
+    assert.deepEqual({ ...b.bus.log.spend('2026-10-22') }, { reserved: 5, spent: 0 });
+    b.clock.t += 2 * 60_000; // past midnight
+    t.tokens = { inputTokens: 400_000, outputTokens: 50_000 }; // $0.50 + $0.50 at gpt-5-codex list price
+    b.engine.end(t.id);
+    await b.until(() => b.bus.log.result(offer.handoff_id));
+    assert.deepEqual({ ...b.bus.log.spend('2026-10-22') }, { reserved: 0, spent: 1 });
+    assert.deepEqual({ ...b.bus.log.spend('2026-10-23') }, { reserved: 0, spent: 0 }, 'nothing stranded on the next day');
+  } finally { b.cleanup(); }
+});
+
+test('caps on: Claude runs get budgetUsd (the handoff budget, else the per-handoff cap); Codex runs get none', async () => {
+  const b = await stubBus({ caps: { enabled: true, handoff_usd: 4, member_usd: 20 }, max_parallel: 3 });
+  try {
+    const own = await b.hand({ to: { provider: 'claude' }, budget_usd: 2 });
+    const cap = await b.hand({ to: { provider: 'claude' } });
+    const codex = await b.hand();
+    assert.equal((await b.until(() => b.taskOf(own.handoff_id))).spec.budgetUsd, 2);
+    assert.equal((await b.until(() => b.taskOf(cap.handoff_id))).spec.budgetUsd, 4);
+    assert.equal((await b.until(() => b.taskOf(codex.handoff_id))).spec.budgetUsd, undefined);
+  } finally { b.cleanup(); }
+});
+
+test('caps on: a start that fails, and an offer that expires, release their reservations', async () => {
+  const b = await stubBus({ caps: { enabled: true, handoff_usd: 5, member_usd: 10 }, max_parallel: 1 });
+  try {
+    const create = b.engine.createTask;
+    b.engine.createTask = async () => { throw Object.assign(new Error('Codex is not logged in'), { code: 'AI_UNAVAILABLE' }); };
+    // $10 a day at $5 a handoff: a leaked reservation would refuse the third with SPEND_CAP.
+    for (let i = 0; i < 3; i++) {
+      const r = await b.hand();
+      assert.ok(r.handoff_id, r.reason);
+      await b.until(() => b.bus.log.result(r.handoff_id)?.kind === 'result.failed', 'failed start');
+    }
+    assert.deepEqual({ ...b.bus.log.spend('2026-10-22') }, { reserved: 0, spent: 0 }, 'failed starts lock nothing');
+    b.clock.t += 61 * 60_000; // past the failure circuit breaker's hour
+    b.engine.createTask = create;
+    const running = await b.hand({ request_id: 'req-running-001', title: 'Running' });
+    const t = await b.until(() => b.taskOf(running.handoff_id));
+    const queued = await b.hand({ request_id: 'req-queued-0001', title: 'Queued', ttl_s: 60 });
+    assert.equal(queued.state, 'offered');
+    b.clock.t += 61_000;
+    b.engine.end(t.id);
+    await b.until(() => b.bus.log.result(queued.handoff_id), 'expired');
+    assert.equal(b.bus.log.result(queued.handoff_id).kind, 'result.expired');
+    assert.equal(b.taskOf(queued.handoff_id), undefined, 'never started');
+    assert.equal({ ...b.bus.log.spend('2026-10-23') }.reserved, 0, 'the expired offer released its reservation');
+  } finally { b.cleanup(); }
 });

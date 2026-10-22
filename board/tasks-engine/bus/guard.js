@@ -2,6 +2,8 @@
 // refusal with a reason the caller can read; nothing here prompts or waits.
 // Order: halt, tier and scope, loops, rate and per-card/per-repo caps, circuit
 // breaker, spend reservation.
+import { BUS_RUN_PROVIDERS } from '../../shared/bus-schema.js';
+
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
@@ -29,7 +31,20 @@ export function mergeSettings(...layers) {
   return out;
 }
 
-export const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
+// policy.json and Preferences each may set these; whichever is stricter wins (off beats on, the shorter clock,
+// caps on, the lower cap). A key only one of them sets is taken from it.
+const STRICT = { enabled: (a, b) => a && b, auto_accept: (a, b) => a && b, wall_clock_min: Math.min };
+const STRICT_CAPS = { enabled: (a, b) => a || b, member_usd: Math.min, team_usd: Math.min, handoff_usd: Math.min };
+export function strictSettings(policy, prefs) {
+  const out = mergeSettings(policy, prefs);
+  const a = mergeSettings(policy), b = mergeSettings(prefs);
+  const sets = (l, k, kk) => !!l && typeof l === 'object' && (kk ? typeof l[k]?.[kk] === typeof DEFAULT_SETTINGS[k][kk] : typeof l[k] === typeof DEFAULT_SETTINGS[k]);
+  for (const [k, f] of Object.entries(STRICT)) if (sets(policy, k) && sets(prefs, k)) out[k] = f(a[k], b[k]);
+  for (const [k, f] of Object.entries(STRICT_CAPS)) if (sets(policy, 'caps', k) && sets(prefs, 'caps', k)) out.caps[k] = f(a.caps[k], b.caps[k]);
+  return out;
+}
+
+export const dayOf =(ms) => new Date(ms).toISOString().slice(0, 10);
 const providerOf = (agentId) => String(agentId).split(':')[0];
 const refuse = (reason, message) => ({ reason, message });
 
@@ -50,6 +65,7 @@ export function admit(h, { log, settings, now, self = null }) {
     if (h.visited.includes(h.to.agent_id) || h.to.agent_id === h.source.agent_id) return refuse('LOOP', 'That agent is already in this handoff chain.');
     return refuse('NO_ELIGIBLE_AGENT', 'Handoffs start fresh runs; a live session cannot be addressed.');
   }
+  if (!BUS_RUN_PROVIDERS.includes(h.to.provider)) return refuse('NO_ELIGIBLE_AGENT', `Bus runs start only on ${BUS_RUN_PROVIDERS.join(' or ')}.`);
   // A→B→A: handing straight back to the provider that handed this work over.
   if (h.visited.length >= 2 && providerOf(h.visited.at(-2)) === h.to.provider) return refuse('LOOP', 'Handing work straight back to the agent that handed it over is refused.');
   if (h.hop > settings.max_hops) return refuse('LOOP', `This would be hop ${h.hop}; the limit is ${settings.max_hops}.`);

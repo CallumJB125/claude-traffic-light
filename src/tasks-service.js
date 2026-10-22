@@ -209,6 +209,7 @@ function createTasksService(opts) {
     }
     attempt = 0;
     setConn('connected');
+    if (opts.busContext && typeof c.bus === 'function') pushBusContext(c);
   }
 
   function onClosed(err) {
@@ -719,12 +720,22 @@ function createTasksService(opts) {
     return { ais: withDetected(ais || []), recent, canSchedule: canSchedule() };
   }
 
+  // Every connection gets main's bus context (Preferences repos and settings) at once, whatever started the helper,
+  // so the dispatcher's restart recovery and pump never run on defaults; then the tray reads the bus state.
+  let busContextFor = null, busContextSent = null;
+  function pushBusContext(c) {
+    busContextFor = c;
+    busContextSent = c.bus('busSetContext', opts.busContext(), null, { timeoutMs: 5_000 })
+      .then(() => { opts.onBusReady?.(); }, () => { if (busContextFor === c) busContextFor = null; });
+    return busContextSent;
+  }
+
   // Agent bus ops (board/AGENT-BUS.md) go to the helper, which owns bus.db; main only relays. The helper starts lazily,
-  // so this waits for it (bounded) and pushes main's bus context once per connection. A helper that cannot start, or
+  // so this waits for it (bounded) and for the connection's bus context push. A helper that cannot start, or
   // exits mid-call, rejects here and the /bus relay answers tasks_helper_unavailable at once.
-  let busContextFor = null;
+  // Worst case for one op stays under the /bus relay's 30 s deadline: 10 s to connect, 5 s for context, 12 s for the op.
   async function bus(op, args = {}, caller = null) {
-    await opts.ensureSupervisor?.();
+    try { await opts.ensureSupervisor?.(); } catch { throw Object.assign(new Error('unavailable'), { code: 'SUPERVISOR_UNREACHABLE' }); }
     start();
     const until = now() + 10_000;
     while (!connected()) {
@@ -732,11 +743,8 @@ function createTasksService(opts) {
       await new Promise((r) => setTimeout(r, 100));
     }
     const channel = client;
-    if (busContextFor !== channel && op !== 'busSetContext' && opts.busContext) {
-      busContextFor = channel;
-      await channel.bus('busSetContext', opts.busContext(), null, { timeoutMs: 10_000 }).catch(() => { busContextFor = null; });
-    }
-    const timeoutMs = op === 'wait' ? (Math.min(120, Math.max(0, Number(args?.timeout_s ?? 60) || 0)) + 10) * 1000 : 20_000;
+    if (op !== 'busSetContext' && opts.busContext) await (busContextFor === channel ? busContextSent : pushBusContext(channel));
+    const timeoutMs = op === 'wait' ? (Math.min(120, Math.max(0, Number(args?.timeout_s ?? 60) || 0)) + 10) * 1000 : 12_000;
     return channel.bus(op, args, caller, { timeoutMs });
   }
 

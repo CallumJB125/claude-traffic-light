@@ -40,3 +40,15 @@ test('tray: Stop then Resume; Sessions list does not start the helper; only the 
   assert.equal(calls.at(-1), 'busSetContext');
   assert.deepEqual(register({ ipcMain: { handle() {} }, sessionsAllowed: () => true, tasks: () => ({}), config: () => ({ agentBus: { enabled: false } }) }).trayItems(), []);
 });
+
+test('tray after a restart while halted: once the helper is up it reads the state and offers Resume', async () => {
+  const calls = [];
+  let changed = 0;
+  const m = register({ ipcMain: { handle() {} }, sessionsAllowed: () => true, started: () => true, config: () => ({ agentBus: {} }), onChange: () => changed++,
+    tasks: () => ({ bus: async (op) => { calls.push(op); return { halted: true, enabled: true, head: 3 }; } }) });
+  assert.deepEqual(m.trayItems(), []);
+  await m.refresh();
+  assert.deepEqual(calls, ['status']);
+  assert.equal(changed, 1);
+  assert.equal(m.trayItems()[0].label, 'Resume agent bus');
+});

@@ -28,6 +28,29 @@ test('a bus task reaches running with no ask: planFirst false although bus is a 
   } finally { await b.cleanup(); }
 });
 
+test('Gemini never takes a bus run: the engine refuses source bus on it, and the bus refuses the target (NO_ELIGIBLE_AGENT)', async () => {
+  class FakeGemini {
+    static describe() { return { id: 'gemini', label: 'Gemini', startable: true, capabilities: { structuredEvents: true, permissions: 'none', budget: 'none', resume: true } }; }
+    static async detect() { return { installed: true, signedIn: true, version: '1', bin: '/nonexistent/gemini' }; }
+  }
+  const b = await startBus({ wait: true }, { engineOpts: { backends: { gemini: FakeGemini }, enabledAis: ['gemini'], defaultAi: 'gemini' } });
+  try {
+    await assert.rejects(b.engine.createTask({ requestId: rid('gem'), spec: busSpec(b, { ai: 'gemini' }) }), (e) => e.code === 'POLICY_DENIED' && e.details?.reason === 'NO_ELIGIBLE_AGENT');
+    await assert.rejects(b.engine.createTask({ requestId: rid('gem'), spec: busSpec(b, { ai: 'auto', text: 'Auto' }) }), (e) => e.details?.reason === 'NO_ELIGIBLE_AGENT', 'auto picking Gemini is refused too');
+    assert.equal((await b.handoff({ request_id: rid('gem'), to: { provider: 'gemini' } })).reason, 'NO_ELIGIBLE_AGENT');
+    assert.equal(b.engine.tasks.size, 0);
+  } finally { await b.cleanup(); }
+});
+
+test('awaitingConfirm: policy.json auto_accept false wins over Preferences auto_accept true', async () => {
+  const b = await startBus({ wait: true }, { policy: (repo) => ({ bus: { auto_accept: false }, repos: { [repo]: { bus_auto: true } } }) });
+  try {
+    await b.bus('busSetContext', { settings: { auto_accept: true } });
+    const { id } = await b.engine.createTask({ requestId: rid('strict'), spec: busSpec(b) });
+    assert.equal(b.engine.tasks.get(id).awaitingConfirm, true);
+  } finally { await b.cleanup(); }
+});
+
 test('remote clamp and always-worktree apply; workInPlace and auto are refused for bus', async () => {
   const b = await startBus({ wait: true });
   try {

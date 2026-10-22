@@ -112,6 +112,7 @@ export function openBusLog(file, { now = Date.now } = {}) {
       return r.changes === 1;
     },
     openClaims() { return st("SELECT * FROM bus_claims WHERE state IN ('granted', 'started')").all(); },
+    reopenedClaims() { return st("SELECT * FROM bus_claims WHERE state = 'reopened' ORDER BY updated_at").all(); },
 
     // Spend (local reservation and measured cost per calendar day).
     spend(day) { return st('SELECT reserved_usd AS reserved, spent_usd AS spent FROM bus_spend WHERE day = ?').get(day) ?? { reserved: 0, spent: 0 }; },
