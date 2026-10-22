@@ -47,6 +47,14 @@
       document.getElementById('teamBrief').checked = config.teamBrief === true;
       document.getElementById('explainMode').checked = config.explainMode === true;
       document.getElementById('agentMailInbox').checked = config.agentMailInbox === true;
+      const bus = config.agentBus || {};
+      document.getElementById('agentBusEnabled').checked = bus.enabled !== false;
+      document.getElementById('agentBusAutoAccept').checked = bus.autoAccept !== false;
+      document.getElementById('agentBusRepos').value = (bus.repos || []).join('\n');
+      document.getElementById('agentBusWallClock').value = bus.wallClockMin ?? 20;
+      document.getElementById('agentBusCaps').checked = bus.caps?.enabled === true;
+      document.getElementById('agentBusMemberUsd').value = bus.caps?.memberUsd ?? 20;
+      document.getElementById('agentBusHandoffUsd').value = bus.caps?.handoffUsd ?? 5;
       document.getElementById('remoteInteractionHost').checked = config.remoteInteractionHost === true;
       document.getElementById('codexDaemonMessaging').checked = config.codexDaemonMessaging === true;
       document.getElementById('busyHold').checked = config.busyHold !== false;
@@ -216,6 +224,13 @@
         teamBrief: document.getElementById('teamBrief').checked,
         explainMode: document.getElementById('explainMode').checked,
         agentMailInbox: document.getElementById('agentMailInbox').checked,
+        agentBus: {
+          enabled: document.getElementById('agentBusEnabled').checked,
+          autoAccept: document.getElementById('agentBusAutoAccept').checked,
+          repos: document.getElementById('agentBusRepos').value.split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 100),
+          wallClockMin: Math.round(Number(document.getElementById('agentBusWallClock').value) || 20),
+          caps: { enabled: document.getElementById('agentBusCaps').checked, memberUsd: Number(document.getElementById('agentBusMemberUsd').value) || 20, handoffUsd: Number(document.getElementById('agentBusHandoffUsd').value) || 5 },
+        },
         remoteInteractionHost: document.getElementById('remoteInteractionHost').checked,
         codexDaemonMessaging: document.getElementById('codexDaemonMessaging').checked,
         simpleMode: document.getElementById('simpleMode').checked,

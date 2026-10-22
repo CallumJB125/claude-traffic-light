@@ -209,6 +209,7 @@ function createTasksService(opts) {
     }
     attempt = 0;
     setConn('connected');
+    if (opts.busContext && typeof c.bus === 'function') pushBusContext(c);
   }
 
   function onClosed(err) {
@@ -719,6 +720,34 @@ function createTasksService(opts) {
     return { ais: withDetected(ais || []), recent, canSchedule: canSchedule() };
   }
 
+  // Every connection gets main's bus context (Preferences repos and settings) at once, whatever started the helper,
+  // so the dispatcher's restart recovery and pump never run on defaults; then the tray reads the bus state.
+  let busContextFor = null, busContextSent = null;
+  function pushBusContext(c) {
+    busContextFor = c;
+    busContextSent = c.bus('busSetContext', opts.busContext(), null, { timeoutMs: 5_000 })
+      .then(() => { opts.onBusReady?.(); }, () => { if (busContextFor === c) busContextFor = null; });
+    return busContextSent;
+  }
+
+  // Agent bus ops (board/AGENT-BUS.md) go to the helper, which owns bus.db; main only relays. The helper starts lazily,
+  // so this waits for it (bounded) and for the connection's bus context push. A helper that cannot start, or
+  // exits mid-call, rejects here and the /bus relay answers tasks_helper_unavailable at once.
+  // Worst case for one op stays under the /bus relay's 30 s deadline: 10 s to connect, 5 s for context, 12 s for the op.
+  async function bus(op, args = {}, caller = null) {
+    try { await opts.ensureSupervisor?.(); } catch { throw Object.assign(new Error('unavailable'), { code: 'SUPERVISOR_UNREACHABLE' }); }
+    start();
+    const until = now() + 10_000;
+    while (!connected()) {
+      if (stopped || now() > until) throw Object.assign(new Error('unavailable'), { code: 'SUPERVISOR_UNREACHABLE' });
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const channel = client;
+    if (op !== 'busSetContext' && opts.busContext) await (busContextFor === channel ? busContextSent : pushBusContext(channel));
+    const timeoutMs = op === 'wait' ? (Math.min(120, Math.max(0, Number(args?.timeout_s ?? 60) || 0)) + 10) * 1000 : 12_000;
+    return channel.bus(op, args, caller, { timeoutMs });
+  }
+
   // Folder choices are handed to the page as opaque handles with a display label.
   function registerFolder(p) {
     const label = tilde(p, homeDir);
@@ -729,7 +758,7 @@ function createTasksService(opts) {
     return { handle, label };
   }
 
-  return { start, stop, retryNow, snapshot, openTask, closeTask, act, saveCheckpoint, copyTakeover, openTerminal, create, preflight, composerInfo, registerFolder, markSeen, folderOf: (handle) => folders.get(handle) ?? null };
+  return { start, stop, retryNow, snapshot, openTask, closeTask, act, saveCheckpoint, copyTakeover, openTerminal, create, preflight, composerInfo, registerFolder, markSeen, folderOf: (handle) => folders.get(handle) ?? null, folderPaths: () => [...folders.values()], bus };
 }
 
 module.exports = { createTasksService, OFFLINE };

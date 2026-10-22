@@ -330,7 +330,7 @@
           c.append(el('h3', null, 'Waiting for you to accept this task'));
           // Plexiform's own facts first; the summary below is the sender's words.
           const facts = el('dl', 'facts');
-          for (const [k, v] of [['Runs in', det.where || det.repo?.name], ['AI', TV.AI_NAME[det.ai.id]], ['Permissions', det.permissionLevel], ['Source', { cli: 'the buddy command', mcp: 'another AI session', board: 'a teammate', phone: 'a phone', slack: 'Slack', voice: 'voice' }[det.source] || det.source]]) if (v) facts.append(el('dt', null, k), el('dd', null, v));
+          for (const [k, v] of [['Runs in', det.where || det.repo?.name], ['AI', TV.AI_NAME[det.ai.id]], ['Permissions', det.permissionLevel], ['Source', { cli: 'the buddy command', mcp: 'another AI session', board: 'a teammate', phone: 'a phone', slack: 'Slack', voice: 'voice', bus: 'another AI on this Mac (agent bus)' }[det.source] || det.source]]) if (v) facts.append(el('dt', null, k), el('dd', null, v));
           c.append(el('p', 'sub', 'Checked by Plexiform:'), facts, el('p', 'sub', `From ${det.source}: (untrusted)`), el('p', null, a.inputSummary));
         } else c.append(el('h3', null, `Wants to use ${a.tool}`), el('p', null, a.inputSummary));
         const b = el('div', 'btns');

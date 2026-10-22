@@ -31,7 +31,7 @@ import {
 } from './mesh.js';
 import {
   TASKS_PROTOCOL_VERSION, MAX_FRAME_BYTES, HB_PUSH_MS, RING_EVENTS, BACKPRESSURE_BYTES, REQUEST_CACHE_MS,
-  ACT_CACHE_MS, SOCKET_NAME, TOKEN_NAME, METHODS, REMOTE_SOURCES,
+  ACT_CACHE_MS, SOCKET_NAME, TOKEN_NAME, METHODS, REMOTE_SOURCES, BUS_OPS,
 } from './protocol.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -40,7 +40,7 @@ export const SCHEMA = JSON.parse(fs.readFileSync(path.join(here, 'schema.json'),
 const PARAMS_DEF = {
   hello: 'HelloParams', createTask: 'CreateTaskParams', listTasks: 'ListTasksParams', getTask: 'GetTaskParams',
   subscribe: 'SubscribeParams', unsubscribe: 'UnsubscribeParams', act: 'ActParams', setLimits: 'SetLimitsParams',
-  getClaims: 'GetClaimsParams', listMessages: 'ListMessagesParams',
+  getClaims: 'GetClaimsParams', listMessages: 'ListMessagesParams', bus: 'BusParams',
 };
 // States with a (possibly dead) agent process behind them: they get a LeaseView.
 const LEASED = new Set(['claimed', 'running', 'quiet', 'blocked', 'handing_over', 'suspended', 'unresponsive', 'orphaned']);
@@ -120,6 +120,7 @@ export async function startMockServer(opts = {}) {
   const ramGb = Math.round(os.totalmem() / 2 ** 30);
   // The mock defaults to 6 so the demo tasks all run; the real default comes from RAM.
   const limits = { maxParallel: opts.maxParallel ?? 6, maxParallelDefault: defaultMaxParallel(ramGb), perAi: { claude: 4, codex: 2, gemini: 0 } };
+  const busState = { halted: false, handoffs: new Map() };
 
   const tasks = new Map();
   const ring = [];
@@ -1023,6 +1024,22 @@ export async function startMockServer(opts = {}) {
       return store.list(id).filter((m) => m.seq > afterSeq);
     },
     act: (p) => act(p),
+    // Agent bus parity (board/AGENT-BUS.md): offers are recorded, never dispatched; nothing runs in the mock.
+    bus: ({ op, args = {} }) => {
+      if (!BUS_OPS.includes(op)) throw new ApiError('VALIDATION', `unknown bus op ${op}`);
+      if (op === 'hello') return { agent_id: `${args.provider ?? 'agent'}:local:mock`, tier: 'local_attested', scope_allowed: ['local'], policy_summary: { halted: busState.halted } };
+      if (op === 'halt' || op === 'resume') { busState.halted = op === 'halt'; return { ok: true, halted: busState.halted }; }
+      if (op === 'busSetContext') return { ok: true };
+      if (op === 'handoff') {
+        if (busState.halted) return { reason: 'HALTED' };
+        const handoff_id = `hof_${crypto.randomBytes(6).toString('hex')}`;
+        busState.handoffs.set(handoff_id, { handoff_id, title: String(args.title ?? '').slice(0, 120), state: 'offered' });
+        return { handoff_id, state: 'offered' };
+      }
+      if (op === 'status') return args.handoff_id ? busState.handoffs.get(args.handoff_id) ?? { reason: 'NOT_FOUND' } : { halted: busState.halted, handoffs: busState.handoffs.size };
+      if (op === 'wait') return { state: 'pending' };
+      return { events: [], next_offset: 0, halted: busState.halted };
+    },
   };
 
   function subscribe(conn, { id, fromSeq, epoch: clientEpoch }) {

@@ -227,6 +227,8 @@ export class TasksClient extends EventEmitter {
   getLimits() { return this.call('getLimits'); }
   setLimits(p) { return this.call('setLimits', p); }
   getClaims(repo) { return this.call('getClaims', { repo }); }
+  /** Agent bus op (board/AGENT-BUS.md). bus_wait holds the call open, so its caller passes a longer timeoutMs. */
+  bus(op, args = {}, caller, { timeoutMs } = {}) { return this.call('bus', { op, args, ...(caller ? { caller } : {}) }, timeoutMs ? { timeoutMs } : {}); }
 
   act(id, action, payload = {}, { requestId = newRequestId(), timeoutMs } = {}) {
     const t = timeoutMs ?? (action === 'takeover' ? TAKEOVER_TIMEOUT_MS : this.timeoutMs);

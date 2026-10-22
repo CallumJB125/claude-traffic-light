@@ -57,6 +57,10 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   handoffRequests: () => ipcRenderer.invoke('handoff:list'),
   handoffConfirm: (id) => ipcRenderer.invoke('handoff:confirm', String(id)),
   handoffDismiss: (id) => ipcRenderer.invoke('handoff:dismiss', String(id)),
+  // Agent bus (src/agent-bus-main.js): the local audit and the person's stop/resume.
+  busList: () => ipcRenderer.invoke('bus:list'),
+  busHalt: () => ipcRenderer.invoke('bus:halt'),
+  busResume: () => ipcRenderer.invoke('bus:resume'),
   // A teammate handed you a card (src/handoff-people.js): accept reads its handover packet; decline tells them.
   handoffPersonAccept: (id) => ipcRenderer.invoke('handoff:person-accept', String(id)),
   handoffPersonDecline: (id) => ipcRenderer.invoke('handoff:person-decline', String(id)),

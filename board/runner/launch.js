@@ -27,6 +27,10 @@ export const DISALLOWED_TOOLS = Object.freeze([
   'Read(~/.claude-traffic-light/**)', 'Read(~/.codex/**)', 'Read(~/Library/Keychains/**)',
 ]);
 
+// Agent bus runs (AGENT-BUS.md §2.4.7): the control against push and PR-open is no network
+// (buildSettings bus: allowedDomains []); these patterns are a backup only and easy to get around.
+export const BUS_DISALLOWED = Object.freeze(['Bash(git push*)', 'Bash(gh pr*)']);
+
 // BOARD_HOME holds the run worktrees (which the agent must read and write) next
 // to the runner's private files (device token, policy, ledger, outbox, run dirs
 // with the run token). Only the private ones are denied. home = null means the
@@ -93,7 +97,7 @@ const LEVELS = Object.freeze({
 });
 const READ_ALLOW = Object.freeze(['Read', 'Glob', 'Grep', ...TASK_TOOLS, 'Task', 'mcp__board']);
 
-export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null, extraDenyRead = [], extraDenyWrite = [], level = null, cacheWrite = CACHE_WRITE, electron = underElectron() }) {
+export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null, extraDenyRead = [], extraDenyWrite = [], level = null, cacheWrite = CACHE_WRITE, electron = underElectron(), bus = false }) {
   const hook = (event, timeout, matcher) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: hookCmd(node, event, electron), timeout }] }];
   const lv = level ? LEVELS[level] ?? LEVELS.ask : null;
   const bashAllow = [...GIT_ALLOW, ...(repo.bash_allow ?? []).map((c) => (c.startsWith('Bash(') ? c : `Bash(${c})`))];
@@ -118,7 +122,8 @@ export function buildSettings({ worktree, tmpdir, node = process.execPath, repo 
         denyRead: [...DENY_READ, ...boardHomeRules(boardHome).denyRead, ...extraDenyRead],
         ...(extraDenyWrite.length ? { denyWrite: extraDenyWrite } : {}),
       },
-      network: { allowedDomains: [...new Set(repo.allowed_domains ?? [])], strictAllowlist: true },
+      // A bus run never gets a domain, whatever the repo allows: no push, no PR, no exfiltration.
+      network: { allowedDomains: bus ? [] : [...new Set(repo.allowed_domains ?? [])], strictAllowlist: true },
     },
     hooks: {
       SessionStart: hook('start', 10),

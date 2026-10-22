@@ -8,7 +8,7 @@ const inFlight = new WeakSet();
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 // A bounded run-bound adapter over the existing Tasks engine. No new authority
 // store: the original task tree, permission level and run lifetime are binding.
-export function createCollaboration({ tasks, current, save, create, deliver, messages, saveOutput, dispatchInbox = () => {}, now = Date.now }) {
+export function createCollaboration({ tasks, current, save, create, deliver, messages, saveOutput, dispatchInbox = () => {}, bus = null, now = Date.now }) {
   const pending = new Map(), familyLocks = new Map();
   function family(task) {
     let root = task, depth = 0;
@@ -33,6 +33,11 @@ export function createCollaboration({ tasks, current, save, create, deliver, mes
     const args = parsed.data;
     const fresh = () => current(task, run);
     if (!fresh()) fail('POLICY_DENIED', 'This task run is no longer authorised.');
+    // Agent bus run tools: the bus scrubs and fences them against the run's own handoff (bus/dispatcher.js).
+    if (name === 'bus_result' || name === 'bus_handoff') {
+      if (!bus) fail('POLICY_DENIED', 'The agent bus is unavailable.');
+      return bus(task, name, args);
+    }
     const all = [...tasks.values()].filter(t => t.id === task.id || related(task, t));
     if (name === 'buddy_tasks') return { self: task.id, parent: task.parentId,
       // The exact caller can inspect its bounded, already-sanitized saved data

@@ -29,6 +29,7 @@ test('engine imports its complete schema from an escaped installation directory'
     for (const name of fs.readdirSync(path.join(board, 'tasks-engine'))) {
       if (name.endsWith('.js')) fs.copyFileSync(path.join(board, 'tasks-engine', name), path.join(engineDir, name));
     }
+    fs.symlinkSync(path.join(board, 'tasks-engine', 'bus'), path.join(engineDir, 'bus'), process.platform === 'win32' ? 'junction' : 'dir');
     const imported = await import(pathToFileURL(engineFile).href);
     assert.equal(typeof imported.TasksEngine, 'function');
     assert.deepEqual(imported.SCHEMA, JSON.parse(fs.readFileSync(path.join(board, 'tasks-api', 'schema.json'), 'utf8')));

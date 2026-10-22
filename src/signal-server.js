@@ -16,11 +16,31 @@ const Adapters = require('../adapters/index.js');
 const Answer = require('../hooks/answer-file.js');
 const AgentReports = require('./agent-self-report');
 const { describeRequest } = require('./request-view.js');
+const Scrub = require('./scrub.js');
 
 const SIGNAL_PORT = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
 const SIGNAL_TOKEN = crypto.randomBytes(32).toString('hex');
 const SIGNAL_TOKEN_HEADER = 'x-buddy-token';
 const KNOWN_SIGNALS = new Set(Rules.SIGNALS.filter((x) => x.hook).map((x) => x.id).concat(['session-end']));
+// Agent bus (board/AGENT-BUS.md): the only ops an agent may send. halt, resume and busSetContext are main's own.
+const BUS_AGENT_OPS = new Set(['hello', 'handoff', 'read', 'wait', 'status']);
+const BUS_LIMITS = { title: 200, brief: 3200, file: 300, branch: 200 };
+const BUS_UNAVAILABLE = { available: false, reason: 'tasks_helper_unavailable', message: 'Plexiform could not reach its Tasks helper. Nothing was handed off.' };
+// A handoff that timed out, or whose helper went away mid-call, may have been posted.
+const BUS_UNKNOWN = { available: false, reason: 'tasks_helper_unavailable', outcome: 'unknown',
+  message: 'Plexiform did not answer in time, so it is unknown whether this was handed off. Retry with the same request_id: a handoff that was posted comes back as a duplicate, never a second run.' };
+// Above the Tasks service's own worst case for one op (10 s to connect, 5 s for context, 12 s for the op).
+const BUS_DEADLINE_MS = 30_000;
+
+// Handoff text is scrubbed here, before it leaves main: secrets out, home folder shown as ~ (handoff-packet.js clean),
+// then cut to the limit, so scrubbing never makes it longer than the bus accepts.
+function busScrub(args, home = os.homedir()) {
+  const clean = (v, max) => (typeof v === 'string' ? Scrub.redactSecretsPass(home ? v.slice(0, max * 2).split(home).join('~') : v.slice(0, max * 2)).slice(0, max) : v);
+  const out = { ...args };
+  for (const k of ['title', 'brief', 'branch']) if (k in out) out[k] = clean(out[k], BUS_LIMITS[k]);
+  if (Array.isArray(out.files)) out.files = out.files.slice(0, 50).map((f) => clean(f, BUS_LIMITS.file));
+  return out;
+}
 
 function tokenMatches(sent) {
   const a = Buffer.from(String(sent || ''));
@@ -31,7 +51,7 @@ function tokenMatches(sent) {
 // `rootDir`, `sessionsDir`, `requestsDir` are the same paths main.js computes;
 // `aggregateState` and `broadcastStatus` are the live core callbacks; tests
 // pass their own port, retry timing and app.
-module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus, teamActivity = null, agentMail = null, port = SIGNAL_PORT, retries = 20, retryMs = 500, app: electronApp = app }) => {
+module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcastStatus, teamActivity = null, agentMail = null, agentBus = null, port = SIGNAL_PORT, retries = 20, retryMs = 500, busDeadlineMs = BUS_DEADLINE_MS, app: electronApp = app }) => {
   // Per-request answer keys from the blocking hooks: memory only, never on
   // disk, so nothing that can write requests/ can also sign an answer.
   const requestKeys = Answer.requestKeys();
@@ -75,7 +95,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
           : done(400, { error: 'nonce must be 64 hex chars' })));
       }
       const hookRoute = /^\/hook\/([\w-]+)(?:\?event=([\w.-]*))?$/.exec(req.url || '');
-      if (req.method !== 'POST' || (req.url !== '/signal' && req.url !== '/request-key' && req.url !== '/metadata/agents' && req.url !== '/team/activity' && req.url !== '/team/mail' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
+      if (req.method !== 'POST' || (req.url !== '/signal' && req.url !== '/request-key' && req.url !== '/metadata/agents' && req.url !== '/team/activity' && req.url !== '/team/mail' && req.url !== '/bus' && !hookRoute)) return done(404, { error: 'POST /signal, POST /hook/:adapter or GET /status' });
       if (!tokenMatches(req.headers[SIGNAL_TOKEN_HEADER])) return done(401, { error: `send header ${SIGNAL_TOKEN_HEADER} with the contents of ${tokenFile}` });
       if (req.url === '/metadata/agents') { // privacy-flow: agent-self-report
         let bytes = 0; const chunks = [];
@@ -101,6 +121,26 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
       if (req.url === '/team/mail') { // privacy-flow: agent-mail-local
         if (!agentMail) return done(404, { error: 'agent mail is not available' });
         return readBody(req, done, (d) => Promise.resolve(agentMail(String(d.op || ''), d.args && typeof d.args === 'object' ? d.args : {})).then((r) => done(200, r), () => done(200, { available: false, reason: 'offline' })));
+      }
+      // Agent bus (board/AGENT-BUS.md): scrub, then hand to the Tasks helper (ensure() starts it); never blocks main.
+      if (req.url === '/bus') { // privacy-flow: agent-bus-local
+        if (!agentBus) return done(404, { error: 'the agent bus is not available' });
+        return readBody(req, done, (d) => {
+          const op = String(d.op || '');
+          if (!BUS_AGENT_OPS.has(op)) return done(200, { reason: 'VALIDATION', message: 'unknown bus op' });
+          const { cwd, ...raw } = d.args && typeof d.args === 'object' && !Array.isArray(d.args) ? d.args : {};
+          const args = op === 'handoff' ? busScrub(raw) : raw;
+          const caller = { provider: typeof raw.provider === 'string' ? raw.provider.slice(0, 12) : null, cwd: typeof cwd === 'string' ? cwd.slice(0, 1024) : null };
+          // bus_wait holds the call; the relay's own deadline (timeout_s + 5 s) means it can never hang.
+          const deadlineMs = op === 'wait' ? (Math.min(120, Math.max(0, Number(raw.timeout_s ?? 60) || 0)) + 5) * 1000 : busDeadlineMs;
+          // Only a helper that was never reached means nothing was handed off.
+          const lost = (e) => (op === 'handoff' && e?.code !== 'SUPERVISOR_UNREACHABLE' ? BUS_UNKNOWN : BUS_UNAVAILABLE);
+          let timer;
+          const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(lost(null)), deadlineMs); });
+          Promise.race([Promise.resolve().then(() => agentBus(op, args, caller)), deadline])
+            .then((r) => done(200, r && typeof r === 'object' ? r : lost(null)), (e) => done(200, e?.code === 'VALIDATION' ? { reason: 'VALIDATION', message: String(e.message).slice(0, 300) } : lost(e)))
+            .finally(() => clearTimeout(timer));
+        });
       }
       if (hookRoute) return readBody(req, done, (d) => hookEvent(hookRoute[1], hookRoute[2] || d.hook_event_name || '', d, done));
       if (req.url === '/request-key') return readBody(req, done, (d) => (requestKeys.register(d.id, d.key) ? done(200, { ok: true }) : done(409, { error: 'bad or duplicate request key' }))); // privacy-flow: request-key

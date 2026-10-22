@@ -24,7 +24,7 @@ export const TOKEN_NAME = 'tasks.token';
 
 export const METHODS = Object.freeze([
   'hello', 'createTask', 'listTasks', 'getTask', 'subscribe', 'unsubscribe', 'act',
-  'detectAIs', 'getLimits', 'setLimits', 'getClaims', 'listMessages', 'saveCheckpoint',
+  'detectAIs', 'getLimits', 'setLimits', 'getClaims', 'listMessages', 'saveCheckpoint', 'bus',
 ]);
 
 export const ACTIONS = Object.freeze([
@@ -43,9 +43,13 @@ export const AIS = Object.freeze(['claude', 'codex', 'gemini']);
 export const AI_CHOICES = Object.freeze([...AIS, 'auto']);
 export const SURFACES = Object.freeze(['background', 'tmux', 'tab']);
 export const PERMISSION_LEVELS = Object.freeze(['plan', 'ask', 'auto-edits', 'auto', 'bypass']);
-export const SOURCES = Object.freeze(['local', 'mcp', 'cli', 'board', 'phone', 'slack', 'voice']);
+export const SOURCES = Object.freeze(['local', 'mcp', 'cli', 'board', 'phone', 'slack', 'voice', 'bus']);
 export const LOCAL_SOURCES = Object.freeze(['local', 'cli']);
-export const REMOTE_SOURCES = Object.freeze(['board', 'phone', 'slack', 'voice']);
+export const REMOTE_SOURCES = Object.freeze(['board', 'phone', 'slack', 'voice', 'bus']);
+// The agent bus (board/AGENT-BUS.md): ops of the `bus` method. Agent-facing ops arrive through main's /bus relay;
+// busSetContext, halt and resume are main's own (tray, Preferences) and never reachable from an agent.
+export const BUS_OPS = Object.freeze(['hello', 'handoff', 'read', 'wait', 'status', 'list', 'busSetContext', 'halt', 'resume']);
+export const BUS_AGENT_OPS = Object.freeze(['hello', 'handoff', 'read', 'wait', 'status']);
 export const PARK_REASONS = Object.freeze(['user', 'limit', 'auth', 'ask_timeout', 'approval_timeout', 'message_loop']);
 export const OUTCOMES = Object.freeze(['merged', 'pr_opened', 'pr_merged', 'discarded']);
 export const CAPABILITIES = Object.freeze(['background', 'resume', 'hooks', 'mcp', 'permissionRouting', 'modelSelect', 'costReport', 'budget', 'sandbox']);

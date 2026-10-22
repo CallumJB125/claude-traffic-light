@@ -92,6 +92,7 @@ push      {push:'event', sub, event}
 | `setLimits` | `SetLimitsParams {maxParallel?, perAi?}` | `Limits` | `VALIDATION` |
 | `getClaims` | `GetClaimsParams {repo}` | `GetClaimsResult {repo, claims:[Claim]}` | — |
 | `saveCheckpoint` | `SaveCheckpointParams {id, expectedVersion, data, requestId}` | `SaveCheckpointResult {checkpoint}` | authenticated task scope, fresh check inside the task queue |
+| `bus` | `BusParams {op, args?, caller?}` (op: hello, handoff, read, wait, status, list, busSetContext, halt, resume) | op-specific object; refusals are `{reason}` results, not errors | full token only (a relay is `POLICY_DENIED`); the agent bus contract is `board/AGENT-BUS.md` |
 
 Unknown method → `UNKNOWN_METHOD`. Params failing their schema → `VALIDATION` with the failing path in `message`.
 

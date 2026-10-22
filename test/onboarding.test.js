@@ -195,7 +195,7 @@ test('first run opens setup (not Help) once; an install that already saw Help is
 test('the default tray menu is 20 items or fewer, with debug controls only in dev or the widget menu', () => {
   const build = (from, devRun = false) => {
     const ctx = { buddyWin: { captureState: () => ({ enabled: true }) }, refreshTrayMenu: () => {}, IS_DEV_RUN: devRun, IS_MAC: true, BuddyPages, AppMenu: require('../src/app-menu.js'), SimpleMode: require('../src/simple-mode.js'), UsagePopOut: require('../src/usage-popout.js'), usageMemo: { turns: [] }, getUsageTurns: () => Promise.resolve(), Usage: { modelMix: () => ({ today: null }) }, BRAND: { OPEN_MENU_LABEL: 'Open Plexiform…' },
-      Menu: { buildFromTemplate: (t) => t }, budgetItems: () => [], scopeItem: () => [], BurstIpc: { trayItems: () => [] }, quietItems: () => [{ label: 'Snooze Notifications' }], WidgetPolish: { menuItems: () => [{ label: 'Quiet for 30 minutes' }] },
+      Menu: { buildFromTemplate: (t) => t }, budgetItems: () => [], scopeItem: () => [], BurstIpc: { trayItems: () => [] }, AgentBusMain: { trayItems: () => [] }, quietItems: () => [{ label: 'Snooze Notifications' }], WidgetPolish: { menuItems: () => [{ label: 'Quiet for 30 minutes' }] },
       loadConfig: () => ({ showWidget: true, menuBarMode: false }), LoginItem: { get: () => true }, updaterTrayItems: () => [{ label: 'Check for Updates…' }], hooksLabel: 'Reinstall Claude Code Hooks' };
     for (const fn of ['openBuddy', 'createFeedbackWindow', 'createHelpWindow', 'showHealth', 'knockNow', 'resizeBy', 'installHooks', 'createTray', 'setManual', 'clearManual', 'saveConfig', 'createWindow', 'applyWidgetVisibility', 'broadcastStatus', 'updateTrayMode']) ctx[fn] = () => {};
     return vm.runInNewContext(`${slice('  const sectionItems = ', '\n  // Rebuilt in place')}\nbuildMenu(${JSON.stringify(from)});`, ctx).filter((i) => i.type !== 'separator');
@@ -219,7 +219,7 @@ test('the tray pauses and resumes automatic work cards, and turning them on the 
     const calls = [];
     const ctx = { buddyWin: { captureState: () => capture, setCapture: (on) => { calls.push(['setCapture', on]); return true; } }, refreshTrayMenu: () => calls.push(['refresh']),
       IS_DEV_RUN: false, IS_MAC: true, BuddyPages, AppMenu: require('../src/app-menu.js'), SimpleMode: require('../src/simple-mode.js'), UsagePopOut: require('../src/usage-popout.js'), usageMemo: { turns: [] }, getUsageTurns: () => Promise.resolve(), Usage: { modelMix: () => ({ today: null }) }, BRAND: { OPEN_MENU_LABEL: 'Open Plexiform…' },
-      Menu: { buildFromTemplate: (t) => t }, budgetItems: () => [], scopeItem: () => [], BurstIpc: { trayItems: () => [] }, quietItems: () => [], WidgetPolish: { menuItems: () => [] },
+      Menu: { buildFromTemplate: (t) => t }, budgetItems: () => [], scopeItem: () => [], BurstIpc: { trayItems: () => [] }, AgentBusMain: { trayItems: () => [] }, quietItems: () => [], WidgetPolish: { menuItems: () => [] },
       loadConfig: () => ({ showWidget: true, menuBarMode: false, ...config }), LoginItem: { get: () => true }, updaterTrayItems: () => [], hooksLabel: 'x' };
     for (const fn of ['openBuddy', 'createFeedbackWindow', 'createHelpWindow', 'showHealth', 'knockNow', 'resizeBy', 'installHooks', 'createTray', 'setManual', 'clearManual', 'saveConfig', 'createWindow', 'applyWidgetVisibility', 'broadcastStatus', 'updateTrayMode']) ctx[fn] = (...a) => calls.push([fn, ...a]);
     const items = vm.runInNewContext(`${slice('  const sectionItems = ', '\n  // Rebuilt in place')}\nbuildMenu('tray');`, ctx);

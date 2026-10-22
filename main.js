@@ -296,6 +296,8 @@ const DEFAULT_CONFIG = {
   teamBrief: false,
   // Agent mail inbox (src/agent-mail.js): teammates' AI questions polled from the team hub; off until ticked.
   agentMailInbox: false,
+  // Agent bus (src/agent-bus-main.js, board/AGENT-BUS.md): local AI-to-AI handoffs run automatically, only in repos ticked here.
+  agentBus: { enabled: true, autoAccept: true, repos: [], wallClockMin: 20, caps: { enabled: false, memberUsd: 20, handoffUsd: 5 } },
   // A role reset the team hub never acknowledged ({origin, userId}; no token): retried at start.
   remoteInteractionResetPending: null,
   // Existing Codex CLI sessions on Codex's shared daemon (src/codex-daemon.js): off until ticked in Preferences.
@@ -384,6 +386,7 @@ function saveConfig(partial) {
   if (partial.presets) next.presets = partial.presets.map((p) => ({ ...p, rulesVersion: Rules.RULES_VERSION }));
   // A renderer can't save a rule the UI would refuse.
   // `sealed` is reserved for the rules' safeStorage HMAC (src/auto-rules.js); null until the evaluator ships.
+  if (partial.agentBus) next.agentBus = require('./src/agent-bus-main.js').normalize(partial.agentBus);
   if (partial.autoAnswer) next.autoAnswer = { v: 1, sealed: null, rules: AutoRules.sanitize(partial.autoAnswer.rules).rules };
   fs.mkdirSync(ROOT_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2));
@@ -508,6 +511,7 @@ const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = 
   broadcastStatus: (...a) => broadcastStatus(...a),
   teamActivity: (op, args) => TeamActivity.call(op, args),
   agentMail: (op, args) => (op === 'request_handoff' || op === 'hand_off_status' ? localHandoffOp(op, args) : AgentMail.op(op, args)),
+  agentBus: (op, args, caller) => AgentBusMain.relay(op, args, caller),
 });
 // A remote session's folder names a directory on another machine: it is
 // shown, never opened, copied as a path, knocked on or used to find a
@@ -1636,6 +1640,7 @@ app.whenReady().then(() => {
 if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_COLLISION_HOOK === '1') global.__collisionInject = handleActivityEvent;
 const ProviderStatus = require('./src/provider-status.js');
 const sessionsSender = e => fromUtilityPage(e, 'sessions');
+const AgentBusMain = require('./src/agent-bus-main.js').register({ ipcMain, sessionsAllowed: sessionsSender, tasks: () => { const t = getTasks(); t.start(); return t; }, started: () => !!tasksSvc, config: () => loadConfig(), folders: () => tasksSvc?.folderPaths() || [], onChange: () => refreshTrayMenu() });
 const WorktreeShare = require('./src/worktree-share.js').createWorktreeShare({ log: console.log });
 ipcMain.handle('sessions:state', e => (sessionsSender(e) ? sessionsState() : null));
 async function sessionsState() {
@@ -2120,6 +2125,8 @@ function getTasks() {
     homeDir: os.homedir(),
     detectedTools: () => AiTools.quick(),
     startGuard: (cwd) => (taskStartGuard ? taskStartGuard(cwd) : null),
+    busContext: () => AgentBusMain.context(),
+    onBusReady: () => { AgentBusMain.refresh(); },
     copy: (text) => clipboard.writeText(text),
     ...(IS_MAC ? { launchTerminal: (descriptor, current) => require('./src/tasks-terminal').launchTaskTerminal(descriptor, { current }) } : {}),
     onChange: (snap) => {
@@ -3471,6 +3478,7 @@ function createTray() {
       { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
       ...quietItems(), ...WidgetPolish.menuItems(),
       ...captureItems(),
+      ...AgentBusMain.trayItems(),
       ...(advanced ? [{ label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } }] : []),
       { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
       {
@@ -3751,6 +3759,7 @@ function applyConfigEffects(prev, next, touched) {
     enableCalendar: () => BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message)),
     applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, applyLowPower, syncFastHook, broadcastStatus, syncInteractionHost, widgetPolish: (p, n) => WidgetPolish.configChanged(p, n),
     syncAgentMail: () => AgentMail.sync(),
+    syncAgentBus: () => AgentBusMain.sync(),
   }, touched);
 }
 function commitConfig(partial) {

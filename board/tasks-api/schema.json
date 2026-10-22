@@ -100,7 +100,8 @@
             "board",
             "phone",
             "slack",
-            "voice"
+            "voice",
+            "bus"
           ]
         },
         "sourceMeta": {
@@ -137,6 +138,27 @@
             "parentSessionId": {
               "type": "string",
               "maxLength": 256
+            },
+            "handoffId": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "fence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "originTier": {
+              "enum": [
+                "person",
+                "run_capability",
+                "local_attested"
+              ]
+            },
+            "scope": {
+              "enum": [
+                "local",
+                "team"
+              ]
             }
           },
           "required": [],
@@ -145,6 +167,11 @@
         "templateId": {
           "type": "string",
           "maxLength": 256
+        },
+        "wallClockMs": {
+          "type": "integer",
+          "minimum": 60000,
+          "maximum": 86400000
         }
       },
       "required": [
@@ -479,7 +506,8 @@
             "board",
             "phone",
             "slack",
-            "voice"
+            "voice",
+            "bus"
           ]
         },
         "awaitingConfirm": {
@@ -869,7 +897,8 @@
             "board",
             "phone",
             "slack",
-            "voice"
+            "voice",
+            "bus"
           ]
         },
         "awaitingConfirm": {
@@ -1741,6 +1770,7 @@
                 "phone",
                 "slack",
                 "voice",
+                "bus",
                 "engine"
               ]
             }
@@ -2021,6 +2051,7 @@
                     "phone",
                     "slack",
                     "voice",
+                    "bus",
                     "engine"
                   ]
                 }
@@ -2265,7 +2296,8 @@
                 "board",
                 "phone",
                 "slack",
-                "voice"
+                "voice",
+                "bus"
               ]
             },
             "name": {
@@ -4208,7 +4240,8 @@
             "setLimits",
             "getClaims",
             "listMessages",
-            "saveCheckpoint"
+            "saveCheckpoint",
+            "bus"
           ]
         },
         "params": {
@@ -4894,6 +4927,34 @@
       "required": [
         "repo",
         "claims"
+      ],
+      "additionalProperties": false
+    },
+    "BusParams": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "enum": [
+            "hello",
+            "handoff",
+            "read",
+            "wait",
+            "status",
+            "list",
+            "busSetContext",
+            "halt",
+            "resume"
+          ]
+        },
+        "args": {
+          "type": "object"
+        },
+        "caller": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "op"
       ],
       "additionalProperties": false
     },
