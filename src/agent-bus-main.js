@@ -5,8 +5,9 @@
 // on the bus (test/bus-main-thread.test.js).
 
 const DEFAULTS = Object.freeze({
-  // repos empty: automatic (any checkout a Claude or Codex session here works in); non-empty: only these. exclude always wins.
-  enabled: true, autoAccept: true, repos: [], exclude: [], wallClockMin: 20,
+  // scope 'auto': any checkout a Claude or Codex session here works in; 'listed', or any repos listed: only these.
+  // exclude always wins.
+  enabled: true, autoAccept: true, scope: 'auto', repos: [], exclude: [], wallClockMin: 20,
   // Owner decision 2026-10-22: spend caps exist and default off.
   caps: { enabled: false, memberUsd: 20, handoffUsd: 5 },
 });
@@ -17,7 +18,7 @@ function normalize(cfg) {
   const caps = c.caps && typeof c.caps === 'object' ? c.caps : {};
   const list = (l) => (Array.isArray(l) ? l : []).filter((r) => typeof r === 'string' && r.trim()).map((r) => r.trim().slice(0, 1024)).slice(0, 100);
   return {
-    enabled: c.enabled !== false, autoAccept: c.autoAccept !== false,
+    enabled: c.enabled !== false, autoAccept: c.autoAccept !== false, scope: c.scope === 'listed' ? 'listed' : 'auto',
     repos: list(c.repos), exclude: list(c.exclude),
     wallClockMin: Math.round(num(c.wallClockMin, DEFAULTS.wallClockMin, 1, 24 * 60)),
     caps: { enabled: caps.enabled === true, memberUsd: num(caps.memberUsd, DEFAULTS.caps.memberUsd, 0, 10000), handoffUsd: num(caps.handoffUsd, DEFAULTS.caps.handoffUsd, 0.01, 100) },
@@ -31,7 +32,7 @@ function contextOf(cfg, folders = []) {
   return {
     settings: { enabled: n.enabled, auto_accept: n.autoAccept, wall_clock_min: n.wallClockMin, allow_pr: false,
       caps: { enabled: n.caps.enabled, member_usd: n.caps.memberUsd, handoff_usd: n.caps.handoffUsd } },
-    repos: n.repos, exclude: n.exclude, folders: [...new Set(folders.filter((f) => typeof f === 'string' && f))].slice(0, 200),
+    scope: n.scope, repos: n.repos, exclude: n.exclude, folders: [...new Set(folders.filter((f) => typeof f === 'string' && f))].slice(0, 200),
   };
 }
 
@@ -41,7 +42,8 @@ function register({ ipcMain, sessionsAllowed, tasks, started = () => true, confi
   let halted = false, used = false, sent = null;
   const call = (op, args, caller) => tasks().bus(op, args, caller);
   const context = () => contextOf(config().agentBus, folders());
-  const push = (ctx = context()) => { sent = JSON.stringify(ctx); return call('busSetContext', ctx); };
+  // Marked sent only once the helper has it, so a failed push is retried on the next hello or handoff.
+  const push = (ctx = context()) => call('busSetContext', ctx).then((r) => { sent = JSON.stringify(ctx); return r; });
   const track = (r) => { if (r && typeof r.halted === 'boolean' && r.halted !== halted) { halted = r.halted; onChange(); } return r; };
   const halt = () => call('halt', {}).then(track);
   const resume = () => call('resume', {}).then(track);
@@ -68,4 +70,13 @@ function register({ ipcMain, sessionsAllowed, tasks, started = () => true, confi
   };
 }
 
-module.exports = { register, normalize, contextOf, DEFAULTS };
+// One-time, for configs saved before automatic mode (no exclude key): an empty list with policy.json bus_auto keys
+// meant "only those", so it stays listed. Returns the agentBus to save, or null when nothing changes.
+function migrate(saved, policy) {
+  if (!saved || typeof saved !== 'object' || 'exclude' in saved) return null;
+  const repos = policy && typeof policy.repos === 'object' && policy.repos ? policy.repos : {};
+  const listed = !(Array.isArray(saved.repos) && saved.repos.length) && Object.values(repos).some((v) => v?.bus_auto === true);
+  return normalize({ ...saved, exclude: [], scope: listed ? 'listed' : saved.scope });
+}
+
+module.exports = { register, normalize, contextOf, migrate, DEFAULTS };

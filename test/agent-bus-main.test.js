@@ -4,10 +4,10 @@
 // that opening Sessions never starts the Tasks helper.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { register, normalize, contextOf } = require('../src/agent-bus-main.js');
+const { register, normalize, contextOf, migrate } = require('../src/agent-bus-main.js');
 
 test('defaults: on, auto-accept, caps off, 20 minute wall clock; context carries allow_pr false', () => {
-  assert.deepEqual(normalize(undefined), { enabled: true, autoAccept: true, repos: [], exclude: [], wallClockMin: 20, caps: { enabled: false, memberUsd: 20, handoffUsd: 5 } });
+  assert.deepEqual(normalize(undefined), { enabled: true, autoAccept: true, scope: 'auto', repos: [], exclude: [], wallClockMin: 20, caps: { enabled: false, memberUsd: 20, handoffUsd: 5 } });
   const c = contextOf({ repos: [' /a ', '', 7], exclude: [' /x ', null], wallClockMin: 9999, caps: { enabled: true, memberUsd: -1 } }, ['/f', '/f', '', 3]);
   assert.deepEqual(c.repos, ['/a']);
   assert.deepEqual(c.exclude, ['/x']);
@@ -69,4 +69,29 @@ test('hello and handoff push the current folders first when they changed (sessio
   await m.relay('read', {}, null);
   await m.relay('handoff', {}, null);
   assert.deepEqual(calls, [['busSetContext', ['/s1']], ['hello', null], ['handoff', null], ['read', null], ['read', null], ['busSetContext', ['/s1', '/s2']], ['handoff', null]]);
+});
+
+test('a failed context push is retried on the next hello or handoff', async () => {
+  const calls = [];
+  let fail = true;
+  const m = register({ ipcMain: { handle() {} }, sessionsAllowed: () => true, started: () => true, config: () => ({ agentBus: {} }), folders: () => ['/s1'],
+    tasks: () => ({ bus: async (op) => { calls.push(op); if (op === 'busSetContext' && fail) throw new Error('helper gone'); return {}; } }) });
+  await m.relay('hello', { provider: 'claude' }, null);
+  fail = false;
+  await m.relay('handoff', {}, null);
+  await m.relay('handoff', {}, null);
+  assert.deepEqual(calls, ['busSetContext', 'hello', 'busSetContext', 'handoff', 'handoff']);
+});
+
+test('one-time migration: an empty list relying on policy.json bus_auto stays listed; a plain default becomes automatic', () => {
+  const policy = { repos: { '/code/app': { bus_auto: true } } };
+  assert.equal(migrate({ enabled: true, repos: [] }, policy).scope, 'listed');
+  assert.deepEqual(migrate({ enabled: true, repos: [] }, policy).exclude, []);
+  assert.equal(migrate({ enabled: true, repos: [] }, {}).scope, 'auto');
+  assert.equal(migrate({ enabled: true, repos: [] }, { repos: { '/code/app': { remote_tasks: true } } }).scope, 'auto');
+  assert.deepEqual(migrate({ repos: ['/kept'] }, policy).repos, ['/kept'], 'a listed config keeps its list (in force whatever the scope)');
+  assert.equal(migrate({ repos: [], exclude: [] }, policy), null, 'already migrated: untouched');
+  assert.equal(migrate(undefined, policy), null);
+  assert.equal(contextOf({ scope: 'listed' }).scope, 'listed');
+  assert.equal(contextOf({ scope: 'bogus' }).scope, 'auto');
 });

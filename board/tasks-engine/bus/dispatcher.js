@@ -48,7 +48,8 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   const deviceId = log.state('device_id') ?? (() => { const id = crypto.randomBytes(8).toString('hex'); log.setState('device_id', id); return id; })();
   // ready: main has pushed its Preferences (busSetContext) since this helper started. Until then nothing
   // starts, so a reopened claim or a queued offer never runs on defaults or misses a Preferences-ticked repo.
-  const context = { ready: false, settings: null, repos: [], exclude: [], folders: [], self: null };
+  const context = { ready: false, settings: null, scope: 'auto', repos: [], exclude: [], folders: [], self: null };
+  const tops = new Map(); // dir → its git top, until main's next push (git runs once per folder per push)
   const halting = new Set(); // task ids being stopped by a halt mid-start: their end posts no result
   const waiters = new Map(); // handoff_id → Set(resolve)
   const failures = new Map(); // offset → tries
@@ -79,26 +80,24 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
 
   async function gitTop(dir) {
     if (typeof dir !== 'string' || !path.isAbsolute(dir)) return null;
+    if (tops.has(dir)) return tops.get(dir);
     const top = await engine.git(dir, ['rev-parse', '--show-toplevel']).then((s) => s.trim(), () => null);
-    if (!top) return null;
-    try { return await fs.promises.realpath(top); } catch { return null; }
+    let real = null;
+    if (top) try { real = await fs.promises.realpath(top); } catch { real = null; }
+    if (tops.size >= 1000) tops.clear();
+    tops.set(dir, real);
+    return real;
   }
 
-  // Automatic mode's memory: the repos live Claude and Codex sessions called the bus from (root → last seen).
+  // Automatic mode's restart cache: repos seen in main's session folders when a session called the bus
+  // (root → last seen, fresh entries only). A caller's own word never puts a repo here.
   const sessionRoots = () => {
     const m = log.state('session_repos', {});
-    return m && typeof m === 'object' && !Array.isArray(m) ? m : {};
-  };
-  function rememberSession(top) {
-    if (!top) return;
     const cut = now() - SESSION_REPO_MS;
-    const kept = Object.entries(sessionRoots()).filter(([r, at]) => r !== top && at > cut).sort((a, b) => b[1] - a[1]).slice(0, SESSION_REPO_MAX - 1);
-    log.setState('session_repos', Object.fromEntries([[top, now()], ...kept]));
-  }
-  /** Whether a live or recent Claude or Codex session on this Mac works in this checkout (automatic mode). */
-  async function sessionRepo(top) {
-    if (!top) return false;
-    if ((sessionRoots()[top] ?? 0) > now() - SESSION_REPO_MS) return true;
+    return Object.fromEntries(Object.entries(m && typeof m === 'object' && !Array.isArray(m) ? m : {}).filter(([, at]) => at > cut));
+  };
+  // Folders main observed itself (task folders, hook-reported Claude and Codex sessions): cheap path checks first.
+  async function folderRepo(top) {
     for (const f of new Set(context.folders)) {
       if (!path.isAbsolute(f)) continue;
       let real;
@@ -106,6 +105,18 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       if ((real === top || real.startsWith(`${top}${path.sep}`)) && (await gitTop(real)) === top) return true;
     }
     return false;
+  }
+  // Remembered only while the bus is on and running, for a repo main observed that the rule allows.
+  async function rememberSession(top) {
+    if (!top || !settings().enabled || log.state('halted', false) || !(await folderRepo(top)) || !(await engine.busRepoAllowed(top))) return;
+    const kept = Object.entries(sessionRoots()).filter(([r]) => r !== top).sort((a, b) => b[1] - a[1]).slice(0, SESSION_REPO_MAX - 1);
+    log.setState('session_repos', Object.fromEntries([[top, now()], ...kept]));
+  }
+  /** Whether a live or recent Claude or Codex session on this Mac works in this checkout (automatic mode). */
+  async function sessionRepo(top) {
+    if (!top) return false;
+    if (sessionRoots()[top]) return true;
+    return folderRepo(top);
   }
 
   // Repos map only from policy keys, the Preferences lists, folders main knows (task folders, live sessions)
@@ -123,7 +134,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       }
     }
     if (!top) return { reason: 'NO_LOCAL_CHECKOUT', message: 'No registered checkout of that repository on this Mac.' };
-    if (!(await engine.busRepoAllowed(top))) return { reason: 'NO_ELIGIBLE_AGENT', message: 'The agent bus does not run in this repository on this Mac (excluded, not on the "only these" list, your home folder, or no Claude or Codex session works in it).' };
+    if (!(await engine.busRepoAllowed(top))) return { reason: 'NO_ELIGIBLE_AGENT', message: 'The agent bus does not run in this repository on this Mac (excluded, a protected folder such as your home folder, ~/.claude or ~/Library, not on the "only these" list, or no Claude or Codex session Plexiform sees works in it).' };
     return { root: top };
   }
 
@@ -344,7 +355,9 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     // A result is posted by the dispatcher, but the work is the run's: name the AI that did it.
     const worker = result ? ev.data?.provider ?? ev.to?.provider ?? null : null;
     const from = result ? { provider: worker ?? 'agent', tier: 'run_capability' } : { provider: ev.source.provider, tier: ev.source.tier };
-    const who = result ? { kind: 'run', name: `${AI_NAME[worker] ?? 'An AI'} running in Plexiform` } : { kind: 'session', name: 'This Mac', provider: ev.source.provider };
+    // Nothing ran for an expired or never-started handoff: the result is Plexiform's own.
+    const who = !result ? { kind: 'session', name: 'This Mac', provider: ev.source.provider }
+      : { kind: 'run', name: ev.data?.task_id ? `${AI_NAME[worker] ?? 'An AI'} running in Plexiform` : 'Plexiform' };
     return { offset: ev.offset, topic: ev.topic, kind: ev.kind, handoff_id: ev.handoff_id, card_id: ev.card_id, hop: ev.hop, at: ev.created_at,
       from, title: ev.data?.title ?? null,
       ...(result ? { cost_usd: ev.data.cost_usd, cost_basis: ev.data.cost_basis, branch: ev.data.branch } : {}),
@@ -358,14 +371,14 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       case 'hello': {
         const a = parse(HelloArgs, rawArgs);
         const top = await gitTop(caller?.cwd);
-        rememberSession(top);
+        await rememberSession(top);
         return { agent_id: agentFor(a.provider, top ?? caller?.cwd ?? ''), tier: 'local_attested', scope_allowed: ['local'],
           policy_summary: { enabled: s.enabled, halted: log.state('halted', false), repo_enabled: top ? await engine.busRepoAllowed(top) : false,
             max_hops: s.max_hops, wall_clock_min: s.wall_clock_min, caps_enabled: s.caps.enabled, auto_accept: s.auto_accept } };
       }
       case 'handoff': {
         const a = parse(HandoffArgs, rawArgs);
-        rememberSession(await gitTop(caller?.cwd));
+        await rememberSession(await gitTop(caller?.cwd));
         // Halted comes first: a stopped bus says so before anything about the repository.
         const repo = log.state('halted', false) ? { reason: 'HALTED', message: 'The agent bus is stopped on this Mac. Your person can resume it from the tray or Sessions.' }
           : await resolveRepo(a.repo ?? caller?.cwd);
@@ -428,6 +441,8 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
         context.ready = true;
         const abs = (l) => (Array.isArray(l) ? l.filter((p) => typeof p === 'string' && p.length <= 1024).slice(0, 200) : null);
         context.repos = abs(a.repos) ?? context.repos;
+        if (a.scope === 'auto' || a.scope === 'listed') context.scope = a.scope;
+        tops.clear();
         context.exclude = abs(a.exclude) ?? context.exclude;
         context.folders = abs(a.folders) ?? context.folders;
         if (a.self !== undefined) context.self = a.self && typeof a.self.userId === 'string' ? { userId: a.self.userId } : null;

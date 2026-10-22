@@ -835,12 +835,14 @@
     <label class="row"><input type="checkbox" id="agentBusEnabled" aria-describedby="hint-agent-bus" /> Let AI tools on this Mac hand work to each other</label>
     <div class="hint" id="hint-agent-bus">An AI session can hand a bounded piece of work to another AI tool here (for example Claude Code to Codex). It starts on its own in a new git worktree with no network access, so it cannot push or open a pull request. Its result goes back to the session that asked. Stop agent bus in the menu bar stops every such run.</div>
     <label class="row"><input type="checkbox" id="agentBusAutoAccept" /> Start handed-off work without asking me</label>
-    <label for="agentBusRepos">Only these repositories (optional)</label>
-    <textarea id="agentBusRepos" rows="3" spellcheck="false" placeholder="Empty: automatic (one folder per line)" aria-describedby="hint-agent-bus-repos"></textarea>
-    <div class="hint" id="hint-agent-bus-repos">Empty means automatic: any git checkout a Claude Code or Codex session on this Mac is working in can take handed-off work, never your home folder itself. List checkout folders, or remotes (github.com/owner/repo), to allow only those.</div>
+    <label class="row"><input type="checkbox" id="agentBusAuto" aria-describedby="hint-agent-bus-auto" /> Automatic: any repository a Claude Code or Codex session here is working in</label>
+    <div class="hint" id="hint-agent-bus-auto">On by default. Any git checkout a Claude Code or Codex session on this Mac is working in can take handed-off work. Never your home folder, hidden folders in it (such as ~/.claude or ~/.codex) or ~/Library. Turn this off, or list repositories below, to allow only the ones you list.</div>
+    <label for="agentBusRepos">Only these repositories</label>
+    <textarea id="agentBusRepos" rows="3" spellcheck="false" placeholder="/Users/you/code/app (one folder per line)" aria-describedby="hint-agent-bus-repos"></textarea>
+    <div class="hint" id="hint-agent-bus-repos">When this list has entries, only these repositories can take handed-off work, even with Automatic on. The checkout folder, or its remote (github.com/owner/repo).</div>
     <label for="agentBusExclude">Never these repositories</label>
     <textarea id="agentBusExclude" rows="2" spellcheck="false" placeholder="/Users/you/code/secret-app (one folder per line)" aria-describedby="hint-agent-bus-exclude"></textarea>
-    <div class="hint" id="hint-agent-bus-exclude">Kept off the agent bus whatever else is set. The checkout folder or its remote.</div>
+    <div class="hint" id="hint-agent-bus-exclude">Kept off the agent bus whatever else is set. A folder covers every repository inside it and every worktree of the repository it holds; a remote (github.com/owner/repo) covers every checkout of it.</div>
     <label for="agentBusWallClock">Stop each run after (minutes)</label>
     <input type="number" id="agentBusWallClock" min="1" max="1440" step="1" />
     <label class="row"><input type="checkbox" id="agentBusCaps" aria-describedby="hint-agent-bus-caps" /> Cap what handed-off runs may spend each day</label>

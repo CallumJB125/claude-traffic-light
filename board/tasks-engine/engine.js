@@ -23,7 +23,7 @@ import { T_QUIET_MS } from '../shared/liveness.js';
 import { redact, filterPath, normalizeRemoteUrl } from '../shared/scope.js';
 import { untrusted, envelopeTag } from '../shared/untrusted.js';
 import { BACKENDS } from '../runner/backends/index.js';
-import { buildSettings, buildMcpConfig, buildEnv, trustedInstructions, HOOK_TOKEN_FILE, API_KEY_FILE, MCP_SERVER, DEFAULT_MAX_TURNS, DISALLOWED_TOOLS, BUS_DISALLOWED } from '../runner/launch.js';
+import { buildSettings, buildMcpConfig, buildEnv, trustedInstructions, HOOK_TOKEN_FILE, API_KEY_FILE, MCP_SERVER, DEFAULT_MAX_TURNS, DISALLOWED_TOOLS, BUS_DISALLOWED, DENY_READ } from '../runner/launch.js';
 import { startIpcServer } from '../runner/ipc.js';
 import { confine, globBase, realish } from '../runner/paths.js';
 import { checkGitPush } from '../runner/run.js';
@@ -751,31 +751,47 @@ export class TasksEngine extends EventEmitter {
   busPolicy() { const p = this.#policy(); return { bus: p.bus, repos: p.repos }; }
 
   /**
-   * The one bus eligibility rule (board/AGENT-BUS.md §5). Never $HOME, a folder holding it or a filesystem root;
-   * never a repo on the Preferences exclude list. Then: policy.repos[<realpath|canonical>].bus_auto; else the
-   * Preferences "only these" list when it has entries; else (automatic, the default) any checkout a Claude or
-   * Codex session on this Mac works in. remote_tasks never counts.
+   * The one bus eligibility rule (board/AGENT-BUS.md §5). Never: a filesystem root, $HOME or a folder holding it,
+   * a DENY_READ path (~/.ssh, ~/.claude, ~/.codex, ~/.claude-traffic-light, ...) or Plexiform's data folder, or a repo
+   * on (or under, or a worktree of one on) the Preferences exclude list. Then policy.repos[<realpath|canonical>].bus_auto,
+   * the only way past the next check. Never a protected folder (a dot-folder or ~/Library under $HOME, here or where
+   * the sibling worktree would go). Then the "only these" list when it is in force; else (automatic, the default)
+   * any checkout a Claude or Codex session on this Mac works in. remote_tasks never counts.
    */
   async busRepoAllowed(top, policy = this.#policy()) {
     if (!top) return false;
     let home;
     try { home = await fs.promises.realpath(this.env.HOME ?? os.homedir()); } catch { home = this.env.HOME ?? os.homedir(); }
-    if (top === path.parse(top).root || top === home || home.startsWith(`${top}${path.sep}`)) return false;
+    const within = (dir, base) => dir === base || dir.startsWith(`${base}${path.sep}`);
+    if (top === path.parse(top).root || within(home, top)) return false;
+    let data = this.dataDir;
+    try { data = await fs.promises.realpath(data); } catch { /* as given */ }
+    if (within(top, data) || within(data, top)) return false;
+    if (DENY_READ.some((p) => within(top, path.join(home, p.replace(/^~\//, ''))))) return false;
     const ctx = this.agentBus?.context ?? {};
     const url = await this.git(top, ['config', '--get', 'remote.origin.url']).then((x) => x.trim(), () => null);
     const canon = url ? normalizeRemoteUrl(url) : null;
-    const matches = async (keys) => {
+    const commonDir = async (dir) => this.git(dir, ['rev-parse', '--git-common-dir'])
+      .then((x) => fs.promises.realpath(path.resolve(dir, x.trim())), () => null);
+    // under: an excluded folder covers everything below it and every worktree of the repo it holds.
+    const matches = async (keys, under = false) => {
+      let common;
       for (const key of keys) {
         if (!path.isAbsolute(key)) { if (canon && (normalizeRemoteUrl(key) ?? key) === canon) return true; continue; }
         let real = key;
         try { real = await fs.promises.realpath(key); } catch { /* as given */ }
-        if (real === top) return true;
+        if (under ? within(top, real) : real === top) return true;
+        if (under) {
+          common ??= await commonDir(top);
+          if (common && common === (await commonDir(real))) return true;
+        }
       }
       return false;
     };
-    if (await matches(ctx.exclude ?? [])) return false;
+    if (await matches(ctx.exclude ?? [], true)) return false;
     if (await matches(Object.entries(policy.repos).filter(([, v]) => v?.bus_auto === true).map(([k]) => k))) return true;
-    if (ctx.repos?.length) return matches(ctx.repos);
+    if (this.#protectedFolder(top) || (path.dirname(top) !== home && this.#protectedFolder(path.dirname(top)))) return false;
+    if (ctx.scope === 'listed' || ctx.repos?.length) return matches(ctx.repos ?? []);
     return !!(await this.agentBus?.sessionRepo(top));
   }
 
