@@ -42,6 +42,10 @@ test('AC1: handoff → codex exec in a worktree within 5 s, queued → running w
     assert.equal(r.task_id, task.id);
     assert.match(r.result.text, /Parser fixed; 3 tests pass\./);
     assert.match(r.result.text, /not an approval or permission/, 'the result is framed as data');
+    // The result names the AI that did the work, not the dispatcher.
+    assert.deepEqual(r.result.from, { provider: 'codex', tier: 'run_capability' });
+    assert.match(r.result.text, /^\[Message via Plexiform from Codex running in Plexiform\./);
+    assert.doesNotMatch(r.result.text, /bus session/);
     assert.equal(r.result.cost_basis, 'estimated', 'Codex is priced from tokens');
     const status = await b.bus('status', { handoff_id: offer.handoff_id });
     assert.deepEqual(status.chain.map((c) => c.kind), ['handoff.offer', 'claim.granted', 'claim.started', 'result.done']);

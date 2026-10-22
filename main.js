@@ -296,8 +296,9 @@ const DEFAULT_CONFIG = {
   teamBrief: false,
   // Agent mail inbox (src/agent-mail.js): teammates' AI questions polled from the team hub; off until ticked.
   agentMailInbox: false,
-  // Agent bus (src/agent-bus-main.js, board/AGENT-BUS.md): local AI-to-AI handoffs run automatically, only in repos ticked here.
-  agentBus: { enabled: true, autoAccept: true, repos: [], wallClockMin: 20, caps: { enabled: false, memberUsd: 20, handoffUsd: 5 } },
+  // Agent bus (src/agent-bus-main.js, board/AGENT-BUS.md): local AI-to-AI handoffs run automatically in any checkout a
+  // Claude or Codex session here works in; repos non-empty means only those, exclude keeps repos off the bus.
+  agentBus: { enabled: true, autoAccept: true, repos: [], exclude: [], wallClockMin: 20, caps: { enabled: false, memberUsd: 20, handoffUsd: 5 } },
   // A role reset the team hub never acknowledged ({origin, userId}; no token): retried at start.
   remoteInteractionResetPending: null,
   // Existing Codex CLI sessions on Codex's shared daemon (src/codex-daemon.js): off until ticked in Preferences.
@@ -1640,7 +1641,7 @@ app.whenReady().then(() => {
 if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_COLLISION_HOOK === '1') global.__collisionInject = handleActivityEvent;
 const ProviderStatus = require('./src/provider-status.js');
 const sessionsSender = e => fromUtilityPage(e, 'sessions');
-const AgentBusMain = require('./src/agent-bus-main.js').register({ ipcMain, sessionsAllowed: sessionsSender, tasks: () => { const t = getTasks(); t.start(); return t; }, started: () => !!tasksSvc, config: () => loadConfig(), folders: () => tasksSvc?.folderPaths() || [], onChange: () => refreshTrayMenu() });
+const AgentBusMain = require('./src/agent-bus-main.js').register({ ipcMain, sessionsAllowed: sessionsSender, tasks: () => { const t = getTasks(); t.start(); return t; }, started: () => !!tasksSvc, config: () => loadConfig(), folders: () => [...(tasksSvc?.folderPaths() || []), ...localSessions(aggregateState().sessions || []).filter((x) => ['claude', 'codex'].includes(x.source || 'claude') && typeof x.cwd === 'string' && x.cwd).map((x) => x.cwd)], onChange: () => refreshTrayMenu() });
 const WorktreeShare = require('./src/worktree-share.js').createWorktreeShare({ log: console.log });
 ipcMain.handle('sessions:state', e => (sessionsSender(e) ? sessionsState() : null));
 async function sessionsState() {

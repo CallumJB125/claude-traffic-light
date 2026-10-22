@@ -10,7 +10,7 @@ AI tools hand bounded work to each other. A handoff is claimed and started autom
 
 ## 2. Envelope (v1)
 
-`{v:1, id, request_id, topic, offset, scope:'local', card_id, repo:{root}, source:{device_id, agent_id, provider, tier, identity_source}, to, kind, handoff_id, body, data, hop, visited, caused_by, created_at, expires_at, grants_execution:false, approval:false}` (`board/shared/bus-schema.js`). One monotonic offset per `bus.db`. Bodies are untrusted text: scrubbed, at most 3200 characters, delivered only inside `frame()` (`board/shared/untrusted-frame.cjs`).
+`{v:1, id, request_id, topic, offset, scope:'local', card_id, repo:{root}, source:{device_id, agent_id, provider, tier, identity_source}, to, kind, handoff_id, body, data, hop, visited, caused_by, created_at, expires_at, grants_execution:false, approval:false}` (`board/shared/bus-schema.js`). One monotonic offset per `bus.db`. Bodies are untrusted text: scrubbed, at most 3200 characters, delivered only inside `frame()` (`board/shared/untrusted-frame.cjs`). Result envelopes are written by the dispatcher (`source.provider: 'bus'`), but `bus_wait`/`bus_read` name the AI that did the work: `from: {provider: 'codex'|'claude', tier: 'run_capability'}` (from `data.provider`, the run's AI) and a frame saying it came from Codex (or Claude) running in Plexiform.
 
 | Topic | Kinds | Retention |
 |---|---|---|
@@ -47,7 +47,13 @@ Refusal reasons: `HALTED`, `SPEND_CAP`, `LOOP`, `RATE`, `NOT_MEMBER`, `TIER_NOT_
 
 ## 5. Guardrails (all refusals, never prompts)
 
-- **Opt-in per repo, on this Mac**: `policy.repos[<realpath|canonical remote>].bus_auto === true` in the engine's `policy.json`, or the repo listed in Preferences → Advanced → Agent bus. `remote_tasks` never counts for the bus. Repos are resolved only from those keys and folders already registered as task folders; no picker. No match: `NO_LOCAL_CHECKOUT`.
+- **Which repos, on this Mac** (`engine.busRepoAllowed`, one rule for admission and the engine):
+  - The repo must be a real local git work tree (`git rev-parse --show-toplevel`, then realpath); anything else is `NO_LOCAL_CHECKOUT`. `$HOME` itself, a folder holding `$HOME` and a filesystem root are never on the bus.
+  - **Never these** (Preferences `agentBus.exclude`, folder or canonical remote) always wins.
+  - `policy.repos[<realpath|canonical remote>].bus_auto === true` in the engine's `policy.json` is always on. `remote_tasks` never counts for the bus.
+  - **Only these** (Preferences `agentBus.repos`): when the list has entries, only those repos (plus `bus_auto` keys) are on. Existing configs that listed repos keep exactly that behaviour.
+  - **Automatic** (the default, the list empty): any checkout a live or recent Claude Code or Codex session on this Mac works in. That is a checkout holding a folder main pushes (task folders and the working folders of the local Claude and Codex sessions it shows; main re-pushes before `hello` and `handoff` when they change), or the repo a session called `bus_hello`/`bus_handoff` from (remembered in `bus.db` for 48 h, at most 100, so an offer still starts after a restart).
+  - Repos are resolved only from those sources; no picker. A canonical remote resolves through them. No match: `NO_LOCAL_CHECKOUT`; a checkout that is not on the bus: `NO_ELIGIBLE_AGENT`. `bus_hello`'s `repo_enabled` applies the same rule to the caller's repo.
 - **Start with no human gate**: `planFirst` is false unless the spec asks; `awaitingConfirm` is false under `bus.auto_accept` (default on) for local scope; no budget dialog. The remote rules still apply: at most `auto-edits`, always a new worktree.
 - **Providers**: bus runs start only on Claude or Codex, the backends with an OS sandbox and network off; anything else (Gemini runs `--approval-mode yolo` with no sandbox) is `NO_ELIGIBLE_AGENT`, at admission and again in the engine.
 - **Settings**: `policy.json` `bus` and Preferences may both set `enabled`, `auto_accept`, `wall_clock_min` and `caps`; the stricter wins (off, the shorter clock, caps on, the lower cap).

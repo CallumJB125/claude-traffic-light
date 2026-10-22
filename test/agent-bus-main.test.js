@@ -7,10 +7,14 @@ const assert = require('node:assert/strict');
 const { register, normalize, contextOf } = require('../src/agent-bus-main.js');
 
 test('defaults: on, auto-accept, caps off, 20 minute wall clock; context carries allow_pr false', () => {
-  assert.deepEqual(normalize(undefined), { enabled: true, autoAccept: true, repos: [], wallClockMin: 20, caps: { enabled: false, memberUsd: 20, handoffUsd: 5 } });
-  const c = contextOf({ repos: [' /a ', '', 7], wallClockMin: 9999, caps: { enabled: true, memberUsd: -1 } }, ['/f']);
+  assert.deepEqual(normalize(undefined), { enabled: true, autoAccept: true, repos: [], exclude: [], wallClockMin: 20, caps: { enabled: false, memberUsd: 20, handoffUsd: 5 } });
+  const c = contextOf({ repos: [' /a ', '', 7], exclude: [' /x ', null], wallClockMin: 9999, caps: { enabled: true, memberUsd: -1 } }, ['/f', '/f', '', 3]);
   assert.deepEqual(c.repos, ['/a']);
+  assert.deepEqual(c.exclude, ['/x']);
   assert.deepEqual(c.folders, ['/f']);
+  // Configs saved before automatic mode (repos only) keep their list as the restriction, with nothing excluded.
+  assert.deepEqual(contextOf({ repos: ['/kept'] }).repos, ['/kept']);
+  assert.deepEqual(contextOf({ repos: ['/kept'] }).exclude, []);
   assert.equal(c.settings.wall_clock_min, 1440);
   assert.equal(c.settings.allow_pr, false);
   assert.deepEqual(c.settings.caps, { enabled: true, member_usd: 0, handoff_usd: 5 });
@@ -51,4 +55,18 @@ test('tray after a restart while halted: once the helper is up it reads the stat
   assert.deepEqual(calls, ['status']);
   assert.equal(changed, 1);
   assert.equal(m.trayItems()[0].label, 'Resume agent bus');
+});
+
+test('hello and handoff push the current folders first when they changed (sessions come and go); unchanged, no push', async () => {
+  const calls = [];
+  let folders = ['/s1'];
+  const m = register({ ipcMain: { handle() {} }, sessionsAllowed: () => true, started: () => true, config: () => ({ agentBus: {} }), folders: () => folders,
+    tasks: () => ({ bus: async (op, args) => { calls.push([op, op === 'busSetContext' ? args.folders : null]); return {}; } }) });
+  await m.relay('hello', { provider: 'claude' }, null);
+  await m.relay('handoff', {}, null);
+  await m.relay('read', {}, null);
+  folders = ['/s1', '/s2'];
+  await m.relay('read', {}, null);
+  await m.relay('handoff', {}, null);
+  assert.deepEqual(calls, [['busSetContext', ['/s1']], ['hello', null], ['handoff', null], ['read', null], ['read', null], ['busSetContext', ['/s1', '/s2']], ['handoff', null]]);
 });

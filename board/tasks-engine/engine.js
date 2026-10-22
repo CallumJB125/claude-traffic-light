@@ -750,19 +750,33 @@ export class TasksEngine extends EventEmitter {
 
   busPolicy() { const p = this.#policy(); return { bus: p.bus, repos: p.repos }; }
 
-  /** The one bus opt-in rule: policy.repos[<realpath|canonical>].bus_auto, or the repo ticked in Preferences. remote_tasks never counts. */
+  /**
+   * The one bus eligibility rule (board/AGENT-BUS.md §5). Never $HOME, a folder holding it or a filesystem root;
+   * never a repo on the Preferences exclude list. Then: policy.repos[<realpath|canonical>].bus_auto; else the
+   * Preferences "only these" list when it has entries; else (automatic, the default) any checkout a Claude or
+   * Codex session on this Mac works in. remote_tasks never counts.
+   */
   async busRepoAllowed(top, policy = this.#policy()) {
     if (!top) return false;
-    const ticked = new Set(this.agentBus?.context.repos ?? []);
-    for (const [key, v] of [...Object.entries(policy.repos), ...[...ticked].map((k) => [k, { bus_auto: true }])]) {
-      if (v?.bus_auto !== true || !path.isAbsolute(key)) continue;
-      let real = key;
-      try { real = await fs.promises.realpath(key); } catch { /* as given */ }
-      if (real === top) return true;
-    }
+    let home;
+    try { home = await fs.promises.realpath(this.env.HOME ?? os.homedir()); } catch { home = this.env.HOME ?? os.homedir(); }
+    if (top === path.parse(top).root || top === home || home.startsWith(`${top}${path.sep}`)) return false;
+    const ctx = this.agentBus?.context ?? {};
     const url = await this.git(top, ['config', '--get', 'remote.origin.url']).then((x) => x.trim(), () => null);
     const canon = url ? normalizeRemoteUrl(url) : null;
-    return !!canon && (policy.repos[canon]?.bus_auto === true || ticked.has(canon));
+    const matches = async (keys) => {
+      for (const key of keys) {
+        if (!path.isAbsolute(key)) { if (canon && (normalizeRemoteUrl(key) ?? key) === canon) return true; continue; }
+        let real = key;
+        try { real = await fs.promises.realpath(key); } catch { /* as given */ }
+        if (real === top) return true;
+      }
+      return false;
+    };
+    if (await matches(ctx.exclude ?? [])) return false;
+    if (await matches(Object.entries(policy.repos).filter(([, v]) => v?.bus_auto === true).map(([k]) => k))) return true;
+    if (ctx.repos?.length) return matches(ctx.repos);
+    return !!(await this.agentBus?.sessionRepo(top));
   }
 
   /** A repo opted in to remote work: policy.repos[<realpath or canonical remote>].remote_tasks === true. */

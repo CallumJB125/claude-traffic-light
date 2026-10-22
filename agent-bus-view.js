@@ -13,7 +13,7 @@
   const NAME = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', bus: 'Plexiform' };
   const name = (id) => NAME[id] || id || 'an AI';
   const WHY = { HALTED: 'the bus is stopped', SPEND_CAP: 'the daily spend cap is used up', LOOP: 'it would loop back', RATE: 'too many handoffs', TIER_NOT_ACCEPTED: 'sessions can hand off to this Mac only',
-    NO_ELIGIBLE_AGENT: 'this repository is not turned on', NO_LOCAL_CHECKOUT: 'no checkout of that repository here' };
+    NO_ELIGIBLE_AGENT: 'this repository is not on the agent bus', NO_LOCAL_CHECKOUT: 'no checkout of that repository here' };
   const LINE = {
     'handoff.offer': (e) => `${name(e.provider)} handed “${e.title || 'work'}” to ${name(e.to)}`,
     'handoff.refused': (e) => `Refused “${e.title || 'a handoff'}”: ${WHY[e.reason] || e.reason}`,
@@ -44,7 +44,7 @@
     section.hidden = !r || r.available === false || (!rows.length && !r.halted);
     if (section.hidden) return out.replaceChildren();
     const head = node('div', null, 'row-actions');
-    head.append(node('span', r.halted ? 'Stopped: nothing new starts until you resume.' : 'Running: handoffs start on their own in the repositories you turned on.', 'muted'));
+    head.append(node('span', r.halted ? 'Stopped: nothing new starts until you resume.' : 'Running: handoffs start on their own, each in its own worktree.', 'muted'));
     const b = node('button', r.halted ? 'Resume agent bus' : 'Stop agent bus', r.halted ? 'primary' : '');
     b.type = 'button';
     b.addEventListener('click', () => void (r.halted ? act(b, api.busResume, 'Resumed.') : act(b, api.busHalt, 'Stopped. Every handed-off run was stopped.')));
