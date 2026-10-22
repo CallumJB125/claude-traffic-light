@@ -58,6 +58,7 @@ async function startFakeDaemon({ socketMode = 0o600, transport = process.platfor
     note('thread/status/changed', { threadId, status: t.status });
     return turnId;
   }
+  const resumeOverrides = new Map();
   const handlers = {
     initialize: () => ({ userAgent: 'fake' }),
     'thread/loaded/list': () => ({ data: [...threads.values()].filter((t) => t.loaded).map((t) => t.id), nextCursor: null }),
@@ -66,7 +67,7 @@ async function startFakeDaemon({ socketMode = 0o600, transport = process.platfor
       const t = threads.get(p.threadId);
       if (!t || !t.loaded) throw new Error('no such thread');
       const { loaded, active, approvalPolicy, sandbox, ...thread } = t;
-      return { thread: { ...thread, turns: [{ id: 'old', items: [{ type: 'userMessage', content: [{ type: 'text', text: `${SECRET} old turn` }] }] }] }, model: 'x', cwd: t.cwd, approvalPolicy, sandbox };
+      return { thread: { ...thread, ...(resumeOverrides.get(p.threadId) ?? {}), turns: [{ id: 'old', items: [{ type: 'userMessage', content: [{ type: 'text', text: `${SECRET} old turn` }] }] }] }, model: 'x', cwd: t.cwd, approvalPolicy, sandbox };
     },
     'turn/start': (p) => {
       const t = threads.get(p.threadId);
@@ -139,7 +140,7 @@ async function startFakeDaemon({ socketMode = 0o600, transport = process.platfor
     fs.symlinkSync(real, socketPath);
   }
   const fake = {
-    socketPath, realPath: real, adapterOptions, modeledPosix, calls, responses, threads, addThread, duplicateResponses: false,
+    socketPath, realPath: real, adapterOptions, modeledPosix, calls, responses, threads, addThread, resumeOverrides, duplicateResponses: false,
     get connections() { return connections; },
     // The human's own turn in their terminal: other clients see it stream.
     foreignTurn(threadId) {

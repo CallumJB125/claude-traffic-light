@@ -201,6 +201,7 @@ function createCodexDaemon({ bin, enabled = () => false, socketPath = defaultSoc
     const result = await request('thread/resume', { threadId: target, excludeTurns: true });
     if (result?.thread?.id !== target) throw new Error('Codex resumed a different thread');
     subs.set(target, (subs.get(target) ?? 0) + 1);
+    // Fail-closed: ThreadResumeResponse.thread is the same Thread type as thread/list (codex_app_server_protocol.v2.schemas.json, 0.163), whose originator and threadSource are optional and nullable. A resume response that omits or nulls them is refused, even if thread/list vouched for the thread.
     if (!threadMeta(result.thread)) { await release({ target }).catch(() => {}); throw new Error('Plexiform only messages interactive Codex CLI sessions'); }
     return { target, status: clean(result.thread.status?.type, 20) || 'unknown', permissions: permissionsOf(result) };
   }
