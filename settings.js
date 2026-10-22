@@ -50,7 +50,9 @@
       const bus = config.agentBus || {};
       document.getElementById('agentBusEnabled').checked = bus.enabled !== false;
       document.getElementById('agentBusAutoAccept').checked = bus.autoAccept !== false;
+      document.getElementById('agentBusAuto').checked = bus.scope !== 'listed';
       document.getElementById('agentBusRepos').value = (bus.repos || []).join('\n');
+      document.getElementById('agentBusExclude').value = (bus.exclude || []).join('\n');
       document.getElementById('agentBusWallClock').value = bus.wallClockMin ?? 20;
       document.getElementById('agentBusCaps').checked = bus.caps?.enabled === true;
       document.getElementById('agentBusMemberUsd').value = bus.caps?.memberUsd ?? 20;
@@ -227,7 +229,9 @@
         agentBus: {
           enabled: document.getElementById('agentBusEnabled').checked,
           autoAccept: document.getElementById('agentBusAutoAccept').checked,
+          scope: document.getElementById('agentBusAuto').checked ? 'auto' : 'listed',
           repos: document.getElementById('agentBusRepos').value.split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 100),
+          exclude: document.getElementById('agentBusExclude').value.split('\n').map((x) => x.trim()).filter(Boolean).slice(0, 100),
           wallClockMin: Math.round(Number(document.getElementById('agentBusWallClock').value) || 20),
           caps: { enabled: document.getElementById('agentBusCaps').checked, memberUsd: Number(document.getElementById('agentBusMemberUsd').value) || 20, handoffUsd: Number(document.getElementById('agentBusHandoffUsd').value) || 5 },
         },

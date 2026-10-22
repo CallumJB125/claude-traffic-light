@@ -1,3 +1,11 @@
+Plexiform app update — next beta (unreleased)
+
+For macOS (Apple silicon and Intel) and Linux (x64).
+
+What changed
+
+- The agent bus is now automatic, and you can opt out. AI tools on this Mac can hand work to each other (for example Claude Code to Codex) in any git repository a Claude Code or Codex session here is working in, with no need to add each project first. Your home folder, hidden folders in it (such as ~/.claude and ~/.codex) and ~/Library are never used. To opt out, untick "Automatic" or list "Only these repositories" in Preferences → Advanced → Agent bus, add repositories to "Never these repositories", or switch the bus off there. If you had set the bus up before through the Tasks policy file with an empty list in Preferences, it stays limited to those repositories. Results now say which AI did the work (for example "Codex running in Plexiform").
+
 Plexiform app update — 20 October 2026 (1.0.2-beta.101)
 
 For macOS (Apple silicon and Intel) and Linux (x64).

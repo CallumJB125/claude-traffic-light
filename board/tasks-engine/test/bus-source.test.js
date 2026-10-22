@@ -80,9 +80,11 @@ test('awaitingConfirm: false for local scope with auto_accept, true when policy 
   } finally { await b.cleanup(); }
 });
 
-test('the one opt-in rule: bus_auto passes, remote_tasks alone does not (engine and bus op)', async () => {
+test('listed ("only these") mode: bus_auto passes, remote_tasks alone does not (engine and bus op)', async () => {
   const b = await startBus({ wait: true }, { policy: (repo) => ({ repos: { [repo]: { remote_tasks: true } } }) });
   try {
+    // A non-empty Preferences list restricts the bus to it: the caller's own checkout is not on it.
+    await b.bus('busSetContext', { repos: [path.join(b.h.dir, 'elsewhere')], folders: [] });
     await assert.rejects(b.engine.createTask({ requestId: rid('opt'), spec: busSpec(b) }), (e) => e.code === 'POLICY_DENIED');
     const refused = await b.handoff({ request_id: rid('opt') });
     assert.equal(refused.reason, 'NO_ELIGIBLE_AGENT');

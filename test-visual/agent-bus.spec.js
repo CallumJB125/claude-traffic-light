@@ -1,7 +1,7 @@
 'use strict';
 // The agent bus through the actual main.js (board/AGENT-BUS.md): Preferences →
 // Advanced → Agent bus saves to config; an AI's /bus handoff into a repository
-// that is not turned on is refused and audited on Sessions → Agent bus, where
+// on the exclude list is refused and audited on Sessions → Agent bus, where
 // the person can stop and resume the bus. Temp home, temp repo, no AI started.
 const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
@@ -34,8 +34,11 @@ test('agent bus: Preferences section, refusal on the Sessions panel, stop and re
     await settings.locator('#agentBusWallClock').fill('15');
     await settings.locator('#agentBusWallClock').dispatchEvent('change');
     await expect.poll(() => JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).agentBus?.wallClockMin).toBe(15);
+    await settings.locator('#agentBusExclude').fill(repo);
+    await settings.locator('#agentBusExclude').dispatchEvent('change');
+    await expect.poll(() => JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).agentBus?.exclude).toEqual([repo]);
 
-    // Not turned on for this repository: refused, nothing starts, the refusal is audited.
+    // Excluded (automatic mode would otherwise take it): refused, nothing starts, the refusal is audited.
     const r = await bus('handoff', { request_id: 'visual-0001', to: { provider: 'codex' }, title: 'Fix the parser', provider: 'claude', cwd: repo });
     expect(r, JSON.stringify(r)).toMatchObject({ reason: 'NO_ELIGIBLE_AGENT' });
     expect((await bus('halt', {})).reason).toBe('VALIDATION');
@@ -43,7 +46,7 @@ test('agent bus: Preferences section, refusal on the Sessions panel, stop and re
     const page = await embedded(app, 'sessions', 'sessions.html');
     const panel = page.locator('#agent-bus');
     await expect(panel).toBeVisible({ timeout: 20000 });
-    await expect(panel).toContainText('Refused “Fix the parser”: this repository is not turned on');
+    await expect(panel).toContainText('Refused “Fix the parser”: this repository is not on the agent bus');
     await expect(panel).toContainText('Running: handoffs start on their own');
     await expect(await snapToPixels(panel)).toHaveScreenshot('agent-bus-sessions.png');
 

@@ -21,7 +21,11 @@ const LEASE_MS = 120_000;
 const RENEW_MS = 30_000;
 const PUMP_MS = 15_000;
 const DEFAULT_TTL_S = 24 * 60 * 60;
+// Automatic mode: a repo a session called the bus from stays eligible this long, so an offer can still start after a restart.
+const SESSION_REPO_MS = 2 * 24 * HOUR_MS;
+const SESSION_REPO_MAX = 100;
 const ACTIVE = new Set(['queued', 'claimed', 'running', 'quiet', 'blocked', 'handing_over', 'handed_over', 'suspended', 'unresponsive']);
+const AI_NAME = { claude: 'Claude', codex: 'Codex' };
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
 export class BusRefusal extends Error {
@@ -37,14 +41,15 @@ export function scrubRun(text, max, root = null) {
 
 /**
  * engine: {createTask, act, tasks, on/off('event'), git, busPolicy(), busRepoAllowed(top)}.
- * Returns {op(op, args, caller), runTool(task, name, args), context, close()}.
+ * Returns {op(op, args, caller), runTool(task, name, args), context, sessionRepo(top), close()}.
  */
 export function createAgentBus({ engine, dataDir, now = Date.now, log: logger }) {
   const log = openBusLog(path.join(dataDir, 'bus.db'), { now });
   const deviceId = log.state('device_id') ?? (() => { const id = crypto.randomBytes(8).toString('hex'); log.setState('device_id', id); return id; })();
   // ready: main has pushed its Preferences (busSetContext) since this helper started. Until then nothing
   // starts, so a reopened claim or a queued offer never runs on defaults or misses a Preferences-ticked repo.
-  const context = { ready: false, settings: null, repos: [], folders: [], self: null };
+  const context = { ready: false, settings: null, scope: 'auto', repos: [], exclude: [], folders: [], self: null };
+  const tops = new Map(); // dir → its git top, until main's next push (git runs once per folder per push)
   const halting = new Set(); // task ids being stopped by a halt mid-start: their end posts no result
   const waiters = new Map(); // handoff_id → Set(resolve)
   const failures = new Map(); // offset → tries
@@ -75,19 +80,53 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
 
   async function gitTop(dir) {
     if (typeof dir !== 'string' || !path.isAbsolute(dir)) return null;
+    if (tops.has(dir)) return tops.get(dir);
     const top = await engine.git(dir, ['rev-parse', '--show-toplevel']).then((s) => s.trim(), () => null);
-    if (!top) return null;
-    try { return await fs.promises.realpath(top); } catch { return null; }
+    let real = null;
+    if (top) try { real = await fs.promises.realpath(top); } catch { real = null; }
+    if (tops.size >= 1000) tops.clear();
+    tops.set(dir, real);
+    return real;
   }
 
-  // Repos map only from policy keys, the Preferences opt-in list and folders the user already registered
-  // as task folders; never a picker. Returns {root} or a refusal.
+  // Automatic mode's restart cache: repos seen in main's session folders when a session called the bus
+  // (root → last seen, fresh entries only). A caller's own word never puts a repo here.
+  const sessionRoots = () => {
+    const m = log.state('session_repos', {});
+    const cut = now() - SESSION_REPO_MS;
+    return Object.fromEntries(Object.entries(m && typeof m === 'object' && !Array.isArray(m) ? m : {}).filter(([, at]) => at > cut));
+  };
+  // Folders main observed itself (task folders, hook-reported Claude and Codex sessions): cheap path checks first.
+  async function folderRepo(top) {
+    for (const f of new Set(context.folders)) {
+      if (!path.isAbsolute(f)) continue;
+      let real;
+      try { real = await fs.promises.realpath(f); } catch { continue; }
+      if ((real === top || real.startsWith(`${top}${path.sep}`)) && (await gitTop(real)) === top) return true;
+    }
+    return false;
+  }
+  // Remembered only while the bus is on and running, for a repo main observed that the rule allows.
+  async function rememberSession(top) {
+    if (!top || !settings().enabled || log.state('halted', false) || !(await folderRepo(top)) || !(await engine.busRepoAllowed(top))) return;
+    const kept = Object.entries(sessionRoots()).filter(([r]) => r !== top).sort((a, b) => b[1] - a[1]).slice(0, SESSION_REPO_MAX - 1);
+    log.setState('session_repos', Object.fromEntries([[top, now()], ...kept]));
+  }
+  /** Whether a live or recent Claude or Codex session on this Mac works in this checkout (automatic mode). */
+  async function sessionRepo(top) {
+    if (!top) return false;
+    if (sessionRoots()[top]) return true;
+    return folderRepo(top);
+  }
+
+  // Repos map only from policy keys, the Preferences lists, folders main knows (task folders, live sessions)
+  // and repos sessions called from; never a picker. Returns {root} or a refusal.
   async function resolveRepo(target) {
     let top = null;
     if (typeof target === 'string' && path.isAbsolute(target)) top = await gitTop(target);
     else if (typeof target === 'string') {
       const want = normalizeRemoteUrl(target) ?? target;
-      const known = [...context.folders, ...context.repos, ...Object.keys(engine.busPolicy().repos)].filter((p) => path.isAbsolute(p));
+      const known = [...context.folders, ...context.repos, ...Object.keys(sessionRoots()), ...Object.keys(engine.busPolicy().repos)].filter((p) => path.isAbsolute(p));
       for (const dir of new Set(known)) {
         const t = await gitTop(dir);
         const url = t ? await engine.git(t, ['config', '--get', 'remote.origin.url']).then((x) => x.trim(), () => null) : null;
@@ -95,7 +134,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       }
     }
     if (!top) return { reason: 'NO_LOCAL_CHECKOUT', message: 'No registered checkout of that repository on this Mac.' };
-    if (!(await engine.busRepoAllowed(top))) return { reason: 'NO_ELIGIBLE_AGENT', message: 'The agent bus is not turned on for this repository on this Mac.' };
+    if (!(await engine.busRepoAllowed(top))) return { reason: 'NO_ELIGIBLE_AGENT', message: 'The agent bus does not run in this repository on this Mac (excluded, a protected folder such as your home folder, ~/.claude or ~/Library, not on the "only these" list, or no Claude or Codex session Plexiform sees works in it).' };
     return { root: top };
   }
 
@@ -186,7 +225,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     }
   }
 
-  function finish(ev, fence, outcome, { summary, evidence = [], cost_usd, cost_basis, branch = null, task_id = null }) {
+  function finish(ev, fence, outcome, { summary, evidence = [], cost_usd, cost_basis, branch = null, task_id = null, provider = null }) {
     if (log.result(ev.handoff_id)?.data?.fence === fence) return;
     const c = log.claimOf(ev.handoff_id);
     if (c && c.fence !== fence) return; // a stale fence's result is refused
@@ -194,7 +233,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     log.settle(dayOf(ev.created_at), c?.reserved_usd ?? ev.data.reservation ?? 0, cost_usd);
     log.setClaim(ev.handoff_id, fence, { state: outcome === 'outcome_unknown' ? 'lost' : 'done' });
     const r = append(envelope({ topic: 'result', kind: `result.${outcome}`, handoff: ev, source: systemSource,
-      data: { fence, summary, evidence, cost_usd, cost_basis, branch, task_id } }));
+      data: { fence, summary, evidence, cost_usd, cost_basis, branch, task_id, provider: provider ?? ev.to?.provider ?? null } }));
     for (const w of waiters.get(ev.handoff_id) ?? []) w(r);
     waiters.delete(ev.handoff_id);
     setImmediate(pump);
@@ -215,7 +254,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     const own = outcome === 'done' ? task.evidence?.summary ?? task.lastAssistant ?? 'Done.' : task.failReason ?? task.parkReason ?? 'The run stopped.';
     finish(ev, task.sourceMeta.fence, report?.outcome === 'failed' ? 'failed' : outcome, {
       summary: report?.summary ?? scrubRun(own, LIMITS.summary, task.worktree), evidence: report?.evidence ?? [],
-      ...runCost(task), branch: task.branch, task_id: task.id,
+      ...runCost(task), branch: task.branch, task_id: task.id, provider: task.ai?.id ?? null,
     });
   }
   const onEvent = (e) => { if (e.type === 'state') { const t = engine.tasks.get(e.taskId); if (t) onTaskState(t); } };
@@ -311,11 +350,18 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   const callerProvider = (args, caller) => args.provider ?? caller?.provider ?? 'agent';
   const consume = (domain, events) => { const hop = Math.max(0, ...events.map((e) => e.hop ?? 0)); if (hop) log.consumed(domain, hop, now() - HOUR_MS); };
   function view(ev) {
-    const text = ev.topic === 'result' ? ev.data?.summary : ev.body;
+    const result = ev.topic === 'result';
+    const text = result ? ev.data?.summary : ev.body;
+    // A result is posted by the dispatcher, but the work is the run's: name the AI that did it.
+    const worker = result ? ev.data?.provider ?? ev.to?.provider ?? null : null;
+    const from = result ? { provider: worker ?? 'agent', tier: 'run_capability' } : { provider: ev.source.provider, tier: ev.source.tier };
+    // Nothing ran for an expired or never-started handoff: the result is Plexiform's own.
+    const who = !result ? { kind: 'session', name: 'This Mac', provider: ev.source.provider }
+      : { kind: 'run', name: ev.data?.task_id ? `${AI_NAME[worker] ?? 'An AI'} running in Plexiform` : 'Plexiform' };
     return { offset: ev.offset, topic: ev.topic, kind: ev.kind, handoff_id: ev.handoff_id, card_id: ev.card_id, hop: ev.hop, at: ev.created_at,
-      from: { provider: ev.source.provider, tier: ev.source.tier }, title: ev.data?.title ?? null,
-      ...(ev.topic === 'result' ? { cost_usd: ev.data.cost_usd, cost_basis: ev.data.cost_basis, branch: ev.data.branch } : {}),
-      text: text ? frame({ kind: ev.topic === 'result' ? 'message' : 'handoff', source: { kind: 'session', name: ev.topic === 'result' ? 'A Plexiform run' : 'This Mac', provider: ev.source.provider }, card_id: ev.card_id, body: text }) : null };
+      from, title: ev.data?.title ?? null,
+      ...(result ? { cost_usd: ev.data.cost_usd, cost_basis: ev.data.cost_basis, branch: ev.data.branch } : {}),
+      text: text ? frame({ kind: result ? 'message' : 'handoff', source: who, card_id: ev.card_id, body: text }) : null };
   }
 
   async function op(name, rawArgs = {}, caller = null) {
@@ -325,12 +371,14 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       case 'hello': {
         const a = parse(HelloArgs, rawArgs);
         const top = await gitTop(caller?.cwd);
+        await rememberSession(top);
         return { agent_id: agentFor(a.provider, top ?? caller?.cwd ?? ''), tier: 'local_attested', scope_allowed: ['local'],
           policy_summary: { enabled: s.enabled, halted: log.state('halted', false), repo_enabled: top ? await engine.busRepoAllowed(top) : false,
             max_hops: s.max_hops, wall_clock_min: s.wall_clock_min, caps_enabled: s.caps.enabled, auto_accept: s.auto_accept } };
       }
       case 'handoff': {
         const a = parse(HandoffArgs, rawArgs);
+        await rememberSession(await gitTop(caller?.cwd));
         // Halted comes first: a stopped bus says so before anything about the repository.
         const repo = log.state('halted', false) ? { reason: 'HALTED', message: 'The agent bus is stopped on this Mac. Your person can resume it from the tray or Sessions.' }
           : await resolveRepo(a.repo ?? caller?.cwd);
@@ -393,6 +441,9 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
         context.ready = true;
         const abs = (l) => (Array.isArray(l) ? l.filter((p) => typeof p === 'string' && p.length <= 1024).slice(0, 200) : null);
         context.repos = abs(a.repos) ?? context.repos;
+        if (a.scope === 'auto' || a.scope === 'listed') context.scope = a.scope;
+        tops.clear();
+        context.exclude = abs(a.exclude) ?? context.exclude;
         context.folders = abs(a.folders) ?? context.folders;
         if (a.self !== undefined) context.self = a.self && typeof a.self.userId === 'string' ? { userId: a.self.userId } : null;
         append(envelope({ topic: 'control', kind: 'control.policy_changed', handoff: null, source: systemSource, data: { repos: context.repos.length } }));
@@ -441,7 +492,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   }
 
   return {
-    op, runTool, context, log,
+    op, runTool, context, log, sessionRepo,
     close() {
       if (closed) return;
       closed = true;
