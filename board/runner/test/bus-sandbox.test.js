@@ -61,8 +61,10 @@ test('a bus Codex run has network.enabled=false and no user config', async () =>
 test('the Ghostty Dock state folder is write-denied even when the home folder is writable', () => {
   const s = buildSettings({ worktree: '/wt', tmpdir: '/t', repo: { allow_write_extra: ['~'] }, bus: true });
   assert.ok(s.sandbox.filesystem.allowWrite.includes('~'));
-  assert.ok(s.sandbox.filesystem.denyWrite.includes('~/.local/state/ghostty-dock'));
+  for (const p of ['~/.local/state/ghostty-dock', '~/.local/bin/ghostty-dock', '~/.local/bin/ghostty-dock-open']) assert.ok(s.sandbox.filesystem.denyWrite.includes(p), p);
   assert.ok(buildSettings({ worktree: '/wt', tmpdir: '/t', extraDenyWrite: ['/data'] }).sandbox.filesystem.denyWrite.includes('~/.local/state/ghostty-dock'));
   const fsArg = codexConfig({ cwd: '/Users/me', env: { HOME: '/Users/me' }, platform: 'darwin' }).find((a) => a.startsWith('permissions.plexiform.filesystem='));
   assert.match(fsArg, /"\/Users\/me\/\.local\/state\/ghostty-dock"\s*=\s*"deny"/);
+  assert.match(fsArg, /"\/Users\/me\/\.local\/bin\/ghostty-dock"\s*=\s*"deny"/);
+  assert.match(fsArg, /"\/Users\/me\/\.local\/bin\/ghostty-dock-open"\s*=\s*"deny"/);
 });

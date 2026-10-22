@@ -61,8 +61,9 @@ export const DENY_READ = Object.freeze([
 // sessions among them, as files in this folder from any process running as the
 // user. A run must never write there, whatever else it may write (the worktree
 // or a repo's allow_write_extra could cover the home folder), or a run could
-// type into the user's terminals and escape the sandbox through it.
-export const DENY_WRITE = Object.freeze(['~/.local/state/ghostty-dock']);
+// type into the user's terminals and escape the sandbox through it. Nor may it
+// replace the Ghostty Dock programs Plexiform itself runs on a click.
+export const DENY_WRITE = Object.freeze(['~/.local/state/ghostty-dock', '~/.local/bin/ghostty-dock', '~/.local/bin/ghostty-dock-open']);
 
 export const CACHE_WRITE = Object.freeze(['~/.npm', '~/.cache', '~/Library/Caches', '~/Library/pnpm', '~/.yarn']);
 

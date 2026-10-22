@@ -357,7 +357,7 @@ function buildConfig() {
   config.spend = Spend.normalize(saved.spend);
   config.voice = Voice.normalizeConfig(saved.voice);
   config.compaction = Compaction.normalizeSettings(saved.compaction);
-  config.integrations = { ghosttyDock: GhosttyDock.normalizeMode(saved.integrations && saved.integrations.ghosttyDock) };
+  config.integrations = { ...(saved.integrations && typeof saved.integrations === 'object' && !Array.isArray(saved.integrations) ? saved.integrations : {}), ghosttyDock: GhosttyDock.normalizeMode(saved.integrations && saved.integrations.ghosttyDock) };
   // Rules are stored whole; a config from before rules existed gets the
   // defaults, which reproduce the old fixed behaviour exactly.
   config.rules = (Array.isArray(saved.rules) ? saved.rules : Rules.defaultRules()).map(Rules.normalizeRule);
@@ -391,7 +391,7 @@ function saveConfig(partial) {
   if (partial.presets) next.presets = partial.presets.map((p) => ({ ...p, rulesVersion: Rules.RULES_VERSION }));
   // A renderer can't save a rule the UI would refuse.
   // `sealed` is reserved for the rules' safeStorage HMAC (src/auto-rules.js); null until the evaluator ships.
-  if (partial.integrations) next.integrations = { ghosttyDock: GhosttyDock.normalizeMode(partial.integrations.ghosttyDock) };
+  if (partial.integrations) next.integrations = { ...loadConfig().integrations, ...partial.integrations, ghosttyDock: GhosttyDock.normalizeMode(partial.integrations.ghosttyDock) };
   if (partial.agentBus) next.agentBus = require('./src/agent-bus-main.js').normalize(partial.agentBus);
   if (partial.autoAnswer) next.autoAnswer = { v: 1, sealed: null, rules: AutoRules.sanitize(partial.autoAnswer.rules).rules };
   fs.mkdirSync(ROOT_DIR, { recursive: true });
@@ -2142,7 +2142,7 @@ function getTasks() {
     onBusReady: () => { AgentBusMain.refresh(); },
     copy: (text) => clipboard.writeText(text),
     // Ghostty Dock when it is on and trusted; the native confirmation names whichever app it is.
-    ...(IS_MAC ? { terminalApp: () => (GhosttyDock.modeOf(loadConfig()) !== 'off' && GhosttyDock.detect().trusted ? GhosttyDock.APP : 'Terminal') } : {}),
+    ...(IS_MAC ? { terminalApp: () => (GhosttyDock.modeOf(loadConfig()) !== 'off' && GhosttyDock.detect().canOpen ? GhosttyDock.APP : 'Terminal') } : {}),
     ...(IS_MAC ? { launchTerminal: (descriptor, current, appName) => { const T = require('./src/tasks-terminal'); return T.launchTaskTerminal(descriptor, { current, ...(appName === GhosttyDock.APP ? { launch: T.ghosttyDockLauncher() } : {}) }); } } : {}),
     onChange: (snap) => {
       for (const wc of tasksPages()) wc.send('tasks:changed', snap);

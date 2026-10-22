@@ -34,10 +34,12 @@ const JUMP_DEADLINE_MS = 4000;
 // killing it early would fall back while the user is still reading.
 const PROMPT_TIMEOUT_MS = 30000;
 
-function exec(file, args, { timeout = EXEC_TIMEOUT_MS } = {}) {
+// `env` and `killSignal` only for Ghostty Dock's CLI (src/ghostty-dock.js),
+// which must run with the environment its trust check saw.
+function exec(file, args, { timeout = EXEC_TIMEOUT_MS, env, killSignal = 'SIGKILL' } = {}) {
   return new Promise((resolve) => {
     try {
-      const child = execFile(file, args, { timeout, killSignal: 'SIGKILL' }, (err, stdout, stderr) => { // privacy-flow: terminal-jump
+      const child = execFile(file, args, { timeout, killSignal, ...(env ? { env } : {}) }, (err, stdout, stderr) => { // privacy-flow: terminal-jump
         resolve({ ok: !err, code: err ? err.code : 0, stdout: String(stdout || ''), stderr: String(stderr || '') });
       });
       child.on('error', (e) => resolve({ ok: false, stdout: '', stderr: e.message }));
@@ -87,11 +89,11 @@ async function focusSession(session, over = {}, adapters = ADAPTERS, clock = nul
   if (!session || typeof session !== 'object') return { ok: false, reason: 'no session' };
   const deadline = clock || { at: ctx.now() + JUMP_DEADLINE_MS };
   const cancelled = () => !!(ctx.isCancelled && ctx.isCancelled());
-  const bounded = (cap) => (file, args) => {
+  const bounded = (cap) => (file, args, opts = {}) => {
     if (cancelled()) return Promise.resolve({ ok: false, stdout: '', stderr: 'superseded by a newer jump' });
     const left = deadline.at - ctx.now();
     if (left <= 0) return Promise.resolve({ ok: false, stdout: '', stderr: 'jump deadline passed' });
-    return ctx.exec(file, args, { timeout: Math.min(cap, left) }); // privacy-flow: terminal-jump
+    return ctx.exec(file, args, { ...opts, timeout: Math.min(cap, left, opts.timeout || cap) }); // privacy-flow: terminal-jump
   };
   ctx.focusOuter = (outer) => focusSession(outer, { ...over, outer: true }, adapters.filter((a) => a.id !== 'tmux'), deadline);
   // Inside tmux it is the pane or nothing: every other id the session holds

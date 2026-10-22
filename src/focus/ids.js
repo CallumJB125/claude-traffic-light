@@ -84,4 +84,4 @@ function hostIs(s, app, termProgram) {
   return !!termProgram && str(envOf(s).TERM_PROGRAM).toLowerCase() === termProgram.toLowerCase();
 }
 
-module.exports = { hostIs, envOf, inTmux, itermUuid, tty, kittyWindow, kittyListen, weztermPane, tmuxPane, tmuxSocket, tmuxServerPid, launchCwd, safePath };
+module.exports = { hostIs, envOf, inTmux, itermUuid, tty, kittyWindow, kittyListen, weztermPane, tmuxPane, tmuxSocket, tmuxServerPid, launchCwd, safePath, okPath };

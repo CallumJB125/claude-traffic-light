@@ -212,8 +212,8 @@ module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = 
     jumper = jumper || Jump.createJumper({
       localHost: getLocalHost(),
       platform: process.platform,
-      // Ghostty Dock's trust is checked afresh on every click, right before its CLI runs.
-      focus: (s, over) => Focus.focusSession(s, { ...over, ghosttyDock: getGhosttyDockMode() === 'off' ? null : GhosttyDock.detect() }),
+      // Ghostty Dock's trust is checked afresh on every click on one of its sessions, right before its CLI runs.
+      focus: (s, over) => Focus.focusSession(s, { ...over, ghosttyDock: s && s.hostApp === GhosttyDock.APP && getGhosttyDockMode() !== 'off' ? GhosttyDock.detect() : null }),
       activate: activateTerminalApp,
       explainer,
       log: (msg) => console.log(`[jump] ${msg}`),

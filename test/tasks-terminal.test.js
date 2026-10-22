@@ -75,3 +75,21 @@ test('Ghostty Dock launcher: opens the task folder with only the quoted path of 
   assert.equal(calls, 1);
   assert.deepEqual(fs.readdirSync(root).filter(n => n.startsWith('plexiform-terminal-')), []);
 });
+
+test('Ghostty Dock launcher: the real run() accepts exactly the launcher\'s open arguments', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pxterm dock '"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const GhosttyDock = require('../src/ghostty-dock');
+  const { ghosttyDockLauncher } = require('../src/tasks-terminal');
+  const calls = [];
+  const exec = async (file, args, opts) => { calls.push({ file, args, opts }); return { ok: true, stdout: '', stderr: '' }; };
+  const dock = { trusted: true, canOpen: true, cli: '/Users/me/.local/bin/ghostty-dock', env: { HOME: '/Users/me', PATH: '/usr/bin:/bin', TMPDIR: '/tmp' } };
+  const run = (op, args, opts) => GhosttyDock.run(op, args, { ...opts, exec, tmpRoot: root });
+  const result = await launchTaskTerminal({ cwd: root, argv: [process.execPath, '-e', ''] }, { platform: 'darwin', tempDir: root, launch: ghosttyDockLauncher({ detect: () => dock, run }) });
+  assert.equal(result.status, 'requested');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].file, dock.cli);
+  assert.deepEqual(calls[0].args.slice(0, 3), ['open', root, '--command']);
+  assert.equal(calls[0].opts.timeout, GhosttyDock.OPEN_TIMEOUT_MS);
+  result.cancelPending();
+});

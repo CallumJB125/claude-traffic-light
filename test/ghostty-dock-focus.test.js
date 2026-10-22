@@ -11,6 +11,7 @@ const { execFileSync } = require('node:child_process');
 const Focus = require('../src/focus/index.js');
 const Ghostty = require('../src/focus/ghostty.js');
 const Dock = require('../src/focus/ghostty-dock.js');
+const GhosttyDockMod = require('../src/ghostty-dock.js');
 const { createJumper } = require('../src/focus/jump.js');
 const HostApp = require('../hooks/host-app.js');
 const H = require('../hostapp.js');
@@ -19,11 +20,14 @@ const { testTempDir } = require('./helpers/tmp');
 const HOST = os.hostname().split('.')[0];
 const SID = '0b7c9a52-1d3e-4f60-8a9b-2c3d4e5f6a7b';
 const CLI = '/Users/me/.local/bin/ghostty-dock';
-const TRUSTED = { installed: true, trusted: true, cli: CLI, apiDir: '/Users/me/.local/state/ghostty-dock/api', reason: 'ready' };
+const ENV = { HOME: '/Users/me', PATH: '/usr/bin:/bin', TMPDIR: '/tmp' };
+const TRUSTED = { installed: true, trusted: true, canOpen: true, cli: CLI, apiDir: '/Users/me/.local/state/ghostty-dock/api', env: ENV, reason: 'ready' };
 const APP_ONLY = { installed: true, trusted: false, cli: null, apiDir: TRUSTED.apiDir, reason: 'CLI not installed' };
 const ctxOf = (over = {}) => ({ platform: 'darwin', which: (b) => b[0], isDir: () => true, tmuxServerOk: () => true, ghosttyDock: TRUSTED, ...over });
 const sess = (extra = {}) => ({ host: HOST, sessionId: SID, hostApp: 'Ghostty Dock', cwd: '/Users/me/proj', terminal: { env: { TERM_PROGRAM: 'ghostty' }, tty: null, cwd: '/Users/me/proj' }, ...extra });
-function fakeExec(answer = () => ({ ok: true })) {
+// The app counts as running unless an answer says otherwise.
+const running = (file, args) => file === '/usr/bin/osascript' && args[1] === GhosttyDockMod.RUNNING_SCRIPT;
+function fakeExec(answer = (file, args) => ({ ok: true, stdout: running(file, args) ? 'true' : '' })) {
   const calls = [];
   return { calls, exec: async (file, args, opts) => { calls.push({ file, args, opts }); return { stdout: '', stderr: '', ...answer(file, args) }; } };
 }
@@ -71,7 +75,9 @@ test('the CLI adapter runs [cli, focus, <uuid>] as argv, exact, with no Automati
   assert.equal(Dock.cli.canHandle(sess(), ctxOf()), true);
   assert.equal(Dock.cli.needs, undefined);
   assert.deepEqual(await Dock.cli.focus(sess(), { exec, ghosttyDock: TRUSTED }), { ok: true, exact: true });
-  assert.deepEqual(calls.map((c) => [c.file, c.args]), [[CLI, ['focus', SID]]]);
+  assert.deepEqual(calls.map((c) => [c.file, c.args]), [['/usr/bin/osascript', ['-e', GhosttyDockMod.RUNNING_SCRIPT]], [CLI, ['focus', SID]]]);
+  assert.equal(calls[1].opts.env, ENV, 'the CLI runs with the env its trust check saw');
+  assert.equal(calls[1].opts.killSignal, 'SIGTERM');
   const r = await Focus.focusSession(sess(), ctxOf({ exec }));
   assert.deepEqual([r.ok, r.exact, r.adapter], [true, true, 'ghostty-dock']);
 });
@@ -90,11 +96,15 @@ test('not handled when Preferences turn it off, off macOS, or for another host',
   assert.equal(Dock.cli.canHandle(sess({ hostApp: undefined }), ctxOf()), false, 'TERM_PROGRAM=ghostty alone is not Ghostty Dock');
 });
 
-test('a failing CLI answers ok:false and the jumper switches nothing', async () => {
+test('a failing CLI falls back to the bundle-id AppleScript; if that fails too, the jumper switches nothing', async () => {
+  const fallback = fakeExec((file, args) => (running(file, args) ? { ok: true, stdout: 'true' } : file === CLI ? { ok: false, stderr: 'no session' } : { ok: true, stdout: 'ok' }));
+  const ok = await Focus.focusSession(sess(), ctxOf({ exec: fallback.exec }));
+  assert.deepEqual([ok.ok, ok.adapter], [true, 'ghostty-dock-script']);
+  assert.deepEqual(fallback.calls.map((c) => c.args[1] === Dock.SCRIPT ? 'script' : c.file), ['/usr/bin/osascript', CLI, 'script']);
   const { exec } = fakeExec(() => ({ ok: false, stderr: 'no session' }));
   const r = await Focus.focusSession(sess(), ctxOf({ exec }));
   assert.equal(r.ok, false);
-  assert.equal(r.adapter, 'ghostty-dock');
+  assert.equal(r.adapter, 'ghostty-dock-script');
   const activated = [];
   const jump = createJumper({
     localHost: HOST, platform: 'darwin',
@@ -126,7 +136,8 @@ test('without a usable CLI the fallback AppleScript addresses Ghostty Dock by bu
   s.terminal.cwd = '/Users/me/my "quoted" proj';
   assert.equal(Dock.cli.canHandle(s, ctxOf({ ghosttyDock: APP_ONLY })), false);
   assert.equal(Dock.script.canHandle(s, ctxOf({ ghosttyDock: APP_ONLY })), true);
-  assert.equal(Dock.script.canHandle(s, ctxOf()), false, 'the CLI path wins when trusted');
+  assert.equal(Dock.script.canHandle(s, ctxOf()), true, 'also the fallback after a failed CLI call');
+  assert.equal(Focus.ADAPTERS.indexOf(Dock.cli) < Focus.ADAPTERS.indexOf(Dock.script), true, 'the CLI is tried first');
   assert.equal(Dock.script.canHandle(s, ctxOf({ ghosttyDock: { ...APP_ONLY, installed: false } })), false);
   assert.deepEqual(Dock.script.needs.permission, 'automation');
   assert.match(Dock.SCRIPT, /tell application id "consulting\.cloudscale\.ghosttydock"/);

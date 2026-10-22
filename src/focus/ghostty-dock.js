@@ -1,9 +1,10 @@
 // Ghostty Dock (src/ghostty-dock.js): its CLI focuses a tab by the exact
 // Claude session id, so several tabs in one folder are no guess, and it needs
-// no Automation permission. Only when the CLI isn't usable but the app is
-// installed does the folder-unique AppleScript run, addressed by bundle id so
-// it can never reach stock Ghostty. Both are skipped when Preferences turn
-// Ghostty Dock off (ctx.ghosttyDock is then null).
+// no Automation permission. When the CLI isn't usable, or fails (a session
+// Dock's hook never saw, such as Codex, or no jq), the folder-unique
+// AppleScript runs next, addressed by bundle id so it can never reach stock
+// Ghostty. Both are skipped when Preferences turn Ghostty Dock off
+// (ctx.ghosttyDock is then null).
 const Ids = require('./ids.js');
 const { runScript } = require('./applescript.js');
 const GhosttyDock = require('../ghostty-dock.js');
@@ -36,7 +37,7 @@ const script = {
   id: 'ghostty-dock-script',
   app: GhosttyDock.APP,
   needs: { permission: 'automation', app: GhosttyDock.APP, reason: 'so a click can switch to the Ghostty Dock tab your session is running in' },
-  canHandle: (s, ctx) => isDock(s, ctx) && !ctx.ghosttyDock.cli && !!ctx.ghosttyDock.installed && !!Ids.launchCwd(s),
+  canHandle: (s, ctx) => isDock(s, ctx) && !!ctx.ghosttyDock.installed && !!Ids.launchCwd(s),
   focus: (s, { exec }) => runScript(exec, SCRIPT, [Ids.launchCwd(s)]),
   SCRIPT,
 };

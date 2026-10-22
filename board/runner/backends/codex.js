@@ -60,7 +60,7 @@ export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitR
   if (dataDir) filesystem[dataDir] = 'deny';
   if (taskRunDir) filesystem[taskRunDir] = 'deny';
   for (const d of denyPaths) filesystem[d] = 'deny';
-  for (const d of [env.CODEX_HOME || (env.HOME && paths.join(env.HOME, '.codex')), ...['.ssh', '.aws', '.config/gh', '.claude', '.claude.json', '.claude-traffic-light', 'Library/Keychains', '.local/state/ghostty-dock'].map((n) => env.HOME && paths.join(env.HOME, n))].filter(Boolean)) filesystem[d] = 'deny';
+  for (const d of [env.CODEX_HOME || (env.HOME && paths.join(env.HOME, '.codex')), ...['.ssh', '.aws', '.config/gh', '.claude', '.claude.json', '.claude-traffic-light', 'Library/Keychains', '.local/state/ghostty-dock', '.local/bin/ghostty-dock', '.local/bin/ghostty-dock-open'].map((n) => env.HOME && paths.join(env.HOME, n))].filter(Boolean)) filesystem[d] = 'deny';
   const shellEnv = {};
   for (const k of ['HOME', 'PATH', 'LANG', 'TMPDIR', 'TZ', ...(platform === 'win32' ? ['SystemRoot', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP', 'COMSPEC', 'PATHEXT'] : []), 'npm_config_cache', 'XDG_CACHE_HOME', 'PIP_CACHE_DIR', 'UV_CACHE_DIR']) if (env[k]) shellEnv[k] = env[k];
   return [

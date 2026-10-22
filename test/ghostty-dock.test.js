@@ -10,16 +10,24 @@ const { testTempDir } = require('./helpers/tmp');
 
 const UID = typeof process.getuid === 'function' ? process.getuid() : 0;
 const SID = '0b7c9a52-1d3e-4f60-8a9b-2c3d4e5f6a7b';
+const RUNNING = async (file, args) => (file === '/usr/bin/osascript' ? { ok: true, stdout: 'true\n', stderr: '' } : null);
 
-function makeHome({ cli = true, cliMode = 0o755, api = true, apiMode = 0o700, app = true } = {}) {
+// A temporary home with the CLI, its opener, the API folder, the app bundle,
+// and its own bin folder standing in for the fixed PATH (jq, uuidgen).
+function makeHome({ cli = true, cliMode = 0o755, opener = true, api = true, apiMode = 0o700, app = true, jq = true } = {}) {
   const home = fs.realpathSync(testTempDir('px-dock-'));
   const where = GhosttyDock.locations(home);
-  if (cli) { fs.mkdirSync(path.dirname(where.cli), { recursive: true }); fs.writeFileSync(where.cli, '#!/bin/sh\nexit 0\n'); fs.chmodSync(where.cli, cliMode); }
+  const bin = path.join(home, 'fixed-path');
+  fs.mkdirSync(bin);
+  for (const t of ['uuidgen', ...(jq ? ['jq'] : [])]) { fs.writeFileSync(path.join(bin, t), '#!/bin/sh\n'); fs.chmodSync(path.join(bin, t), 0o755); }
+  fs.mkdirSync(path.dirname(where.cli), { recursive: true });
+  if (cli) { fs.writeFileSync(where.cli, '#!/bin/sh\nexit 0\n'); fs.chmodSync(where.cli, cliMode); }
+  if (opener) { fs.writeFileSync(where.opener, '#!/bin/sh\nexit 0\n'); fs.chmodSync(where.opener, 0o755); }
   if (api) { fs.mkdirSync(where.apiDir, { recursive: true }); fs.chmodSync(where.apiDir, apiMode); }
   if (app) fs.mkdirSync(where.apps[0], { recursive: true });
-  return { home, where, done: () => fs.rmSync(home, { recursive: true, force: true }) };
+  return { home, where, bin, done: () => fs.rmSync(home, { recursive: true, force: true }) };
 }
-const detect = (home, over = {}) => GhosttyDock.detect({ home, uid: UID, platform: 'darwin', ...over });
+const detect = (home, over = {}) => GhosttyDock.detect({ home, uid: UID, platform: 'darwin', pathDirs: [path.join(home, 'fixed-path')], ...over });
 
 test('a private API folder and our own executable CLI are trusted; the CLI path is absolute and fixed', () => {
   const h = makeHome();
@@ -27,6 +35,8 @@ test('a private API folder and our own executable CLI are trusted; the CLI path 
     const d = detect(h.home);
     assert.equal(d.trusted, true);
     assert.equal(d.installed, true);
+    assert.equal(d.canOpen, true);
+    assert.deepEqual(d.env, { HOME: h.home, PATH: h.bin, TMPDIR: require('node:os').tmpdir() });
     assert.equal(d.cli, path.join(h.home, '.local', 'bin', 'ghostty-dock'));
     assert.ok(path.isAbsolute(d.cli));
   } finally { h.done(); }
@@ -39,6 +49,7 @@ test('untrusted: API folder is a symlink, is 0755, or belongs to another user; C
     ['cli not executable', { cliMode: 0o644 }],
     ['cli missing', { cli: false }],
     ['api missing', { api: false }],
+    ['no jq on the fixed PATH', { jq: false }],
   ];
   for (const [label, opts] of cases) {
     const h = makeHome(opts);
@@ -59,6 +70,30 @@ test('untrusted: API folder is a symlink, is 0755, or belongs to another user; C
     assert.match(detect(h.home).reason, /not a plain folder/);
     assert.equal(detect(h.home, { uid: UID + 1 }).trusted, false, 'another owner');
   } finally { h.done(); }
+  const noJq = makeHome({ jq: false });
+  try { assert.equal(detect(noJq.home).reason, 'CLI needs jq'); } finally { noJq.done(); }
+});
+
+test('the CLI\'s folder and a symlink\'s target folder must not be writable by others; the opener is checked for open', () => {
+  const h = makeHome();
+  try {
+    fs.chmodSync(path.dirname(h.where.cli), 0o777);
+    assert.match(detect(h.home).reason, /folder other users can change/);
+    fs.chmodSync(path.dirname(h.where.cli), 0o755);
+    const shared = path.join(h.home, 'shared');
+    fs.mkdirSync(shared, { mode: 0o777 });
+    fs.chmodSync(shared, 0o777);
+    fs.renameSync(h.where.cli, path.join(shared, 'ghostty-dock'));
+    fs.symlinkSync(path.join(shared, 'ghostty-dock'), h.where.cli);
+    assert.equal(detect(h.home).trusted, false, 'symlink into a world-writable folder');
+    fs.chmodSync(shared, 0o755);
+    assert.equal(detect(h.home).trusted, true, 'symlink to our own file in our own folder');
+    fs.chmodSync(h.where.opener, 0o777);
+    const d = detect(h.home);
+    assert.deepEqual([d.trusted, d.canOpen], [true, false]);
+  } finally { h.done(); }
+  const noApp = makeHome({ app: false });
+  try { assert.deepEqual([detect(noApp.home).trusted, detect(noApp.home).canOpen], [true, false]); } finally { noApp.done(); }
 });
 
 test('the GHOSTTY_DOCK_STATE override is ignored, and nothing is looked up on PATH', () => {
@@ -81,7 +116,8 @@ test('the GHOSTTY_DOCK_STATE override is ignored, and nothing is looked up on PA
 test('absent cleanly: no app, no CLI, or not macOS', () => {
   const h = makeHome({ cli: false, api: false, app: false });
   try {
-    assert.deepEqual(detect(h.home), { installed: false, trusted: false, cli: null, apiDir: h.where.apiDir, reason: 'CLI not installed' });
+    const d = detect(h.home);
+    assert.deepEqual([d.installed, d.trusted, d.canOpen, d.cli, d.reason], [false, false, false, null, 'CLI not installed']);
     assert.equal(GhosttyDock.detect({ home: h.home, platform: 'linux' }).trusted, false);
   } finally { h.done(); }
 });
@@ -100,28 +136,79 @@ test('the op allow-list is frozen to focus, list, notify and open; anything else
   assert.deepEqual(calls, []);
 });
 
-test('run passes argv only, refuses control characters, and needs a trusted dock', async () => {
+const ENV = { HOME: '/Users/me', PATH: '/usr/bin:/bin', TMPDIR: '/tmp' };
+const DOCK = { trusted: true, canOpen: true, cli: '/x/ghostty-dock', env: ENV };
+
+test('focus checks the app is running first, then runs argv only with the checked env and SIGTERM', async () => {
   const calls = [];
-  const exec = async (file, args) => { calls.push([file, args]); return { ok: true, stdout: '', stderr: '' }; };
-  const dock = { trusted: true, cli: '/x/ghostty-dock' };
-  assert.deepEqual(await GhosttyDock.run('focus', [SID], { dock, exec }), { ok: true });
-  assert.deepEqual(calls, [['/x/ghostty-dock', ['focus', SID]]]);
-  await assert.rejects(GhosttyDock.run('focus', ['a\nb'], { dock, exec }), /bad argument/);
+  const exec = async (file, args, opts) => { calls.push([file, args, opts]); return (await RUNNING(file)) || { ok: true, stdout: '', stderr: '' }; };
+  assert.deepEqual(await GhosttyDock.run('focus', [SID], { dock: DOCK, exec }), { ok: true });
+  assert.deepEqual(calls.map(([f, a]) => [f, a]), [['/usr/bin/osascript', ['-e', GhosttyDock.RUNNING_SCRIPT]], ['/x/ghostty-dock', ['focus', SID]]]);
+  assert.match(GhosttyDock.RUNNING_SCRIPT, /application id "consulting\.cloudscale\.ghosttydock" is running/);
+  for (const [, , opts] of calls) { assert.equal(opts.env, ENV); assert.equal(opts.killSignal, 'SIGTERM'); }
+  // Not running: no request file is ever written for a later start to act on.
+  const quiet = [];
+  const down = await GhosttyDock.run('focus', [SID], { dock: DOCK, exec: async (f, a) => { quiet.push(f); return { ok: true, stdout: 'false' }; } });
+  assert.deepEqual(down, { ok: false, reason: 'Ghostty Dock is not running' });
+  assert.deepEqual(quiet, ['/usr/bin/osascript']);
   assert.equal((await GhosttyDock.run('focus', [SID], { dock: { trusted: false, cli: null, reason: 'API folder is not private' }, exec })).ok, false);
-  assert.equal(calls.length, 1);
-  const failed = await GhosttyDock.run('focus', [SID], { dock, exec: async () => ({ ok: false, stderr: 'no such session\n' }) });
+  assert.equal(calls.length, 2);
+  const failed = await GhosttyDock.run('focus', [SID], { dock: DOCK, exec: async (f) => (await RUNNING(f)) || { ok: false, stderr: 'no such session\n' } });
   assert.deepEqual(failed, { ok: false, reason: 'no such session' });
+});
+
+test('each op has a fixed argument shape: no free command line, no names or folders for focus', async () => {
+  const calls = [];
+  const exec = async (file, args, opts) => { calls.push([file, args, opts]); return { ok: true, stdout: 'true' }; };
+  const tmpRoot = '/private/var/folders/xy/T';
+  const file = `${tmpRoot}/plexiform-terminal-Ab12Cd/continue.command`;
+  const bad = [
+    ['focus', []], ['focus', [SID, SID]], ['focus', ['aws-cli']], ['focus', ['a\nb']], ['focus', ['/Users/me/repo']],
+    ['list', ['--all']], ['notify', []], ['notify', ['a', 'b']], ['notify', ['--urgent']],
+    ['open', ['/Users/me/repo', '--command', 'rm -rf ~']],
+    ['open', ['/Users/me/repo', '--command', "'rm' -rf ~"]],
+    ['open', ['/Users/me/repo', '--command', `'${file}'; rm -rf ~`]],
+    ['open', ['/Users/me/repo', '--command', file]],
+    ['open', ['/Users/me/repo', '--command', `'/tmp/evil/continue.command'`]],
+    ['open', ['/Users/me/repo', '--command', `'${tmpRoot}/plexiform-terminal-Ab12Cd/../x/continue.command'`]],
+    ['open', ['/Users/me/repo', '--command', `'${tmpRoot}/plexiform-terminal-Ab12Cd/run.sh'`]],
+    ['open', ['relative', '--command', `'${file}'`]],
+    ['open', ['/Users/me/repo', '-c', `'${file}'`]],
+    ['open', ['/Users/me/repo', '--command', `'${file}'`, 'extra']],
+  ];
+  for (const [op, args] of bad) await assert.rejects(GhosttyDock.run(op, args, { dock: DOCK, exec, tmpRoot }), /bad arguments/, `${op} ${JSON.stringify(args)}`);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(await GhosttyDock.run('open', ['/Users/me/repo', '--command', `'${file}'`], { dock: DOCK, exec, tmpRoot }), { ok: true });
+  assert.deepEqual(calls[0][1], ['open', '/Users/me/repo', '--command', `'${file}'`]);
+  assert.equal(calls[0][2].timeout, GhosttyDock.OPEN_TIMEOUT_MS, 'room for the Automation prompt');
+  assert.ok(GhosttyDock.OPEN_TIMEOUT_MS >= 30000);
+  assert.equal((await GhosttyDock.run('open', ['/Users/me/repo', '--command', `'${file}'`], { dock: { ...DOCK, canOpen: false }, exec, tmpRoot })).ok, false);
+  await GhosttyDock.run('list', [], { dock: DOCK, exec });
+  await GhosttyDock.run('notify', [`Plexiform: done\u0007${'x'.repeat(300)}`], { dock: DOCK, exec });
+  const title = calls.at(-1)[1][1];
+  assert.ok(title.length <= 120 && !/[\0-\x1f]/.test(title), 'one clipped title');
 });
 
 test('a fake CLI on disk is run for real, with exactly the argv given', async () => {
   const h = makeHome();
   try {
     const log = path.join(h.home, 'argv.json');
-    fs.writeFileSync(h.where.cli, `#!${process.execPath}\nrequire('fs').writeFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)));\n`);
+    fs.writeFileSync(h.where.cli, `#!${process.execPath}\nrequire('fs').writeFileSync(${JSON.stringify(log)}, JSON.stringify({ argv: process.argv.slice(2), state: process.env.GHOSTTY_DOCK_STATE ?? null, home: process.env.HOME, path: process.env.PATH, secret: process.env.PX_DOCK_SECRET ?? null }));\n`);
     fs.chmodSync(h.where.cli, 0o700);
-    const r = await GhosttyDock.run('focus', [SID], { dock: detect(h.home) });
+    const saved = process.env.GHOSTTY_DOCK_STATE;
+    process.env.GHOSTTY_DOCK_STATE = '/tmp/planted-state';
+    process.env.PX_DOCK_SECRET = 'fixture-private-value';
+    let r;
+    try {
+      // The real exec, with only the running check stubbed (Ghostty Dock isn't here).
+      const realExec = (file, args, opts) => (file === '/usr/bin/osascript' ? RUNNING(file) : GhosttyDock.execCli(file, args, opts));
+      r = await GhosttyDock.run('focus', [SID], { dock: detect(h.home), exec: realExec });
+    } finally {
+      if (saved === undefined) delete process.env.GHOSTTY_DOCK_STATE; else process.env.GHOSTTY_DOCK_STATE = saved;
+      delete process.env.PX_DOCK_SECRET;
+    }
     assert.equal(r.ok, true);
-    assert.deepEqual(JSON.parse(fs.readFileSync(log, 'utf8')), ['focus', SID]);
+    assert.deepEqual(JSON.parse(fs.readFileSync(log, 'utf8')), { argv: ['focus', SID], state: null, home: h.home, path: h.bin, secret: null });
   } finally { h.done(); }
 });
 
@@ -134,7 +221,7 @@ test('detection is cached for 60 s and a failed call drops the cache', async () 
     assert.equal(GhosttyDock.current({ home: h.home, uid: UID, platform: 'darwin', now: 30000 }).trusted, true, 'cached');
     assert.equal(GhosttyDock.current({ home: h.home, uid: UID, platform: 'darwin', now: 61001 }).trusted, false, 'expired');
     fs.chmodSync(h.where.apiDir, 0o700);
-    await GhosttyDock.run('focus', [SID], { dock: { trusted: true, cli: '/x' }, exec: async () => ({ ok: false }) });
+    await GhosttyDock.run('list', [], { dock: DOCK, exec: async () => ({ ok: false }) });
     assert.equal(GhosttyDock.current({ home: h.home, uid: UID, platform: 'darwin', now: 61002 }).trusted, true, 'invalidated');
   } finally { h.done(); GhosttyDock.invalidate(); }
 });
