@@ -1,0 +1,52 @@
+// The bus sandbox pin (AGENT-BUS.md §2.4.7): a bus run has no network. Claude:
+// allowedDomains [] whatever the repo allows, WebFetch/WebSearch disallowed, and
+// push / gh pr patterns as a backup only. Codex: network.enabled=false.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { buildSettings, buildArgv, BUS_DISALLOWED, DISALLOWED_TOOLS } from '../launch.js';
+import { startEngine, makeRepo, tmpDir, rm, writePolicy, waitFor } from '../../tasks-engine/test/helpers.js';
+import { startBus, rid } from '../../tasks-engine/test/bus-helpers.js';
+
+test('buildSettings: bus forces allowedDomains [] over the repo allowlist; others keep it', () => {
+  const repo = { allowed_domains: ['registry.npmjs.org', 'github.com'] };
+  assert.deepEqual(buildSettings({ worktree: '/wt', tmpdir: '/t', repo, bus: true }).sandbox.network, { allowedDomains: [], strictAllowlist: true });
+  assert.deepEqual(buildSettings({ worktree: '/wt', tmpdir: '/t', repo }).sandbox.network.allowedDomains, ['registry.npmjs.org', 'github.com']);
+  assert.equal(buildSettings({ worktree: '/wt', tmpdir: '/t', bus: true }).sandbox.allowUnsandboxedCommands, false);
+  const argv = buildArgv({ runDir: '/r', sessionId: 's', extraDisallowed: BUS_DISALLOWED });
+  for (const t of ['WebFetch', 'WebSearch', 'Bash(git push*)', 'Bash(gh pr*)']) assert.ok(argv.includes(t), t);
+  assert.ok(DISALLOWED_TOOLS.includes('WebFetch') && DISALLOWED_TOOLS.includes('WebSearch'));
+});
+
+test('a bus Claude run is launched with no domains and the push/PR backup disallows', async () => {
+  const dir = tmpDir();
+  const repo = makeRepo(dir);
+  const m = await startEngine({ dir, scenario: { steps: [{ tool: 'Read', input: { file_path: 'README.md' }, ms: 60000 }] } });
+  try {
+    writePolicy(m.dataDir, { repos: { [repo.checkout]: { bus_auto: true, allowed_domains: ['example.com'] } } });
+    const { id } = await m.eng.engine.createTask({ requestId: rid('sbx'), spec: { text: 'x', cwd: repo.checkout, ai: 'claude', source: 'bus',
+      sourceMeta: { handoffId: 'hof_0123456789abcdef', fence: 1, originTier: 'local_attested', scope: 'local' } } });
+    const run = await waitFor(() => m.eng.engine.runs.get(id)?.backend && m.eng.engine.runs.get(id), { label: 'claude run' });
+    const settings = JSON.parse(fs.readFileSync(path.join(run.runDir, 'settings.json'), 'utf8'));
+    assert.deepEqual(settings.sandbox.network.allowedDomains, []);
+    assert.equal(settings.sandbox.network.strictAllowlist, true);
+    const argv = run.backend.argv();
+    for (const t of ['WebFetch', 'WebSearch', 'Bash(git push*)', 'Bash(gh pr*)']) assert.ok(argv.includes(t), t);
+    // A local task keeps the ordinary profile (no bus backup patterns).
+    const local = await m.client.createTask({ text: 'local one', cwd: repo.checkout, ai: 'claude' });
+    const lrun = await waitFor(() => m.eng.engine.runs.get(local.id)?.backend && m.eng.engine.runs.get(local.id), { label: 'local run' });
+    assert.ok(!lrun.backend.argv().includes('Bash(gh pr*)'));
+  } finally { await m.close(); rm(dir); }
+});
+
+test('a bus Codex run has network.enabled=false and no user config', async () => {
+  const b = await startBus({ text: 'ok' });
+  try {
+    await b.handoff({ request_id: rid('cdx') });
+    const started = await waitFor(() => b.h.log().find((x) => x.kind === 'start'), { label: 'codex start' });
+    assert.ok(started.argv.some((s) => s === 'permissions.plexiform.network.enabled=false'));
+    assert.ok(started.argv.includes('--ignore-user-config'));
+    assert.ok(started.argv.some((s) => s.startsWith('mcp_servers.board.enabled_tools=') && s.includes('bus_result') && s.includes('bus_handoff')));
+  } finally { await b.cleanup(); }
+});

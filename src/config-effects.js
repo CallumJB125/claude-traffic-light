@@ -15,6 +15,7 @@ function applyConfigSideEffects(prev, next, d, touched) {
   if (hit('lowPower')) d.applyLowPower?.();
   if (hit('fastHook')) d.syncFastHook?.();
   if (hit('agentMailInbox')) d.syncAgentMail?.();
+  if (hit('agentBus')) d.syncAgentBus?.();
   if (hit('widgetShortcut') || hit('widgetSize')) d.widgetPolish?.(prev, next);
   d.broadcastStatus();
 }

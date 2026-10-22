@@ -19,6 +19,8 @@ if (scenario.wait && !(scenario.waitFirstOnly && process.argv.includes('resume')
  emit({ type: 'item.started', item: { id: 'cmd_1', type: 'command_execution', command: 'sleep 300' } });
  await new Promise((r) => setTimeout(r, 300000));
 }
+// delayMs: a short working turn, long enough for a test to call the run's task tools.
+if (scenario.delayMs) await new Promise((r) => setTimeout(r, scenario.delayMs));
 if (scenario.write || (scenario.writeOnResume && process.argv.includes('resume'))) {
  fs.writeFileSync(path.join(process.cwd(), 'codex-result.txt'), 'fixture edit\n');
  emit({ type: 'item.completed', item: { id: 'file_1', type: 'file_change', status: 'completed', changes: [{ path: path.join(process.cwd(), 'codex-result.txt'), kind: 'add' }] } });

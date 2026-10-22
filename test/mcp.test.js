@@ -212,12 +212,12 @@ test('buddy_spend: today, this week and runaways from the transcripts, with the 
   assert.match(r.summary, /1 turn this week unpriced/);
 });
 
-test('the server exposes fourteen buddy_ tools and nine team_ tools, read-only but for the two that draft held agent mail', () => {
-  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_spend', 'buddy_usage_history', 'buddy_health', 'buddy_pending_requests', 'buddy_burst_status', 'buddy_burst_coordination', 'buddy_burst_requests', 'team_activity', 'who_touched', 'team_handover', 'team_brief', 'team_memory_search', 'team_memory_get', 'team_ask', 'team_hand_off', 'hand_off_to_tool', 'hand_off_status', 'team_agent_mail']);
-  assert.deepEqual(M.TOOLS.filter((t) => t.readOnly === false).map((t) => t.name), ['team_ask', 'team_hand_off', 'hand_off_to_tool']);
+test('the server exposes fourteen buddy_ tools, nine team_ tools and five bus_ tools, read-only but for the ones that draft held agent mail or hand off on the agent bus', () => {
+  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_spend', 'buddy_usage_history', 'buddy_health', 'buddy_pending_requests', 'buddy_burst_status', 'buddy_burst_coordination', 'buddy_burst_requests', 'team_activity', 'who_touched', 'team_handover', 'team_brief', 'team_memory_search', 'team_memory_get', 'team_ask', 'team_hand_off', 'hand_off_to_tool', 'hand_off_status', 'bus_hello', 'bus_handoff', 'bus_wait', 'bus_read', 'bus_status', 'team_agent_mail']);
+  assert.deepEqual(M.TOOLS.filter((t) => t.readOnly === false).map((t) => t.name), ['team_ask', 'team_hand_off', 'hand_off_to_tool', 'bus_handoff']);
 });
 
-test('stdio: the server starts, lists twenty-five tools and answers buddy_status and buddy_health end to end', async () => {
+test('stdio: the server starts, lists thirty tools and answers buddy_status and buddy_health end to end', async () => {
   const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
   const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
   const root = fixture({ config: base, sessions: { a: session('a', { updatedAt: new Date().toISOString() }) } });
@@ -231,7 +231,7 @@ test('stdio: the server starts, lists twenty-five tools and answers buddy_status
   await client.connect(transport);
   try {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 25);
+    assert.equal(tools.length, 30);
     // The same synthetic home on every host, without an installed Codex profile.
     const health = JSON.parse((await client.callTool({ name: 'buddy_health', arguments: {} })).content[0].text);
     assert.equal(health.checks.length, 8);

@@ -828,6 +828,22 @@
     </div>
     <div class="hint" id="health-copy-hint" role="status" aria-live="polite"></div>
   </section>
+
+  <!-- Agent bus (src/agent-bus-main.js, board/AGENT-BUS.md) -->
+  <h2>Agent bus</h2>
+  <div class="field" id="agent-bus-settings">
+    <label class="row"><input type="checkbox" id="agentBusEnabled" aria-describedby="hint-agent-bus" /> Let AI tools on this Mac hand work to each other</label>
+    <div class="hint" id="hint-agent-bus">An AI session can hand a bounded piece of work to another AI tool here (for example Claude Code to Codex). It starts on its own, only in a repository listed below, in a new git worktree with no network access, so it cannot push or open a pull request. Its result goes back to the session that asked. Stop agent bus in the menu bar stops every such run.</div>
+    <label class="row"><input type="checkbox" id="agentBusAutoAccept" /> Start handed-off work without asking me</label>
+    <label for="agentBusRepos">Repositories turned on</label>
+    <textarea id="agentBusRepos" rows="3" spellcheck="false" placeholder="/Users/you/code/app (one folder per line)" aria-describedby="hint-agent-bus-repos"></textarea>
+    <div class="hint" id="hint-agent-bus-repos">The checkout folder, or its remote (github.com/owner/repo) for a folder you already used in Tasks. Off for every other repository.</div>
+    <label for="agentBusWallClock">Stop each run after (minutes)</label>
+    <input type="number" id="agentBusWallClock" min="1" max="1440" step="1" />
+    <label class="row"><input type="checkbox" id="agentBusCaps" aria-describedby="hint-agent-bus-caps" /> Cap what handed-off runs may spend each day</label>
+    <div class="row"><label for="agentBusMemberUsd">Per day ($)</label> <input type="number" id="agentBusMemberUsd" min="0" max="10000" step="1" /> <label for="agentBusHandoffUsd">Per run ($)</label> <input type="number" id="agentBusHandoffUsd" min="0.01" max="100" step="0.5" /></div>
+    <div class="hint" id="hint-agent-bus-caps">Off by default. When on, a run starts only if the day's cap still covers its per-run amount. Claude Code stops at the per-run amount; Codex reports no cost while it runs, so it is priced afterwards from its tokens and is bounded by the time limit above.</div>
+  </div>
   </div>
 
   <div class="actions">

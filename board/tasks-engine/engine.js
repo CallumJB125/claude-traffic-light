@@ -17,19 +17,21 @@ import { MessageStore, cleanBody, messageId } from '../tasks-api/mesh.js';
 import { buildPacket, cleanPacketData, packetMarkdown, PacketError } from './checkpoint.js';
 import {
   TASKS_PROTOCOL_VERSION, RING_EVENTS, REQUEST_CACHE_MS, ACT_CACHE_MS, REMOTE_SOURCES, MAX_TRANSCRIPT_CHUNK, MAX_PATCH_BYTES,
-  AIS, CAPABILITIES, LOCAL_SOURCES,
+  AIS, CAPABILITIES, LOCAL_SOURCES, BUS_OPS,
 } from '../tasks-api/protocol.js';
 import { T_QUIET_MS } from '../shared/liveness.js';
 import { redact, filterPath, normalizeRemoteUrl } from '../shared/scope.js';
 import { untrusted, envelopeTag } from '../shared/untrusted.js';
 import { BACKENDS } from '../runner/backends/index.js';
-import { buildSettings, buildMcpConfig, buildEnv, trustedInstructions, HOOK_TOKEN_FILE, API_KEY_FILE, MCP_SERVER, DEFAULT_MAX_TURNS, DISALLOWED_TOOLS } from '../runner/launch.js';
+import { buildSettings, buildMcpConfig, buildEnv, trustedInstructions, HOOK_TOKEN_FILE, API_KEY_FILE, MCP_SERVER, DEFAULT_MAX_TURNS, DISALLOWED_TOOLS, BUS_DISALLOWED } from '../runner/launch.js';
 import { startIpcServer } from '../runner/ipc.js';
 import { confine, globBase, realish } from '../runner/paths.js';
 import { checkGitPush } from '../runner/run.js';
 import { runAllowKey } from '../runner/policy.js';
 import { makeGit, resolveGit } from './git.js';
 import { createCollaboration, collaborationReceipts } from './collaboration.js';
+import { createAgentBus, BusRefusal } from './bus/dispatcher.js';
+import { mergeSettings } from './bus/guard.js';
 import { TASK_TOOL_NAMES } from '../mcp/task-tools.js';
 import { createTaskIntegration } from './integration.js';
 import { createTaskPullRequest } from './pull-request.js';
@@ -181,6 +183,7 @@ export class TasksEngine extends EventEmitter {
       },
       dispatchInbox: (task, ids) => { for (const id of ids) this.#markMessage(task, id, { deliveredAt: this.now(), source: 'live' }); },
       create: (args, task, fresh) => this.createTask(args, { auth: () => fresh() ? this.#agentPrincipal(task) : null }),
+      bus: (task, name, args) => this.agentBus.runTool(task, name, args),
       deliver: (sender, target, body, fresh) => this.#withLock(target, async () => {
         if (!fresh() || this.tasks.get(target.id) !== target) throw new ApiError('POLICY_DENIED', 'The task run changed.');
         if (!this.#face(target).actions.includes('message')) throw new ApiError('ILLEGAL_TRANSITION', `Messages are unavailable while the task is ${target.state}.`);
@@ -197,6 +200,7 @@ export class TasksEngine extends EventEmitter {
     await this.#detect();
     this.#recover();
     this.#prune();
+    this.agentBus = createAgentBus({ engine: this, dataDir: this.dataDir, now: this.now, log: this.log });
     this.tick = setInterval(() => this.#tick(), this.opts.tickMs ?? 1000);
     this.tick.unref?.();
     this.detectTimer = setInterval(() => { this.#prune(); this.#detect().catch(() => {}); }, DETECT_EVERY_MS);
@@ -654,7 +658,8 @@ export class TasksEngine extends EventEmitter {
     if (workInPlace && this.#protectedFolder(top ?? cwd)) throw new ApiError('POLICY_DENIED', "this folder can't be used for a task in place");
     if (parent && (!parent.repo || parent.repo.root !== top)) throw new ApiError('POLICY_DENIED', "a spin-off works only in its parent task's repo");
     const policy = this.#policy();
-    if (remote && !(await this.#remoteAllowed(top, policy))) throw new ApiError('POLICY_DENIED', 'tasks from other people or devices are not turned on for this repo');
+    if (source === 'bus' ? !(await this.busRepoAllowed(top, policy)) : remote && !(await this.#remoteAllowed(top, policy))) throw new ApiError('POLICY_DENIED', 'tasks from other people or devices are not turned on for this repo');
+    if (spec.wallClockMs != null && !(Number.isSafeInteger(spec.wallClockMs) && spec.wallClockMs >= 60_000 && spec.wallClockMs <= DAY_MS)) throw new ApiError('VALIDATION', 'wallClockMs must be 1 minute to 24 hours');
     const root = top ?? cwd;
     let worktree = root;
     let branch = null;
@@ -686,12 +691,17 @@ export class TasksEngine extends EventEmitter {
 
     const now = this.now();
     const originUserId = parent ? parent.originUserId ?? null : spec.sourceMeta?.userId ?? null;
-    const remoteNeedsAccept = remote && !policy.acceptFrom.has(originUserId ?? '');
+    // Bus (AGENT-BUS.md §2.4): accepted under the receiver's own policy, never by acceptFrom. Local scope is this
+    // Mac's own user; team scope needs the origin tier in accept_tiers (hub-verified, phase 2).
+    const bus = source === 'bus' ? this.#busSettings(policy) : null;
+    const remoteNeedsAccept = bus
+      ? !(bus.auto_accept === true && (spec.sourceMeta?.scope === 'local' || bus.accept_tiers.includes(spec.sourceMeta?.originTier)))
+      : remote && !policy.acceptFrom.has(originUserId ?? '');
     const task = {
       id, title: (spec.title ?? spec.text.split('\n')[0]).slice(0, 120) || 'Task', spec,
       state: 'queued', blockedKind: null, failKind: null, failReason: null, parkReason: null, outcome: null, queueReason: null,
       ai: { id: ai.id, reason: ai.reason, model: spec.model ?? null }, surface, permissionLevel: level,
-      planFirst: remote || parentPlanning || !!spec.planFirst, planApproved: false, source, sourceMeta: spec.sourceMeta ?? {},
+      planFirst: source === 'bus' ? spec.planFirst === true : remote || parentPlanning || !!spec.planFirst, planApproved: false, source, sourceMeta: spec.sourceMeta ?? {},
       awaitingConfirm: remoteNeedsAccept, repo: top ? { root: top, name: path.basename(top) } : null, branch, worktree, workInPlace,
       worktreeCreated: false, gitDir: null, gitRef, baseBranch, baseSha, sessionId: crypto.randomUUID(), sessionStarted: false, nonce: hex(8),
       cost: { usd: 0, budgetUsd: spec.budgetUsd ?? null }, numTurns: 0, turn: 0, createdAt: now, stateSince: now, lastSeq: 0,
@@ -727,8 +737,29 @@ export class TasksEngine extends EventEmitter {
       return {
         acceptFrom: new Set(Array.isArray(j.accept_from) ? j.accept_from.filter((x) => typeof x === 'string') : []),
         repos: j.repos && typeof j.repos === 'object' && !Array.isArray(j.repos) ? j.repos : {},
+        bus: j.bus && typeof j.bus === 'object' && !Array.isArray(j.bus) ? j.bus : null,
       };
-    } catch { return { acceptFrom: new Set(), repos: {} }; }
+    } catch { return { acceptFrom: new Set(), repos: {}, bus: null }; }
+  }
+
+  // policy.json's bus keys, then what main pushed from Preferences (busSetContext).
+  #busSettings(policy = this.#policy()) { return mergeSettings(policy.bus, this.agentBus?.context.settings); }
+
+  busPolicy() { const p = this.#policy(); return { bus: p.bus, repos: p.repos }; }
+
+  /** The one bus opt-in rule: policy.repos[<realpath|canonical>].bus_auto, or the repo ticked in Preferences. remote_tasks never counts. */
+  async busRepoAllowed(top, policy = this.#policy()) {
+    if (!top) return false;
+    const ticked = new Set(this.agentBus?.context.repos ?? []);
+    for (const [key, v] of [...Object.entries(policy.repos), ...[...ticked].map((k) => [k, { bus_auto: true }])]) {
+      if (v?.bus_auto !== true || !path.isAbsolute(key)) continue;
+      let real = key;
+      try { real = await fs.promises.realpath(key); } catch { /* as given */ }
+      if (real === top) return true;
+    }
+    const url = await this.git(top, ['config', '--get', 'remote.origin.url']).then((x) => x.trim(), () => null);
+    const canon = url ? normalizeRemoteUrl(url) : null;
+    return !!canon && (policy.repos[canon]?.bus_auto === true || ticked.has(canon));
   }
 
   /** A repo opted in to remote work: policy.repos[<realpath or canonical remote>].remote_tasks === true. */
@@ -940,7 +971,7 @@ export class TasksEngine extends EventEmitter {
     writeJsonAtomic(path.join(runDir, 'settings.json'), buildSettings({
       worktree: task.worktree, tmpdir: path.join(cacheDir, 'tmp'), repo: {}, apiKeyFile, extraDenyRead: [fs.realpathSync(this.dataDir)],
       extraDenyWrite: [fs.realpathSync(this.dataDir), ...protectedWrite],
-      level: task.planFirst && !task.planApproved ? 'plan' : task.permissionLevel, cacheWrite: [cacheDir],
+      level: task.planFirst && !task.planApproved ? 'plan' : task.permissionLevel, cacheWrite: [cacheDir], bus: task.source === 'bus',
     }));
     writeJsonAtomic(path.join(runDir, 'mcp.json'), buildMcpConfig({ socket: socketPath, token, server: this.mcpServer }));
     writeFileAtomic(path.join(runDir, HOOK_TOKEN_FILE), token);
@@ -999,7 +1030,7 @@ export class TasksEngine extends EventEmitter {
       budget: remaining != null ? { amount: remaining, unit: 'usd' } : null, maxTurns: ONE_TURN.has(task.ai.id) ? undefined : DEFAULT_MAX_TURNS,
       systemPrompt: this.#brief(task), model: task.ai.model ?? undefined, log: this.log, boardHome: null,
       permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel],
-      extraDisallowed: ['Read', 'Edit', 'Write'].map((t) => `${t}(/${dataReal}/**)`),
+      extraDisallowed: [...['Read', 'Edit', 'Write'].map((t) => `${t}(/${dataReal}/**)`), ...(task.source === 'bus' ? BUS_DISALLOWED : [])],
       interruptWaitMs: this.opts.interruptWaitMs, stopGraceMs: this.opts.stopGraceMs,
       dataDir: dataReal, cacheDir, ...gitAccess, ...(task.ai.id === 'codex' ? { taskRunDir: runDir } : {}),
     });
@@ -1039,6 +1070,7 @@ export class TasksEngine extends EventEmitter {
       return;
     }
     task.sessionStarted = true;
+    if (task.spec.wallClockMs != null) task.wallClockStart ??= this.now();
     task.run = { pid: backend.pid ?? null, lstart: backend.lstart ?? null, pgid: backend.pgid ?? null, ...(backend.platform === 'win32' ? { kind: 'windows-job' } : {}) };
     task.lastActivity = this.now();
     this.#audit(task, 'supervisor', resume ? 'resumed' : 'started', `${AI_LABEL[task.ai.id]} session ${resume ? 'resumed' : 'started'}`);
@@ -1046,6 +1078,24 @@ export class TasksEngine extends EventEmitter {
   }
 
   #cacheDir(task) { return path.join(this.env.TMPDIR || os.tmpdir(), `buddy-task-${task.id}`); }
+
+  // spec.wallClockMs (bus runs; Codex has no native spend cap): measured by the engine clock from the first start,
+  // across resumes, checked on every tick, then the stop action's recipe. A runaway or looping run ends here.
+  #wallClock(task, now) {
+    if (task.spec.wallClockMs == null || task.wallClockStart == null || now - task.wallClockStart < task.spec.wallClockMs) return;
+    const run = this.runs.get(task.id);
+    if (!run?.backend || run.wallClockHit) return;
+    run.wallClockHit = true;
+    this.log.info('task wall clock reached', { task_id: task.id });
+    this.#withLock(task, async () => {
+      if (this.runs.get(task.id) !== run || !LEASED.has(task.state)) return;
+      // The stop action's recipe, with the reason recorded instead of "stopped by you".
+      this.#audit(task, 'supervisor', 'stop', 'wall clock limit reached');
+      await this.#stopRun(task, run);
+      if (task.openAsk) this.#closeAsk(task, null);
+      this.#failTask(task, 'stopped', `wall clock limit (${Math.round(task.spec.wallClockMs / 60000)} min) reached`);
+    }).catch(() => {});
+  }
 
   #isLive(task, run) { return !this.closing && !this.closed && this.runs.get(task.id) === run; }
 
@@ -1093,6 +1143,11 @@ export class TasksEngine extends EventEmitter {
     });
     b.on('rate_limit', ({ info }) => {
       if (live() && info?.status === 'rejected') run.rateLimited = { resetsAt: Number.isFinite(info.resetsAt) ? info.resetsAt * 1000 : null };
+    });
+    b.on('usage', (u) => {
+      if (!live()) return;
+      const n = (v) => (Number.isFinite(v) && v > 0 ? v : 0);
+      task.tokens = { inputTokens: n(task.tokens?.inputTokens) + n(u.inputTokens), outputTokens: n(task.tokens?.outputTokens) + n(u.outputTokens) };
     });
     b.on('result', (r) => { if (live()) this.#onResult(task, run, r); });
     b.on('exit', (x) => {
@@ -1754,6 +1809,8 @@ export class TasksEngine extends EventEmitter {
       }
       case 'retry': {
         if (task.cost.budgetUsd != null && task.cost.usd >= task.cost.budgetUsd) throw new ApiError('BUDGET_EXCEEDED', "this task's budget is used up");
+        // A person's retry gets a fresh wall clock.
+        task.wallClockStart = null;
         const fresh = !!payload.fresh || !task.sessionStarted;
         if (fresh) {
           // A new session consumes context, never an earlier plan approval.
@@ -1883,6 +1940,17 @@ export class TasksEngine extends EventEmitter {
     return this.getLimits();
   }
 
+  /** The agent bus (board/AGENT-BUS.md): main's own client only; a relay never reaches it. */
+  async bus({ op, args = {}, caller = null }, ctx = {}) {
+    if (this.principal(ctx)?.kind === 'relay') throw new ApiError('POLICY_DENIED', 'only the local app can use the agent bus');
+    if (!BUS_OPS.includes(op)) throw new ApiError('VALIDATION', 'unknown bus op');
+    const c = caller && typeof caller === 'object' ? { provider: typeof caller.provider === 'string' ? caller.provider.slice(0, 12) : null, cwd: typeof caller.cwd === 'string' && path.isAbsolute(caller.cwd) ? caller.cwd.slice(0, 1024) : null } : null;
+    try { return await this.agentBus.op(op, args, c); } catch (e) {
+      if (e instanceof BusRefusal) throw new ApiError(['VALIDATION', 'POLICY_DENIED', 'CONFLICT'].includes(e.code) ? e.code : 'INTERNAL', e.message);
+      throw e;
+    }
+  }
+
   getClaims({ repo }, ctx = {}) {
     const p = this.principal(ctx);
     if (p?.kind === 'relay' && ![...this.tasks.values()].some((t) => t.repo?.root === repo && this.canAccess(t.id, p))) throw new ApiError('NOT_FOUND', 'repo not found');
@@ -1924,6 +1992,7 @@ export class TasksEngine extends EventEmitter {
     if ([...this.tasks.values()].some((t) => t.state === 'queued' && (t.spec.startAfter != null || t.spec.window || t.spec.afterReset))) this.#schedule();
     for (const task of this.tasks.values()) {
       if (!LEASED.has(task.state)) continue;
+      this.#wallClock(task, now);
       if (task.state === 'running' && task.lastActivity != null && now - task.lastActivity > T_QUIET_MS && !this.runs.get(task.id)?.toolInFlight) {
         this.#setState(task, 'quiet');
         continue;
@@ -1984,6 +2053,7 @@ export class TasksEngine extends EventEmitter {
     for (const e of this.idleIpc.values()) await e.ipc.close();
     this.runs.clear();
     this.idleIpc.clear();
+    this.agentBus?.close();
     this.store.close();
   }
 }

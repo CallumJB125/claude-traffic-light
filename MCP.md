@@ -40,9 +40,13 @@ Every tool returns JSON.
 | `buddy_burst_coordination` | Which session masters which file (`path`: a file path or its tail; omit for all). "Burst not present" without Burst |
 | `buddy_burst_requests` | The last requests Burst routed, metadata only (`session`, `limit` up to 50) |
 
+### Agent bus tools
+
+`bus_hello`, `bus_handoff`, `bus_wait`, `bus_read` and `bus_status` reach the running app's local `/bus` endpoint (the same token as the team tools) and hand work between AI tools on this Mac (contract: `board/AGENT-BUS.md`). `bus_handoff` is the one that acts: in a repository your person turned on in Preferences → Advanced → Agent bus, it starts the other tool at once, with no approval, in its own git worktree with no network (it cannot push or open a pull request), stopped after the wall clock (20 min by default). The text is scrubbed of secrets and your home folder before it leaves the app. `bus_wait` waits up to 120 seconds for the result. Refusals come back as `{reason}` (`HALTED`, `SPEND_CAP`, `LOOP`, `RATE`, `TIER_NOT_ACCEPTED`, `NO_ELIGIBLE_AGENT`, `NO_LOCAL_CHECKOUT`). Runs the bus starts get `bus_result` and their own `bus_handoff` on their per-run task server instead.
+
 The three Burst tools read a snapshot the running app writes (`burst-snapshot.json`, mode 0600, whitelisted fields, no prompts or paths). The server never contacts Burst; a missing snapshot or one older than two minutes means "Burst not present".
 
-Every tool is read-only. There is deliberately no tool that answers a permission request: a session that is waiting on a prompt can't call tools, so such a tool could only ever approve *another* session's tool call, and the server can't tell which session is calling it. Answer at the widget (or, later, from a paired phone).
+Every tool except `team_ask`, `team_hand_off`, `hand_off_to_tool` and `bus_handoff` is read-only. There is deliberately no tool that answers a permission request: a session that is waiting on a prompt can't call tools, so such a tool could only ever approve *another* session's tool call, and the server can't tell which session is calling it. Answer at the widget (or, later, from a paired phone).
 
 The server works out the look from disk with the same `rules.js` the widget uses. Some things only the running app knows: a Lights preview, the walk to your terminal, and Electron's online flag. For those, `buddy_status` also asks the app's local `GET /status` endpoint and reports `app.agrees`.
 

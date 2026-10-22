@@ -59,6 +59,7 @@
       "sessions-preload.js",
       "agent-mail-view.js",
       "handoff-requests-view.js",
+      "agent-bus-view.js",
       "agent-mail-view.css",
       "timeline.html",
       "timeline.css",

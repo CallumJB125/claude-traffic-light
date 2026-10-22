@@ -10,7 +10,7 @@ import { STATES, BLOCKED_KINDS, FAIL_KINDS } from '../../shared/states.js';
 import { PARTY_KINDS, MSG_MAX_BYTES } from '../mesh.js';
 import {
   TASKS_PROTOCOL_VERSION, METHODS, ACTIONS, EVENT_TYPES, AIS, AI_CHOICES, SURFACES, PERMISSION_LEVELS,
-  SOURCES, PARK_REASONS, OUTCOMES, CAPABILITIES, ERRORS, MAX_TRANSCRIPT_CHUNK, MAX_PATCH_BYTES,
+  SOURCES, BUS_OPS, PARK_REASONS, OUTCOMES, CAPABILITIES, ERRORS, MAX_TRANSCRIPT_CHUNK, MAX_PATCH_BYTES,
 } from '../protocol.js';
 
 const ref = (n) => ({ $ref: `#/$defs/${n}` });
@@ -93,8 +93,11 @@ const taskSpec = optional({
   sourceMeta: optional({
     userId: str(), displayName: str(), channel: str(), messageId: str(),
     boardId: str(), cardId: str(), deviceId: str(), parentSessionId: str(),
+    handoffId: str(), fence: int({ minimum: 1 }), originTier: en(['person', 'run_capability', 'local_attested']), scope: en(['local', 'team']),
   }, []),
   templateId: str(),
+  // Bus Codex runs (no native spend cap): stop after this long. 1 min to 24 h.
+  wallClockMs: int({ minimum: 60000, maximum: 86400000 }),
 }, ['text', 'cwd']);
 
 const taskViewProps = {
@@ -306,6 +309,8 @@ const schema = {
     SetLimitsParams: optional({ maxParallel: int({ minimum: 1, maximum: 8 }), perAi: optional(Object.fromEntries(AIS.map((a) => [a, int({ maximum: 8 })])), []) }, []),
     GetClaimsParams: obj({ repo: str({ minLength: 1, ...PATH }) }),
     GetClaimsResult: obj({ repo: str(PATH), claims: arr(ref('Claim')) }),
+    // The agent bus (board/AGENT-BUS.md). args are checked per op by the bus itself (board/shared/bus-schema.js).
+    BusParams: optional({ op: en(BUS_OPS), args: { type: 'object' }, caller: { type: 'object' } }, ['op']),
     // thin clients
     SpinOffInput: optional({
       task: str({ minLength: 1, maxLength: 20000 }), cwd: str(PATH), backend: en(AI_CHOICES), surface: en(SURFACES),

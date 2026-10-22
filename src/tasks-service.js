@@ -719,6 +719,27 @@ function createTasksService(opts) {
     return { ais: withDetected(ais || []), recent, canSchedule: canSchedule() };
   }
 
+  // Agent bus ops (board/AGENT-BUS.md) go to the helper, which owns bus.db; main only relays. The helper starts lazily,
+  // so this waits for it (bounded) and pushes main's bus context once per connection. A helper that cannot start, or
+  // exits mid-call, rejects here and the /bus relay answers tasks_helper_unavailable at once.
+  let busContextFor = null;
+  async function bus(op, args = {}, caller = null) {
+    await opts.ensureSupervisor?.();
+    start();
+    const until = now() + 10_000;
+    while (!connected()) {
+      if (stopped || now() > until) throw Object.assign(new Error('unavailable'), { code: 'SUPERVISOR_UNREACHABLE' });
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const channel = client;
+    if (busContextFor !== channel && op !== 'busSetContext' && opts.busContext) {
+      busContextFor = channel;
+      await channel.bus('busSetContext', opts.busContext(), null, { timeoutMs: 10_000 }).catch(() => { busContextFor = null; });
+    }
+    const timeoutMs = op === 'wait' ? (Math.min(120, Math.max(0, Number(args?.timeout_s ?? 60) || 0)) + 10) * 1000 : 20_000;
+    return channel.bus(op, args, caller, { timeoutMs });
+  }
+
   // Folder choices are handed to the page as opaque handles with a display label.
   function registerFolder(p) {
     const label = tilde(p, homeDir);
@@ -729,7 +750,7 @@ function createTasksService(opts) {
     return { handle, label };
   }
 
-  return { start, stop, retryNow, snapshot, openTask, closeTask, act, saveCheckpoint, copyTakeover, openTerminal, create, preflight, composerInfo, registerFolder, markSeen, folderOf: (handle) => folders.get(handle) ?? null };
+  return { start, stop, retryNow, snapshot, openTask, closeTask, act, saveCheckpoint, copyTakeover, openTerminal, create, preflight, composerInfo, registerFolder, markSeen, folderOf: (handle) => folders.get(handle) ?? null, folderPaths: () => [...folders.values()], bus };
 }
 
 module.exports = { createTasksService, OFFLINE };
