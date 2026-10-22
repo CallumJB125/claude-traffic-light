@@ -88,8 +88,17 @@ function allowedExe(provider, exe, { home, codexHome, args = '' } = {}) {
 }
 
 // `lsof -F` output: "p<pid>", "f<fd>", "n<name>" lines.
-// Every file name in `lsof -Fn` output.
-const lsofNames = (text) => new Set(String(text || '').split('\n').filter((l) => l[0] === 'n').map((l) => l.slice(1)));
+// Every open file in `lsof -FDi` output, as "<dev>:<inode>" (D is the device in hex, as fstat's dev).
+function lsofFiles(text) {
+  const out = new Set();
+  let dev = null;
+  for (const line of String(text || '').split('\n')) {
+    if (line[0] === 'f') dev = null;
+    else if (line[0] === 'D') dev = Number.parseInt(line.slice(1), 16);
+    else if (line[0] === 'i' && Number.isFinite(dev) && /^\d+$/.test(line.slice(1))) out.add(`${dev}:${line.slice(1)}`);
+  }
+  return out;
+}
 
 function parseLsof(text) {
   const out = {};
@@ -232,19 +241,36 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     return null; // Windows: not verifiable in v1, so never a peer.
   }
 
-  // Codex: the server behind the recorded pid holds this thread's rollout open,
-  // and the rollout itself (Codex's file, not ours) names this thread, as a
-  // person's, in the recorded folder or one below it.
+  // A server's open files, one lsof per server per rebuild.
+  let serverFiles = new Map();
+  const openFilesOf = (pid) => {
+    if (!serverFiles.has(pid)) serverFiles.set(pid, run('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-FDi']).then(lsofFiles, () => new Set())); // privacy-flow: agent-awareness-local
+    return serverFiles.get(pid);
+  };
+
+  // Codex: the server behind the recorded pid holds this very file open (by
+  // device and inode, so no path can be swapped in between), and the rollout
+  // (Codex's file, not ours) names this thread, as a person's, in exactly the
+  // recorded folder: a thread's folder is fixed, and a folder inside it could
+  // be any repo an agent made there.
   async function codexThread(s, pid) {
     if (typeof s.codexTranscript !== 'string' || !path.isAbsolute(s.codexTranscript) || !s.codexTranscript.endsWith('.jsonl')) return false;
     const t = await realpath(s.codexTranscript).catch(() => null);
     if (!t || !within(t, await realOr(codexHome))) return false;
-    const open = await run('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-Fn']).then(lsofNames, () => new Set()); // privacy-flow: agent-awareness-local
-    if (!open.has(t) && !open.has(s.codexTranscript)) return false;
-    const head = await readHead(fsp, t, Hook.META_MAX_BYTES);
-    const meta = head && Hook.sessionMetaOf(head.text);
+    const open = await openFilesOf(pid);
+    let fh;
+    let text;
+    try {
+      fh = await fsp.open(t, OPEN_FLAGS);
+      const st = await fh.stat();
+      if (!st.isFile() || !open.has(`${st.dev}:${st.ino}`)) return false;
+      const buf = Buffer.alloc(Math.min(Hook.META_MAX_BYTES, st.size));
+      const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+      text = buf.toString('utf8', 0, bytesRead);
+    } catch { return false; } finally { if (fh) await fh.close().catch(() => {}); }
+    const meta = Hook.sessionMetaOf(text);
     if (!meta || meta.interactive !== true || meta.id !== s.sessionId || !meta.cwd || !path.isAbsolute(meta.cwd)) return false;
-    return within(await realOr(s.cwd), await realOr(meta.cwd));
+    return (await realOr(s.cwd)) === (await realOr(meta.cwd));
   }
 
   // Verified (plan §3.1): a recent event, a real claude or codex binary behind
@@ -327,6 +353,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
 
   async function build() {
     const at = now();
+    serverFiles = new Map();
     const { aw, exclude, busEnabled } = settings();
     const list = (sessions() || []).filter((s) => s && !s.remote && (!s.host || s.host === host)).map((s) => Object.fromEntries(SESSION_FIELDS.map((k) => [k, s[k]])));
     const self = {};
@@ -453,4 +480,4 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   return { build, refresh, schedule, start, stop, invalidate, visible, rosterFile, classify };
 }
 
-module.exports = { create, normalize, handleFor, allowedExe, parseLsof, lsofNames, statusOf, interactiveOf, DEFAULTS, SESSION_FIELDS, HEARTBEAT_MS, DEBOUNCE_MS, BUILD_TIMEOUT_MS, BURST_WINDOW_MS, GROUP_BUMP_MS };
+module.exports = { create, normalize, handleFor, allowedExe, parseLsof, lsofFiles, statusOf, interactiveOf, DEFAULTS, SESSION_FIELDS, HEARTBEAT_MS, DEBOUNCE_MS, BUILD_TIMEOUT_MS, BURST_WINDOW_MS, GROUP_BUMP_MS };

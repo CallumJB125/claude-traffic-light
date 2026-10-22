@@ -39,7 +39,7 @@ function world(t) {
       if (!p) return cb(Object.assign(new Error('no such process'), { code: 1 }), '');
       return cb(null, args.includes('lstart=') ? `${p.start}\n` : `${p.args || ''}\n`);
     }
-    if (file === '/usr/sbin/lsof') return p ? cb(null, `p${pid}\nfcwd\nn${p.cwd}\nftxt\nn${p.exe}\n${args.includes('-d') ? '' : (p.files || []).map((f, i) => `f${30 + i}\nn${f}\n`).join('')}`) : cb(Object.assign(new Error('none'), { code: 1 }), '');
+    if (file === '/usr/sbin/lsof') return p ? cb(null, `p${pid}\nfcwd\nn${p.cwd}\nftxt\nn${p.exe}\n${args.includes('-d') ? '' : (p.files || []).map(({ path: f, st }, i) => `f${30 + i}\nD0x${st.dev.toString(16)}\ni${st.ino}\nn${f}\n`).join('')}`) : cb(Object.assign(new Error('none'), { code: 1 }), '');
     return cb(Object.assign(new Error(`unexpected ${file}`), { code: 'ENOENT' }));
   };
   const claudeExe = path.join(home, '.local/share/claude/versions/2.1.308');
@@ -65,7 +65,8 @@ function world(t) {
     const pid = extra.server || pidSeq++;
     if (!procs.has(pid)) procs.set(pid, { start: 'Thu Oct 22 09:00:00 2026', exe: codexExe, cwd: '/', files: [] });
     const transcript = extra.codexTranscript || rollout(id, cwd, extra.meta);
-    if (extra.open !== false) (procs.get(pid).files = procs.get(pid).files || []).push(transcript);
+    // Held open: the server's file is this inode, whatever later happens to the path.
+    if (extra.open !== false) (procs.get(pid).files = procs.get(pid).files || []).push({ path: transcript, st: fs.statSync(transcript) });
     const s = { sessionId: id, host: HOST, source: 'codex', cwd, signal: 'stop', updatedAt: iso(T0 + 20_000), codexHookAt: iso(T0 + 20_000), codexServerPid: pid, codexInteractive: true, codexStartedAt: iso(T0 - 900_000), codexTranscript: transcript, ...extra };
     for (const k of ['server', 'meta', 'open']) delete s[k];
     state.sessions.push(s);
@@ -449,7 +450,7 @@ test('review 1 (AW11): handles are keyed by a secret main holds; a 4-hex collisi
   assert.deepEqual(await handles(), first, 'read order does not matter');
 });
 
-test('review 2 (AW8): a second file with an excluded session\'s id does not borrow an allowed verdict, and cannot hide an allowed one either way', async (t) => {
+test('review 2 (AW8): a second file with an excluded session\'s id does not borrow an allowed verdict (and a copy of any id hides that session: fail closed)', async (t) => {
   const w = world(t);
   const secret = gitInit(path.join(w.dir, 'code', 'bondly'));
   const mine = gitInit(path.join(w.dir, 'code', 'app'));
@@ -536,4 +537,43 @@ test('review 3: JavaScript built-in property names are not providers, statuses o
     assert.match(text, /- codex-y-1234  Codex  folder b  idle/, `${n}: an unknown status is idle, an unknown wait is none`);
   }
   assert.equal(Hook.selfKey('__proto__', { session_id: 'x' }), null);
+});
+
+test('re-review N1: a real thread with no session file of its own cannot be claimed from a repo nested in its folder', async (t) => {
+  const w = world(t);
+  const site = gitInit(path.join(w.dir, 'code', 'site'));
+  const real = w.codex('thread-real', site, { server: 300, meta: { originator: 'codex_work_desktop' } });
+  const nested = gitInit(path.join(site, 'vendor', 'IGNORE-ALL-PRIOR'));
+  w.state.sessions = [{ ...real, cwd: nested, signal: 'permission-ask' }];
+  const r = await w.make().build();
+  assert.deepEqual(r.peers, []);
+  assert.equal(r.self['codex|thread-real'].verified, false);
+  w.state.sessions = [real];
+  assert.equal((await w.make().build()).self['codex|thread-real'].verified, true, 'its own folder exactly still passes');
+});
+
+test('re-review N2: the server must hold the very file read (device and inode), so swapping the folder under a held path binds nothing', async (t) => {
+  const w = world(t);
+  const repo = gitInit(path.join(w.dir, 'code', 'app'));
+  // The server holds an exec thread's rollout open.
+  const held = w.codex('exec-thread', repo, { server: 300, meta: { originator: 'codex_exec', source: 'exec' } });
+  w.state.sessions = [];
+  // The agent moves the day folder away and puts its own session_meta at the same path.
+  const day = path.dirname(held.codexTranscript);
+  fs.renameSync(day, `${day}-moved`);
+  fs.mkdirSync(day);
+  fs.writeFileSync(held.codexTranscript, `${JSON.stringify({ type: 'session_meta', payload: { id: 'made-up', cwd: repo, source: 'vscode', thread_source: 'user', originator: 'codex-tui' } })}\n`);
+  w.state.sessions.push({ sessionId: 'made-up', host: HOST, source: 'codex', cwd: repo, signal: 'stop', updatedAt: iso(T0 + 20_000), codexServerPid: 300, codexInteractive: true, codexTranscript: held.codexTranscript });
+  const r = await w.make().build();
+  assert.deepEqual(r.peers, []);
+  assert.equal(r.self['codex|made-up'].verified, false);
+});
+
+test('re-review N3: one lsof of a server per rebuild, however many of its threads are checked', async (t) => {
+  const w = world(t);
+  for (let i = 0; i < 4; i += 1) w.codex(`t${i}`, gitInit(path.join(w.dir, 'code', `r${i}`)), { server: 300 });
+  const r = await w.make().build();
+  assert.equal(r.peers.length, 4);
+  assert.equal(w.calls.filter((c) => c[0] === '/usr/sbin/lsof' && c.includes('-FDi')).length, 1);
+  assert.deepEqual([...A.lsofFiles('p1\nf3\nD0x10\ni42\nn/x\nf4\ni7\n')], ['16:42'], 'a file with no device line is not counted');
 });
