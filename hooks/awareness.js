@@ -33,6 +33,7 @@ const STATUS = Object.freeze({ working: 'working', idle: 'idle', failed: 'turn f
 const WAITING = Object.freeze({ person: 'waiting on its person', limit: 'waiting on a usage limit' });
 // Where a provider's hook output reaches the model (outputs/awareness-stepA-findings.md §2, §4).
 const EVENTS = Object.freeze({ claude: new Set(['SessionStart', 'UserPromptSubmit']), codex: new Set(['SessionStart', 'UserPromptSubmit']), gemini: new Set(['SessionStart']) });
+const TOOLS = 'bus_peers, bus_handoff';
 const HANDLE = /^(?:claude|codex|gemini)-[a-z0-9-]{1,16}-[0-9a-f]{4,6}$/;
 const REPO_KEY = /^[0-9a-f]{16}$/;
 const GROUP_ID = /^g[0-9a-f]{12}$/;
@@ -205,6 +206,8 @@ function viewOf(roster, self) {
   const mine = self && typeof self.handle === 'string' && HANDLE.test(self.handle) ? self.handle : null;
   const myRepo = self && REPO_KEY.test(self.repo_key || '') ? self.repo_key : null;
   const myGroup = self && GROUP_ID.test(self.group || '') ? self.group : null;
+  // Only tools that are live for this viewer: none until its provider has Plexiform's bus tools (plan §3.4).
+  const tools = !!(self && self.caps && typeof self.caps === 'object' && self.caps.mcp === true);
   const groups = new Map();
   for (const g of Array.isArray(roster.groups) ? roster.groups : []) {
     if (!g || !GROUP_ID.test(g.id || '') || !has(PROVIDERS, g.provider) || !Number.isInteger(g.count) || g.count < 3 || g.count > 999) continue;
@@ -225,13 +228,13 @@ function viewOf(roster, self) {
   }
   // Same repo first, then the roster's own order (most recent first).
   const ordered = items.map((it, i) => ({ it, i })).sort((a, b) => (b.it.same - a.it.same) || (a.i - b.i)).map((x) => x.it);
-  return { self: mine, items: ordered };
+  return { self: mine, items: ordered, tools };
 }
 
 // Membership, provider, folder, same-repo branch and group size only: never status or waiting.
 function versionOf(view) {
   const keys = view.items.map((it) => (it.kind === 'group' ? ['g', it.id, it.provider, it.folder, it.same, it.countV] : ['p', it.handle, it.provider, it.folder, it.same, it.branch])).map((k) => JSON.stringify(k)).sort();
-  return sha(JSON.stringify({ self: view.self, keys }));
+  return sha(JSON.stringify({ self: view.self, keys, ...(view.tools ? { tools: TOOLS } : {}) }));
 }
 
 function lineOf(it) {
@@ -240,12 +243,13 @@ function lineOf(it) {
   return `- ${it.handle}  ${PROVIDERS[it.provider]}  folder ${it.folder}${branch}  ${it.waiting ? WAITING[it.waiting] : STATUS[it.status]}`;
 }
 
-// ≤ MAX_LINES peer lines and BLOCK_MAX characters, then "and N more". No Tools
-// line: the bus tools are not registered for these sessions yet (plan §3.4).
+// ≤ MAX_LINES peer lines and BLOCK_MAX characters, then "and N more". The
+// Tools line names only what this viewer can call (plan §3.4).
 function render(view) {
   if (!view.items.length) return null;
-  const tail = view.self ? [`You are ${view.self}.`] : [];
-  const fits = (lines, more) => [HEADER, ...lines, ...(more ? [`- and ${more} more`] : []), ...tail].join('\n').length <= BLOCK_MAX;
+  const tail = [[view.self ? `You are ${view.self}.` : '', view.tools ? `Tools: ${TOOLS}.` : ''].filter(Boolean).join(' ')].filter(Boolean);
+  const andMore = (n) => `- and ${n} more${view.tools ? ' (bus_peers)' : ''}`;
+  const fits = (lines, more) => [HEADER, ...lines, ...(more ? [andMore(more)] : []), ...tail].join('\n').length <= BLOCK_MAX;
   const lines = [];
   for (let i = 0; i < view.items.length; i += 1) {
     const next = [...lines, lineOf(view.items[i])];
@@ -255,7 +259,7 @@ function render(view) {
   }
   if (!lines.length) return null;
   const more = view.items.length - lines.length;
-  return [HEADER, ...lines, ...(more ? [`- and ${more} more`] : []), ...tail].join('\n');
+  return [HEADER, ...lines, ...(more ? [andMore(more)] : []), ...tail].join('\n');
 }
 
 function output(text, event) {

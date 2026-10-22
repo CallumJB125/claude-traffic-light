@@ -39,7 +39,8 @@ async function queueResume({ tasks, doc, session, provider, resetAtMs, sleep = (
 // mail() → {held, inbox} agent mail waiting (src/agent-mail.js pending), openMail() shows it on Sessions.
 // burstLooseEnds(): the loose-ends view model (src/burst-loose-ends-view.js) or null; burstAct(kind) → {ok…} runs one
 // card action through Burst's own consent dialog (BurstIpc.act / runAction); openOptimiser() shows Usage & Burst.
-function createHomeAlerts({ sessions = () => [], burst = () => null, burstView = null, tasks = () => [], jump, copyHandover, docFor, confirm, resume, mail = () => null, openMail = async () => {}, burstLooseEnds = () => null, burstAct = null, platform = process.platform, now = Date.now, newHandle = () => crypto.randomUUID() }) {
+// busNotices() → [{handle, title, meta, action}] from src/mcp-auto.js; busAct(handle, action) runs Undo or Dismiss there.
+function createHomeAlerts({ sessions = () => [], burst = () => null, burstView = null, tasks = () => [], jump, copyHandover, docFor, confirm, resume, mail = () => null, openMail = async () => {}, burstLooseEnds = () => null, burstAct = null, busNotices = () => [], busAct = null, platform = process.platform, now = Date.now, newHandle = () => crypto.randomUUID() }) {
   const handles = new Map(); // episode key -> handle
   const byHandle = new Map(); // handle -> card
   const dismissed = new Set();
@@ -102,7 +103,14 @@ function createHomeAlerts({ sessions = () => [], burst = () => null, burstView =
   function snapshot() {
     const c = cards();
     const view = (list) => list.map((x) => ({ handle: handleOf(x.key), ...x.view }));
-    return { stuck: view(c.stuck), limits: view(c.limits), mail: mailCards(), waiting: waitingCards(), burst: burstCard() };
+    return { stuck: view(c.stuck), limits: view(c.limits), mail: mailCards(), waiting: waitingCards(), burst: burstCard(), bus: busCards() };
+  }
+
+  // Plexiform's own agent bus notices: what it registered (with Undo), and the Codex hook approval only the person can give.
+  const BUS_ACTIONS = new Set(['undo', 'dismiss']);
+  function busCards() {
+    return (safe(busNotices, []) || []).filter((n) => n && typeof n.handle === 'string' && BUS_ACTIONS.has(n.action)).slice(0, 3)
+      .map((n) => ({ handle: n.handle, title: String(n.title || ''), meta: String(n.meta || ''), action: n.action }));
   }
 
   // Home's one Burst card (src/attention-inbox.js burstRow decides whether to show it): the status view's
@@ -144,6 +152,11 @@ function createHomeAlerts({ sessions = () => [], burst = () => null, burstView =
       const c = burstCard();
       if (action !== 'act' || !c || !c.view.action || c.view.action.kind !== handle || typeof burstAct !== 'function') return { ok: false, error: 'That card has changed. Home refreshes in a moment.' };
       try { const r = await burstAct(handle); return r && typeof r === 'object' ? r : { ok: false, error: 'Burst could not do that.' }; } catch { return { ok: false, error: 'Burst could not do that.' }; }
+    }
+    if (kind === 'bus') {
+      const c = busCards().find((x) => x.handle === handle);
+      if (!c || (action !== c.action && action !== 'dismiss') || typeof busAct !== 'function') return { ok: false, error: 'That card has changed. Home refreshes in a moment.' };
+      try { const r = await busAct(handle, action); return r && typeof r === 'object' ? r : { ok: false, error: 'Plexiform could not do that.' }; } catch { return { ok: false, error: 'Plexiform could not do that.' }; }
     }
     if (kind === 'waiting') {
       if (action !== 'open' || !waitingCards().some((c) => c.handle === handle)) return { ok: false, error: 'That card has changed. Home refreshes in a moment.' };
@@ -198,12 +211,12 @@ function register({ ipcMain, homeAllowed, usageAllowed, alerts }) {
 }
 
 // Main's one call. The confirmation is a native dialog with Cancel as the default, like Tasks' risky actions.
-function wire({ ipcMain, dialog, clipboard, homeAllowed, usageAllowed, sessions, burst, burstView = null, burstLooseEnds, burstAct, tasksRows, tasksService, handoverText, jump, mail, openMail, entitlements = require('./entitlements.js') }) {
+function wire({ ipcMain, dialog, clipboard, homeAllowed, usageAllowed, sessions, burst, burstView = null, burstLooseEnds, burstAct, tasksRows, tasksService, handoverText, jump, mail, openMail, busNotices, busAct, entitlements = require('./entitlements.js') }) {
   const Handoff = require('./handoff.js');
   const docFor = (s) => handoverText(docKey(s)) || null;
   const handoff = Handoff.create({ entitlements, clipboard, docFor: async (key) => handoverText(key) || null, adapters: {} });
   const alerts = createHomeAlerts({
-    sessions, burst, burstView, burstLooseEnds, burstAct, tasks: tasksRows, jump, docFor, mail, openMail,
+    sessions, burst, burstView, burstLooseEnds, burstAct, tasks: tasksRows, jump, docFor, mail, openMail, busNotices, busAct,
     copyHandover: (s) => handoff.copy(docKey(s)),
     confirm: async (info) => (await dialog.showMessageBox({
       type: 'question', buttons: ['Cancel', 'Queue task'], defaultId: 0, cancelId: 0, noLink: true,

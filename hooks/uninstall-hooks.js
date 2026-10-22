@@ -15,9 +15,17 @@ function loadMcp() {
   return null;
 }
 
+// The Codex CLI, for removing the bus tools Plexiform registered with it (src/codex-app-server.js findCodexBin).
+function loadCodexBin() {
+  for (const p of [path.join(__dirname, '..', 'app.asar', 'src', 'codex-app-server.js'), path.join(__dirname, '..', 'src', 'codex-app-server.js')]) {
+    try { return require(p).findCodexBin(); } catch { /* try the next */ } // privacy-flow: own-code
+  }
+  return null;
+}
+
 // Shared with main.js --uninstall-hooks (the Windows uninstaller).
-function main({ home = os.homedir(), mcp = loadMcp(), log = console.log } = {}) {
-  const results = UninstallAll.run({ home, mcp });
+function main({ home = os.homedir(), mcp = loadMcp(), codexBin = loadCodexBin(), log = console.log } = {}) {
+  const results = UninstallAll.run({ home, mcp, codexBin });
   if (!mcp) results.push({ id: 'mcp', file: path.join(home, '.claude.json'), changed: false, error: 'MCP uninstall helper unavailable' });
   for (const r of results) log(`[uninstall-hooks] ${r.id}: ${Object.hasOwn(r, 'error') ? `left alone (${r.error})` : r.changed ? 'removed' : 'nothing to remove'} ${r.file}`);
   return results;
@@ -29,4 +37,4 @@ function exitCode(results) {
 
 if (require.main === module) process.exitCode = exitCode(main());
 
-module.exports = { main, loadMcp, exitCode };
+module.exports = { main, loadMcp, loadCodexBin, exitCode };

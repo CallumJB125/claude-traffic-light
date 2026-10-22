@@ -30,8 +30,24 @@ function holdsOurs(adapter, file) {
   return commandsIn(Runtime.readJsonConfig(file).hooks).some((c) => adapter.isOurs(c));
 }
 
-// mcp: mcp-install.js, or null where it can't be loaded. → [{ id, file, changed, error? }]
-function run({ home, mcp = null }) {
+// Codex's own CLI (`codex mcp get|remove`), synchronously: this runs from an uninstaller, never from the app.
+// It acts on `home`'s Codex config (HOME and CODEX_HOME point there), never on whoever runs it.
+function removeCodexMcp({ bin, mcp, home, execFileSync = require('child_process').execFileSync }) {
+  const file = 'codex mcp plexiform-bus';
+  const env = { ...process.env, HOME: home, CODEX_HOME: require('path').join(home, '.codex') };
+  // No Codex config there: nothing was registered, and Codex would only fail on the missing folder.
+  if (!fs.existsSync(require('path').join(env.CODEX_HOME, 'config.toml'))) return { id: 'codex-mcp', file, changed: false };
+  const codex = (args) => execFileSync(bin, args, { encoding: 'utf8', timeout: 5000, env, stdio: ['ignore', 'pipe', 'pipe'] }); // privacy-flow: agent-bus-tools-local
+  let spec = null;
+  try { spec = require('./codex-mcp.js').specOf(JSON.parse(codex(['mcp', 'get', 'plexiform-bus', '--json']))); }
+  catch (err) { return /No MCP server named/i.test(String(err.stderr || err.message)) ? { id: 'codex-mcp', file, changed: false } : { id: 'codex-mcp', file, changed: false, error: 'codex did not answer' }; }
+  if (!spec || !mcp.markerOf(spec)) return { id: 'codex-mcp', file, changed: false };
+  try { codex(['mcp', 'remove', 'plexiform-bus']); return { id: 'codex-mcp', file, changed: true }; }
+  catch { return { id: 'codex-mcp', file, changed: false, error: 'codex did not remove it' }; }
+}
+
+// mcp: mcp-install.js, or null where it can't be loaded. codexBin: the Codex CLI, or null. → [{ id, file, changed, error? }]
+function run({ home, mcp = null, codexBin = null, execFileSync }) {
   const results = [];
   for (const adapter of Adapters.extras()) {
     const file = adapter.configPath(home);
@@ -63,7 +79,10 @@ function run({ home, mcp = null }) {
   if (fs.existsSync(activity)) {
     const r = codex.uninstallActivity({ home });
     results.push({ id: 'codex-activity', file: activity, changed: !!r.changed, ...(r.error ? { error: r.error } : {}) });
+    const b = codex.uninstallBusHook({ home });
+    results.push({ id: 'codex-bus-hook', file: activity, changed: !!b.changed, ...(b.error ? { error: b.error } : {}) });
   }
+  if (mcp && codexBin) results.push(removeCodexMcp({ bin: codexBin, mcp, home, ...(execFileSync ? { execFileSync } : {}) }));
   if (mcp) {
     const file = mcp.configPath(home);
     try {
@@ -72,8 +91,15 @@ function run({ home, mcp = null }) {
     } catch (err) {
       results.push({ id: 'mcp', file, changed: false, error: err.message });
     }
+    // The bus profile (src/mcp-auto.js): any entry still carrying Plexiform's marker.
+    if (mcp.BUS_NAME) {
+      try {
+        const r = fs.existsSync(file) ? mcp.uninstall({ home, name: mcp.BUS_NAME }) : { changed: false };
+        results.push({ id: 'mcp-bus', file, changed: !!r.changed });
+      } catch (err) { results.push({ id: 'mcp-bus', file, changed: false, error: err.message }); }
+    }
   }
   return results;
 }
 
-module.exports = { run, commandsIn, holdsOurs };
+module.exports = { run, commandsIn, holdsOurs, removeCodexMcp };

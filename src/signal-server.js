@@ -23,7 +23,11 @@ const SIGNAL_TOKEN = crypto.randomBytes(32).toString('hex');
 const SIGNAL_TOKEN_HEADER = 'x-buddy-token';
 const KNOWN_SIGNALS = new Set(Rules.SIGNALS.filter((x) => x.hook).map((x) => x.id).concat(['session-end']));
 // Agent bus (board/AGENT-BUS.md): the only ops an agent may send. halt, resume and busSetContext are main's own.
-const BUS_AGENT_OPS = new Set(['hello', 'handoff', 'read', 'wait', 'status']);
+// peers and session (bus_peers, bus_session) are answered by main's awareness side.
+const BUS_AGENT_OPS = new Set(['hello', 'handoff', 'read', 'wait', 'status', 'peers', 'session']);
+// The thread id Codex stamps on a tools/call (_meta.threadId), forwarded by mcp-server.js: a claim main checks
+// against the calling process (src/agent-awareness.js bindCaller), never identity on its own.
+const THREAD_ID = /^[\w.-]{1,120}$/;
 const BUS_LIMITS = { title: 200, brief: 3200, file: 300, branch: 200 };
 const BUS_UNAVAILABLE = { available: false, reason: 'tasks_helper_unavailable', message: 'Plexiform could not reach its Tasks helper. Nothing was handed off.' };
 // A handoff that timed out, or whose helper went away mid-call, may have been posted.
@@ -134,13 +138,16 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
           const { cwd, ...raw } = d.args && typeof d.args === 'object' && !Array.isArray(d.args) ? d.args : {};
           const args = op === 'handoff' ? busScrub(raw) : raw;
           const caller = { provider: typeof raw.provider === 'string' ? raw.provider.slice(0, 12) : null, cwd: typeof cwd === 'string' ? cwd.slice(0, 1024) : null };
+          // Who is calling comes from this socket's peer process, which main looks up; the body only carries Codex's thread claim.
+          const threadId = d.meta && typeof d.meta === 'object' && typeof d.meta.thread_id === 'string' && THREAD_ID.test(d.meta.thread_id) ? d.meta.thread_id : null;
+          const ident = { remotePort: req.socket.remotePort, threadId };
           // bus_wait holds the call; the relay's own deadline (timeout_s + 5 s) means it can never hang.
           const deadlineMs = op === 'wait' ? (Math.min(120, Math.max(0, Number(raw.timeout_s ?? 60) || 0)) + 5) * 1000 : busDeadlineMs;
           // Only a helper that was never reached means nothing was handed off.
           const lost = (e) => (op === 'handoff' && e?.code !== 'SUPERVISOR_UNREACHABLE' ? BUS_UNKNOWN : BUS_UNAVAILABLE);
           let timer;
           const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(lost(null)), deadlineMs); });
-          Promise.race([Promise.resolve().then(() => agentBus(op, args, caller)), deadline])
+          Promise.race([Promise.resolve().then(() => agentBus(op, args, caller, ident)), deadline])
             .then((r) => done(200, r && typeof r === 'object' ? r : lost(null)), (e) => done(200, e?.code === 'VALIDATION' ? { reason: 'VALIDATION', message: String(e.message).slice(0, 300) } : lost(e)))
             .finally(() => clearTimeout(timer));
         });
