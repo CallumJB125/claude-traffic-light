@@ -58,3 +58,26 @@ test('H1: each helper gets a fresh 32-byte main key over parentPort only, never 
   assert.ok(!JSON.stringify(s.status()).includes(keys[1]));
   await s.stop({ final: true });
 });
+test('O1b: the helper\'s wrapped runs reach main, and none once it exits; a run\'s bus_peers is answered by main, only for the current helper', async () => {
+  const children = []; const runs = []; const asked = [];
+  const s = createTasksSupervisor({ fork: () => { const c = new Child(); children.push(c); return c; }, entry, dataDir,
+    onRuns: (r) => runs.push(r), peersForTask: async (id) => { asked.push(id); return { you: 'claude-app-1a2b', peers: [] }; } });
+  const p = s.ensure(); const c = children[0];
+  c.emit('message', { type: 'tasks.listening', socket, epoch }); await p;
+  const row = { taskId: 'tsk_a1', ai: 'claude', pid: 4242, lstart: 'x' };
+  c.emit('message', { type: 'tasks.runs', runs: [row] });
+  c.emit('message', { type: 'tasks.runs', runs: 'not a list' });
+  assert.deepEqual(runs, [[row], []]);
+  c.emit('message', { type: 'awareness.peers', id: 7, taskId: 'tsk_a1' });
+  c.emit('message', { type: 'awareness.peers', id: 'x', taskId: 'tsk_a1' });
+  c.emit('message', { type: 'awareness.peers', id: 8, taskId: 42 });
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(asked, ['tsk_a1']);
+  assert.deepEqual(c.messages.at(-1), { type: 'awareness.peers.reply', id: 7, result: { you: 'claude-app-1a2b', peers: [] } });
+  c.emit('exit', 1);
+  assert.deepEqual(runs.at(-1), [], 'a helper that stops has no runs');
+  // A stale child's messages are ignored.
+  c.emit('message', { type: 'tasks.runs', runs: [row] });
+  assert.deepEqual(runs.at(-1), []);
+  await s.stop({ final: true });
+});

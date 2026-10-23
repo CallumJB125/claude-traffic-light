@@ -2,14 +2,27 @@ import crypto from 'node:crypto';
 import { TASK_TOOLS } from '../mcp/task-tools.js';
 import { redact } from '../shared/scope.js';
 import { cleanBody, flagsFor } from '../tasks-api/mesh.js';
+import { LOCAL_SOURCES } from '../tasks-api/protocol.js';
 
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 const inFlight = new WeakSet();
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 // A bounded run-bound adapter over the existing Tasks engine. No new authority
 // store: the original task tree, permission level and run lifetime are binding.
-export function createCollaboration({ tasks, current, save, create, deliver, messages, saveOutput, dispatchInbox = () => {}, bus = null, now = Date.now }) {
-  const pending = new Map(), familyLocks = new Map();
+export function createCollaboration({ tasks, current, save, create, deliver, messages, saveOutput, dispatchInbox = () => {}, bus = null, peers = null, now = Date.now }) {
+  const pending = new Map(), familyLocks = new Map(), peerViews = new Map();
+  // bus_peers for the person's own wrapped runs (O1b): main answers from its roster; a run asking faster than every
+  // two seconds gets its last answer again.
+  async function peersOf(task) {
+    if (!LOCAL_SOURCES.includes(task.source)) fail('POLICY_DENIED', 'bus_peers is for runs the person started.');
+    if (!peers) fail('POLICY_DENIED', 'Plexiform cannot show other AI sessions here.');
+    const last = peerViews.get(task.id);
+    if (last && now() - last.at < 2000) return last.view;
+    const view = await peers(task);
+    if (!view || typeof view !== 'object') fail('UNAVAILABLE', 'Plexiform did not answer. Try again in a few seconds.');
+    peerViews.set(task.id, { at: now(), view });
+    return view;
+  }
   function family(task) {
     let root = task, depth = 0;
     const seen = new Set();
@@ -38,6 +51,7 @@ export function createCollaboration({ tasks, current, save, create, deliver, mes
       if (!bus) fail('POLICY_DENIED', 'The agent bus is unavailable.');
       return bus(task, name, args);
     }
+    if (name === 'bus_peers') return peersOf(task);
     const all = [...tasks.values()].filter(t => t.id === task.id || related(task, t));
     if (name === 'buddy_tasks') return { self: task.id, parent: task.parentId,
       // The exact caller can inspect its bounded, already-sanitized saved data
