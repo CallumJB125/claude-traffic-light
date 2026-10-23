@@ -29,7 +29,7 @@ for (const name of ['request_user_input', 'functions.request_user_input', 'reque
   assert.equal(JSON.stringify(e).includes(SECRET), false);
   const s = State.reduceCodexLifecycle(start(), e, iso(1));
   assert.equal(s.signal, 'tool-use', 'raw activity remains working');
-  assert.deepEqual(shows(s), { widget: 'permission-ask', waiting: true, sessions: 'Waiting on you', help: 'Codex: needs input' });
+  assert.deepEqual(shows(s), { widget: 'permission-ask', waiting: true, sessions: 'Needs you', help: 'Codex: Needs you' });
   const publicDTO = JSON.stringify(Overview.snapshot({ sessions: [s], now: NOW + 10 }));
   assert.doesNotMatch(publicDTO, /call-1|turn-1|session-1|codexInputRequests/);
 });
@@ -39,8 +39,8 @@ test('async accepted delivery and unrelated AI work retain original request age 
   s = reduce(s, 'PostToolUse', { tool_name: 'request_user_input_async', tool_use_id: 'call-1', tool_response: { accepted: true, answer: SECRET } }, 1000);
   s = reduce(s, 'PreToolUse', { tool_name: 'Bash', tool_use_id: 'other-call', tool_input: { command: SECRET } }, 60000);
   assert.deepEqual(s.codexInputRequests, [request]); assert.equal(s.signal, 'tool-use'); assert.equal(s.codexHookAt, iso(60000));
-  assert.equal(shows(s, NOW + 89999).sessions, 'Waiting on you');
-  assert.deepEqual(shows(s, NOW + 90002), { widget: 'tool-use', waiting: false, sessions: 'Working', help: 'Codex: working' });
+  assert.equal(shows(s, NOW + 89999).sessions, 'Needs you');
+  assert.deepEqual(shows(s, NOW + 90002), { widget: 'tool-use', waiting: false, sessions: 'Working on it', help: 'Codex: Working on it' });
   assert.equal(JSON.stringify(s).includes(SECRET), false);
 });
 test('duplicate Pre cannot refresh original askedAt, and stale matching requests cannot reappear', () => {
@@ -96,7 +96,7 @@ test('future/unknown/malformed pending metadata never presents waiting or leaks 
   const s = ask();
   for (const change of [r => r.askedAt = iso(10000), r => r.askedAt = 'invalid', r => r.kind = '__proto__', r => r.id = [], r => r.turnId = 'foreign', r => r.prompt = SECRET]) {
     const bad = structuredClone(s); change(bad.codexInputRequests[0]);
-    assert.equal(Machine.codexInputPending(bad, NOW + 10), false); assert.equal(shows(bad).sessions, 'Working');
+    assert.equal(Machine.codexInputPending(bad, NOW + 10), false); assert.equal(shows(bad).sessions, 'Working on it');
     assert.equal(JSON.stringify(Overview.snapshot({ sessions: [bad], now: NOW + 10 })).includes(SECRET), false);
   }
   for (const change of [x => x.source = 'claude', x => x.codexLifecycle = 0, x => x.codexClosedTurn = true, x => x.codexInputRequests = Array(17).fill(s.codexInputRequests[0])]) {
@@ -125,16 +125,16 @@ test('actual emitter receives synthetic async metadata and never stores question
   const text = fs.readFileSync(file, 'utf8'), s = JSON.parse(text);
   assert.equal(text.includes(SECRET), false); assert.equal(s.codexInputRequests.length, 1);
   assert.equal(s.signal, 'tool-done'); assert.equal(Machine.presentSignal(s), 'permission-ask');
-  assert.equal(Overview.snapshot({ sessions: [s] }).sessions[0].status, 'Waiting on you');
+  assert.equal(Overview.snapshot({ sessions: [s] }).sessions[0].status, 'Needs you');
   assert.equal(emit('Stop').stdout, '{}'); assert.deepEqual(JSON.parse(fs.readFileSync(file)).codexInputRequests, []);
 });
 test('actual bound child input presents waiting without changing parent work, then expires and stops', () => {
   let s = ask(start(), 'async', 'child-call', 1, { agent_id: 'child-1', turn_id: 'child-turn' });
   assert.equal(shows(s).widget, 'permission-ask'); assert.equal(s.signal, 'subagent-start');
-  assert.equal(Overview.snapshot({ sessions: [s], now: NOW + 10 }).sessions[0].children[0].status, 'Waiting on you');
+  assert.equal(Overview.snapshot({ sessions: [s], now: NOW + 10 }).sessions[0].children[0].status, 'Needs you');
   s = reduce(s, 'PostToolUse', { agent_id: 'child-1', turn_id: 'child-turn', tool_name: 'request_user_input_async', tool_use_id: 'child-call', tool_response: { accepted: true } }, 60000);
-  assert.equal(shows(s, NOW + 89999).sessions, 'Waiting on you');
-  assert.equal(shows(s, NOW + 90002).sessions, 'Working');
+  assert.equal(shows(s, NOW + 89999).sessions, 'Needs you');
+  assert.equal(shows(s, NOW + 90002).sessions, 'Working on it');
   const closed = reduce(s, 'Stop', {}, 60001);
   assert.equal(closed.codexAgents[0].codexInputRequests.length, 0); assert.equal(Machine.codexInputPending(closed, NOW + 60002), false);
   s = reduce(s, 'SubagentStop', { agent_id: 'child-1', turn_id: 'child-turn' }, 60001);

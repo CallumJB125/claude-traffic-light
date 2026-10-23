@@ -101,9 +101,9 @@ test('metadata lifecycle projects Hermes accurately and refuses stale turn reope
   const { runtime: { dataDir } } = fixture(t);
   const apply = data => Bridge.apply({ sessionId: 'external-session', ...data }, dataDir);
   assert.equal(apply({ event: 'start', user_message: 'PRIVATE-PROMPT' }), true);
-  assert.equal(Overview.snapshot({ sessions: rows(dataDir) }).sessions[0].status, 'Ready');
+  assert.equal(Overview.snapshot({ sessions: rows(dataDir) }).sessions[0].status, 'Idle', 'a started session with no turn is idle (was "Ready" before #41)');
   assert.equal(apply({ event: 'working', turnId: 'session:task:turn1' }), true);
-  assert.equal(Overview.snapshot({ sessions: rows(dataDir) }).sessions[0].status, 'Working');
+  assert.equal(Overview.snapshot({ sessions: rows(dataDir) }).sessions[0].status, 'Working on it');
   assert.equal(apply({ event: 'stop', turnId: 'session:task:turn1', failed: false }), true);
   assert.equal(apply({ event: 'working', turnId: 'session:task:turn1' }), false);
   assert.equal(apply({ event: 'start' }), false);
@@ -114,7 +114,9 @@ test('metadata lifecycle projects Hermes accurately and refuses stale turn reope
   assert.equal(apply({ event: 'stop', turnId: 'session:task:turn2', failed: true }), true);
   const view = Overview.snapshot({ sessions: rows(dataDir), now: Date.now() + 100000 });
   assert.equal(view.sessions[0].provider, 'Hermes');
-  assert.equal(view.sessions[0].status, 'Turn failed');
+  assert.equal(view.sessions[0].status, 'Stuck or failed');
+  assert.equal(view.sessions[0].bucket, 'stuck');
+  assert.equal(view.sessions[0].detail, 'Turn failed');
   assert.equal(view.sessions[0].freshness, 'stale');
   assert.doesNotMatch(JSON.stringify(rows(dataDir)), /PRIVATE-PROMPT/);
   assert.equal(apply({ event: 'working', turnId: '../bad' }), false);
@@ -184,7 +186,7 @@ test('bridge keeps a bounded absolute cwd and drops relative, oversized or contr
   assert.equal(Hermes.isInstalled({ home: f.home }), true);
 });
 
-test('Hermes approval prompts show Waiting on you for the turn in progress only', t => {
+test('Hermes approval prompts show Needs you for the turn in progress only', t => {
   const { runtime: { dataDir } } = fixture(t);
   const apply = data => Bridge.apply({ sessionId: 'approval-session', ...data }, dataDir);
   const status = () => Overview.snapshot({ sessions: rows(dataDir) }).sessions[0].status;
@@ -192,15 +194,15 @@ test('Hermes approval prompts show Waiting on you for the turn in progress only'
   assert.equal(apply({ event: 'start' }), true);
   assert.equal(apply({ event: 'working', turnId: 'turn1' }), true);
   assert.equal(apply({ event: 'ask', turnId: 'turn1', command: 'PRIVATE-COMMAND' }), true);
-  assert.equal(status(), 'Waiting on you');
+  assert.equal(status(), 'Needs you');
   assert.equal(rows(dataDir)[0].askKind, 'request');
   assert.equal(apply({ event: 'ask', turnId: 'other-turn' }), false, 'a different turn still in progress');
   assert.equal(apply({ event: 'answered', turnId: 'turn1' }), true);
-  assert.equal(status(), 'Working');
+  assert.equal(status(), 'Working on it');
   assert.equal(apply({ event: 'stop', turnId: 'turn1', failed: false }), true);
   assert.equal(apply({ event: 'ask', turnId: 'turn1' }), false, 'a closed turn never reopens');
   assert.equal(apply({ event: 'ask', turnId: 'turn2' }), true, 'a new non-streaming turn may ask first');
-  assert.equal(status(), 'Waiting on you');
+  assert.equal(status(), 'Needs you');
   assert.equal(apply({ event: 'ask', turnId: '../bad' }), false);
   assert.doesNotMatch(JSON.stringify(rows(dataDir)), /PRIVATE-/);
 });
