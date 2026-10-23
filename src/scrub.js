@@ -334,9 +334,13 @@ function scrub(text, { home = null, user = null, hostname = null, names = [], sa
 // A number PATTERNS.PHONE found is a phone with 9-15 digits (E.164 allows 15). The shapes
 // already need a leading +, a leading 0 or a 3-3-4 North American grouping, so versions,
 // dates, times, ticket keys and counts never reach here.
+// A run that only climbs or only falls ("0123456789", "0123 4567 8901") is a test id.
 function phoneOk(m) {
-  const digits = m.replace(/\D/g, '').length;
-  return digits >= 9 && digits <= 15;
+  const d = m.replace(/\D/g, '');
+  if (d.length < 9 || d.length > 15) return false;
+  const step = (i) => (Number(d[i]) - Number(d[i - 1]) + 10) % 10;
+  const s1 = step(1);
+  return !((s1 === 1 || s1 === 9) && [...d].every((c, i) => i === 0 || step(i) === s1));
 }
 // Private names that need no third label: nas.local, jenkins.corp, api.internal.
 const PRIVATE_SUFFIX = /\.(?:local|lan|internal|corp|intranet|home\.arpa|svc)$/;
@@ -447,24 +451,37 @@ const cutLongLines = (t) => (t.length <= MAX_LINE ? t : t.split('\n').map((l) =>
 // indentation at the start of a line stays.
 const foldSpaces = (t) => t.replace(/(?<=\S)[ \t]{2,}/g, ' ');
 
+// A full commit hash named as one ("commit 3f2c…", ".../commit/3f2c…") is no secret.
+// Elsewhere a 40-hex run stays redacted: legacy GitHub tokens look the same.
+const GIT_HASH = /\b((?:commits?|sha(?:1|256)?|rev(?:ision)?|reverts?|reverted|cherry-pick(?:ed)?|merged?|hash)\b\s*[:#]?\s*|\/commit\/)([0-9a-f]{40}|[0-9a-f]{64})\b/gi;
+// A MAC address names a device.
+const MAC = /(?<![\w:.-])[0-9a-f]{2}([:-])(?:[0-9a-f]{2}\1){4}[0-9a-f]{2}(?![\w:.-])/gi;
 // After "/" a bare name is checked like any other (fix/db1.corp.acme.internal); file
 // paths stay because their last label is an extension or no real top-level domain.
 const TITLE_HOST = /(?<![\w.@:\\-])(?=([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8}))\1(?![\w-]|\.\w)(:\d{1,5}(?!\d))?/gi;
+// "version 1.2.3.4" is a version; a 4-part number elsewhere may be an address.
+const VERSION_WORD = /(?:^|[^a-z])(?:version|ver)\.?\s*[:=]?\s*$/i;
+
 // Text on its way to a team hub or a teammate (review L2): a title, a task's report.
 // Unlike scrub() it labels what it removes ([ip], [host], [phone], [email]) instead of
 // hashing, so the text still reads. Line breaks and spacing are kept.
 //   hubHost: the destination hub's host name, the one tailnet name the text may keep
 function scrubText(text, { hubHost = null } = {}) {
   const hub = typeof hubHost === 'string' && hubHost ? hubHost.toLowerCase() : null;
-  let out = redactSecretsPass(foldSpaces(plainText(String(text ?? ''))));
+  const parked = [];
+  let out = foldSpaces(plainText(String(text ?? ''))).replace(/[\u0001\u0002]/g, '');
+  out = out.replace(GIT_HASH, (m, lead, hash) => `${lead}\u0001${parked.push(hash) - 1}\u0002`);
+  out = redactSecretsPass(out);
   out = out.replace(PATTERNS.EMAIL, '[email]');
   out = out.replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8})(:\d{1,5})?/gi, (m, scheme, host, port) => (privateHost(host, port, hub, { inUrl: true }) ? `${scheme}[host]` : m));
+  out = out.replace(MAC, '[mac]');
   // "1.2.3.4-beta" is a version with a prerelease tag, not an address.
-  out = out.replace(PATTERNS.IPV4, (m, at, all) => (KEEP_IPS.has(m) || /^-[a-z]/i.test(all.slice(at + m.length)) ? m : '[ip]'));
+  out = out.replace(PATTERNS.IPV4, (m, at, all) => (KEEP_IPS.has(m) || /^-[a-z]/i.test(all.slice(at + m.length)) || VERSION_WORD.test(all.slice(Math.max(0, at - 24), at)) ? m : '[ip]'));
   // IPv6 needs a digit: "a::b" and "std::vector" are code.
   out = out.replace(PATTERNS.IPV6, (m) => (KEEP_IPS.has(m) || !/\d/.test(m) ? m : '[ip]'));
   out = out.replace(TITLE_HOST, (m, host, port) => (privateHost(host, port, hub) ? '[host]' : m));
-  return out.replace(PATTERNS.PHONE, (m) => (phoneOk(m) ? '[phone]' : m));
+  out = out.replace(PATTERNS.PHONE, (m) => (phoneOk(m) ? '[phone]' : m));
+  return out.replace(/\u0001(\d+)\u0002/g, (m, i) => parked[i]);
 }
 // scrubText for a one-line title: runs of spaces left by removals fold to one.
 const scrubTitle = (text, opts) => scrubText(text, opts).replace(/[ \t]{2,}/g, ' ');

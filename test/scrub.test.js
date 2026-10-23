@@ -361,3 +361,14 @@ test('scrubTitle: a bare name is a host only with a real top-level domain; publi
     ['ssh db1.internal.example.com', 'ssh [host]'], ['ssh build.acme.engineering', 'ssh [host]'], ['open https://build.acme.foo/x', 'open https://[host]/x'],
     ['branch fix/db1.corp.acme.internal', 'branch fix/[host]'], ['tail logs/db1.corp.acme.com today', 'tail logs/[host] today'], ['nas.svc', '[host]']]) assert.equal(scrubTitle(input), want, input);
 });
+
+test('scrubTitle: named commit hashes, version numbers and test ids stay; a MAC address goes (#52 follow-up)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  const H = '3f2c9a0e4b1d8c7f6e5a4b3c2d1e0f9a8b7c6d5e';
+  for (const keep of [`commit ${H}`, `reverts ${H}`, `sha: ${H}`, `cherry-picked ${H}`, `see github.com/acme/app/commit/${H}`,
+    'version 1.2.3.4', 'APP_VERSION=1.2.3.4', 'ver. 0.9.0.101', 'IDs 0123 4567 8901', 'id 0123456789', 'id 01234567890', 'id 9876543210']) assert.equal(scrubTitle(keep), keep, keep);
+  // A bare 40-hex run may be a legacy GitHub token; an address after a non-version word stays [ip].
+  for (const [input, want] of [[`token ${H}`, 'token [redacted]'], [H, '[redacted]'], ['ssh root@10.0.0.5', 'ssh root@[ip]'], ['server=10.0.0.5', 'server=[ip]'],
+    ['driver 1.2.3.4', 'driver [ip]'], ['call 082 555 0199', 'call [phone]'], ['mac 00:1a:2b:3c:4d:5e', 'mac [mac]'], ['mac 00-1A-2B-3C-4D-5E', 'mac [mac]'],
+    ['ping fe80::1ff:fe23:4567:890a', 'ping [ip]'], ['x \u00010\u0002 y', 'x 0 y']]) assert.equal(scrubTitle(input), want, input);
+});
