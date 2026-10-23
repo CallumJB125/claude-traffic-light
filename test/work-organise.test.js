@@ -458,3 +458,16 @@ test('work-organise: L1 — invisible fillers and tag characters are removed bef
     }
   }
 });
+
+test('work-organise: L3 — lower-case Linear-style tickets count in branches, never in prompts', () => {
+  const t = (branch) => W.titleOf({ team: false, branch });
+  assert.deepEqual(t('sam/abc-123-fix-login'), { title: 'ABC-123 · Fix login', source: 'ticket' });
+  assert.deepEqual(t('abc-123-fix-login'), { title: 'ABC-123 · Fix login', source: 'ticket' });
+  assert.deepEqual(t('claude/eng-42'), { title: 'ENG-42', source: 'ticket' });
+  assert.deepEqual(t('codex/work-organise-2026-10-23'), { title: 'Work organise', source: 'branch' }, 'a word then a date is no ticket');
+  assert.deepEqual(t('feat/utf-8-paths'), { title: 'Utf 8 paths', source: 'branch' }, 'standards stay excluded');
+  assert.deepEqual(t('fix/v-2-layout'), { title: 'V 2 layout', source: 'branch' });
+  assert.equal(t('fix/beta-90-notes').source, 'branch');
+  assert.equal(t('fix/issue-42-crash').source, 'branch');
+  assert.equal(W.titleOf({ team: false, firstPrompt: 'abc-123 fix login' }).source, 'prompt', 'prompts still need capitals');
+});

@@ -217,9 +217,20 @@
   const aiName = (p) => (typeof p === 'string' && Object.hasOwn(AI_NAMES, p.trim().toLowerCase()) ? AI_NAMES[p.trim().toLowerCase()] : 'AI');
 
   // ABC-123 (not a standard such as UTF-8 or SHA-256), #123, gh-123.
-  const NOT_TICKETS = new Set(['UTF', 'SHA', 'ISO', 'GPT', 'RFC', 'CVE', 'MD', 'AES', 'RSA', 'HTTP', 'TLS', 'SSL', 'IPV', 'ES', 'ECMA', 'PEP', 'ARM', 'X', 'GH', 'PR', 'CSS', 'H', 'MP', 'COVID', 'F', 'B', 'IE', 'WCAG', 'OAUTH', 'S3', 'EC2', 'P', 'Q']);
+  const NOT_TICKETS = new Set(['UTF', 'SHA', 'ISO', 'GPT', 'RFC', 'CVE', 'MD', 'AES', 'RSA', 'HTTP', 'TLS', 'SSL', 'IPV', 'ES', 'ECMA', 'PEP', 'ARM', 'X', 'GH', 'PR', 'CSS', 'H', 'MP', 'COVID', 'F', 'B', 'IE', 'WCAG', 'OAUTH', 'S3', 'EC2', 'P', 'Q', 'V', 'ISSUE', 'BUG', 'BETA', 'ALPHA', 'RC', 'STEP', 'PHASE', 'PART', 'ROUND', 'WAVE', 'DAY', 'WEEK', 'SPRINT', 'PY', 'K8S']);
   const TICKET = /(?<![A-Za-z0-9])(?:gh-(\d{1,6})|([A-Z][A-Z0-9]{1,9})-(\d{1,6})|#(\d{1,6}))(?![A-Za-z0-9])/gi;
-  // A key must be written in capitals: lower-case "organise-2026" is a word and a year.
+  // In a branch, Linear's lower-case key also counts, but only where a segment starts:
+  // "sam/abc-123-fix-login", not "work-organise-2026-10-23".
+  const BRANCH_TICKET = /(?:^|[\\/])([a-z][a-z0-9]{1,9})-(\d{1,6})(?=$|[-_./])/;
+  function branchTicket(branch) {
+    if (typeof branch !== 'string') return null;
+    const upper = ticketIn(branch);
+    if (upper) return upper;
+    const m = BRANCH_TICKET.exec(branch);
+    if (!m || /^\d+$/.test(m[1]) || NOT_TICKETS.has(m[1].toUpperCase())) return null;
+    return { id: `${m[1].toUpperCase()}-${m[2]}`, match: `${m[1]}-${m[2]}` };
+  }
+  // Elsewhere a key must be written in capitals: lower-case "organise-2026" is a word and a year.
   function ticketIn(text) {
     if (typeof text !== 'string') return null;
     for (const m of text.matchAll(TICKET)) {
@@ -285,7 +296,7 @@
     const branchRaw = cleanBranch(o.branch, redact);
     const prompt = promptsAllowed ? prepare(o.firstPrompt, redact) : '';
     const summary = summarise(prompt);
-    const fromBranch = ticketIn(branchRaw);
+    const fromBranch = branchTicket(branchRaw);
     const fromPrompt = !fromBranch && prompt ? ticketIn(finish(prompt, { max: MAX_INPUT })) : null;
     const ticket = fromBranch || fromPrompt;
     if (ticket) {
