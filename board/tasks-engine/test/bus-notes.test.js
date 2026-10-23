@@ -245,3 +245,29 @@ test('L3 (PR #35 review): a handoff main marks after_note records it on the offe
     assert.doesNotMatch((await b.bus('read', { topic: 'handoff' })).events.find((e) => e.handoff_id === plain.handoff_id).text, /read a note/);
   } finally { await b.cleanup(); }
 });
+
+test('R1 (PR #35 re-review): mainKey is taken on the first hello only; a later hello carrying one is refused and the connection closed', async () => {
+  const mainKey = crypto.randomBytes(32).toString('hex');
+  const b = await startBus(undefined, { engineOpts: { mainKey } });
+  const opened = [];
+  const hello = (c, extra = {}) => c.call('hello', { protocol: 1, client: { name: 'r1', version: '1' }, ...extra }).then(() => 'ok', (e) => e.code);
+  try {
+    const { socketPath, tokenPath } = b.h.eng;
+    // A same-user process that said hello without the key, then learnt the key: it cannot upgrade that connection.
+    const late = await connect({ socketPath, tokenPath });
+    opened.push(late);
+    assert.equal(await hello(late, { mainKey }), 'POLICY_DENIED');
+    assert.notEqual(await late.bus('notes_pending', {}, null).then(() => 'ok', (e) => e.code), 'ok', 'still no note ops on it');
+    // Main's own connection: a second hello with a key is refused too, and one without a key never drops it.
+    const main = await connect({ socketPath, tokenPath, mainKey });
+    opened.push(main);
+    assert.equal(await hello(main), 'ok');
+    assert.equal((await main.bus('notes_pending', {}, null)).notes.length, 0, 'the first hello\'s key still holds');
+    assert.equal(await hello(main, { mainKey }), 'POLICY_DENIED');
+    assert.notEqual(await main.bus('notes_pending', {}, null).then(() => 'ok', (e) => e.code), 'ok', 'closed after the refused hello');
+    // A fresh connection with the key on its first hello still works.
+    const fresh = await connect({ socketPath, tokenPath, mainKey });
+    opened.push(fresh);
+    assert.equal((await fresh.bus('notes_pending', {}, null)).notes.length, 0);
+  } finally { for (const c of opened) c.close(); await b.cleanup(); }
+});
