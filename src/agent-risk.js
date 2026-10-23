@@ -22,7 +22,7 @@ const HIGH = [
   { rule: 'sensitive-config', re: />>?\s*(?:~|\$HOME)\/\.(?:ssh\/|bashrc|zshrc|bash_profile|zprofile|profile)\b/i, why: 'Writes into SSH or shell start-up files.' },
   { rule: 'base64-blob', re: /[A-Za-z0-9+/]{200,}={0,2}/, why: 'A long encoded blob that cannot be read before adding.' },
   { rule: 'exfiltration', re: /\b(?:send|post|upload|exfiltrate|transmit|forward|report|beacon)\b[^\n]{0,80}\b(?:to|at)\s+<?https?:\/\/(?!(?:www\.)?example\.(?:com|org)\b|localhost\b|127\.0\.0\.1\b)/i, why: 'Tells the AI to send data to a web address.' },
-  { rule: 'hidden-characters', re: /[​-‏‪-‮⁠-⁤⁦-⁩﻿]/, why: 'Invisible or text-direction characters can hide instructions.' },
+  { rule: 'hidden-characters', re: /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/, why: 'Invisible or text-direction characters can hide instructions.' },
 ];
 
 function lineAt(text, index) {
@@ -30,7 +30,7 @@ function lineAt(text, index) {
   const end = text.indexOf('\n', index);
   return { line: text.slice(0, index).split('\n').length, text: text.slice(start, end < 0 ? text.length : end) };
 }
-const excerpt = (s) => { const t = s.replace(/[​-‏‪-‮⁠-⁤⁦-⁩﻿]/g, '␣').trim(); return t.length > EXCERPT ? `${t.slice(0, EXCERPT - 1)}…` : t; };
+const excerpt = (s) => { const t = s.replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g, '␣').trim(); return t.length > EXCERPT ? `${t.slice(0, EXCERPT - 1)}…` : t; };
 
 function fenced(text) {
   const out = [];
