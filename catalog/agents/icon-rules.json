@@ -1,0 +1,354 @@
+{
+  "schema": 1,
+  "note": "Deterministic category and icon mapping for the agent catalogue. Category: overrides.json, then the source's division map, then the first matching categoryRules entry (over the name, then the description, then the division), then defaultCategory. Icon: overrides.json, then the first matching iconRules entry (over name + description), then the category's icon, then fallbackIcon. Patterns are case-insensitive JavaScript regular expressions. Glyph ids are drawn in the app's 16px / 1.5-stroke sidebar style (agent-icons.js). Every pattern is anchored at a word start (\\\\b is prepended).",
+  "glyphs": [
+    "code",
+    "server",
+    "layout",
+    "phone",
+    "cloud",
+    "database",
+    "shield",
+    "bug",
+    "flask",
+    "chart",
+    "megaphone",
+    "pen",
+    "palette",
+    "gamepad",
+    "globe",
+    "map",
+    "cube",
+    "briefcase",
+    "dollar",
+    "heart-pulse",
+    "graduation-cap",
+    "headset",
+    "kanban",
+    "robot",
+    "terminal",
+    "git-branch",
+    "lock",
+    "search",
+    "sparkle"
+  ],
+  "fallbackIcon": "sparkle",
+  "defaultCategory": "engineering",
+  "categories": {
+    "engineering": {
+      "label": "Engineering",
+      "icon": "code"
+    },
+    "infrastructure": {
+      "label": "Infrastructure & DevOps",
+      "icon": "cloud"
+    },
+    "data-ai": {
+      "label": "Data & AI",
+      "icon": "robot"
+    },
+    "security": {
+      "label": "Security",
+      "icon": "shield"
+    },
+    "testing": {
+      "label": "Testing & quality",
+      "icon": "bug"
+    },
+    "developer-experience": {
+      "label": "Developer experience",
+      "icon": "terminal"
+    },
+    "design": {
+      "label": "Design",
+      "icon": "palette"
+    },
+    "product": {
+      "label": "Product",
+      "icon": "layout"
+    },
+    "project-management": {
+      "label": "Project management",
+      "icon": "kanban"
+    },
+    "orchestration": {
+      "label": "Agent orchestration",
+      "icon": "git-branch"
+    },
+    "writing": {
+      "label": "Writing & docs",
+      "icon": "pen"
+    },
+    "marketing": {
+      "label": "Marketing",
+      "icon": "megaphone"
+    },
+    "paid-media": {
+      "label": "Paid media",
+      "icon": "chart"
+    },
+    "sales": {
+      "label": "Sales",
+      "icon": "briefcase"
+    },
+    "support": {
+      "label": "Support",
+      "icon": "headset"
+    },
+    "finance": {
+      "label": "Finance",
+      "icon": "dollar"
+    },
+    "strategy": {
+      "label": "Strategy & business",
+      "icon": "briefcase"
+    },
+    "game-development": {
+      "label": "Game development",
+      "icon": "gamepad"
+    },
+    "spatial-computing": {
+      "label": "Spatial computing",
+      "icon": "cube"
+    },
+    "gis": {
+      "label": "Maps & GIS",
+      "icon": "map"
+    },
+    "academic": {
+      "label": "Academic",
+      "icon": "graduation-cap"
+    },
+    "research": {
+      "label": "Research",
+      "icon": "search"
+    },
+    "healthcare": {
+      "label": "Healthcare",
+      "icon": "heart-pulse"
+    },
+    "specialized": {
+      "label": "Specialized",
+      "icon": "sparkle"
+    }
+  },
+  "divisions": {
+    "agency": {
+      "academic": "academic",
+      "design": "design",
+      "engineering": "engineering",
+      "finance": "finance",
+      "game-development": "game-development",
+      "gis": "gis",
+      "healthcare": "healthcare",
+      "marketing": "marketing",
+      "paid-media": "paid-media",
+      "product": "product",
+      "project-management": "project-management",
+      "research": "research",
+      "sales": "sales",
+      "security": "security",
+      "spatial-computing": "spatial-computing",
+      "strategy": "strategy",
+      "support": "support",
+      "testing": "testing",
+      "specialized": "specialized"
+    },
+    "voltagent": {
+      "01-core-development": "engineering",
+      "02-language-specialists": "engineering",
+      "03-infrastructure": "infrastructure",
+      "05-data-ai": "data-ai",
+      "06-developer-experience": "developer-experience",
+      "08-business-product": "product",
+      "09-meta-orchestration": "orchestration",
+      "10-research-analysis": "research"
+    },
+    "wshobson": {},
+    "0xfurai": {}
+  },
+  "categoryRules": [
+    {
+      "match": "security|secur(e|ity)|pentest|penetration|vulnerab|threat|appsec|devsecops|compliance|forensic|malware|reverse.engineer|soc.?2|gdpr|hipaa|pci",
+      "category": "security"
+    },
+    {
+      "match": "\\b(test|tests|testing|qa|quality|tdd|accessibility|a11y|debug|debugger|review(er)?|audit(or)?|eval)\\b",
+      "category": "testing"
+    },
+    {
+      "match": "orchestrat|multi-agent|agent.team|conductor|context.manag|team.lead|coordinator|workflow.orchestr",
+      "category": "orchestration"
+    },
+    {
+      "match": "kubernetes|k8s|docker|terraform|devops|sre\\b|cloud|aws|azure|gcp|infrastructure|deploy|ci/?cd|observab|monitor|incident|network|platform.engineer|linux|sysadmin",
+      "category": "infrastructure"
+    },
+    {
+      "match": "\\b(ml|ai|llm|rag|data|machine.learning|mlops|nlp|prompt|analytics|spark|etl|dbt|pandas|finetun|embedding|vector)\\b",
+      "category": "data-ai"
+    },
+    {
+      "match": "documentation|technical.writ|docs\\b|api.documenter|tutorial|content.writ|copywrit|writing",
+      "category": "writing"
+    },
+    {
+      "match": "\\bui\\b|\\bux\\b|designer|ui.design|ux.design|visual.design|graphic|figma|brand|visual|landing.?page",
+      "category": "design"
+    },
+    {
+      "match": "seo|marketing|social.media|content.market|growth",
+      "category": "marketing"
+    },
+    {
+      "match": "sales|crm|customer.sales",
+      "category": "sales"
+    },
+    {
+      "match": "support|customer.success|help.?desk",
+      "category": "support"
+    },
+    {
+      "match": "quant|trading|payment|billing|finance|financial|accounting|fintech|blockchain|web3|defi",
+      "category": "finance"
+    },
+    {
+      "match": "business|startup|strategy|legal|hr\\b|market.research",
+      "category": "strategy"
+    },
+    {
+      "match": "product.manag|product.owner|roadmap",
+      "category": "product"
+    },
+    {
+      "match": "project.manag|scrum|agile|sprint",
+      "category": "project-management"
+    },
+    {
+      "match": "game|unity|unreal|godot",
+      "category": "game-development"
+    },
+    {
+      "match": "research|analyst|scientist",
+      "category": "research"
+    },
+    {
+      "match": "cli|tooling|developer.experience|\\bdx\\b|refactor|git|dependency|build.engineer|legacy|migration|cleanup",
+      "category": "developer-experience"
+    }
+  ],
+  "iconRules": [
+    {
+      "match": "security|secur(e|ity)|pentest|penetration|vulnerab|threat|appsec|forensic|malware|incident.respon",
+      "icon": "shield"
+    },
+    {
+      "match": "auth|identity|secret|credential|privacy|encrypt|crypto(graph)?|zero.trust|access.control|iam\\b",
+      "icon": "lock"
+    },
+    {
+      "match": "database|\\bsql\\b|postgres|mysql|mongo|redis|cassandra|dba\\b|supabase|data.?warehouse|schema",
+      "icon": "database"
+    },
+    {
+      "match": "\\b(ios|android|mobile|swift|kotlin|flutter|react.native|expo|app.store)\\b",
+      "icon": "phone"
+    },
+    {
+      "match": "\\b(ml|ai|llm|rag|machine.learning|mlops|nlp|prompt|gpt|claude|model|neural|finetun|embedding|agentic|chatbot|pytorch|tensorflow|keras|scikit|hugging.?face|langchain|openai)\\b",
+      "icon": "robot"
+    },
+    {
+      "match": "orchestrat|multi-agent|agent.team|conductor|workflow|pipeline|git\\b|branch|merge|pull.request",
+      "icon": "git-branch"
+    },
+    {
+      "match": "kubernetes|k8s|docker|terraform|cloud|aws|azure|gcp|serverless",
+      "icon": "cloud"
+    },
+    {
+      "match": "server|backend|devops|sre\\b|infrastructure|deploy|network|linux|platform.engineer|observab|monitor|nestjs|express|fastapi|spring|websocket|microservice|queue|kafka|rabbitmq",
+      "icon": "server"
+    },
+    {
+      "match": "\\b(test|tests|testing|qa|tdd|debug|debugger|bug|e2e|playwright|cypress)\\b",
+      "icon": "bug"
+    },
+    {
+      "match": "accessib|a11y|wcag|\\bux\\b|\\bui\\b|frontend|front-end|layout|css|html|landing.?page|web.?design",
+      "icon": "layout"
+    },
+    {
+      "match": "designer|ui.design|ux.design|visual.design|graphic|figma|brand|visual|illustrat|color|typograph|image|photo|video|creative",
+      "icon": "palette"
+    },
+    {
+      "match": "experiment|science|scientist|chemis|lab\\b|prototype|r&d",
+      "icon": "flask"
+    },
+    {
+      "match": "analytic|metric|dashboard|report|forecast|insight|kpi|chart|statistic|ads?\\b|ppc|paid",
+      "icon": "chart"
+    },
+    {
+      "match": "seo|marketing|social.media|campaign|tiktok|instagram|twitter|linkedin|reddit|podcast|pr\\b|growth|influenc",
+      "icon": "megaphone"
+    },
+    {
+      "match": "writ|document|docs\\b|content|copy|blog|editor|narrat|story|transcript",
+      "icon": "pen"
+    },
+    {
+      "match": "game|unity|unreal|godot|roblox|level.design",
+      "icon": "gamepad"
+    },
+    {
+      "match": "spatial|visionos|vision.pro|\\bxr\\b|\\bvr\\b|\\bar\\b|3d|metal\\b|webgl|three\\.js",
+      "icon": "cube"
+    },
+    {
+      "match": "\\bgis\\b|map|geospatial|geograph|cartograph|location",
+      "icon": "map"
+    },
+    {
+      "match": "global|international|i18n|locali[sz]|translat|cultur|language|travel",
+      "icon": "globe"
+    },
+    {
+      "match": "financ|accounting|accountant|tax|payment|billing|invoice|budget|invest|trading|quant|price|pricing|revenue|bookkeep|payroll",
+      "icon": "dollar"
+    },
+    {
+      "match": "health|medical|clinic|patient|wellness|therap",
+      "icon": "heart-pulse"
+    },
+    {
+      "match": "academic|teach|tutor|education|student|course|curriculum|histor|anthropolog|philosoph",
+      "icon": "graduation-cap"
+    },
+    {
+      "match": "support|customer.service|help.?desk|customer.success|onboard",
+      "icon": "headset"
+    },
+    {
+      "match": "project|scrum|agile|sprint|kanban|jira|roadmap|planner|plan\\b|producer|shepherd",
+      "icon": "kanban"
+    },
+    {
+      "match": "sales|deal|business|strategy|consult|executive|legal|hr\\b|recruit|operations|procure|negotiat|startup|real.estate|loan|mortgage|insurance",
+      "icon": "briefcase"
+    },
+    {
+      "match": "search|research|discover|investigat|archaeolog|audit|review|analy[sz]",
+      "icon": "search"
+    },
+    {
+      "match": "cli|terminal|shell|bash|tooling|script|dx\\b|developer.experience|build",
+      "icon": "terminal"
+    },
+    {
+      "match": "code|coding|program|developer|engineer|architect|refactor|api\\b|typescript|javascript|python|rust|golang|\\bgo\\b|java|c\\+\\+|ruby|php|elixir|scala|haskell|framework|\\.net|rails|django|laravel|react|vue|angular|svelte|node",
+      "icon": "code"
+    }
+  ]
+}

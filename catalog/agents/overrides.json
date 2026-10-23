@@ -1,0 +1,1 @@
+{ "schema": 1, "note": "Per-agent manual overrides, keyed by catalogue id. Allowed keys: icon, category, oneLiner, bestWhen, include (true ships a high-risk agent; needs reason), exclude (true drops an agent; needs reason), reason.", "agents": {} }

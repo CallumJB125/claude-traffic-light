@@ -37,3 +37,11 @@ test('every page, preload and local asset main.js uses is packaged', () => {
   const missing = [...new Set([...pages, ...preloads, ...assets])].filter((f) => !fs.existsSync(path.join(ROOT, f)) || !packaged(f));
   assert.deepEqual(missing, []);
 });
+
+test('the agent catalogue, its licences and the third-party notices are packaged', () => {
+  const lic = fs.readdirSync(path.join(ROOT, 'catalog/agents/licenses')).map((f) => `catalog/agents/licenses/${f}`);
+  assert.ok(lic.length >= 1);
+  const need = ['catalog/agents/catalog.json.gz', 'THIRD_PARTY_NOTICES.md', 'src/agent-catalog.js', 'src/agent-catalog-pin.js', 'src/agent-risk.js', 'src/agent-frontmatter.js', ...lic];
+  assert.deepEqual(need.filter((f) => !fs.existsSync(path.join(ROOT, f)) || !packaged(f)), []);
+  for (const f of ['catalog/sources.json', 'catalog/agents/lock.json', 'catalog/agents/build-report.json', 'scripts/build-agent-catalog.js']) assert.equal(packaged(f), false, `${f} is build input, not shipped`);
+});

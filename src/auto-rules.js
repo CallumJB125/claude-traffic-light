@@ -327,4 +327,4 @@ function danger(req) {
   return null;
 }
 
-module.exports = { MAX_RULES, SHELL_TOOLS, FILE_TOOLS, normalizeRule, refusal, sanitize, matchRule, mustAsk, danger, simpleCommand, commandMatch, pathGlob, charGlob };
+module.exports = { MAX_RULES, SHELL_TOOLS, FILE_TOOLS, DESTRUCTIVE_CMDS, normalizeRule, refusal, sanitize, matchRule, mustAsk, danger, simpleCommand, commandMatch, pathGlob, charGlob };
