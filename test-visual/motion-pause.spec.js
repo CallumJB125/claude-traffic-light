@@ -208,15 +208,35 @@ test('the editor stage follows its window focus: display clock focused, ambient 
   await expect.poll(stageLoops).toEqual(['running']);
 });
 
-// The editor mounts a live rig per picker tile (~165); only the few in view
-// may animate, and a minimised editor holds everything.
+// The editor has a picker tile per option (~165). Tiles out of view have no rig until
+// they are scrolled to; a built tile scrolled away again stops animating, and a
+// minimised editor holds everything.
 test('the Lights editor animates only what is in view, and holds while minimised', async () => {
   await widget.evaluate(() => window.trafficLight.openLights());
   const lights = await windowByFile(h.app, 'lights.html');
   await lights.waitForLoadState('load');
-  await expect.poll(() => lights.evaluate(() => document.querySelectorAll('svg.rig.offscreen').length)).toBeGreaterThan(100);
-  const running = () => lights.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running' && a.effect.target.closest('svg.rig.offscreen')).length);
-  expect(await running()).toBe(0);
+  await expect.poll(() => lights.evaluate(() => document.querySelectorAll('.mini[data-rig="pending"]').length)).toBeGreaterThan(100);
+  // #editor is the scroller, not the document. Scroll its last tile into view (that
+  // builds it), then back to the top so it is offscreen again.
+  const last = lights.locator('.mini').last();
+  await last.scrollIntoViewIfNeeded();
+  await expect(last).toHaveAttribute('data-rig', 'mounted');
+  await lights.evaluate(() => { document.getElementById('editor').scrollTop = 0; });
+  // Wait until a built tile that is now offscreen owns animations, so the check below
+  // is about pausing them (rig.css .rig.offscreen), not about there being none.
+  const offscreenAnims = () => lights.evaluate(() => document.getAnimations().filter((a) => a.effect?.target?.closest?.('.mini svg.rig.offscreen')).length);
+  await expect.poll(offscreenAnims).toBeGreaterThan(0);
+  // Tiles are content-visibility: auto, so an offscreen one skips style and its
+  // animations keep reporting the last play state. Asking for the target's computed
+  // style brings it up to date first; then only the pause rule can make it 'paused'.
+  // Rig animations loop forever, so without that rule this never reaches 0.
+  const running = () => lights.evaluate(() => document.getAnimations().filter((a) => {
+    const t = a.effect?.target;
+    if (!t?.closest?.('svg.rig.offscreen')) return false;
+    getComputedStyle(t).animationPlayState;
+    return a.playState === 'running';
+  }).length);
+  await expect.poll(running).toBe(0);
   const lightsPaused = () => lights.evaluate(() => document.body.classList.contains('motion-paused'));
   await main(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('lights.html')).minimize());
   await expect.poll(lightsPaused).toBe(true);
