@@ -948,7 +948,8 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
       if (!(await attest(w).catch(() => false))) { unverified += 1; continue; }
       const key = `${w.ai}|task:${w.taskId}`;
       const peer = { handle: handleFor({ provider: w.ai, folder: cls.folder, host, source: w.ai, sessionId: w.sessionId }, 4, handleKey), provider: w.ai,
-        folder: Hook.folderLabel(cls.folder), repo_key: cls.repoKey || null, branch: cls.repoKey ? Hook.branchLabel(w.branch) || null : null,
+        // Never a branch: a task branch is named after the task text and id (engine.js, buddy/<slug>-<id>).
+        folder: Hook.folderLabel(cls.folder), repo_key: cls.repoKey || null, branch: null,
         ...(w.state === 'blocked' ? { status: 'idle', waiting_on: 'person' } : { status: 'working', waiting_on: null }),
         since_min: Number.isFinite(w.stateSince) ? Math.max(0, Math.floor((at - w.stateSince) / 60000)) : null };
       const entry = { allowed: true, interactive: false, verified: true, bound: false, caps: { mcp: false, notes: false }, notices: [], repo_key: cls.repoKey || null };

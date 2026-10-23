@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { world } = require('./helpers/bind-world.js');
+const Hook = require('../hooks/awareness.js');
 
 const START = 'Thu Oct 22 10:00:00 2026';
 const TASK = 'tsk_wrapped01';
@@ -36,7 +37,7 @@ test('a verified wrapped run is a peer by handle: native sessions see it, it tak
   const p = r.peers.find((x) => x.folder === 'docs');
   assert.ok(p, 'listed');
   assert.match(p.handle, /^claude-docs-[0-9a-f]{4}$/);
-  assert.deepEqual({ ...p, handle: null }, { handle: null, provider: 'claude', folder: 'docs', repo_key: p.repo_key, branch: 'main', status: 'working', waiting_on: null, since_min: 3 });
+  assert.deepEqual({ ...p, handle: null }, { handle: null, provider: 'claude', folder: 'docs', repo_key: p.repo_key, branch: null, status: 'working', waiting_on: null, since_min: 3 });
   assert.equal(r.unverified, 0);
   assert.ok(!Object.keys(r.self).some((k) => k.includes('task:')), 'no self entry: nothing binds to it');
   await s.aw.refresh();
@@ -176,4 +177,40 @@ test('hostile branch and folder names are labels: short tokens, no line breaks o
   const r = await s.aw.build();
   for (const p of r.peers) for (const v of [p.folder, p.branch || '']) assert.match(v, /^[A-Za-z0-9._/-]*$/);
   assert.ok(!JSON.stringify(r.peers).includes('Plexiform:'));
+});
+
+// Review #47 finding 1: a task branch is buddy/<slug of the task text>-<6 hex of the id>. None of it reaches another
+// session: not the row, roster.json, the hook's view or either bus_peers view. Matched lowercased with every run of
+// non-alphanumerics as one dash, so case and separators cannot hide it.
+const flat = (v) => String(typeof v === 'string' ? v : JSON.stringify(v)).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+test('a wrapped run shows no branch: neither the task-text slug nor the id fragment reaches any session', async (t) => {
+  const s = setup(t, (w) => {
+    const row = { ...wrapped(w), root: w.repoA, worktree: w.repoA, taskId: 'tsk_bffde4abcdef', branch: 'buddy/Secret_Task-TEXT-bffde4' };
+    w.procs.get(400).cwd = w.repoA;
+    return [row];
+  });
+  const r = await s.aw.build();
+  await s.aw.refresh();
+  const p = r.peers.find((x) => x.provider === 'claude' && x.folder === 'app' && !Object.values(r.self).some((e) => e.handle === x.handle));
+  assert.ok(p, 'listed in the same repo as session X');
+  assert.equal(p.branch, null);
+  const views = [fs.readFileSync(s.aw.rosterFile, 'utf8'), Hook.render(Hook.viewOf(r, r.self['claude|X'])), await asX(s), await s.aw.peersForTask('tsk_bffde4abcdef')];
+  assert.ok(views[1].includes(p.handle), 'X is shown the wrapped run');
+  for (const v of views) {
+    assert.ok(!flat(v).includes('secret-task-text'), 'no task-text slug');
+    assert.ok(!flat(v).includes('bffde4'), 'no id fragment');
+  }
+});
+
+// Review #47 finding 4: the engine's worktree path may run through a symlink (/tmp → /private/tmp on a Mac); the
+// process reports the real folder, so the attest compares real paths.
+test('a worktree path through a symlink still attests; the real cwd is compared with the real worktree', async (t) => {
+  const s = setup(t, (w) => {
+    const link = path.join(w.home, 'tmp-link');
+    fs.symlinkSync(path.dirname(w.repoC), link);
+    return [wrapped(w, { worktree: path.join(link, path.basename(w.repoC)) })];
+  });
+  const r = await s.aw.build();
+  assert.ok(r.peers.some((p) => p.folder === 'docs'), 'listed');
+  assert.equal(r.unverified, 0);
 });

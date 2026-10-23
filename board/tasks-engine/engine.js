@@ -478,7 +478,8 @@ export class TasksEngine extends EventEmitter {
       if (t.ai?.id !== 'claude' && t.ai?.id !== 'codex') continue;
       const root = t.repo?.root ?? t.worktree;
       if (typeof root !== 'string' || typeof t.worktree !== 'string') continue;
-      rows.push({ taskId: t.id, ai: t.ai.id, sessionId: String(t.sessionId ?? t.id), root, worktree: t.worktree, branch: t.branch ?? null,
+      // No branch: a task branch is named after the task text and id (buddy/<slug>-<id>), which must not reach other sessions.
+      rows.push({ taskId: t.id, ai: t.ai.id, sessionId: String(t.sessionId ?? t.id), root, worktree: t.worktree, branch: null,
         state: t.state, stateSince: t.stateSince, startedAt: t.createdAt, pid: r.pid, lstart: r.lstart });
     }
     return rows.sort((a, b) => (a.taskId < b.taskId ? -1 : 1));

@@ -10,17 +10,24 @@ const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).
 // A bounded run-bound adapter over the existing Tasks engine. No new authority
 // store: the original task tree, permission level and run lifetime are binding.
 export function createCollaboration({ tasks, current, save, create, deliver, messages, saveOutput, dispatchInbox = () => {}, bus = null, peers = null, now = Date.now }) {
-  const pending = new Map(), familyLocks = new Map(), peerViews = new Map();
-  // bus_peers for the person's own wrapped runs (O1b): main answers from its roster; a run asking faster than every
-  // two seconds gets its last answer again.
+  const pending = new Map(), familyLocks = new Map(), peerViews = new Map(), peerAsks = new Map();
+  // bus_peers for the person's own wrapped runs (O1b): main answers from its roster. One question per run at a time;
+  // any answer, or none (main slow or gone), is reused for two seconds.
   async function peersOf(task) {
     if (!LOCAL_SOURCES.includes(task.source)) fail('POLICY_DENIED', 'bus_peers is for runs the person started.');
     if (!peers) fail('POLICY_DENIED', 'Plexiform cannot show other AI sessions here.');
     const last = peerViews.get(task.id);
-    if (last && now() - last.at < 2000) return last.view;
-    const view = await peers(task);
-    if (!view || typeof view !== 'object') fail('UNAVAILABLE', 'Plexiform did not answer. Try again in a few seconds.');
-    peerViews.set(task.id, { at: now(), view });
+    let view;
+    if (last && now() - last.at < 2000) view = last.view;
+    else {
+      if (!peerAsks.has(task.id)) {
+        peerAsks.set(task.id, Promise.resolve().then(() => peers(task)).catch(() => null)
+          .then((v) => { const ok = v && typeof v === 'object' ? v : null; peerViews.set(task.id, { at: now(), view: ok }); return ok; })
+          .finally(() => peerAsks.delete(task.id)));
+      }
+      view = await peerAsks.get(task.id);
+    }
+    if (!view) fail('UNAVAILABLE', 'Plexiform did not answer. Try again in a few seconds.');
     return view;
   }
   function family(task) {
