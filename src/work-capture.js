@@ -501,7 +501,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     // backfill never touch an agent entry, so the card stays put until the person moves or closes it.
     const body={install_id:state.install_id,provider:o.provider,session_id:o.session_id,task_id,repo_id:destination.repo_id??null,title:cardTitle,status:'idle',...(summary!==null?{summary}:{})};
     let result;
-    try{result=destination.kind==='team'?await sendTeam(destination,body):await sendLocal(body);}catch{result=null;}
+    try{result=destination.kind==='team'?await sendTeam(destination,teamBody(destination,body)):await sendLocal(body);}catch{result=null;}
     const id=typeof result?.card?.id==='string'&&ID.test(result.card.id)?result.card.id:null;
     if(!result?.ok||!id){log('agent card deferred');return refuse('UNAVAILABLE');}
     if(commit(next=>{const e=next.tasks[key];if(e){e.card_id=id;e.status='idle';e.sent_at=now();}}))changed();

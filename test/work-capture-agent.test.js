@@ -299,3 +299,31 @@ test('PR B addAgentCard (#55 review M1): a lost-answer retry resends the scrubbe
   assert.equal(local.calls[0].kind, 'local');
   assert.equal(local.calls[0].body.title, 'Fix sam@acme.co.za on 10.0.0.5 \u00b7 added by Codex');
 });
+
+// #55 re-review: every team send goes through teamBody, the agent card's too. teamBody is idempotent, so for a card
+// saved scrubbed the sent body is the stored one, byte for byte; a saved entry that was never scrubbed (written by
+// an older build, or by hand) is still scrubbed on its way out.
+test('PR B addAgentCard (#55 re-review): the body sent to a team hub is the stored one, and a stored entry never scrubbed is scrubbed at send', async (t) => {
+  const r = rig(t);
+  for (const [input] of TITLE_LEAKS) {
+    const res = await add(r, { title: `Fix ${input}`, details: `see ${input}` });
+    const { body } = r.calls.at(-1);
+    const saved = Object.values(JSON.parse(fs.readFileSync(r.setup.file, 'utf8')).tasks).find((e) => e.agent && e.card_id === res.card_id);
+    assert.deepEqual({ title: body.title, summary: body.summary }, { title: saved.title, summary: saved.summary }, input);
+  }
+  let fail = true;
+  const old = rig(t, { sendTeam: async (destination, body) => { old.calls.push({ kind: 'team', destination, body }); if (fail) { fail = false; return { ok: false }; } return { ok: true, card: { id: 'team-ok' } }; } });
+  const request_id = rid();
+  const args = { title: 'Fix the parser', details: 'grammar.js', request_id };
+  assert.equal((await add(old, args)).reason, 'UNAVAILABLE');
+  const file = JSON.parse(fs.readFileSync(old.setup.file, 'utf8'));
+  const e = Object.values(file.tasks).find((x) => x.agent);
+  e.title = 'Fix sam@acme.co.za on 10.0.0.5 \u00b7 added by Codex';
+  e.summary = `${e.summary}\nhost db1.internal.example.com`;
+  fs.writeFileSync(old.setup.file, JSON.stringify(file));
+  const again = rig(t, { file: old.setup.file, sendTeam: old.setup.sendTeam });
+  assert.equal((await add(again, args)).card_id, 'team-ok');
+  const sent = old.calls.at(-1).body;
+  for (const raw of ['sam@acme.co.za', '10.0.0.5', 'db1.internal.example.com']) assert.ok(!JSON.stringify(sent).includes(raw), `${raw} in ${JSON.stringify(sent)}`);
+  assert.equal(sent.title, 'Fix [email] on [ip] \u00b7 added by Codex');
+});

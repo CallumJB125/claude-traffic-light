@@ -8,8 +8,9 @@ const BOARD_NAME_MAX = 60;
 const MARKS_PER_BASE = 2;
 const KEEP = /[^\p{L}\p{N}\p{M} .,\-_&+/#():!]/gu;
 // \p{L} includes modifier letters that look like quotes (U+02BA, U+02BB, U+02BC, U+02EE, U+A78B/A78C saltillo).
-// The Spacing Modifier Letters block and the saltillo range go; CJK modifier letters such as U+30FC stay.
-const QUOTE_LIKE = /[\u02B0-\u02FF\uA788-\uA78C]/gu;
+// The Spacing Modifier Letters block, the saltillo range, U+0559 (Armenian), U+07F4/07F5 (NKo tone apostrophes) and
+// U+2E2F (vertical tilde) go; CJK modifier letters such as U+30FC stay.
+const QUOTE_LIKE = /[\u02B0-\u02FF\uA788-\uA78C\u0559\u07F4\u07F5\u2E2F]/gu;
 
 function boardLabel(value) {
   if (typeof value !== 'string') return '';
