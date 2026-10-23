@@ -5,6 +5,7 @@
 // opaque card handle, never a path, URL or command.
 const InputView = require('./input-view.js');
 const SessionOverview = require('./session-overview.js');
+const Organise = require('./work-organise.js');
 const { finding } = require('../usage-waste-view.js');
 const { summary } = require('./ai-tools.js');
 
@@ -53,7 +54,7 @@ function needs(inputs, now, paused = null) {
   return {
     paused: paused && typeof paused.text === 'string' ? { text: text(paused.text, 160), note: text(paused.note, 300), resumable: paused.resumable !== false } : null,
     total: queue.length,
-    items: queue.slice(0, LIST_MAX).map((i) => ({ id: typeof i.id === 'string' ? i.id.slice(0, 100) : '', kind: InputView.KIND_LABEL[i.kind] || 'Waiting', headline: InputView.headline(i), project: text(InputView.project(i), 100), age: InputView.ageText(i, now), late: InputView.escalated(i, now), options: quickOptions(i, now) })),
+    items: queue.slice(0, LIST_MAX).map((i) => ({ id: typeof i.id === 'string' ? i.id.slice(0, 100) : '', kind: InputView.KIND_LABEL[i.kind] || Organise.headingOf('needs'), headline: InputView.headline(i), project: text(InputView.project(i), 100), age: InputView.ageText(i, now), late: InputView.escalated(i, now), options: quickOptions(i, now) })),
   };
 }
 

@@ -692,3 +692,13 @@ test('work-organise: bucketOf reads its own headings and labels back', () => {
     assert.equal(W.bucketOf(b.label.toUpperCase()), b.id, b.label);
   }
 });
+
+test('work-organise: views name a project with projectOf — the folder-leaf copies and their fallbacks are gone', () => {
+  const files = ['session-overview', 'session-card-view', 'input-view', 'home-alerts', 'guardrails-main', 'cost-rollup', 'setup-checklist', 'explain-main'];
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', `${f}.js`), 'utf8');
+    assert.match(src, /require\('\.\/work-organise(?:\.js)?'\)/, `${f} uses work-organise`);
+    assert.match(src, /projectOf\(/, `${f} names projects with projectOf`);
+    assert.doesNotMatch(src, /'(?:Local project|Unknown project|a project|your project|A session|a session)'/, `${f} keeps no fallback of its own`);
+  }
+});

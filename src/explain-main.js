@@ -15,6 +15,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const Explain = require('./explain.js');
 const ExplainAi = require('./explain-ai.js');
+const Organise = require('./work-organise.js');
 
 const MAX_RECAPS = 10;
 const MAX_STORED = 50;
@@ -89,7 +90,7 @@ function create({ config, inputs = () => [], sessions = () => [], runner = Expla
     try { read = readSession({ adapter, sessionId }) || read; } catch (e) { log(`[explain] transcript: ${e?.message ?? e}`); }
     let files = null;
     try { files = await turnFiles(sessionId); } catch { files = null; }
-    const project = path.basename(String(cwd || read.facts?.cwd || '')) || 'your project';
+    const project = Organise.projectOf({ cwd: String(cwd || read.facts?.cwd || '') || null }).heading;
     const recap = storable({ ...Explain.buildRecap({ project, facts: read.facts, turnFiles: files, ports: read.ports }), sessionId, at: now(),
       failed: !!read.facts?.lastToolFailed }, scrub);
     if (!recap) return null;
@@ -112,7 +113,7 @@ function create({ config, inputs = () => [], sessions = () => [], runner = Expla
     const t = now();
     for (const s of sessions() || []) {
       if (!s || !s.stuck) continue;
-      help.push({ project: path.basename(String(s.cwd || '')) || 'A session', why: 'This session has gone quiet. It may be stuck.', prompts: Explain.stuckHelp({ stuck: s.stuck }).map((p) => ({ label: p.label, handle: handle({ prompt: p.id }) })) });
+      help.push({ project: Organise.projectOf({ cwd: typeof s.cwd === 'string' ? s.cwd : null }).heading, why: 'This session has gone quiet. It may be stuck.', prompts: Explain.stuckHelp({ stuck: s.stuck }).map((p) => ({ label: p.label, handle: handle({ prompt: p.id }) })) });
     }
     for (const r of recaps) {
       if (!r.failed || t - r.at > FAIL_FRESH_MS || help.length >= 5) continue;

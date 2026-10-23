@@ -12,13 +12,14 @@ const SessionHandover = require('./session-handover.js');
 const { isRemote } = require('./remote-devices.js');
 const BurstView = require('./burst-view.js');
 const LooseEnds = require('./burst-loose-ends-view.js');
+const Organise = require('./work-organise.js');
 
 const MAX_CARDS = 5;
 const ATTENTION_KINDS = new Set(['broken', 'too_old', 'ca_untrusted', 'hosts_missing', 'console_down', 'gateway_stale']);
 const MAIL_HANDLE = 'agent-mail';
 const TASK_TEXT_MAX = 20000;
 const AIS = ['claude', 'codex', 'gemini'];
-const project = (cwd) => (typeof cwd === 'string' && cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) || cwd : 'a session');
+const project = (cwd) => Organise.projectOf({ cwd: typeof cwd === 'string' ? cwd : null }).heading;
 const mins = (ms) => Math.max(1, Math.round(ms / 60000));
 
 // The handover a resumed task continues from: Plexiform's own doc for that session.
