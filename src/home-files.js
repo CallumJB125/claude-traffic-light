@@ -55,13 +55,15 @@ function createHomeFiles({ home, fsApi = fs, maxBytes = 16 * 1024 * 1024 }) {
   function writeTarget(file, text, mode, { exclusive = false } = {}) {
     // Checked before any folder is made, so a bad path creates nothing.
     const parts = partsOf(file);
-    let cur = HOME;
+    let cur = HOME, parent = fsApi.lstatSync(HOME);
     for (const part of parts.slice(0, -1)) {
       cur = path.join(cur, part);
       try { fsApi.mkdirSync(cur, { mode: 0o700 }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
-      const st = fsApi.lstatSync(cur);
-      if (st.isSymbolicLink() || !st.isDirectory()) throw new Error('link');
+      parent = fsApi.lstatSync(cur);
+      if (parent.isSymbolicLink() || !parent.isDirectory()) throw new Error('link');
     }
+    // The folder written into must still be the one checked above.
+    const sameParent = () => { const st = fsApi.lstatSync(cur); if (st.isSymbolicLink() || st.dev !== parent.dev || st.ino !== parent.ino) throw new Error('folder changed'); };
     const full = path.join(cur, parts.at(-1));
     const tmp = path.join(cur, `.${parts.at(-1)}.plexiform-${randomUUID()}.tmp`);
     let fd;
@@ -73,6 +75,7 @@ function createHomeFiles({ home, fsApi = fs, maxBytes = 16 * 1024 * 1024 }) {
       fsApi.fsyncSync(fd);
       fsApi.closeSync(fd); fd = undefined;
       locate(file);
+      sameParent();
       if (exclusive) { fsApi.linkSync(tmp, full); fsApi.unlinkSync(tmp); } else fsApi.renameSync(tmp, full);
     } catch (e) {
       if (fd !== undefined) try { fsApi.closeSync(fd); } catch { /* already closed */ }

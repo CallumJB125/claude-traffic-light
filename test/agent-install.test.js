@@ -577,3 +577,44 @@ test('security L1: a link planted as the ledger after it was read is replaced, n
   assert.ok(st.isFile() && !st.isSymbolicLink());
   assert.equal(st.mode & 0o777, 0o600);
 });
+
+test('security L2: a folder swapped for a link after it was checked is caught before the file lands', () => {
+  const { createHomeFiles } = require('../src/home-files.js');
+  const home = tmp(), elsewhere = tmp();
+  fs.mkdirSync(path.join(home, '.claude/agents'), { recursive: true });
+  const dir = path.join(home, '.claude/agents');
+  let swapped = false;
+  const fsApi = new Proxy(fs, { get(t, k) {
+    if (k === 'openSync') return (p, ...a) => {
+      if (!swapped && String(p).includes('.plexiform-')) { swapped = true; t.renameSync(dir, `${dir}.moved`); t.symlinkSync(elsewhere, dir); }
+      return t.openSync(p, ...a);
+    };
+    return typeof t[k] === 'function' ? t[k].bind(t) : t[k];
+  } });
+  const hf = createHomeFiles({ home, fsApi });
+  for (const exclusive of [true, false]) {
+    swapped = false;
+    if (fs.lstatSync(dir).isSymbolicLink()) { fs.unlinkSync(dir); fs.renameSync(`${dir}.moved`, dir); }
+    assert.throws(() => hf.writeTarget('.claude/agents/x.md', 'x', 0o644, { exclusive }));
+    assert.ok(swapped);
+    assert.deepEqual(fs.readdirSync(elsewhere), [], `exclusive=${exclusive}`);
+  }
+});
+
+test('security L2: a folder replaced by another real folder after the check is caught by its identity', () => {
+  const { createHomeFiles } = require('../src/home-files.js');
+  const home = tmp();
+  const dir = path.join(home, '.claude/agents');
+  fs.mkdirSync(dir, { recursive: true });
+  let swapped = false;
+  const fsApi = new Proxy(fs, { get(t, k) {
+    if (k === 'openSync') return (p, ...a) => {
+      if (!swapped && String(p).includes('.plexiform-')) { swapped = true; t.renameSync(dir, `${dir}.moved`); t.mkdirSync(dir); }
+      return t.openSync(p, ...a);
+    };
+    return typeof t[k] === 'function' ? t[k].bind(t) : t[k];
+  } });
+  assert.throws(() => createHomeFiles({ home, fsApi }).writeTarget('.claude/agents/x.md', 'x', 0o644, { exclusive: true }), /folder changed/);
+  assert.ok(swapped);
+  assert.deepEqual(fs.readdirSync(dir), []);
+});
