@@ -16,6 +16,7 @@ const HermesActivity = require('../adapters/hermes-activity.js');
 const Runtime = require('../adapters/runtime.js');
 const { scrub, cleanJsonError } = require('./scrub.js');
 const Brand = require('../brand.js');
+const { ledgerHealth } = require('./agent-install.js');
 
 const LAST_HOOK_FILE = 'last-hook.json';
 // A session lock is held for one read-parse-write, and the next writer breaks
@@ -123,6 +124,11 @@ function checkHooks(ctx) {
     fix,
     next: RESTART_SESSIONS,
   };
+}
+
+// Agent files Find agents added or adopted: still there, still as written.
+function checkAgents(ctx) {
+  return ledgerHealth({ home: ctx.home, dataRoot: ctx.root, ledgerKey: ctx.agentLedgerKey, fsApi: ctx.fs });
 }
 
 // Found when the Hermes CLI is installed; connecting enables Plexiform's
@@ -457,6 +463,7 @@ const CHECKS = [
   ['bus-mcp-codex', 'Agent bus tools (Codex)', busRow('codex')],
   ['bus-codex-hook', 'Codex agent bus hook', checkBusHook],
   ['mcp-node', 'Node for the MCP server (development)', checkMcpNode],
+  ['agents', 'Agents added from Find agents', checkAgents],
   ['transcripts', 'Transcripts', checkTranscripts],
   ['disk', 'Disk space', checkDisk],
   ['burst', 'Burst trusted', checkBurst],
@@ -572,5 +579,5 @@ function diagnostics({ report, versions = {}, platform = {}, logText = '', scrub
 module.exports = {
   FIXES, LAST_HOOK_FILE, STALE_LOCK_AGE_MS,
   runChecks, likelyCause, clearStaleLocks, newestHookAt, lastHookEvent, notConfigured, hookPaths, logExcerpt, diagnostics, ago,
-  checkHooks, checkCodexHooks, checkVersion, checkMcp, checkSignal, checkSessions, checkLastHook, checkTranscripts, checkDisk,
+  checkHooks, checkAgents, checkCodexHooks, checkVersion, checkMcp, checkSignal, checkSessions, checkLastHook, checkTranscripts, checkDisk,
 };

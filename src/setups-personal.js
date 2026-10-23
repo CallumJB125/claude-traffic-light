@@ -15,6 +15,7 @@ const { scan } = require('./borrow/scan.js');
 const { scrubFile } = require('./borrow/scrub.js');
 const schema = require('./borrow/payload.js');
 const { findSecrets, redactSecrets } = require('./secret-patterns.js');
+const { createHomeFiles, NOFOLLOW, NONBLOCK } = require('./home-files.js');
 
 const ENVELOPE_KIND = 'plexiform.setup';
 const SOURCES = Object.freeze(['claude-code', 'codex', 'gemini-cli']);
@@ -37,8 +38,6 @@ const SEGMENT = /^(?!\.{1,2}$)[A-Za-z0-9_.@+ -]{1,128}$/;
 const MCP_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const PH = /\{\{(HOME|USER|HOSTNAME|NAME|EMAIL(?::\d+)?|IP:\d+|HOST:\d+|PRIVATE:\d+|SSH_USER|SECRET:[\w.-]{1,64})\}\}/g;
 const LIMITS = Object.freeze({ importBytes: schema.SETUP_BODY_MAX, targetBytes: 16 * 1024 * 1024, mcpServers: 64, mcpBytes: 16 * 1024, valueBytes: 4096, valuesBytes: 16 * 1024, values: 128, backups: 50, manifestBytes: 40 * 1024 * 1024, diffCells: 2_250_000, ttl: 10 * 60_000 });
-const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
-const NONBLOCK = fs.constants.O_NONBLOCK ?? 0;
 // A gallery setup comes from a stranger: every unit needs its own tick, and
 // only files an AI reads when asked (skills, commands, agents) are accepted.
 const GALLERY_REASON = 'An AI will follow these instructions in every session.';
@@ -114,64 +113,8 @@ function createPersonalSetups({ home, dataRoot, user = () => os.userInfo().usern
   const keep = (map, value) => { if (map.size >= 16) map.delete(map.keys().next().value); const handle = randomUUID(); map.set(handle, { ...value, expires: now() + LIMITS.ttl }); return handle; };
   const live = (map, handle) => { const e = typeof handle === 'string' ? map.get(handle) : null; if (!e) return null; if (e.expires <= now()) { map.delete(handle); return null; } return e; };
 
-  // Walks the relative path from home one component at a time with lstat and
-  // refuses any link, any non-folder parent and any non-file target.
-  function locate(file) {
-    const parts = file.split('/');
-    const full = path.join(HOME, ...parts);
-    if (!full.startsWith(HOME + path.sep)) throw new Error('outside home');
-    let cur = HOME;
-    for (let i = 0; i < parts.length; i++) {
-      cur = path.join(cur, parts[i]);
-      let st;
-      try { st = fsApi.lstatSync(cur); } catch (e) { if (e.code === 'ENOENT') return { full, exists: false }; throw e; }
-      if (st.isSymbolicLink()) throw new Error('link');
-      if (i < parts.length - 1 ? !st.isDirectory() : !st.isFile()) throw new Error('not a regular file');
-    }
-    return { full, exists: true };
-  }
-  function readTarget(file) {
-    const { full, exists } = locate(file);
-    if (!exists) return { full, text: null, mode: null };
-    let fd;
-    try {
-      fd = fsApi.openSync(full, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK);
-      const st = fsApi.fstatSync(fd);
-      if (!st.isFile() || st.nlink !== 1 || st.size > LIMITS.targetBytes) throw new Error('unsupported target');
-      const buf = Buffer.alloc(st.size);
-      let at = 0;
-      while (at < buf.length) { const n = fsApi.readSync(fd, buf, at, buf.length - at, at); if (n < 1) break; at += n; }
-      return { full, text: buf.subarray(0, at).toString('utf8'), mode: st.mode & 0o777 };
-    } finally { if (fd !== undefined) fsApi.closeSync(fd); }
-  }
-  function writeTarget(file, text, mode) {
-    const parts = file.split('/');
-    let cur = HOME;
-    for (const part of parts.slice(0, -1)) {
-      cur = path.join(cur, part);
-      try { fsApi.mkdirSync(cur, { mode: 0o700 }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
-      const st = fsApi.lstatSync(cur);
-      if (st.isSymbolicLink() || !st.isDirectory()) throw new Error('link');
-    }
-    const full = path.join(cur, parts.at(-1));
-    const tmp = path.join(cur, `.${parts.at(-1)}.plexiform-${randomUUID()}.tmp`);
-    let fd;
-    try {
-      // Never executable: an imported file keeps at most read/write bits.
-      fd = fsApi.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NOFOLLOW, (Number.isInteger(mode) ? mode : 0o600) & 0o666);
-      fsApi.fchmodSync(fd, (Number.isInteger(mode) ? mode : 0o600) & 0o666);
-      fsApi.writeFileSync(fd, text, 'utf8');
-      fsApi.fsyncSync(fd);
-      fsApi.closeSync(fd); fd = undefined;
-      locate(file);
-      fsApi.renameSync(tmp, full);
-    } catch (e) {
-      if (fd !== undefined) try { fsApi.closeSync(fd); } catch { /* already closed */ }
-      try { fsApi.unlinkSync(tmp); } catch { /* never created */ }
-      throw e;
-    }
-  }
-  function removeTarget(file) { const { full, exists } = locate(file); if (exists) fsApi.unlinkSync(full); }
+  // Links, non-folder parents and non-file targets are refused (src/home-files.js).
+  const { readTarget, writeTarget, removeTarget } = createHomeFiles({ home: HOME, fsApi, maxBytes: LIMITS.targetBytes });
 
   // ── Export ────────────────────────────────────────────────────────────────
   function collect() {
