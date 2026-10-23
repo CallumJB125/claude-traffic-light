@@ -102,3 +102,14 @@ test('provider confidence and last-seen metadata stay bounded and honest offline
   const unavailable = Provider.snapshot({ available: false, now });
   assert.equal(unavailable.available, false); assert.equal(unavailable.latest_age_ms, null);
 });
+
+test('a failed or limited session outranks one still working in the provider line, as before the bucket change', () => {
+  for (const [signal, bucket, state] of [['turn-failed', 'stuck', 'Stuck or failed'], ['error', 'stuck', 'Stuck or failed'], ['limit-hit', 'needs', 'Needs you']]) {
+    for (const rows of [[row('codex'), row('codex', { signal })], [row('codex', { signal }), row('codex')]]) {
+      const p = snap(rows).providers[0];
+      assert.equal(p.bucket, bucket, signal); assert.equal(p.state, state, signal);
+    }
+  }
+  assert.equal(snap([row('codex', { signal: 'turn-failed' }), row('codex', { signal: 'waiting' })]).providers[0].state, 'Needs you');
+  assert.equal(snap([row('codex', { signal: 'stop' }), row('codex')]).providers[0].state, 'Working on it');
+});

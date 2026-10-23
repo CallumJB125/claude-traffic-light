@@ -3,8 +3,9 @@
 const Overview = require('./session-overview');
 const Organise = require('./work-organise');
 // A provider's state is the most urgent bucket among its sessions, named with the bucket
-// heading; a stale or unreported session counts as Idle (work-organise.js).
-const PRIORITY = Organise.BUCKETS.map(b => b.id);
+// heading; a stale or unreported session counts as Idle (work-organise.js). Urgency is not
+// the display order of the buckets: a failed or limited session outranks one still working.
+const PRIORITY = ['needs', 'stuck', 'working', 'check', 'idle'];
 // Only trusted app-owned local metadata enters this pure projection. Fixed
 // labels and aggregate counts leave it; no raw source, IDs, paths or chat text.
 function snapshot({ sessions = [], online = true, available = true, now = Date.now() } = {}) {
