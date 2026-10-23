@@ -13,6 +13,7 @@ module.exports = {
   id: 'opencode',
   label: 'OpenCode',
   dir: '.config/opencode/agents',
+  ext: '.md',
   verified: true,
   render(agent, { alt = false } = {}) {
     const slug = slugOf(agent, alt);

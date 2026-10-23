@@ -14,6 +14,7 @@ module.exports = {
   id: 'gemini',
   label: 'Gemini CLI',
   dir: '.gemini/agents',
+  ext: '.md',
   verified: true,
   TOOLS,
   render(agent, { alt = false } = {}) {

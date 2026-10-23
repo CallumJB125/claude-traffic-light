@@ -19,10 +19,15 @@ function createHomeFiles({ home, fsApi = fs, maxBytes = 16 * 1024 * 1024 }) {
   if (typeof home !== 'string' || !path.isAbsolute(home)) throw new Error('home files need an absolute root');
   const HOME = path.resolve(home);
 
+  // Every component must be a real name: no empty, "." or ".." parts.
+  function partsOf(file) {
+    const parts = String(file).split('/');
+    if (parts.some((p) => p === '' || p === '.' || p === '..') || !path.join(HOME, ...parts).startsWith(HOME + path.sep)) throw new Error('outside home');
+    return parts;
+  }
   function locate(file) {
-    const parts = file.split('/');
+    const parts = partsOf(file);
     const full = path.join(HOME, ...parts);
-    if (!full.startsWith(HOME + path.sep)) throw new Error('outside home');
     let cur = HOME;
     for (let i = 0; i < parts.length; i++) {
       cur = path.join(cur, parts[i]);
@@ -48,9 +53,8 @@ function createHomeFiles({ home, fsApi = fs, maxBytes = 16 * 1024 * 1024 }) {
     } finally { if (fd !== undefined) fsApi.closeSync(fd); }
   }
   function writeTarget(file, text, mode, { exclusive = false } = {}) {
-    const parts = file.split('/');
     // Checked before any folder is made, so a bad path creates nothing.
-    if (parts.some((p) => p === '' || p === '.' || p === '..') || !path.join(HOME, ...parts).startsWith(HOME + path.sep)) throw new Error('outside home');
+    const parts = partsOf(file);
     let cur = HOME;
     for (const part of parts.slice(0, -1)) {
       cur = path.join(cur, part);

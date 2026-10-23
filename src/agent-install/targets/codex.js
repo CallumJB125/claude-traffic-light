@@ -11,6 +11,7 @@ module.exports = {
   id: 'codex',
   label: 'Codex',
   dir: '.codex/agents',
+  ext: '.toml',
   verified: true,
   render(agent, { alt = false } = {}) {
     const slug = slugOf(agent, alt);

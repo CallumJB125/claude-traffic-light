@@ -17,6 +17,7 @@ module.exports = {
   id: 'claude',
   label: 'Claude Code',
   dir: '.claude/agents',
+  ext: '.md',
   verified: true,
   render(agent, { alt = false } = {}) {
     if (agent.name.includes(':') || agent.name.startsWith('-') || agent.name.length > 256) return { ok: false, reason: 'Claude Code does not accept this agent\'s name.' };

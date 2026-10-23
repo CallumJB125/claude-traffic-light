@@ -12,6 +12,7 @@ module.exports = {
   id: 'copilot',
   label: 'Copilot CLI',
   dir: '.copilot/agents',
+  ext: '.agent.md',
   verified: true,
   render(agent, { alt = false } = {}) {
     const slug = slugOf(agent, alt);

@@ -33,6 +33,46 @@ const refuse = (status, error, extra = {}) => ({ ok: false, status, error, ...ex
 const tilde = (rel) => `~/${rel}`;
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+const HEX64 = /^[0-9a-f]{64}$/;
+const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const CURSOR_REL = /^\.cursor\/rules\/[a-z0-9]+(?:-[a-z0-9]+)*\.mdc$/;
+const OP_KINDS = new Set(['add', 'update', 'remove', 'adopt', 'release', 'add-project']);
+const hexOrNull = (v) => v === null || (typeof v === 'string' && HEX64.test(v));
+
+// The ledger lives in the data folder, which other same-user programs can
+// write. Every record is checked on read and anything that does not fit is
+// dropped, so a forged record can only ever name one file directly inside one
+// of the agent folders (or a Cursor rule in a real project folder).
+function ledgerValidator(targets, home) {
+  const byId = new Map(targets.filter((t) => t.id !== 'cursor-project').map((t) => [t.id, t]));
+  const relOk = (platform, rel) => {
+    if (typeof rel !== 'string') return false;
+    if (platform === 'cursor') return CURSOR_REL.test(rel);
+    const t = byId.get(platform);
+    if (!t || !rel.startsWith(`${t.dir}/`)) return false;
+    const name = rel.slice(t.dir.length + 1);
+    return FILE_NAME.test(name) && !name.includes('..') && name.endsWith(t.ext ?? '.md');
+  };
+  const ownedOk = (k, o) => isObject(o) && o.platform !== 'cursor' && keyOfRel(o.platform, o.rel) === k && relOk(o.platform, o.rel)
+    && (o.how === 'added' || o.how === 'adopted') && typeof o.agentId === 'string' && o.agentId.length <= 200
+    && HEX64.test(o.sha) && HEX64.test(o.fileSha256) && (o.original === undefined || HEX64.test(o.original)) && (o.alt === undefined || typeof o.alt === 'boolean');
+  const projectOk = (p) => typeof p === 'string' && path.isAbsolute(p) && path.resolve(p) === p && p !== path.resolve(home) && p !== path.parse(p).root;
+  const changeOk = (kind, c) => isObject(c) && (kind === 'add-project') === (c.platform === 'cursor') && relOk(c.platform, c.rel)
+    && hexOrNull(c.before) && hexOrNull(c.after) && (c.prevFileSha256 === undefined || HEX64.test(c.prevFileSha256))
+    && (c.owned === undefined || ownedOk(keyOfRel(c.platform, c.rel), c.owned));
+  const opOk = (op) => isObject(op) && typeof op.id === 'string' && /^[\w-]{1,64}$/.test(op.id) && OP_KINDS.has(op.kind)
+    && Array.isArray(op.changes) && op.changes.length <= 64 && op.changes.every((c) => changeOk(op.kind, c))
+    && (op.kind !== 'add-project' || (op.changes.length === 1 && projectOk(op.project)));
+  return {
+    ownedOk, opOk, projectOk,
+    clean(l) {
+      const owned = {};
+      for (const [k, o] of Object.entries(l.owned)) if (ownedOk(k, o)) owned[k] = o;
+      return { schema: 1, owned, ops: l.ops.filter(opOk) };
+    },
+  };
+}
+const keyOfRel = (platform, rel) => `${platform}:${rel}`;
 
 function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.now, targets = TARGETS, enableCursorProject = false, failAfterWrites = null } = {}) {
   if (typeof home !== 'string' || !path.isAbsolute(home) || typeof dataRoot !== 'string' || !path.isAbsolute(dataRoot)) throw new Error('agent installs need an absolute home and data folder');
@@ -43,6 +83,7 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
   const byId = new Map(userTargets.map((t) => [t.id, t]));
   const ledgerPath = path.join(DATA, LEDGER_FILE);
   let writesDone = 0; // tests: fail on the Nth write
+  const validator = ledgerValidator(targets, HOME);
 
   // ── ledger ──────────────────────────────────────────────────────────────
   function readLedger() {
@@ -54,7 +95,7 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
     } catch (e) { if (e.code === 'ENOENT') return { schema: 1, owned: {}, ops: [] }; throw e; }
     const l = JSON.parse(text);
     if (!isObject(l) || l.schema !== 1 || !isObject(l.owned) || !Array.isArray(l.ops)) throw new Error('ledger is damaged');
-    return l;
+    return validator.clean(l);
   }
   function writeLedger(l) {
     fsApi.mkdirSync(DATA, { recursive: true, mode: 0o700 });
@@ -62,7 +103,7 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
     Runtime.writeTextAtomic(ledgerPath, `${JSON.stringify(l, null, 2)}\n`, fsApi, undefined, { newMode: 0o600 });
     fsApi.chmodSync(ledgerPath, 0o600);
   }
-  const keyOf = (platform, rel) => `${platform}:${rel}`;
+  const keyOf = keyOfRel;
 
   // Content-addressed copies of bytes Plexiform may need to put back (an
   // adopted original, the text before an update).
@@ -218,7 +259,7 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
     if (!agent) return refuse('unavailable', 'This agent is not in the catalogue.');
     const ledger = readLedger();
     const changes = [], results = [];
-    for (const o of Object.values(ledger.owned).filter((x) => x.agentId === agentId)) {
+    for (const [k, o] of Object.entries(ledger.owned).filter(([, x]) => x.agentId === agentId)) {
       const t = byId.get(o.platform);
       const cur = current(o.rel);
       if (!t || !cur.ok || cur.sha !== o.sha) { results.push({ platform: o.platform, path: tilde(o.rel), outcome: 'skipped', reason: cur.ok && cur.text == null ? 'The file is gone.' : 'Changed outside Plexiform, so it is left alone.' }); continue; }
@@ -229,7 +270,7 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
       try {
         before = keepOriginal(cur.text);
         write(o.rel, r.text);
-        changes.push({ platform: o.platform, rel: o.rel, before, after: sha(r.text), prevFileSha256: o.fileSha256 });
+        changes.push({ k, platform: o.platform, rel: o.rel, before, after: sha(r.text), prevFileSha256: o.fileSha256 });
       } catch {
         // A write whose read-back failed may still have landed.
         if (before) changes.push({ platform: o.platform, rel: o.rel, before, after: sha(r.text) });
@@ -239,7 +280,7 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
       results.push({ platform: o.platform, path: tilde(o.rel), outcome: 'updated' });
     }
     if (!changes.length) return { ok: true, opId: null, results };
-    for (const c of changes) Object.assign(ledger.owned[keyOf(c.platform, c.rel)], { sha: c.after, fileSha256: agent.fileSha256 });
+    for (const c of changes) { Object.assign(ledger.owned[c.k], { sha: c.after, fileSha256: agent.fileSha256 }); delete c.k; }
     const op = { id: randomUUID(), kind: 'update', at: new Date(now()).toISOString(), agentId, catalogSha: catalog.sha256, changes };
     ledger.ops.push(op);
     try { writeLedger(ledger); } catch {
@@ -296,7 +337,7 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
     const dir = path.join(HOME, CLAUDE_DIR);
     try { files.locate(`${CLAUDE_DIR}/x`); } catch { return { ok: true, matches: [], userOwned: 0, reason: 'The agents folder is a link or not a folder, so Plexiform leaves it alone.' }; }
     let names = [];
-    try { names = fsApi.readdirSync(dir).filter((n) => n.endsWith('.md')).sort().slice(0, MAX_ADOPT_SCAN); } catch { return { ok: true, matches: [], userOwned: 0 }; }
+    try { names = fsApi.readdirSync(dir).filter((n) => n.endsWith('.md') && FILE_NAME.test(n) && !n.includes('..')).sort().slice(0, MAX_ADOPT_SCAN); } catch { return { ok: true, matches: [], userOwned: 0 }; }
     const byHash = new Map();
     for (const a of catalog.catalog.agents) if (!byHash.has(a.fileSha256) || a.primary) byHash.set(a.fileSha256, a);
     const matches = [];
@@ -470,6 +511,8 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
     const ledger = readLedger();
     const op = ledger.ops.find((o) => o.id === opId && o.kind === 'add-project');
     if (!op || op.undone) return refuse('unavailable', 'Nothing to undo for this click.');
+    let st; try { st = fsApi.lstatSync(op.project); } catch { return refuse('unavailable', 'That project folder is gone.'); }
+    if (st.isSymbolicLink() || !st.isDirectory()) return refuse('refused', 'The project folder is now a link or not a folder, so Plexiform leaves it alone.');
     const proj = createHomeFiles({ home: op.project, fsApi, maxBytes: 1024 * 1024 });
     const c = op.changes[0];
     let cur; try { cur = proj.readTarget(c.rel); } catch { return { ok: true, restored: [], conflicts: [{ path: path.join(op.project, c.rel), reason: 'Not a regular file Plexiform can change safely.' }] }; }
@@ -496,7 +539,8 @@ function ledgerHealth({ home, dataRoot, fsApi = fs }) {
     if (e.code === 'ENOENT') return null;
     return { status: 'fail', detail: 'Plexiform\'s record of added agents can\'t be read.', next: 'Review on Find agents.' };
   }
-  const owned = Object.values(isObject(ledger?.owned) ? ledger.owned : {});
+  const v = ledgerValidator(TARGETS, home);
+  const owned = Object.entries(isObject(ledger?.owned) ? ledger.owned : {}).filter(([k, o]) => v.ownedOk(k, o)).map(([, o]) => o);
   if (!owned.length) return null;
   const files = createHomeFiles({ home, fsApi, maxBytes: 1024 * 1024 });
   let modified = 0, missing = 0, broken = 0;

