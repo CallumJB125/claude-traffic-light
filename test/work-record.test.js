@@ -205,3 +205,11 @@ test('forShare: a tailnet name other than the route hub goes from shared text (#
   assert.doesNotMatch(shared.summary, /callums-mac|555-0100/, shared.summary);
   assert.match(shared.summary, /plexi\.tail1234\.ts\.net/);
 });
+
+test('forShare: with no valid route.hub every tailnet name goes (fails closed)', () => {
+  const rec = { ...WorkRecord.build({ install_id: INSTALL, o: o(), raw: {}, facts: facts({ lastAssistant: 'x' }), home: HOME }), rev: 1 };
+  for (const hub of [undefined, null, '', 'not a url']) {
+    const shared = WorkRecord.forShare({ ...rec, summary: 'ssh callums-mac.tail1234.ts.net' }, { share_summaries: true, hub }, { salt: 's' });
+    assert.doesNotMatch(shared.summary, /callums-mac/, `${hub}: ${shared.summary}`);
+  }
+});
