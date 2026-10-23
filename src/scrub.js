@@ -18,6 +18,12 @@
 //
 // It does not try to recognise prompts or transcript content: callers must
 // never hand it any. It only makes paths, names and secrets unrecoverable.
+// One reviewed exception: src/work-organise.js passes the first prompt (cut
+// to 4 KB, normalised) through redactSecretsPass to make a short local
+// display title. That is fine because the scrubber is only a defence there,
+// not a disclosure decision: the title stays on this machine, and only one
+// sentence (at most 60 characters) is kept. Team titles never use a prompt
+// without share_summaries.
 //
 // It is best-effort defence in depth, not a guarantee: callers must feed it
 // only allow-listed fields and show the person exactly what will be sent
