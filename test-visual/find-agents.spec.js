@@ -50,7 +50,7 @@ async function open(theme, { noKey = false } = {}) {
   const agentsHome = fs.mkdtempSync(path.join(os.tmpdir(), 'af-visual-home-'));
   const agentsData = fs.mkdtempSync(path.join(os.tmpdir(), 'af-visual-data-'));
   const h = await launchApp({ env: { PLEXIFORM_AGENTS_HOME: fs.realpathSync(agentsHome), PLEXIFORM_AGENTS_DATA: fs.realpathSync(agentsData) } });
-  await h.app.evaluate(({ ipcMain, safeStorage }, { noKey, targets }) => {
+  await h.app.evaluate(({ ipcMain, safeStorage }, { noKey, targets, mine, adoptable }) => {
     // Stubbed both ways so no automated run asks the real safeStorage (L1).
     safeStorage.isEncryptionAvailable = () => !noKey;
     ipcMain.removeHandler('agents:targets');
