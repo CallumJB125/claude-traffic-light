@@ -413,22 +413,27 @@ test('My sessions: a loose-ends badge "n uncommitted · n unpushed · n stashes"
   } finally { s.close(); }
 });
 
-test('Team sessions: a teammate with an 80-character name who needs input still renders, with the name cut', async () => {
+test('Team sessions: a teammate with an 80-unit name who needs input still renders, with the name cut', async () => {
   const long = 'Maria Fernanda de los Angeles Gonzalez Rodriguez van der Berg Smith-Jones IIII';
-  const name = long + 'x'.repeat(80 - long.length);
-  assert.equal(name.length, 80);
-  const fixture = structuredClone(FIXTURE); fixture.users['u-cara'] = name;
-  const s = stack({ teamHub: createFakeTeamHub(fixture) });
-  try {
-    await s.ready(); await s.team();
-    s.teamHub.update('cara-1', { state: 'input' });
-    await wait(400); await tick();
-    const entries = s.results.flatMap(([ch, r]) => (ch === 'overview:directory' && r?.view === 'team' ? r.entries : []));
-    const cara = entries.filter((e) => e.task?.title === 'Write docs').at(-1);
-    assert.equal(cara.bucket, 'needs');
-    assert.ok(cara.state.length <= 80, cara.state);
-    assert.match(cara.state, /^Needs Maria Fernanda .*…$/);
-    const tag = s.row('team-list', /Write docs/).querySelector('.tag').textContent;
-    assert.match(tag, /Needs Maria/);
-  } finally { s.close(); }
+  const names = [long + 'x'.repeat(80 - long.length), '😀'.repeat(40), `Ana ${'😀'.repeat(38)}`, '𝓜𝓪𝓻𝓲𝓪 '.repeat(8)];
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  for (const name of names) {
+    assert.ok(name.length >= 75, `${name.length}`);
+    const fixture = structuredClone(FIXTURE); fixture.users['u-cara'] = name;
+    const s = stack({ teamHub: createFakeTeamHub(fixture) });
+    try {
+      await s.ready(); await s.team();
+      s.teamHub.update('cara-1', { state: 'input', self_reported: { state: 'input', at: new Date().toISOString() }, children: [{ ref: 'kid', name: 'Kid', state: 'input', source: 'self-reported', observed_ago_ms: 500 }] });
+      await wait(400); await tick();
+      const entries = s.results.flatMap(([ch, r]) => (ch === 'overview:directory' && r?.view === 'team' ? r.entries : []));
+      const cara = entries.filter((e) => e.task?.title === 'Write docs').at(-1);
+      assert.equal(cara.bucket, 'needs');
+      const states = [cara.state, cara.selfReported?.state, cara.children[0]?.state, cara.children[0]?.selfReported?.state];
+      for (const st of states) {
+        assert.ok(typeof st === 'string' && st.length <= 80, `${name}: ${st}`);
+        assert.match(st, /^Needs \S/); assert.doesNotMatch(st, lone, 'no half of a surrogate pair');
+      }
+      assert.match(s.row('team-list', /Write docs/).querySelector('.tag').textContent, /^Needs /, name);
+    } finally { s.close(); }
+  }
 });
