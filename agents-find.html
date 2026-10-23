@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+<title>Find agents</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="demo-banner.css">
+<link rel="stylesheet" href="agents-find-view.css">
+</head>
+<body class="agents-find">
+  <main id="af-page" class="af-page" aria-labelledby="af-title"></main>
+  <div id="af-backdrop" class="af-backdrop" hidden></div>
+  <aside id="af-drawer" class="af-drawer" role="dialog" aria-modal="true" aria-labelledby="af-drawer-title" hidden></aside>
+  <div id="af-pop" class="af-pop" role="dialog" aria-modal="true" aria-labelledby="af-pop-title" hidden></div>
+  <script src="src/command-palette.js"></script>
+  <script src="src/agent-catalog-search.js"></script>
+  <script src="src/agent-prompt-render.js"></script>
+  <script src="agent-icons.js"></script>
+  <script src="agents-find-view.js"></script>
+  <script src="demo-banner.js"></script>
+</body>
+</html>

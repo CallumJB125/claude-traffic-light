@@ -9,8 +9,9 @@
   const COMMANDS = Object.freeze([{ kind: 'command', id: 'search-sessions', title: 'Search past sessions', subtitle: 'Full-text search of your prompts and replies on this computer', keywords: ['find', 'history', 'search everything', 'what did I ask'] }]);
   const norm = s => String(s ?? '').toLocaleLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '');
   // Subsequence match with a bonus for prefix, word-start and contiguous runs.
-  function score(hay, needle) {
-    const h = norm(hay), n = norm(needle);
+  function score(hay, needle) { return scoreNorm(norm(hay), norm(needle)); }
+  // score() for callers that normalised once up front (Find agents' index).
+  function scoreNorm(h, n) {
     if (!n) return 1;
     if (h === n) return 100;
     if (h.startsWith(n)) return 80 + n.length;
@@ -50,7 +51,7 @@
     for (const c of COMMANDS) out.push({ ...c, keywords: [...c.keywords] });
     return out;
   }
-  const api = { search, score, indexOf, KINDS, COMMANDS, LIMIT };
+  const api = { search, score, scoreNorm, norm, indexOf, KINDS, COMMANDS, LIMIT };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformPalette = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

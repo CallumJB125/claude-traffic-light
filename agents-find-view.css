@@ -1,0 +1,109 @@
+/* Find agents (agents-find-view.js): search, filters, the card grid, the
+   detail sheet and the + confirmation. Colours come from tokens.css only. */
+body.agents-find { margin: 0; height: 100vh; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--font); font-size: var(--text-base); }
+.af-page { height: 100%; box-sizing: border-box; overflow-y: auto; padding: 18px 22px 28px; }
+.af-head { display: flex; justify-content: space-between; align-items: start; gap: var(--space-4); }
+.af-head h1 { margin: 0 0 4px; font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.01em; }
+.af-head p { margin: 0; max-width: 72ch; color: var(--muted); }
+.af-muted { color: var(--muted); }
+.af-label { color: var(--muted); }
+.af-warn { color: var(--amber); }
+.af-notice { margin: 12px 0 0; padding: 8px 10px; border: 1px solid color-mix(in oklab, var(--amber) 55%, transparent); border-radius: var(--radius); color: var(--text); background: color-mix(in oklab, var(--amber) 10%, var(--panel)); }
+
+/* controls */
+.af-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.af-search, .af-select { font: inherit; font-size: var(--text-sm); padding: 5px 8px; border: 1px solid var(--line-input); border-radius: var(--radius); background: var(--bg); color: var(--text); }
+.af-search { flex: 1 1 240px; min-width: 0; }
+.af-chip { font: inherit; font-size: var(--text-sm); padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: none; color: var(--text); cursor: pointer; }
+.af-chip[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: var(--bg); }
+.af-count { min-height: 1.4em; margin: 10px 0 6px; color: var(--muted); font-size: var(--text-sm); }
+
+/* buttons */
+.af-btn { font: inherit; font-size: var(--text-sm); min-height: 28px; padding: 4px 11px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel-2); color: var(--text); cursor: pointer; }
+.af-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.af-btn.link { min-height: 0; padding: 0; border: 0; background: none; text-decoration: underline; text-underline-offset: 2px; }
+.af-btn:disabled, .af-plus:disabled { opacity: 0.5; cursor: default; }
+.af-btn:focus-visible, .af-chip:focus-visible, .af-plus:focus-visible, .af-card-open:focus-visible, .af-search:focus-visible, .af-select:focus-visible, .af-pick input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.af-more { display: block; margin: 14px auto 0; }
+
+/* grid and cards */
+.af-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.af-card { position: relative; display: flex; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+.af-card:hover { border-color: var(--line-strong); }
+.af-card-open { flex: 1; min-width: 0; display: grid; align-content: start; gap: 6px; padding: 12px 52px 12px 12px; border: 0; border-radius: var(--radius-lg); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.af-card:has(.af-plus.done) .af-card-open { padding-right: 108px; }
+.af-card-top { display: flex; align-items: center; gap: 10px; }
+.af-card-name { display: grid; min-width: 0; }
+.af-card-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+.af-card-name .af-muted { font-size: var(--text-xs); }
+.af-card-what { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: var(--text-sm); }
+.af-card-when { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: var(--text-xs); color: var(--text); }
+.af-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.af-tag { padding: 1px 7px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); color: var(--muted); font-size: var(--text-xs); }
+.af-tag.warn { border-color: color-mix(in oklab, var(--amber) 60%, transparent); color: var(--amber); }
+.af-plus { position: absolute; top: 10px; right: 10px; min-width: 32px; height: 32px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: var(--panel-2); color: var(--text); font: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
+.af-plus:hover:enabled { border-color: var(--accent); color: var(--accent); }
+.af-plus.done { font-size: var(--text-xs); color: var(--green); border-color: color-mix(in oklab, var(--green) 60%, transparent); }
+.af-empty { margin: 28px 0; color: var(--muted); }
+.af-empty .af-btn { margin-top: 8px; }
+
+/* icon tiles: a category tint behind the stroke icon, never the only cue (the category is printed beside it) */
+.af-tile { --tint: var(--muted); flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius); background: color-mix(in oklab, var(--tint) 16%, var(--panel)); color: color-mix(in oklab, var(--tint) 70%, var(--text)); }
+.af-tile.big { width: 44px; height: 44px; }
+.agent-icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.af-tile.big .agent-icon { width: 22px; height: 22px; }
+.cat-engineering, .cat-developer-experience, .cat-orchestration { --tint: var(--accent); }
+.cat-infrastructure, .cat-security, .cat-spatial-computing { --tint: var(--green); }
+.cat-testing, .cat-data-ai, .cat-research, .cat-academic { --tint: var(--amber); }
+.cat-design, .cat-game-development, .cat-writing { --tint: var(--red); }
+.cat-marketing, .cat-paid-media, .cat-sales, .cat-support { --tint: var(--amber); }
+.cat-product, .cat-project-management, .cat-strategy, .cat-finance { --tint: var(--green); }
+.cat-gis, .cat-healthcare, .cat-specialized { --tint: var(--accent); }
+
+/* detail sheet */
+.af-backdrop { position: fixed; inset: 0; background: color-mix(in oklab, var(--bg) 55%, transparent); }
+.af-backdrop[hidden], .af-drawer[hidden], .af-pop[hidden] { display: none; }
+.af-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 94vw); box-sizing: border-box; overflow-y: auto; padding: 18px 20px 28px; border-left: 1px solid var(--line); background: var(--panel); box-shadow: -12px 0 32px color-mix(in oklab, var(--bg) 60%, transparent); }
+.af-drawer-head { display: flex; align-items: start; gap: 12px; }
+.af-drawer-head > div { flex: 1; min-width: 0; }
+.af-drawer-head h2 { margin: 2px 0 2px; font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.af-drawer-head p { margin: 0; font-size: var(--text-sm); }
+.af-summary { margin: 12px 0 6px; }
+.af-sub { margin: 16px 0 4px; font-size: var(--text-base); font-weight: 650; }
+.af-detail p { margin: 4px 0; }
+.af-flags ul, .af-where { margin: 4px 0 0; padding-left: 18px; font-size: var(--text-sm); }
+.af-flags li, .af-where li { margin: 3px 0; }
+.af-where code, .af-flags code, .af-result code { font-size: var(--text-xs); overflow-wrap: anywhere; }
+.af-safety { margin: 14px 0 0 !important; padding: 8px 10px; border-left: 3px solid var(--amber); background: color-mix(in oklab, var(--amber) 8%, var(--panel)); font-size: var(--text-sm); }
+.af-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.af-prompt { margin-top: 4px; padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); font-size: var(--text-sm); line-height: 1.5; overflow-wrap: anywhere; }
+.af-prompt.collapsed { max-height: 40em; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 85%, transparent); mask-image: linear-gradient(to bottom, #000 85%, transparent); }
+.af-prompt .af-ph { margin: 12px 0 4px; font-size: var(--text-base); font-weight: 650; }
+.af-prompt ul, .af-prompt ol { margin: 4px 0; padding-left: 20px; }
+.af-prompt blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--line-strong); color: var(--muted); }
+.af-prompt hr { border: 0; border-top: 1px solid var(--line); }
+.af-prompt code { font-size: var(--text-xs); padding: 0 3px; border-radius: var(--radius-sm); background: var(--panel-2); }
+.af-code, .af-raw { margin: 6px 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); }
+.af-raw { max-height: 60vh; background: var(--bg); }
+.af-prompt-tools { display: flex; gap: 14px; margin-top: 6px; }
+.af-facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 18px 0 0; font-size: var(--text-xs); color: var(--muted); }
+.af-facts dt { font-weight: 650; }
+.af-facts dd { margin: 0; overflow-wrap: anywhere; }
+
+/* + confirmation and result */
+.af-pop { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); width: min(440px, 92vw); box-sizing: border-box; padding: 16px 18px; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 12px 40px color-mix(in oklab, var(--bg) 70%, transparent); z-index: 2; }
+.af-pop h2 { margin: 0 0 8px; font-size: var(--text-base); font-weight: 650; overflow-wrap: anywhere; }
+.af-pop p { margin: 4px 0; font-size: var(--text-sm); }
+.af-pick, .af-result { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; font-size: var(--text-sm); }
+.af-pick li { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: start; }
+.af-pick li.off { color: var(--muted); }
+.af-pick label { overflow-wrap: anywhere; }
+.af-alt { grid-column: 2; display: flex; gap: 6px; align-items: center; }
+.af-result .st-added strong { color: var(--green); }
+.af-result .st-failed strong, .af-result .st-rolled-back strong { color: var(--danger-text); }
+.af-result .st-skipped strong, .af-result .st-already-there strong { color: var(--muted); }
+.af-pop-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .af-plus, .af-card { transition: border-color var(--t-fast, 120ms), color var(--t-fast, 120ms); }
+}
