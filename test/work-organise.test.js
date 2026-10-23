@@ -615,3 +615,28 @@ test('work-organise: N3 — percent-encoded, bare and $HOME home folders leave n
   keep('$HOMEBREW_PREFIX check', '$HOMEBREW_PREFIX check');
   assert.equal(titleOf({ team: false, human: 'ok %0Aevil %E2%80%AE' }).title, 'ok %0Aevil %E2%80%AE', 'only printable ASCII is decoded');
 });
+
+test('work-organise: N4 — runs of slashes and crafted nested tags stay fast (under 50 ms best-of-3, and near plain prose)', () => {
+  // Plain prose of the same length is the yardstick: a quadratic pass costs ~20× it, while the
+  // 50 ms ceiling alone is loose enough for a fast machine to pass one.
+  const prose = 'fix the login loop in the settings page and tidy up the tests '.repeat(70).slice(0, 4000);
+  let nested = 'x';
+  while (nested.length < 4000) nested = `<a></a${nested}>`;
+  const cases = {
+    'slashes': '/'.repeat(4000),
+    'backslashes': '\\'.repeat(4000),
+    'slashes then Users': `${'/'.repeat(3990)}Users`,
+    'nested <a></a<…>>': nested,
+    'nested blocks': `${'<b>'.repeat(600)}x${'</b>'.repeat(600)}`,
+  };
+  for (const [name, text] of Object.entries(cases)) {
+    for (const key of ['human', 'firstPrompt']) {
+      const base = best(() => titleOf({ team: false, [key]: prose }));
+      const ms = best(() => titleOf({ team: false, [key]: text }));
+      assert.ok(ms < 50, `${name} as ${key}: ${ms.toFixed(1)} ms`);
+      assert.ok(ms < 8 * Math.max(base, 1), `${name} as ${key}: ${ms.toFixed(1)} ms vs prose ${base.toFixed(1)} ms`);
+    }
+  }
+  assert.equal(titleOf({ team: false, human: 'fix C:\\Users\\sam\\x now' }).title, 'fix now', 'a drive home folder still goes');
+  assert.equal(titleOf({ team: false, human: 'fix //Users/sam now' }).title, 'fix now', 'a doubled slash still goes');
+});

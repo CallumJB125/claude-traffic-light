@@ -70,7 +70,7 @@
   // wherever they are, even glued to a word; any other absolute, drive or dotted path
   // starts at anything that isn't part of a word (so "CI/CD" and "and/or" stay).
   const PATH_CHARS = '[^\\s"\'`()<>\\[\\]{}|,;]*';
-  const HOME_RE = new RegExp(`(?:[A-Za-z]:)?[\\\\/]+(?:Users|home)(?:[\\\\/]${PATH_CHARS}|(?![\\w.-]))`, 'g');
+  const HOME_RE = new RegExp(`(?:[A-Za-z]:)?(?<![\\\\/])[\\\\/]+(?:Users|home)(?:[\\\\/]${PATH_CHARS}|(?![\\w.-]))`, 'g');
   const UNC_RE = new RegExp(`\\\\\\\\${PATH_CHARS}`, 'g');
   // A home folder named without its leading slash ("see Users/sam", "home/sam/x"), and $HOME.
   const BARE_HOME_RE = new RegExp(`(?<![\\w.~%$-])(?:Users|home)[\\\\/]+${PATH_CHARS}`, 'g');
@@ -123,7 +123,8 @@
   function stripMarkup(t) {
     let out = t.replace(/```[\s\S]*?(?:```|$)/g, ' ').replace(/`[^`\n]*`/g, ' ');
     if (out.includes('<')) {
-      for (let prev; prev !== out;) { prev = out; out = out.replace(BLOCK, ' '); }
+      // Nested blocks peel one level a pass; capped, so a crafted nesting cannot run long.
+      for (let i = 0, prev; i < 5 && prev !== out; i++) { prev = out; out = out.replace(BLOCK, ' '); }
       // A lone tag is dropped without a space, so a token it split is whole again.
       out = out.replace(TAG, '');
     }
