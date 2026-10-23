@@ -182,6 +182,9 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
     const cur = current(rel);
     if (!cur.ok) return { ...base, status: 'refused', reason: cur.reason };
     const owned = ledger.owned[keyOf(t.id, rel)];
+    // Ownership is per catalogue agent (source and key), not per file name: 42
+    // names exist in more than one source.
+    if (owned && owned.agentId !== agent.id) return { ...base, status: 'other-agent', reason: `Plexiform already put ${owned.agentId} here, which has the same name.`, canAlt: !alt };
     if (cur.text == null) return { ...base, status: owned ? 'missing' : 'new' };
     if (owned) {
       if (cur.sha !== owned.sha) return { ...base, status: 'modified', reason: `You changed ${tilde(rel)} after Plexiform added it, so Plexiform leaves it alone.` };

@@ -647,3 +647,21 @@ test('security L3: PRIVACY.md lists the local files Find agents keeps and the fo
   const privacy = fs.readFileSync(path.join(__dirname, '..', 'PRIVACY.md'), 'utf8');
   for (const s of ['agent-installs.json', 'agent-originals', 'agent-backups', '~/.claude/agents', '~/.codex/agents', '~/.gemini/agents', '~/.copilot/agents', '~/.config/opencode/agents']) assert.ok(privacy.includes(s), s);
 });
+
+test('security L4: same-named agents from two sources never share a file or each other\'s updates', () => {
+  const V = agentOf('voltagent/docker-expert', { name: 'docker-expert', tools: ['Read', 'Edit', 'Bash'] });
+  const X = agentOf('0xfurai/docker-expert', { name: 'docker-expert', body: '# Docker\n\nThe other one.\n' });
+  const { home, inst, add } = setup({ agents: [V, X] });
+  assert.equal(add(V.id, ['claude']).results[0].outcome, 'added');
+  const p = inst.preview(X.id, ['claude']).results[0];
+  assert.equal(p.status, 'other-agent');
+  assert.equal(p.canAlt, true);
+  assert.match(p.reason, /voltagent\/docker-expert/);
+  const r = add(X.id, ['claude']);
+  assert.equal(r.results[0].outcome, 'skipped');
+  assert.deepEqual(inst.update(X.id).results, []);
+  assert.equal(read(home, '.claude/agents/docker-expert.md'), V.raw);
+  assert.equal(add(X.id, [{ platform: 'claude', alt: true }]).results[0].outcome, 'added');
+  assert.match(read(home, '.claude/agents/docker-expert-plexiform.md'), /The other one\./);
+  assert.deepEqual(inst.status().items.map((i) => `${i.agentId}:${i.path}`).sort(), ['0xfurai/docker-expert:~/.claude/agents/docker-expert-plexiform.md', 'voltagent/docker-expert:~/.claude/agents/docker-expert.md']);
+});
