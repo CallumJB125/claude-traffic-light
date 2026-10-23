@@ -69,8 +69,10 @@
   const PATH_RE = /(?:^|(?<=[\s("'`=:]))(?:~|[A-Za-z]:|\.{1,2})?[\\/](?:[^\s"'`()<>]*)/g;
   // Relative paths: a word/word token with a file extension or two separators.
   const REL_PATH = /(?<![\w.-])[\w.-]+(?:[\\/][\w.-]+)*[\\/][\w-]+\.[A-Za-z0-9]{1,8}(?![\w.-])|(?<![\w.-])[\w.-]+(?:[\\/][\w.-]+){2,}[\\/]?(?![\w.-])/g;
+  const REDACTED = /\[(?:redacted|email|ip|user|host|card|iban|sa-id|ssn|nino|passport)\]|<redacted(?::\w+)?>/i;
   // A redacted value takes the word it was glued to with it ("sk-[redacted]").
-  const REDACTED = /[^\s\[\]<>]*(?:\[(?:redacted|email|ip|user|host|card|iban|sa-id|ssn|nino|passport)\]|<redacted(?::\w+)?>)[^\s\[\]<>]*/gi;
+  // Token by token, so a long run without spaces is read once, not once per character.
+  const dropRedacted = (t) => t.split(/(\s+)/).map((w) => (REDACTED.test(w) ? ' ' : w)).join('');
 
   let defaultRedact = null;
   if (typeof module === 'object' && module.exports && typeof require === 'function') {
@@ -85,8 +87,8 @@
   // whole again when the scrubber reads it.
   function normalise(v) {
     if (typeof v !== 'string') return '';
-    let t = v.slice(0, MAX_INPUT);
-    t = t.normalize('NFKC');
+    // NFKC can make one character five (U+3315): cut again after it.
+    const t = v.slice(0, MAX_INPUT).normalize('NFKC').slice(0, MAX_INPUT);
     return t.replace(INVISIBLE, '').replace(CONTROL, ' ').replace(/[\ud800-\udfff]/g, (c, i, s) => {
       const code = c.charCodeAt(0);
       if (code < 0xdc00) return /[\udc00-\udfff]/.test(s[i + 1] || '') ? c : ' ';
@@ -107,14 +109,17 @@
   // `slashes: false` also turns any remaining / or \ into a space, for text
   // that was derived (not typed as a title by a person).
   function safeText(v, { redact, max = MAX_TITLE, slashes = true } = {}) {
-    let t = normalise(v);
-    if (!t.trim()) return '';
-    if (typeof redact !== 'function') return '';
-    t = redact(t);
-    t = stripMarkup(t).replace(URL_RE, ' ').replace(PATH_RE, ' ').replace(REL_PATH, ' ').replace(REDACTED, ' ');
-    if (!slashes) t = t.replace(/[\\/]+/g, ' ');
-    t = t.replace(/\s+/g, ' ').trim();
-    return cut(t, max);
+    return finish(prepare(v, redact), { max, slashes });
+  }
+  // Normalised, scrubbed and stripped, but not yet cut: one scrub serves every use of a prompt.
+  function prepare(v, redact) {
+    const t = normalise(v);
+    if (!t.trim() || typeof redact !== 'function') return '';
+    return dropRedacted(stripMarkup(redact(t)).replace(URL_RE, ' ').replace(PATH_RE, ' ').replace(REL_PATH, ' '));
+  }
+  function finish(t, { max = MAX_TITLE, slashes = true } = {}) {
+    const out = (slashes ? t : t.replace(/[\\/]+/g, ' ')).replace(/\s+/g, ' ').trim();
+    return cut(out, max);
   }
 
   function cut(t, max = MAX_TITLE) {
@@ -150,7 +155,7 @@
   const named = (s, redact) => {
     const t = plainName(s);
     if (!t || typeof redact !== 'function') return t;
-    return plainName(redact(t).replace(REDACTED, ' '));
+    return plainName(dropRedacted(redact(t)));
   };
 
   // A branch name is untrusted too: normalised, then scrubbed (no path
@@ -159,7 +164,7 @@
     if (typeof branch !== 'string' || typeof redact !== 'function') return '';
     const b = normalise(branch).slice(0, 200).replace(/\s+/g, ' ').trim();
     if (!b) return '';
-    return redact(b).replace(REDACTED, ' ').replace(/\s+/g, ' ').trim();
+    return dropRedacted(redact(b)).replace(/\s+/g, ' ').trim();
   }
 
   // Branch → sub-label: agent and kind prefixes dropped, separators shown as ›.
@@ -240,8 +245,9 @@
   const DANGLING = /(?:\s+(?:in|at|on|for|to|from|of|with|and|or|the|a|an|into|under|inside|via|using|like|as|by))+\s*$/i;
   const TRAILING_FILLER = /[\s,]*(?:please|pls|thanks|thank you|thx|cheers|for me|if you can|asap)[\s.!?]*$/i;
 
-  function promptSummary(prompt, redact) {
-    const safe = safeText(prompt, { redact, max: MAX_INPUT, slashes: false });
+  const promptSummary = (prompt, redact) => summarise(prepare(prompt, redact));
+  function summarise(prepared) {
+    const safe = finish(prepared, { max: MAX_INPUT, slashes: false });
     if (!safe) return '';
     for (const part of safe.split(/(?<=[.!?])\s+|\s+[-–—]\s+|[;\n]/)) {
       let s = part.replace(FILLER, '').replace(TRAILING_FILLER, '').replace(/^[\s,.:;!?'"-]+|[\s,.:;!?'"-]+$/g, '').trim();
@@ -265,9 +271,10 @@
       if (t && hasWords(t, 1)) return { title: t, source };
     }
     const branchRaw = cleanBranch(o.branch, redact);
-    const summary = promptsAllowed ? promptSummary(o.firstPrompt, redact) : '';
+    const prompt = promptsAllowed ? prepare(o.firstPrompt, redact) : '';
+    const summary = summarise(prompt);
     const fromBranch = ticketIn(branchRaw);
-    const fromPrompt = !fromBranch && promptsAllowed ? ticketIn(safeText(o.firstPrompt, { redact, max: MAX_INPUT })) : null;
+    const fromPrompt = !fromBranch && prompt ? ticketIn(finish(prompt, { max: MAX_INPUT })) : null;
     const ticket = fromBranch || fromPrompt;
     if (ticket) {
       const rest = (fromBranch ? humaniseBranch(branchRaw, fromBranch.match) : '') || stripTicket(summary, ticket.match);

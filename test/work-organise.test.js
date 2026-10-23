@@ -345,3 +345,46 @@ test('work-organise: pure and browser-safe — no fs, exec or network, loads wit
   assert.equal(api.projectOf({ commonDir: '/d/app/.git' }).heading, 'app');
   assert.equal(api.titleOf({ firstPrompt: 'Add dark mode', provider: 'codex' }).title, 'Codex session', 'no scrubber in a page: no prompt titles');
 });
+
+// Wall time on a shared machine is noisy: best of three after a warm-up.
+const best = (fn, n = 3) => { fn(); let min = Infinity; for (let i = 0; i < n; i++) { const t0 = process.hrtime.bigint(); fn(); min = Math.min(min, Number(process.hrtime.bigint() - t0) / 1e6); } return min; };
+const blob = (seed, bytes = 3072, enc = 'base64') => { const r = rng(seed); return Buffer.from(Array.from({ length: bytes }, () => Math.floor(r() * 256))).toString(enc); };
+// The shapes people paste as a first prompt: an image data URI, a token, a blob with a key glued on.
+const pasted = (i) => [`data:image/png;base64,${blob(i, 3072, 'base64url')}`, `eyJ${blob(i, 3000, 'base64url')}.eyJ${blob(i + 1, 300, 'base64url')}`, `${blob(i, 3072, 'base64url')}sk-abcdefghijklmnopqrstuvwx`, blob(i)][i % 4];
+
+test('work-organise: H1 — no-space and NFKC-expanding input stays linear (under 50 ms each)', () => {
+  const cases = {
+    'U+3315 ×4000 (5× after NFKC)': String.fromCodePoint(0x3315).repeat(4000),
+    'U+3300 ×4000 (4× after NFKC)': String.fromCodePoint(0x3300).repeat(4000),
+    '4 KB base64 blob': blob(1),
+    '4 KB data URI': pasted(0),
+    '4 KB token-shaped blob': pasted(1),
+    '4 KB blob with a key glued on': pasted(2),
+    'x ×4000': 'x'.repeat(4000),
+    'a. ×2000': 'a.'.repeat(2000),
+    'redacted run': 'sk-abcdefghijklmnopqrstuvwx'.repeat(150),
+  };
+  for (const [label, firstPrompt] of Object.entries(cases)) {
+    const ms = best(() => titleOf({ firstPrompt, branch: firstPrompt, human: undefined }));
+    assert.ok(ms < 50, `${label}: ${ms.toFixed(1)} ms`);
+    for (const k of ['human', 'card', 'reported', 'cronJob', 'project']) {
+      const t = best(() => titleOf({ [k]: firstPrompt }));
+      assert.ok(t < 50, `${label} as ${k}: ${t.toFixed(1)} ms`);
+    }
+    assert.ok(best(() => projectOf({ cwd: `/x/${firstPrompt}`, branch: firstPrompt })) < 50, `${label} as project`);
+  }
+  assert.ok(Array.from(titleOf({ firstPrompt: cases['U+3315 ×4000 (5× after NFKC)'] }).title).length <= MAX_TITLE);
+});
+
+test('work-organise: H1 — 100 sessions of pasted blobs title in under 500 ms', () => {
+  const sessions = Array.from({ length: 100 }, (_, i) => ({ firstPrompt: pasted(100 + i), provider: 'claude', project: 'app' }));
+  const ms = best(() => { for (const s of sessions) titleOf(s); }, 2);
+  assert.ok(ms < 500, `${ms.toFixed(0)} ms`);
+});
+
+test('work-organise: H1 — the prompt is scrubbed once per title', () => {
+  let calls = 0;
+  const redact = (t) => { calls++; return t; };
+  titleOf({ firstPrompt: 'Fix the login loop for good' }, { redact });
+  assert.equal(calls, 1);
+});
