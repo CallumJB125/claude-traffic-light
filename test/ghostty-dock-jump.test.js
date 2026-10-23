@@ -158,3 +158,53 @@ test('a hung Dock list costs a jump to another terminal at most ADOPT_MS', async
   assert.deepEqual(focused, ['iTerm2']);
   assert.ok(Date.now() - t0 < ADOPT_MS + 1500);
 });
+
+// Security review L4: an adopted session whose Dock focus fails falls back to
+// the terminal its hook recorded, under the same stale checks.
+function fallbackJumper({ dockResult, termResult = { ok: true, adapter: 'iterm', exact: true }, focused, superseded = () => false }) {
+  return createJumper({
+    localHost: HOST, platform: 'darwin',
+    adopt: async (s) => ({ ...s, hostApp: 'Ghostty Dock' }),
+    focus: async (s) => { focused.push(s.hostApp); if (superseded()) return { ok: false }; return s.hostApp === 'Ghostty Dock' ? dockResult : termResult; },
+    activate: async () => null,
+    explainer: { onNeeds: () => null, onDenied: () => {} },
+  });
+}
+
+test('L4: Dock focus failing for an adopted session falls back to its recorded terminal', async () => {
+  const focused = [];
+  const jump = fallbackJumper({ dockResult: { ok: false, adapter: 'ghostty-dock', reason: 'no such tab' }, focused });
+  const r = await jump(ghosttySess({ hostApp: 'iTerm2' }), 'proj');
+  assert.deepEqual(focused, ['Ghostty Dock', 'iTerm2']);
+  assert.equal(r.app, 'iTerm2', 'reports the app it actually used');
+  assert.equal(r.exact, true);
+  assert.equal(r.cant, undefined);
+});
+
+test('L4: no recorded terminal means no fallback, and nothing is switched', async () => {
+  const focused = [];
+  const jump = fallbackJumper({ dockResult: { ok: false, adapter: 'ghostty-dock', reason: 'no such tab' }, focused });
+  const r = await jump(ghosttySess({ hostApp: 'iTerm2', terminal: null }), 'proj');
+  assert.deepEqual(focused, ['Ghostty Dock']);
+  assert.ok(r.cant);
+});
+
+test('L4: a jump superseded during the Dock attempt does not fall back', async () => {
+  const focused = [];
+  let jumpRef;
+  const jump = createJumper({
+    localHost: HOST, platform: 'darwin',
+    adopt: async (s) => (s.sessionId === SID ? { ...s, hostApp: 'Ghostty Dock' } : null),
+    focus: async (s) => {
+      focused.push(`${s.sessionId.slice(0, 4)}:${s.hostApp}`);
+      if (s.hostApp === 'Ghostty Dock') { jumpRef(ghosttySess({ sessionId: SID2, hostApp: 'iTerm2' }), 'other'); return { ok: false, adapter: 'ghostty-dock' }; }
+      return { ok: true, adapter: 'iterm', exact: true };
+    },
+    activate: async () => null,
+    explainer: { onNeeds: () => null, onDenied: () => {} },
+  });
+  jumpRef = jump;
+  assert.equal(await jump(ghosttySess({ hostApp: 'iTerm2' }), 'proj'), null);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(!focused.includes(`${SID.slice(0, 4)}:iTerm2`), JSON.stringify(focused));
+});

@@ -50,11 +50,19 @@ function createJumper({ localHost, platform, focus, activate, explainer, adopt =
       const target = adopted || session;
       if (!target.terminal && !adopted) { log('no terminal recorded; nothing switched'); return stale() ? null : cantJump(null); }
       if (adopted) log(`listed by ${adopted.hostApp}; trying it first`);
-      const r = await focus(target, { onNeeds: (needs) => explainer.onNeeds(needs), isCancelled: stale, log });
+      const ctx = { onNeeds: (needs) => explainer.onNeeds(needs), isCancelled: stale, log };
+      let used = target;
+      let r = await focus(used, ctx);
       if (stale()) return null;
+      if (adopted && !r.ok && session.terminal) {
+        log(`${r.adapter || adopted.hostApp}: ${r.reason || 'failed'}; trying the recorded terminal`);
+        used = session;
+        r = await focus(used, ctx);
+        if (stale()) return null;
+      }
       if (r.ok) {
         const adapter = ADAPTERS.find((a) => a.id === String(r.adapter).split('+').pop());
-        return { app: r.app || target.hostApp || (adapter && adapter.app) || 'terminal', exact: !!r.exact, ...(r.byFolder ? { byFolder: true } : {}) };
+        return { app: r.app || used.hostApp || (adapter && adapter.app) || 'terminal', exact: !!r.exact, ...(r.byFolder ? { byFolder: true } : {}) };
       }
       log(`${r.adapter || 'no adapter'}: ${r.reason || 'failed'}; nothing switched`);
       if (r.denied) explainer.onDenied(r.needs);
