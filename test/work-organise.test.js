@@ -485,7 +485,6 @@ test('work-organise: L3/N2 — lower-case Linear-style tickets count only after 
   assert.equal(t('sam/v-2-layout').source, 'branch');
   assert.equal(t('sam/x/abc-123').source, 'branch', 'only directly after the first segment');
   assert.deepEqual(W.titleOf({ team: false, branch: 'feat/ENG-42-fix' }), { title: 'ENG-42 · Fix', source: 'ticket' }, 'capitals still count anywhere');
-  assert.equal(W.titleOf({ team: false, branch: 'feat/NODE-22' }).source, 'branch');
   assert.deepEqual(t('codex/work-organise-2026-10-23'), { title: 'Work organise', source: 'branch' }, 'a word then a date is no ticket');
   assert.deepEqual(t('feat/utf-8-paths'), { title: 'Utf 8 paths', source: 'branch' }, 'standards stay excluded');
   assert.deepEqual(t('fix/v-2-layout'), { title: 'V 2 layout', source: 'branch' });
@@ -639,4 +638,16 @@ test('work-organise: N4 — runs of slashes and crafted nested tags stay fast (u
   }
   assert.equal(titleOf({ team: false, human: 'fix C:\\Users\\sam\\x now' }).title, 'fix now', 'a drive home folder still goes');
   assert.equal(titleOf({ team: false, human: 'fix //Users/sam now' }).title, 'fix now', 'a doubled slash still goes');
+});
+
+test('work-organise: R1 — runtime and release words are skipped only as lower-case branch keys', () => {
+  const t = (input) => W.titleOf({ team: false, ...input });
+  assert.deepEqual(t({ branch: 'feat/IOS-12-dark-mode' }), { title: 'IOS-12 · Dark mode', source: 'ticket' });
+  assert.deepEqual(t({ branch: 'API-77' }), { title: 'API-77', source: 'ticket' });
+  assert.deepEqual(t({ human: 'SDK-3 retry' }), { title: 'SDK-3 retry', source: 'human' });
+  assert.match(t({ firstPrompt: 'Fix SDK-3 retry loop' }).title, /^SDK-3 · /, 'a capital key in a prompt counts');
+  assert.equal(t({ branch: 'feat/NODE-22' }).source, 'ticket');
+  assert.equal(t({ branch: 'sam/node-22-upgrade' }).source, 'branch', 'lower case it is still a version');
+  assert.equal(t({ branch: 'sam/ios-17-fix' }).source, 'branch');
+  assert.equal(t({ branch: 'feat/UTF-8-paths' }).source, 'branch', 'standards stay excluded in capitals');
 });
