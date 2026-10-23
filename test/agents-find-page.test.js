@@ -205,7 +205,7 @@ test('the preload exposes only the Find agents calls and rebuilds every argument
   const electron = { contextBridge: { exposeInMainWorld: (k, v) => { exposed[k] = v; } }, ipcRenderer: { invoke: (...a) => { invoked.push(a); return Promise.resolve(null); } } };
   new Function('require', src)((m) => (m === 'electron' ? electron : null));
   assert.deepEqual(Object.keys(exposed), ['agentsApi']);
-  assert.deepEqual(Object.keys(exposed.agentsApi).sort(), ['add', 'addToProject', 'detail', 'list', 'openTools', 'status', 'targets', 'undo', 'undoProject']);
+  assert.deepEqual(Object.keys(exposed.agentsApi).sort(), ['add', 'addToProject', 'adopt', 'adoptable', 'backupPlan', 'detail', 'list', 'mine', 'onShow', 'openTools', 'remove', 'showBackup', 'status', 'stopManaging', 'targets', 'undo', 'undoOp', 'undoProject', 'undoProjectOp', 'update']);
   const evil = { platform: 'claude', alt: 'yes', path: '/etc', toString: () => 'x' };
   exposed.agentsApi.add({ toString: () => 'a'.repeat(500) }, 'f'.repeat(100), [evil, 'codex', ...Array(30).fill('gemini')]);
   const [ch, id, sha, plats] = invoked.at(-1);
@@ -220,6 +220,37 @@ test('the preload exposes only the Find agents calls and rebuilds every argument
   assert.deepEqual(invoked.at(-1), ['agents:add-to-project', 'x', 'y']);
   exposed.agentsApi.undo({});
   assert.deepEqual(invoked.at(-1), ['agents:undo', '[object Object]']);
+  // PR 4: names, ids and backup ids only, each cut to size; no paths.
+  exposed.agentsApi.adopt([...Array(500).fill('a.md'), { toString: () => 'x'.repeat(300) }]);
+  let [c2, names] = invoked.at(-1);
+  assert.equal(c2, 'agents:adopt');
+  assert.equal(names.length, 400);
+  assert.ok(names.every((n) => typeof n === 'string' && n.length <= 128));
+  exposed.agentsApi.adopt('not a list');
+  assert.deepEqual(invoked.at(-1), ['agents:adopt', []]);
+  exposed.agentsApi.update('x', 'f'.repeat(99), '/etc');
+  assert.deepEqual(invoked.at(-1), ['agents:update', 'x', 'f'.repeat(64)]);
+  exposed.agentsApi.remove('x', '/etc');
+  assert.deepEqual(invoked.at(-1), ['agents:remove', 'x']);
+  exposed.agentsApi.stopManaging('/etc');
+  assert.deepEqual(invoked.at(-1), ['agents:stop-managing']);
+  exposed.agentsApi.undoOp('u'.repeat(99));
+  assert.deepEqual(invoked.at(-1), ['agents:undo-op', 'u'.repeat(36)]);
+  exposed.agentsApi.undoProjectOp(null);
+  assert.deepEqual(invoked.at(-1), ['agents:undo-project-op', '']);
+  exposed.agentsApi.showBackup('b'.repeat(99), '/etc');
+  assert.deepEqual(invoked.at(-1), ['agents:show-backup', 'b'.repeat(64)]);
+  exposed.agentsApi.backupPlan('b');
+  assert.deepEqual(invoked.at(-1), ['agents:backup-plan', 'b']);
+  // agents:show passes only the literal 'mine'.
+  const on = [];
+  const e2 = { contextBridge: { exposeInMainWorld: (k, v) => { exposed[k] = v; } }, ipcRenderer: { invoke: () => null, on: (ch, fn) => on.push([ch, fn]) } };
+  new Function('require', src)((m) => (m === 'electron' ? e2 : null));
+  const got = [];
+  exposed.agentsApi.onShow((v) => got.push(v));
+  assert.equal(on[0][0], 'agents:show');
+  for (const v of ['mine', 'all', { toString: () => 'mine' }, '<img>']) on[0][1]({}, v);
+  assert.deepEqual(got, ['mine']);
 });
 
 test('the page is registered in the Agents section with its own glyph', () => {
@@ -236,6 +267,9 @@ test('the page is registered in the Agents section with its own glyph', () => {
 test('the page names only ids, the catalogue sha, platforms and an undo id', () => {
   const js = read('agents-find-view.js');
   const calls = [...js.matchAll(/api\.(\w+)\(([^)]*)\)/g)].map((m) => `${m[1]}(${m[2]})`);
-  const allowed = new Set(['list()', 'status()', 'detail(a.id)', 'targets(a.id)', 'add(a.id, catalogSha, platforms)', 'undo(opId)', 'addToProject(a.id, state.catalogSha)', 'undoProject(r.opId)', 'openTools()']);
+  const allowed = new Set(['list()', 'status()', 'detail(a.id)', 'targets(a.id)', 'add(a.id, catalogSha, platforms)', 'undo(opId)', 'addToProject(a.id, state.catalogSha)', 'undoProject(r.opId)', 'openTools()',
+    // PR 4: file names, agent ids, undo ids and backup ids, all from main's own answers.
+    'mine()', 'adoptable()', 'adopt(names)', 'stopManaging()', 'update(a.agentId, state.catalogSha)', 'remove(a.agentId)', 'undo(o.opId)', 'undoOp(o.opId)', 'undoProject(o.opId)', 'undoProjectOp(o.opId)', 'showBackup(b.id)', 'showBackup(n.backup)']);
   for (const c of calls) assert.ok(allowed.has(c), c);
+  assert.match(js, /const names = matches\.map\(\(m\) => m\.name\);/, 'adopt names come from agents:adoptable');
 });

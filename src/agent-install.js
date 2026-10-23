@@ -823,6 +823,9 @@ function worksWith(agent, targets = TARGETS) {
   return out;
 }
 
+// Health's fix button opens Find agents on Added by me (main.js health-fix).
+const REVIEW = Object.freeze({ fix: 'agents-review', fixLabel: 'Review on Find agents' });
+
 // For Health: what the ledger says Plexiform manages, checked against disk.
 // Needs no catalogue. null when Find agents was never used.
 // Without the key nothing can be verified, so Health says nothing.
@@ -832,11 +835,11 @@ function ledgerHealth({ home, dataRoot, ledgerKey, fsApi = fs }) {
   let ledger;
   try {
     const st = fsApi.lstatSync(file);
-    if (st.isSymbolicLink() || !st.isFile()) return { status: 'fail', detail: 'Plexiform\'s record of added agents is not a regular file.', next: 'Review on Find agents.' };
+    if (st.isSymbolicLink() || !st.isFile()) return { status: 'fail', detail: 'Plexiform\'s record of added agents is not a regular file.', next: 'Review on Find agents.', ...REVIEW };
     ledger = JSON.parse(fsApi.readFileSync(file, 'utf8'));
   } catch (e) {
     if (e.code === 'ENOENT') return null;
-    return { status: 'fail', detail: 'Plexiform\'s record of added agents can\'t be read.', next: 'Review on Find agents.' };
+    return { status: 'fail', detail: 'Plexiform\'s record of added agents can\'t be read.', next: 'Review on Find agents.', ...REVIEW };
   }
   const v = ledgerValidator(TARGETS, home);
   const owned = Object.entries(isObject(ledger?.owned) ? ledger.owned : {}).filter(([k, o]) => macOk(ledgerKey, 'owned', k, o) && v.ownedOk(k, withoutMac(o))).map(([, o]) => o);
@@ -851,7 +854,7 @@ function ledgerHealth({ home, dataRoot, ledgerKey, fsApi = fs }) {
   if (modified) parts.push(`${modified} changed outside Plexiform`);
   if (missing) parts.push(`${missing} missing`);
   if (broken) parts.push(`${broken} now a link or not a regular file`);
-  return { status: broken ? 'fail' : modified || missing ? 'warn' : 'ok', detail: `${parts.join('; ')}.`, next: modified || missing || broken ? 'Review on Find agents.' : undefined };
+  return { status: broken ? 'fail' : modified || missing ? 'warn' : 'ok', detail: `${parts.join('; ')}.`, next: modified || missing || broken ? 'Review on Find agents.' : undefined, ...(modified || missing || broken ? REVIEW : {}) };
 }
 
 module.exports = { createAgentInstaller, ledgerHealth, signLedger, worksWith, LEDGER_FILE };

@@ -4870,14 +4870,21 @@ const AgentsFind = (() => {
   const installer = (k) => (inst && inst.key === k ? inst.it : (inst = { key: k, it: createAgentInstaller({ ...opts, catalog: AgentCatalog.shipped(), ledgerKey: k }) }).it);
   // Read-only planning before any key exists: a throwaway key, so a ledger it can't verify reads as empty. It never writes.
   const planner = () => plan || (plan = createAgentInstaller({ ...opts, catalog: AgentCatalog.shipped(), ledgerKey: require('node:crypto').randomBytes(32) }));
-  Main.register({
+  const reg = Main.register({
     ipcMain, allowed: (e) => fromUtilityPage(e, 'agents-find'), discoverAllowed: (e) => fromUtilityPage(e, 'discover'), pageContents: () => buddyWin?.pageWebContents('agents-find'),
     catalog: () => AgentCatalog.shipped(), keyStore: key, installer, planner, tools: () => AiTools.quick(), demo: Demo,
     pickFolder: (sender) => dialog.showOpenDialog(BrowserWindow.fromWebContents(sender) || undefined, { title: 'Choose the project to add the Cursor rule to', properties: ['openDirectory'] }),
     home, dataRoot: (() => { try { return fs.realpathSync(dataRoot); } catch { return dataRoot; } })(),
     openTools: () => aiToolsOpen('aitools'), openFindAgents: () => openBuddy('agents-find'), log: (m) => console.warn(m),
+    // Cancel is both the default and the Escape button (PR 4 review change 7).
+    confirm: async (sender, { message, detail, ok }) => (await dialog.showMessageBox(BrowserWindow.fromWebContents(sender) || undefined, { type: 'warning', buttons: [String(ok), 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, message: String(message), detail: String(detail) })).response === 0,
+    showItem: (dir) => shell.showItemInFolder(dir),
   });
-  return { cachedKey: () => key.cached() };
+  return {
+    cachedKey: () => key.cached(),
+    // Health's "Review on Find agents": the page opens on Added by me.
+    openMine: () => { reg.showMine(); openBuddy('agents-find'); buddyWin?.sendToPage('agents-find', 'agents:show', 'mine'); },
+  };
 })();
 require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null), resumeCap: () => (costGuardResume ? costGuardResume() : null), demo: Demo, simple: () => loadConfig().simpleMode === true });
 require('./src/guardrails-main.js').install({ ipcMain, dialog, shell, BrowserWindow, rootDir: ROOT_DIR, allowed: (e) => fromUtilityPage(e, 'home'), broadcast: () => broadcastStatus(), log: console.log });
@@ -5100,6 +5107,7 @@ ipcMain.handle('health-fix', (e, id) => {
     } else if (id === 'connect-hermes') error = 'Open the installed app to connect Hermes.';
     else if (id === 'enable-mcp') { McpInstall.install(mcpOpts()); saveConfig({ mcpUserOff: false }); registerBusTools().catch(() => {}); }
     else if (id === 'clear-stale-locks') Health.clearStaleLocks({ root: ROOT_DIR });
+    else if (id === 'agents-review') AgentsFind.openMine();
     else if (id === 'open-burst-console') BurstIpc.openConsole().catch((err) => console.log(`[health] burst console: ${err.message}`));
     else error = 'unknown fix';
   } catch (err) { error = err.message; }
