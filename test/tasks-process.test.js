@@ -90,9 +90,10 @@ test('O3: the helper\'s real-work rows reach main, and none once it exits; a sta
   c.emit('message', { type: 'tasks.work', rows: [row] });
   c.emit('message', { type: 'tasks.work', rows: { not: 'a list' } });
   assert.deepEqual(work, [[row], []]);
-  c.emit('exit', 1);
-  assert.deepEqual(work.at(-1), []);
   c.emit('message', { type: 'tasks.work', rows: [row] });
-  assert.deepEqual(work.at(-1), []);
+  c.emit('exit', 1);
+  assert.deepEqual(work, [[row], [], [row], []], 'the exit itself clears the rows');
+  c.emit('message', { type: 'tasks.work', rows: [row] });
+  assert.equal(work.length, 4, 'a stale child is ignored');
   await s.stop({ final: true });
 });
