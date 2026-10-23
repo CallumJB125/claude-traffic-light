@@ -228,7 +228,10 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
     if (self && x.kind !== 'board-run') return null;
     const ownerName = str(x.owner.name, 80) || 'Teammate';
     // A teammate's session waiting on input needs them, not the viewer: display only, the bucket stays.
-    const needsWho = self ? Organise.headingOf('needs') : str(x.owner.name, 80) ? `Needs ${str(x.owner.name, 80)}` : 'Needs them';
+    // Cut so the state stays inside the page's 80-character limit: a longer one fails validation
+    // and blanks the whole Team view.
+    const shortName = (n) => (Array.from(n).length > 60 ? `${Array.from(n).slice(0, 59).join('').trimEnd()}…` : n);
+    const needsWho = self ? Organise.headingOf('needs') : str(x.owner.name, 80) ? `Needs ${shortName(str(x.owner.name, 80))}` : 'Needs them';
     const whose = (v) => (v.bucket === 'needs' ? { ...v, state: needsWho } : v);
     const t = timing(`team:${team.key}:${x.ref}`, x.observed_at, time);
     const sr = object(x.self_reported) && TEAM_STATES.includes(x.self_reported.state) && Number.isFinite(stamp(x.self_reported.at)) ? { state: whose(teamState(x.self_reported.state)).state, at: stamp(x.self_reported.at) } : null;
