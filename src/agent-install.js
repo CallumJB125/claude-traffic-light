@@ -538,12 +538,18 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     };
     // cpSync makes every copied folder 755 (Node 22), so each folder in the
     // backup is set back to its source's mode, deepest first (review #54 M1).
-    // Only folders inside the backup Plexiform just made, opened without
-    // following a link and checked to be the folder lstat saw.
+    // The walk goes down the backup's side: it enters only folders lstat
+    // shows are real folders in the backup, so every part of each path is a
+    // folder Plexiform made inside its 0700 backup, never a copied link
+    // (M2). The mode comes from the matching source entry only when that is
+    // a real folder too; otherwise it's skipped, and the walk below refuses.
     const dirModes = (a, b) => {
-      for (const n of fsApi.readdirSync(a).sort()) {
-        const pa = path.join(a, n), pb = path.join(b, n), sa = fsApi.lstatSync(pa);
-        if (!sa.isDirectory() || sa.isSymbolicLink()) continue;
+      for (const n of fsApi.readdirSync(b).sort()) {
+        const pa = path.join(a, n), pb = path.join(b, n), sb = fsApi.lstatSync(pb);
+        if (!sb.isDirectory() || sb.isSymbolicLink()) continue;
+        let sa = null;
+        try { sa = fsApi.lstatSync(pa); } catch { /* gone: the walk refuses */ }
+        if (!sa || !sa.isDirectory() || sa.isSymbolicLink()) continue;
         dirModes(pa, pb);
         setDirMode(dest, pb, sa.mode & 0o7777);
       }
@@ -690,8 +696,8 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     const tag = id.replace(/^claude-agents-/, '');
     const R = `.claude/agents-restored-${tag}`, O = `.claude/agents-old-${tag}`;
     return [
-      `if [ -e "$HOME/${R}" ]; then echo "~/${R} already exists, so nothing was copied."; else ${copy} "$HOME/${rel}" "$HOME/${R}"; fi`,
-      `if [ -e "$HOME/${O}" ] || [ ! -d "$HOME/${R}" ]; then echo "~/${O} already exists or there's nothing to swap in, so nothing was moved."; else mv "$HOME/.claude/agents" "$HOME/${O}" && mv "$HOME/${R}" "$HOME/.claude/agents"; fi`,
+      `if [ -e "$HOME/${R}" ] || [ -L "$HOME/${R}" ]; then echo "~/${R} already exists, so nothing was copied."; else ${copy} "$HOME/${rel}" "$HOME/${R}"; fi`,
+      `if [ -e "$HOME/${O}" ] || [ -L "$HOME/${O}" ] || [ ! -d "$HOME/${R}" ]; then echo "~/${O} already exists or there's nothing to swap in, so nothing was moved."; else mv "$HOME/.claude/agents" "$HOME/${O}" && mv "$HOME/${R}" "$HOME/.claude/agents"; fi`,
     ].join('\n');
   }
   /**

@@ -270,8 +270,8 @@ test('step 11: the documented restore (into a new folder, then swap by hand) get
   // Two lines, named with the backup's stamp (review #54 L2): copy, check, swap.
   const [copy, swap, ...more] = cmd.split('\n');
   assert.deepEqual(more, []);
-  assert.equal(copy, `if [ -e "$HOME/.claude/agents-restored-${tag}" ]; then echo "~/.claude/agents-restored-${tag} already exists, so nothing was copied."; else ditto "$HOME/Library/Plexiform/agent-backups/${a.backup}" "$HOME/.claude/agents-restored-${tag}"; fi`);
-  assert.equal(swap, `if [ -e "$HOME/.claude/agents-old-${tag}" ] || [ ! -d "$HOME/.claude/agents-restored-${tag}" ]; then echo "~/.claude/agents-old-${tag} already exists or there's nothing to swap in, so nothing was moved."; else mv "$HOME/.claude/agents" "$HOME/.claude/agents-old-${tag}" && mv "$HOME/.claude/agents-restored-${tag}" "$HOME/.claude/agents"; fi`);
+  assert.equal(copy, `if [ -e "$HOME/.claude/agents-restored-${tag}" ] || [ -L "$HOME/.claude/agents-restored-${tag}" ]; then echo "~/.claude/agents-restored-${tag} already exists, so nothing was copied."; else ditto "$HOME/Library/Plexiform/agent-backups/${a.backup}" "$HOME/.claude/agents-restored-${tag}"; fi`);
+  assert.equal(swap, `if [ -e "$HOME/.claude/agents-old-${tag}" ] || [ -L "$HOME/.claude/agents-old-${tag}" ] || [ ! -d "$HOME/.claude/agents-restored-${tag}" ]; then echo "~/.claude/agents-old-${tag} already exists or there's nothing to swap in, so nothing was moved."; else mv "$HOME/.claude/agents" "$HOME/.claude/agents-old-${tag}" && mv "$HOME/.claude/agents-restored-${tag}" "$HOME/.claude/agents"; fi`);
   const sh = (line) => execFileSync('/bin/sh', ['-c', line], { env: { ...process.env, HOME: s.home } }).toString();
   // The swap before a copy moves nothing.
   assert.match(sh(swap), /nothing was moved/);
