@@ -32,6 +32,12 @@ const VERIFY_TTL_MS = 60 * 1000;
 const BUILD_TIMEOUT_MS = 15 * 1000;
 // Session owner pins (owners.json): how many are kept, and how many dead-process checks run at once.
 const OWNERS_MAX = 200;
+// bus_card_add (PR B): the real bound on cards an AI can add is these limits, counted per attempt that reaches the
+// board and persisted (card-limits.json, 0600) so a restart of Plexiform does not reset them. One at a time per session.
+const CARD_LIMITS = Object.freeze({ burst: 3, burstMs: 10 * 60_000, sessionDay: 10, macDay: 30 });
+// A soft guard only: the session's own hook facts say it edited a file or has run over a minute. That session can write
+// its own facts, so this is no security boundary; it keeps an honest AI from carding a one-line question.
+const REAL_WORK_MS = 60_000;
 const PRUNE_BATCH = 10;
 const OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0);
 const CONTEXT_PROVIDERS = new Set(['claude', 'codex', 'gemini']);
@@ -145,7 +151,9 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   bus = async () => null, busStarted = () => false, refreshHalt = async () => {},
   // O1b: Plexiform's own wrapped runs (local/cli tasks), as the Tasks helper reports them over parentPort; utcStart(pid)
   // is a process's start in the runner's form (ps lstart, TZ=UTC, C locale), compared with the engine's record.
-  wrappedRuns = () => [], utcStart = null }) {
+  wrappedRuns = () => [], utcStart = null,
+  // bus_card_add: addAgentCard(session, args) files the card (src/work-capture.js); sessionFacts(session) are its hook facts.
+  addAgentCard = async () => ({ reason: 'UNAVAILABLE', message: 'Plexiform cannot add cards here.' }), sessionFacts = () => null }) {
   const rosterDir = path.join(rootDir, 'awareness');
   const rosterFile = path.join(rosterDir, 'roster.json');
   const run = (file, args, timeout = EXEC_TIMEOUT_MS) => new Promise((resolve, reject) => {
@@ -739,6 +747,104 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     return r && typeof r.note_id === 'string' ? { note_id: r.note_id, state: r.state, ...(r.duplicate ? { duplicate: true } : {}) } : r;
   }
 
+  // bus_card_add's limits (CARD_LIMITS): {v, day, mac, sessions: {key: {n (today), at: [ms, newest last]}}}, loaded once,
+  // written after each count.
+  const cardFile = path.join(rosterDir, 'card-limits.json');
+  const CARD_KEY = /^(?:claude|codex|gemini)\|[\w.-]{1,120}$/;
+  const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
+  let cardCounts = null;
+  let cardLoad = null;
+  let cardSaving = Promise.resolve();
+  // Read once, even when two sessions ask at the same moment: every count then lands on the same object.
+  const loadCardCounts = () => { cardLoad = cardLoad || readCardCounts(); return cardLoad; };
+  async function readCardCounts() {
+    const head = await readHead(fsp, cardFile, 256 * 1024).catch(() => null);
+    let d = null;
+    try { d = head ? JSON.parse(head.text) : null; } catch { d = null; }
+    const out = { v: 1, day: dayOf(now()), mac: 0, sessions: {} };
+    if (d && d.v === 1 && typeof d.day === 'string') {
+      if (d.day === out.day && Number.isInteger(d.mac) && d.mac >= 0) out.mac = Math.min(d.mac, 10_000);
+      for (const [k, e] of Object.entries(d.sessions && typeof d.sessions === 'object' ? d.sessions : {}).slice(-OWNERS_MAX)) {
+        if (!CARD_KEY.test(k) || !e || typeof e !== 'object') continue;
+        const at = Array.isArray(e.at) ? e.at.filter((t) => Number.isFinite(t) && t <= now() + 60_000).slice(-50) : [];
+        out.sessions[k] = { n: d.day === out.day && Number.isInteger(e.n) && e.n >= 0 ? Math.min(e.n, 10_000) : 0, at };
+      }
+    }
+    cardCounts = out;
+    return out;
+  }
+  function saveCardCounts() {
+    const c = cardCounts;
+    const text = JSON.stringify({ v: 1, day: c.day, mac: c.mac, sessions: c.sessions });
+    cardSaving = cardSaving.then(() => writeFile(cardFile, text)).catch((e) => log(`[awareness] card limits not written: ${e && e.code ? e.code : 'error'}`));
+    return cardSaving;
+  }
+  // Counts one attempt for this session if every limit allows it: null, or the refusal.
+  async function countCard(key) {
+    const c = await loadCardCounts();
+    const t = now();
+    if (c.day !== dayOf(t)) { c.day = dayOf(t); c.mac = 0; for (const e of Object.values(c.sessions)) e.n = 0; }
+    const e = c.sessions[key] || { n: 0, at: [] };
+    e.at = e.at.filter((x) => t - x < CARD_LIMITS.burstMs);
+    if (e.at.length >= CARD_LIMITS.burst) return { reason: 'RATE', message: `At most ${CARD_LIMITS.burst} cards in 10 minutes from one session.` };
+    if (e.n >= CARD_LIMITS.sessionDay) return { reason: 'RATE', message: `At most ${CARD_LIMITS.sessionDay} cards a day from one session.` };
+    if (c.mac >= CARD_LIMITS.macDay) return { reason: 'RATE', message: `At most ${CARD_LIMITS.macDay} cards a day from the AI sessions on this Mac.` };
+    e.at.push(t);
+    e.n += 1;
+    c.mac += 1;
+    delete c.sessions[key];
+    c.sessions[key] = e;
+    const keys = Object.keys(c.sessions);
+    for (const k of keys.slice(0, Math.max(0, keys.length - OWNERS_MAX))) delete c.sessions[k];
+    await saveCardCounts();
+    return null;
+  }
+  const realWork = (s) => {
+    let f = null;
+    try { f = sessionFacts(s); } catch { f = null; }
+    if (!f || typeof f !== 'object') return false;
+    if (f.files && typeof f.files === 'object' && Object.values(f.files).some((k) => k === 'edit')) return true;
+    const started = Date.parse(f.startedAt);
+    return Number.isFinite(started) && now() - started > REAL_WORK_MS;
+  };
+  const cardBusy = new Set();
+  // bus_card_add (/bus op card_add). Who calls, which folder, which scope, provider and handle all come from the
+  // verified session and the book, never from the request (review point 7): args carry only title, details and
+  // request_id. The board itself is decided in work capture from that session.
+  async function cardOp(args, ident) {
+    const { aw, exclude } = settings();
+    if (!aw.enabled) return { reason: 'AWARENESS_OFF', message: 'Your person turned off "Let my AI sessions see each other" in Plexiform, so AI sessions cannot add cards.' };
+    const b = await bindCaller(ident);
+    if (!b.bound) return { reason: 'NOT_BOUND', message: 'Plexiform could not tell which AI session is calling, so it cannot add a card for it.' };
+    if (!(await classify(b.session.cwd, exclude)).allowed) return { reason: 'EXCLUDED', message: 'Plexiform does not add cards for this folder.' };
+    const roster = await current(b.key);
+    const me = roster && has(roster.self, b.key) ? roster.self[b.key] : null;
+    const who = book.get(b.key);
+    if (!me || me.verified !== true || typeof me.handle !== 'string' || !who) return { reason: 'NOT_BOUND', message: 'Plexiform could not verify this session, so it cannot add a card for it.' };
+    const title = typeof args.title === 'string' ? args.title : '';
+    const details = typeof args.details === 'string' ? args.details : undefined;
+    if (!title.trim() || title.length > 120 || (details !== undefined && details.length > 800) || typeof args.request_id !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(args.request_id)) {
+      return { reason: 'VALIDATION', message: 'title (1 to 120 characters), details (at most 800) and request_id (8 to 100 letters, digits, _ or -) are needed.' };
+    }
+    if (!realWork(b.session)) return { reason: 'NOT_REAL_WORK', message: 'not real work yet: no files edited, under a minute' };
+    if (cardBusy.has(b.key)) return { reason: 'RATE', message: 'One card at a time from a session.' };
+    cardBusy.add(b.key);
+    try {
+      const limited = await countCard(b.key);
+      if (limited) { log('[awareness] card rate'); return limited; }
+      let r;
+      try {
+        r = await addAgentCard(b.session, { title, details, request_id: args.request_id, handle: me.handle, folder: who.folder, after_note: noteReaders.has(b.key) });
+      } catch { r = { reason: 'UNAVAILABLE', message: 'Plexiform could not add the card just now. Retry later with the same request_id.' }; }
+      log(`[awareness] card ${r && r.reason ? String(r.reason).toLowerCase() : r && r.duplicate ? 'duplicate' : r && r.card_id ? 'added' : 'error'}`);
+      if (!r || typeof r !== 'object') return { reason: 'UNAVAILABLE', message: 'Plexiform could not add the card just now.' };
+      if (r.reason) return { reason: String(r.reason).slice(0, 32), message: typeof r.message === 'string' ? r.message.slice(0, 200) : '', ...(typeof r.fix === 'string' ? { fix: r.fix.slice(0, 200) } : {}) };
+      const board = Hook.boardOf({ board: r.board });
+      return { card_id: r.card_id, title: r.title, board: { kind: board.kind, ...(board.kind === 'team' && board.name ? { name: board.name } : {}) }, ...(r.duplicate ? { duplicate: true } : {}),
+        note: 'Plexiform marked the card as added by an AI. Only your person moves or closes it.' };
+    } finally { cardBusy.delete(b.key); }
+  }
+
   let lastRoster = null;
   let lastBuiltAt = 0;
   // The roster a tool call answers from: at most 1.5 s old, and rebuilt at once for a caller it does not know yet.
@@ -803,6 +909,7 @@ function boardAnswer(board) {
   // hello from a bound caller goes on with its real provider in place of the one it declared (signal-server.js:133).
   async function relay(op, args, caller, ident, { forward, onCodexSession = async () => {} }) {
     if (op === 'note' || op === 'notes') return notesOp(op, args && typeof args === 'object' ? args : {}, ident, forward);
+    if (op === 'card_add') return cardOp(args && typeof args === 'object' ? args : {}, ident);
     if (op === 'peers' || op === 'session') {
       const r = await busOp(op, ident, caller);
       // Only a call shaped as Codex's hook makes it (src/mcp-server.js hookShaped): the model calling bus_session itself does not.
@@ -1120,4 +1227,4 @@ function boardAnswer(board) {
   return { build, refresh, schedule, start, stop, invalidate, visible, rosterFile, classify, bindCaller, busOp, relay, syncNotes, peersForTask, ackNotices: () => ackNotices(lastRoster ? lastRoster.self : {}) };
 }
 
-module.exports = { create, normalize, handleFor, allowedExe, parseLsof, lsofFiles, statusOf, interactiveOf, DEFAULTS, SESSION_FIELDS, HEARTBEAT_MS, DEBOUNCE_MS, BUILD_TIMEOUT_MS, BURST_WINDOW_MS, GROUP_BUMP_MS };
+module.exports = { create, CARD_LIMITS, REAL_WORK_MS, normalize, handleFor, allowedExe, parseLsof, lsofFiles, statusOf, interactiveOf, DEFAULTS, SESSION_FIELDS, HEARTBEAT_MS, DEBOUNCE_MS, BUILD_TIMEOUT_MS, BURST_WINDOW_MS, GROUP_BUMP_MS };

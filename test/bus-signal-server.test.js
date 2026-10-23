@@ -116,3 +116,21 @@ test('every helper connection gets the bus context at once, with no bus call, an
     assert.deepEqual(a.b.engine.agentBus.context.repos, ['/prefs/repo']);
   } finally { await a.cleanup(); }
 });
+
+test('/bus card_add (PR B): an agent op; title and details folded then scrubbed (a zero-width-split key is still caught), cut to 120 and 800; the folder it names goes to the caller, never the args', async () => {
+  const seen = [];
+  const s = await serve(async (op, args, caller) => { seen.push({ op, args, caller }); return { ok: true, op }; });
+  try {
+    const split = 'AKIA​Z7Q4M2LXWB3K9RTD';
+    const r = await (await s.post({ op: 'card_add', args: { cwd: '/repo/other', title: `Rotate ${split} ${'word '.repeat(60)}`, details: `key ${split} at ${require('node:os').homedir()}/x ${'more words '.repeat(200)}`, request_id: 'req-card-0001' } })).json();
+    assert.deepEqual(r, { ok: true, op: 'card_add' });
+    const c = seen.find((x) => x.op === 'card_add');
+    assert.ok(!('cwd' in c.args));
+    assert.equal(c.caller.cwd, '/repo/other', 'only the relay\'s caller hint, which main ignores for card_add');
+    for (const k of ['title', 'details']) assert.ok(!c.args[k].includes('AKIA') && !c.args[k].includes('Z7Q4M2LXWB3K9RTD'), `${k}: ${c.args[k].slice(0, 40)}`);
+    assert.equal(c.args.title.length, 120);
+    assert.equal(c.args.details.length, 800);
+    assert.ok(c.args.details.includes('~/x'));
+    assert.equal(c.args.request_id, 'req-card-0001');
+  } finally { s.close(); }
+});

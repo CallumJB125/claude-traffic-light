@@ -385,3 +385,23 @@ test('a local session\'s open PR is kept and shown on the personal board only; n
   const gone = await call({ ...local, pr: null });
   assert.equal(gone.body.capture.pr, undefined, 'the branch has no open PR any more');
 });
+
+test('PR B: a card an AI added (task agent-…, status idle) is an ordinary In Progress card that reports idle, then unknown; nothing it sends moves it to Needs you', async (t) => {
+  const f = await rig(t);
+  const body = observation(f.A.repo, { task_id: 'agent-0123456789abcdef01234567', title: 'Fix the parser · added by Codex', status: 'idle', summary: 'Added by a Codex session (codex-app-1a2b, folder app). Plexiform wrote this line; only your person moves or closes this card.' });
+  const first = await f.as(f.users.amember, 'POST', path(f.A.board), body);
+  assert.equal(first.status, 200, first.text);
+  assert.equal(first.body.card.column, 'in_progress');
+  assert.equal(first.body.card.title, body.title, 'the suffix survives the hub');
+  assert.equal(first.body.capture.status, 'idle');
+  assert.equal(first.body.card.run, null);
+  // The same report again (a retry) changes nothing, and once stale it reads unknown, still In Progress.
+  const retry = await f.as(f.users.amember, 'POST', path(f.A.board), body);
+  assert.equal(retry.body.card.id, first.body.card.id);
+  f.h.clock.advance(60_001);
+  const stale = await f.as(f.users.amember, 'GET', `/api/cards/${first.body.card.id}`);
+  assert.equal(stale.body.card.column, 'in_progress');
+  assert.equal(stale.body.card.capture.reported_status, 'idle');
+  assert.equal(stale.body.card.capture.status, 'unknown');
+  assert.equal(stale.body.card.capture.source, 'local_observation');
+});

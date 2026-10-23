@@ -9,13 +9,17 @@ const path = require('node:path');
 const { testTempDir } = require('./helpers/tmp');
 const M = require('../mcp-server.js');
 
-test('bus tools: nine, only bus_handoff and bus_note act, all through busCall to /bus', async () => {
+test('bus tools: ten, only bus_handoff, bus_note and bus_card_add act, all through busCall to /bus', async () => {
   const bus = M.TOOLS.filter((t) => t.name.startsWith('bus_'));
-  assert.deepEqual(bus.map((t) => t.name), ['bus_peers', 'bus_session', 'bus_hello', 'bus_handoff', 'bus_wait', 'bus_read', 'bus_status', 'bus_note', 'bus_notes']);
-  assert.deepEqual(bus.filter((t) => t.readOnly === false).map((t) => t.name), ['bus_handoff', 'bus_note']);
+  assert.deepEqual(bus.map((t) => t.name), ['bus_peers', 'bus_session', 'bus_hello', 'bus_handoff', 'bus_wait', 'bus_read', 'bus_status', 'bus_note', 'bus_notes', 'bus_card_add']);
+  assert.deepEqual(bus.filter((t) => t.readOnly === false).map((t) => t.name), ['bus_handoff', 'bus_note', 'bus_card_add']);
   const calls = [];
   for (const t of bus) await t.run({ handoff_id: 'hof_0123456789abcdef' }, { bus: async (op, args) => { calls.push(op); return {}; } });
-  assert.deepEqual(calls, ['peers', 'session', 'hello', 'handoff', 'wait', 'read', 'status', 'note', 'notes']);
+  assert.deepEqual(calls, ['peers', 'session', 'hello', 'handoff', 'wait', 'read', 'status', 'note', 'notes', 'card_add']);
+  // bus_card_add sends only its own three fields: where the card goes is main's to decide (PR B review point 7).
+  const sent = [];
+  await bus.find((t) => t.name === 'bus_card_add').run({ title: 'Fix', details: 'd', request_id: 'req-00000001', cwd: '/elsewhere', board: 'x' }, { bus: async (op, args) => { sent.push(args); return {}; } });
+  assert.deepEqual(sent, [{ title: 'Fix', details: 'd', request_id: 'req-00000001' }]);
   assert.ok(M.BUS_TIMEOUT_MS >= 130_000);
 });
 
