@@ -81,6 +81,8 @@ const taskSpec = optional({
   ai: en(AI_CHOICES),
   // With ai 'auto': the AI the person saw and confirmed (a `route` result). If routing now picks another, CONFLICT.
   expectAi: en(AIS),
+  // local/cli only: the person confirmed "over your spend cap — run anyway?" for this one task.
+  overrideSpendCap: bool,
   model: str(),
   surface: en(SURFACES),
   permissionLevel: en(PERMISSION_LEVELS),

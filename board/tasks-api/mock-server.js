@@ -696,7 +696,7 @@ export async function startMockServer(opts = {}) {
     let permissionLevel = spec.permissionLevel ?? 'auto-edits';
     let aiId = spec.ai ?? 'auto';
     let aiReason = null;
-    if (aiId === 'auto') { aiId = routed?.ai ?? 'claude'; aiReason = routed?.reason ?? 'Auto: Claude is logged in, supports background runs and routes approvals to Buddy'; }
+    if (routed) { aiId = routed.ai; aiReason = routed.reason; } else if (aiId === 'auto') { aiId = 'claude'; aiReason = 'Auto: Claude is logged in, supports background runs and routes approvals to Buddy'; }
     const task = {
       id, title: spec.title ?? spec.text.split('\n')[0].slice(0, 80), text: spec.text, spec,
       state: 'queued', blockedKind: null, failKind: null, failReason: null, parkReason: null, outcome: null, queueReason: null,
@@ -976,13 +976,17 @@ export async function startMockServer(opts = {}) {
     };
   }
 
-  // The real router over the mock's AIs. opts.defaultAi (default 'claude'), opts.routeUsage and opts.routeRules feed it.
+  // The real router over the mock's AIs. opts.defaultAi (default 'claude'), opts.routeUsage, opts.routeRules and
+  // opts.spendCap (the enforced cap holds every AI unless the person overrode it for this task) feed it.
   const routeOf = (spec) => Route.route({
-    want: spec.ai ?? 'auto', level: spec.permissionLevel ?? 'auto-edits', now: Date.now(), ais: MOCK_AIS,
+    // The mock models terminal surfaces, where approvals happen in the terminal: only a background 'ask' needs routing.
+    want: spec.ai ?? 'auto', now: Date.now(), ais: MOCK_AIS,
+    level: (spec.surface ?? 'background') !== 'background' && spec.permissionLevel === 'ask' ? 'auto-edits' : spec.permissionLevel ?? 'auto-edits',
     defaultAi: opts.defaultAi === undefined ? 'claude' : opts.defaultAi, needsBudget: spec.budgetUsd != null, waitForReset: spec.afterReset === true,
     text: spec.text, usage: opts.routeUsage ?? {}, rules: opts.routeRules ?? [],
+    spend: opts.spendCap && spec.overrideSpendCap !== true ? Object.fromEntries(MOCK_AIS.map((a) => [a.id, true])) : {},
   });
-  const refuse = (r, want) => new ApiError(r.code, r.reason, { ai: want, ...(r.capability ? { capability: r.capability } : {}) });
+  const refuse = (r, want) => new ApiError(r.code, r.reason, { ai: want, ...(r.capability ? { capability: r.capability } : {}), ...(r.code === 'BUDGET_EXCEEDED' ? { canOverride: true } : {}) });
 
   // ── methods ────────────────────────────────────────────────────────────────
   const methods = {
@@ -999,7 +1003,8 @@ export async function startMockServer(opts = {}) {
       }
       if (spec.permissionLevel === 'bypass') throw new ApiError('POLICY_DENIED', 'bypass needs the per-project opt-in (none in the mock)');
       const want = spec.ai ?? 'auto';
-      if (want !== 'auto') {
+      const wrapper = ['local', 'cli'].includes(spec.source ?? 'local');
+      if (want !== 'auto' && !wrapper) {
         const ai = MOCK_AIS.find((a) => a.id === want);
         if (!ai?.installed || !ai.loggedIn) throw new ApiError('AI_UNAVAILABLE', `${want} is not installed or not logged in`, { ai: want });
         if ((spec.permissionLevel ?? 'auto-edits') === 'ask' && (spec.surface ?? 'background') === 'background' && !ai.capabilities.permissionRouting) {
@@ -1007,8 +1012,8 @@ export async function startMockServer(opts = {}) {
         }
       }
       let routed = null;
-      // Only the wrapper (local/cli) routes; other sources keep the plain pick, as in the engine.
-      if (want === 'auto' && ['local', 'cli'].includes(spec.source ?? 'local')) {
+      // Only the wrapper (local/cli) routes, explicit picks included; other sources keep the plain pick, as in the engine.
+      if (wrapper) {
         routed = routeOf(spec);
         if (routed.decision === 'ask') {
           const picked = spec.expectAi ? Route.pickFromTie(routed, spec.expectAi) : null;

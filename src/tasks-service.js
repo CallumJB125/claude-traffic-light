@@ -634,18 +634,25 @@ function createTasksService(opts) {
     let held = null;
     try { held = await opts.startGuard?.(cwd); } catch { held = null; }
     if (!current()) return failure({ code: 'CONFLICT' });
-    if (held) {
+    // held: main's own start guard. The engine's spend cap answers BUDGET_EXCEEDED (canOverride) the same way, so a
+    // retry with overrideBudget goes through the same native confirmation even when the guard has nothing to say.
+    if (held || draft.overrideBudget === true) {
+      held = held ?? { text: 'Your spend cap is reached.' };
       if (draft.overrideBudget !== true) return { ok: false, code: 'BUDGET_HELD', text: held.text, canOverride: true };
       let yes = false;
       try { yes = !!(await opts.confirmDialog?.({ action: 'create', label: 'Start anyway', title: 'Start over the limit', where: tilde(cwd, homeDir), detail: `${held.text}\nThis one task will start regardless. Nothing already running is stopped either way.` }, extra?.wcId ?? 0)); } catch { yes = false; }
       if (!yes) return { ok: false, code: 'CONFIRM_REQUIRED', text: '', cancelled: true };
+      v.spec.overrideSpendCap = true;
     }
     if (!current()) return failure({ code: 'CONFLICT' });
     try {
       const r = await channel.createTask(v.spec, { requestId: typeof draft.requestId === 'string' && /^[\w-]{8,128}$/.test(draft.requestId) ? draft.requestId : undefined });
       refresh().catch(() => {});
       return { ok: true, id: r.id };
-    } catch (e) { return failure(e); }
+    } catch (e) {
+      if (e?.code === 'BUDGET_EXCEEDED' && e.details?.canOverride && draft.overrideBudget !== true) return { ok: false, code: 'BUDGET_HELD', text: String(e.message || '').slice(0, 300), canOverride: true };
+      return failure(e);
+    }
   }
 
   // Advisory observations from the existing local helper, never a filesystem lock.

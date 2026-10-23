@@ -22,6 +22,7 @@ const SURFACES = ['background', 'tmux', 'tab'];
 const PERMS = ['plan', 'ask', 'auto-edits', 'auto'];
 const END_OK = new Set(['in_review', 'done']);
 const END_BAD = new Set(['failed', 'parked']);
+const END_ELSEWHERE = new Set(['handed_over']);
 const UNREACHABLE = new Set(['SUPERVISOR_UNREACHABLE', 'UNAUTHENTICATED', 'FORBIDDEN', 'TIMEOUT', 'PROTOCOL_UNSUPPORTED', 'ENOENT', 'ECONNREFUSED', 'EACCES']);
 const MAX_TEXT = 20000;
 
@@ -63,7 +64,9 @@ async function connectTasks(ctx) {
   return client;
 }
 
-const oneLine = (s, n = 300) => String(s ?? '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ').slice(0, n);
+// Model and tool text reaches a terminal: drop C0/C1 controls (ESC, the 8-bit CSI U+009B) and bidi overrides.
+const UNSAFE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
+const oneLine = (s, n = 300) => String(s ?? '').replace(UNSAFE, ' ').slice(0, n);
 const codeOf = (e) => (typeof e?.code === 'string' ? e.code : null);
 
 function routeLines(r, spec) {
@@ -136,7 +139,18 @@ async function runTask(args, ctx) {
     : fail(EXIT.REFUSED, `${oneLine(e.message)}${codeOf(e) ? ` (${codeOf(e)})` : ''}`, { code: codeOf(e), ...(e.details?.choices ? { choices: e.details.choices } : {}) }));
   try {
     let r;
-    try { r = await client.route(spec); } catch (e) { return refused(e); }
+    try { r = await client.route(spec); } catch (e) {
+      if (codeOf(e) !== 'BUDGET_EXCEEDED' || e.details?.canOverride !== true) return refused(e);
+      // Callum's decision: over the cap, pause and ask "run anyway?". Only a person at a terminal, or --yes, says yes.
+      if (interactive) {
+        const a = await ctx.prompt(`${oneLine(e.message)}. Over your spend cap — run anyway? [y/N] `);
+        if ((a ?? '').trim().toLowerCase() !== 'y') { out('Not started.'); return EXIT.OK; }
+      } else if (!args.flags.yes) {
+        return fail(EXIT.REFUSED, `${oneLine(e.message)}. Over your spend cap: pass --yes to run it anyway.`, { code: 'BUDGET_EXCEEDED', canOverride: true });
+      }
+      spec.overrideSpendCap = true;
+      try { r = await client.route(spec); } catch (e2) { return refused(e2); }
+    }
     if (!args.json) for (const l of routeLines(r, spec)) out(l);
 
     let ai = spec.ai;
@@ -192,12 +206,14 @@ function follow(client, t, args, ctx, interactive) {
     const end = (state, label, reason) => {
       if (END_OK.has(state)) finish(EXIT.OK, `Done: ${oneLine(label, 60)}${reason ? ` · ${oneLine(reason)}` : ''}`);
       else if (END_BAD.has(state)) finish(EXIT.ENDED_BADLY, `Ended: ${oneLine(label, 60)}${reason ? ` · ${oneLine(reason)}` : ''}`);
+      else if (END_ELSEWHERE.has(state)) finish(EXIT.OK, `Continued in a terminal: ${oneLine(label, 60)}. Hand it back in Plexiform when you're done.`);
     };
     const answer = async (e) => {
       if (asked.has(e.approvalId)) return;
       asked.add(e.approvalId);
       if (!interactive) { if (!args.json) out('  Answer it in Plexiform (Tasks).'); return; }
-      const a = await ctx.prompt('Approve once? a = approve, d = deny, Enter = answer it in Plexiform: ');
+      // fresh: only input typed after this prompt answers it; anything typed ahead while following is dropped.
+      const a = await ctx.prompt('Approve once? a = approve, d = deny, Enter = answer it in Plexiform: ', { fresh: true });
       const k = a == null ? '' : a.trim().toLowerCase();
       if (done || (k !== 'a' && k !== 'd')) return;
       try {
@@ -230,27 +246,31 @@ function readAllStdin(stdin = process.stdin) {
   });
 }
 
-/** One line from the terminal, or null on end of input. */
-function terminalPrompt({ input = process.stdin, output = process.stderr } = {}) {
+/**
+ * One line from the terminal, or null on end of input. Readline is open only while a prompt waits: between prompts
+ * the terminal is back in its normal mode, so the first Ctrl-C while following is a real SIGINT. Ctrl-C at a prompt
+ * is passed on as SIGINT too. {fresh}: wait settleMs and drop whatever was typed ahead before showing the question.
+ */
+function terminalPrompt({ input = process.stdin, output = process.stderr, settleMs = 40, onSigint = () => process.emit('SIGINT', 'SIGINT') } = {}) {
   const readline = require('readline');
-  let rl = null;
-  const lines = [];
-  const waiting = [];
   let ended = false;
-  const open = () => {
-    if (rl) return;
-    rl = readline.createInterface({ input, output, terminal: !!input.isTTY });
-    rl.on('line', (l) => { const w = waiting.shift(); if (w) w(l); else lines.push(l); });
-    rl.on('close', () => { ended = true; while (waiting.length) waiting.shift()(null); });
+  input.once?.('end', () => { ended = true; });
+  const prompt = async (q, { fresh = false } = {}) => {
+    if (ended) return null;
+    const rl = readline.createInterface({ input, output, terminal: !!input.isTTY });
+    const lines = [];
+    let take = null;
+    rl.on('line', (l) => { if (take) { const t = take; take = null; t(l); } else lines.push(l); });
+    rl.on('SIGINT', () => { rl.close(); onSigint(); });
+    const closed = new Promise((res) => rl.once('close', () => res(null)));
+    try {
+      if (fresh) { await new Promise((res) => setTimeout(res, settleMs)); lines.length = 0; }
+      output.write(q);
+      if (lines.length) return lines.shift();
+      return await Promise.race([new Promise((res) => { take = res; }), closed]);
+    } finally { rl.close(); }
   };
-  const prompt = (q) => {
-    open();
-    output.write(q);
-    if (lines.length) return Promise.resolve(lines.shift());
-    if (ended) return Promise.resolve(null);
-    return new Promise((res) => waiting.push(res));
-  };
-  prompt.close = () => { if (rl) rl.close(); };
+  prompt.close = () => {};
   return prompt;
 }
 

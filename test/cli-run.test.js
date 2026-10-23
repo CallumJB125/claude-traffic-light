@@ -95,7 +95,7 @@ test('the person can switch AI at the prompt; that is recorded as their choice',
 });
 
 test('a tie lists both choices and waits for a letter; without a terminal it is refused', async () => {
-  const m = await mock({ defaultAi: null });
+  const m = await mock({ defaultAi: null, routeUsage: { claude: { utilization: 0.4, status: 'allowed', resetsAt: Date.now() + 3600e3 }, codex: { utilization: 0.4, status: 'allowed', resetsAt: Date.now() + 3600e3 } } });
   try {
     const no = await plexiform(m, ['run', 'fix it', '--yes']);
     assert.equal(no.code, 4);
@@ -239,4 +239,90 @@ test('help lists run', async () => {
   await Cli.run({ argv: ['help'], out: (s) => { out += s; } });
   assert.match(out, /run +give a task to Claude or Codex/);
   assert.match(out, /plexiform run "<task>"/);
+});
+
+// Review #42 fixes: the spend cap pauses with "run anyway?", follow ends on parked and handed_over, terminal safety.
+test('over the spend cap: a terminal asks "run anyway?"; a script needs --yes; nothing starts on no', async () => {
+  const m = await mock({ spendCap: true });
+  try {
+    const script = await plexiform(m, ['run', 'fix it', '--with', 'claude', '--json']);
+    assert.equal(script.code, 4);
+    assert.deepEqual([script.json()[0].code, script.json()[0].canOverride], ['BUDGET_EXCEEDED', true]);
+    const no = await plexiform(m, ['run', 'fix it', '--with', 'claude'], { tty: true, answers: ['n'] });
+    assert.equal(no.code, 0);
+    assert.match(no.prompts[0], /Over your spend cap — run anyway\? \[y\/N\]/);
+    assert.match(no.out, /Not started\./);
+    assert.deepEqual(await tasks(m), []);
+    const yes = await plexiform(m, ['run', 'fix it', '--with', 'claude'], { tty: true, answers: ['y', ''] });
+    assert.equal(yes.code, 0, yes.err);
+    assert.match(yes.out, /Started tsk_/);
+    const auto = await plexiform(m, ['run', 'tidy the docs', '--yes']);
+    assert.equal(auto.code, 0, auto.err);
+    assert.equal((await tasks(m)).length, 2);
+  } finally { await m.close(); }
+});
+
+async function followUntil(m, act) {
+  const run = plexiform(m, ['run', 'build the thing', '--with', 'claude', '--follow', '--yes']);
+  let t;
+  for (let i = 0; i < 200 && !(t && t.state === 'running'); i += 1) { await new Promise((res) => setTimeout(res, 25)); [t] = await tasks(m); }
+  assert.equal(t.state, 'running');
+  await m.client.act(t.id, act, {});
+  return run;
+}
+
+test('--follow: a parked task exits 5; a task taken over in a terminal exits 0', async () => {
+  const m = await mock();
+  try {
+    const parked = await followUntil(m, 'pause');
+    assert.equal(parked.code, 5, parked.out);
+    assert.match(parked.out, /^Ended: /m);
+  } finally { await m.close(); }
+  const m2 = await mock();
+  try {
+    const over = await followUntil(m2, 'takeover');
+    assert.equal(over.code, 0, over.out);
+    assert.match(over.out, /Continued in a terminal: /);
+  } finally { await m2.close(); }
+});
+
+test('terminal output drops ESC, C1 controls (8-bit CSI) and bidi overrides', () => {
+  const [line] = RunCmd.eventLines({ type: 'error', message: 'a\x1b]0;pwn\x07b\u009b2Jc‮d⁦e\u0085f' }, {});
+  assert.equal(line, '! a ]0;pwn b 2Jc d e f');
+  const [tool] = RunCmd.eventLines({ type: 'tool', phase: 'start', name: 'Bash\x1b[2J', summary: 'rm ‮exe.txt' }, {});
+  assert.doesNotMatch(tool, /[\u001b‮]/);
+});
+
+test('terminalPrompt: readline is closed between prompts, typed-ahead input never answers an approval, Ctrl-C is passed on', async () => {
+  const { PassThrough } = require('stream');
+  const input = new PassThrough();
+  const output = new PassThrough();
+  output.resume();
+  let sigints = 0;
+  const prompt = RunCmd.terminalPrompt({ input, output, settleMs: 30, onSigint: () => { sigints += 1; } });
+  setTimeout(() => input.write('\n'), 10);
+  assert.equal(await prompt('Enter to run: '), '');
+  assert.equal(input.listenerCount('data'), 0, 'no reader left open while following');
+  input.write('a\n');
+  const answer = prompt('Approve once? ', { fresh: true });
+  setTimeout(() => input.write('d\n'), 80);
+  assert.equal(await answer, 'd', 'the stray "a" typed ahead was dropped');
+  input.isTTY = true;
+  const p = prompt('Approve once? ');
+  setTimeout(() => input.write('\x03'), 10);
+  assert.equal(await p, null);
+  assert.equal(sigints, 1);
+  input.isTTY = false;
+  input.end();
+  await new Promise((res) => setImmediate(res));
+  assert.equal(await prompt('again? '), null, 'end of input');
+});
+
+test('the mock routes through the same fail-safe: a malformed usage reading never makes a tie or moves the pick', async () => {
+  const m = await mock({ defaultAi: null, routeUsage: { claude: { utilization: 0.4 }, codex: { utilization: '0.4', status: 'allowed', resetsAt: Date.now() + 3600e3 } } });
+  try {
+    const r = await plexiform(m, ['run', 'fix it', '--json', '--yes']);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.json()[0].reason, /^Claude: the usual pick; no usage data to compare$/);
+  } finally { await m.close(); }
 });

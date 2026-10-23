@@ -34,6 +34,7 @@ import { createCollaboration, collaborationReceipts } from './collaboration.js';
 import { createAgentBus, BusRefusal } from './bus/dispatcher.js';
 import { strictSettings } from './bus/guard.js';
 import { BUS_RUN_PROVIDERS } from '../shared/bus-schema.js';
+
 import { TASK_TOOL_NAMES } from '../mcp/task-tools.js';
 import { createTaskIntegration } from './integration.js';
 import { createTaskPullRequest } from './pull-request.js';
@@ -251,13 +252,16 @@ export class TasksEngine extends EventEmitter {
     this.ais = out;
   }
 
+  // The raw reading from a run's rate_limit event; the router decides whether it is known (Route.known). A report
+  // whose utilization is not known (null, a string, true…) never replaces a known reading for the same window.
   #noteUsage(id, info) {
-    const u = Number(info?.utilization);
-    this.usage[id] = {
-      status: typeof info?.status === 'string' ? info.status : null,
-      resetsAt: Number.isFinite(info?.resetsAt) ? info.resetsAt * 1000 : null,
-      utilization: Number.isFinite(u) && u >= 0 && u <= 1 ? u : null,
-    };
+    const prev = this.usage[id];
+    const status = Route.USAGE_STATUSES.includes(info?.status) ? info.status : null;
+    const resetsAt = typeof info?.resetsAt === 'number' && Number.isFinite(info.resetsAt) ? info.resetsAt * 1000 : null;
+    const next = { status, resetsAt, utilization: info?.utilization };
+    const now = this.now();
+    const keep = prev && Route.known(next, now) == null && Route.known(prev, now) != null && (resetsAt == null || resetsAt === prev.resetsAt);
+    this.usage[id] = keep ? { status: status ?? prev.status, resetsAt: prev.resetsAt, utilization: prev.utilization } : next;
   }
 
   #aiInfo(id) { return this.ais.find((a) => a.id === id) ?? null; }
@@ -275,12 +279,12 @@ export class TasksEngine extends EventEmitter {
         const u = this.usage[a.id];
         const parked = [...this.tasks.values()].filter((t) => t.ai.id === a.id && t.state === 'parked' && t.parkReason === 'limit' && t.limitResetAt > now).map((t) => t.limitResetAt);
         const until = Math.max(-1, ...parked, ...(u?.status === 'rejected' && u.resetsAt > now ? [u.resetsAt] : []));
-        usage[a.id] = { limitedUntil: until > now ? until : null, utilization: u && (u.resetsAt == null || u.resetsAt > now) ? u.utilization : null };
+        usage[a.id] = { limitedUntil: until > now ? until : null, utilization: u?.utilization, status: u?.status, resetsAt: u?.resetsAt };
       }
       // The enforced spend cap (src/spend-enforce.js → spend-gate.json) holds every AI's runs while it is reached.
       let gate = null;
       try { gate = this.opts.spendGate?.() ?? null; } catch { gate = null; }
-      if (gate?.cap) for (const a of this.ais) spend[a.id] = true;
+      if (gate?.cap && !o.spendOverride) for (const a of this.ais) spend[a.id] = true;
     }
     return {
       want, level, now, ais: this.ais, usage, spend, defaultAi: this.opts.defaultAi ?? null,
@@ -300,9 +304,15 @@ export class TasksEngine extends EventEmitter {
       if (picked) r = picked;
       else throw new ApiError('CONFIRM_REQUIRED', r.reason, { choices: r.alternatives.slice(0, 2) });
     }
-    if (r.decision === 'refuse') throw new ApiError(r.code, r.reason, { ai: want, ...(r.capability ? { capability: r.capability } : {}) });
+    if (r.decision === 'refuse') throw new ApiError(r.code, r.reason, { ai: want, ...(r.capability ? { capability: r.capability } : {}), ...(r.code === 'BUDGET_EXCEEDED' ? { canOverride: true } : {}) });
     if (o.expectAi && r.ai !== o.expectAi) throw new ApiError('CONFLICT', `Routing changed since you confirmed it. ${r.reason}`, { ai: r.ai });
     return { id: r.ai, reason: r.reason, route: r };
+  }
+
+  // Only backends with an OS sandbox and no network can take a bus run (Gemini has neither); a budget needs a native cap.
+  #aiFits(ai, spec, source) {
+    if (source === 'bus' && !BUS_RUN_PROVIDERS.includes(ai.id)) throw new ApiError('POLICY_DENIED', `${AI_LABEL[ai.id]} cannot take agent bus runs`, { reason: 'NO_ELIGIBLE_AGENT' });
+    if (spec.budgetUsd != null && this.backends[ai.id].describe().capabilities.budget !== 'native') throw new ApiError('CAPABILITY_MISSING', `${AI_LABEL[ai.id]} does not offer a native spend cap`, { capability: 'budget' });
   }
 
   // The pick every non-wrapper source had before routing: the default AI, else the first usable one; no gates.
@@ -345,6 +355,7 @@ export class TasksEngine extends EventEmitter {
   async #routeOptions(spec, root, policy) {
     return {
       text: spec.text, budget: spec.budgetUsd != null, afterReset: spec.afterReset === true, expectAi: spec.expectAi,
+      spendOverride: spec.overrideSpendCap === true,
       repoPreferred: await this.#repoPreferred(root, policy), rules: policy.routeRules,
     };
   }
@@ -361,7 +372,7 @@ export class TasksEngine extends EventEmitter {
     const policy = this.#policy();
     const o = await this.#routeOptions({ ...spec, expectAi: undefined }, top ?? cwd, policy);
     const r = Route.route(this.#routeInput(spec.ai ?? 'auto', level, o));
-    if (r.decision === 'refuse') throw new ApiError(r.code, r.reason, { ai: spec.ai ?? 'auto', ...(r.capability ? { capability: r.capability } : {}) });
+    if (r.decision === 'refuse') throw new ApiError(r.code, r.reason, { ai: spec.ai ?? 'auto', ...(r.capability ? { capability: r.capability } : {}), ...(r.code === 'BUDGET_EXCEEDED' ? { canOverride: true } : {}) });
     return { decision: r.decision, ai: r.ai, rule: r.rule, confidence: r.confidence, reason: r.reason, alternatives: r.alternatives };
   }
 
@@ -740,6 +751,9 @@ export class TasksEngine extends EventEmitter {
     if (spec.model != null && !MODEL_RE.test(spec.model)) throw new ApiError('VALIDATION', 'model is not a model name');
     if (spec.baseBranch != null && !REF_RE.test(spec.baseBranch)) throw new ApiError('VALIDATION', 'baseBranch is not a branch name');
     if (spec.budgetUsd != null && !(spec.budgetUsd > 0)) throw new ApiError('VALIDATION', 'budgetUsd must be more than 0');
+    // Every source but the wrapper keeps its plain pick, at its old place, so its errors read exactly as before.
+    let ai = LOCAL_SOURCES.includes(source) ? null : this.#plainAi(spec.ai ?? 'auto', level);
+    if (ai) this.#aiFits(ai, spec, source);
     if (!path.isAbsolute(spec.cwd)) throw new ApiError('VALIDATION', 'cwd must be an absolute path');
     let cwd;
     try { cwd = fs.realpathSync(spec.cwd); } catch { throw new ApiError('VALIDATION', 'cwd must be an existing folder'); }
@@ -758,12 +772,11 @@ export class TasksEngine extends EventEmitter {
     if (workInPlace && this.#protectedFolder(top ?? cwd)) throw new ApiError('POLICY_DENIED', "this folder can't be used for a task in place");
     if (parent && (!parent.repo || parent.repo.root !== top)) throw new ApiError('POLICY_DENIED', "a spin-off works only in its parent task's repo");
     const policy = this.#policy();
-    // Routing is the wrapper's (the composer and `plexiform run`). Every other source keeps the plain pick it always
-    // had, so people who coordinate native sessions without the wrapper see no new refusals or choices.
-    const ai = local ? this.#chooseAi(spec.ai ?? 'auto', level, await this.#routeOptions(spec, top ?? cwd, policy)) : this.#plainAi(spec.ai ?? 'auto', level);
-    // Only backends with an OS sandbox and no network can take a bus run (Gemini has neither).
-    if (source === 'bus' && !BUS_RUN_PROVIDERS.includes(ai.id)) throw new ApiError('POLICY_DENIED', `${AI_LABEL[ai.id]} cannot take agent bus runs`, { reason: 'NO_ELIGIBLE_AGENT' });
-    if (spec.budgetUsd != null && this.backends[ai.id].describe().capabilities.budget !== 'native') throw new ApiError('CAPABILITY_MISSING', `${AI_LABEL[ai.id]} does not offer a native spend cap`, { capability: 'budget' });
+    // Routing is the wrapper's (the composer and `plexiform run`); it needs the repo for its preference.
+    if (local) {
+      ai = this.#chooseAi(spec.ai ?? 'auto', level, await this.#routeOptions(spec, top ?? cwd, policy));
+      this.#aiFits(ai, spec, source);
+    }
     if (source === 'bus' ? !(await this.busRepoAllowed(top, policy)) : remote && !(await this.#remoteAllowed(top, policy))) throw new ApiError('POLICY_DENIED', 'tasks from other people or devices are not turned on for this repo');
     if (spec.wallClockMs != null && !(Number.isSafeInteger(spec.wallClockMs) && spec.wallClockMs >= 60_000 && spec.wallClockMs <= DAY_MS)) throw new ApiError('VALIDATION', 'wallClockMs must be 1 minute to 24 hours');
     const root = top ?? cwd;

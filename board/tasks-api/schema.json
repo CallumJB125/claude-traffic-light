@@ -40,6 +40,9 @@
             "gemini"
           ]
         },
+        "overrideSpendCap": {
+          "type": "boolean"
+        },
         "model": {
           "type": "string",
           "maxLength": 256
@@ -4986,6 +4989,7 @@
             "only",
             "default",
             "headroom",
+            "usual",
             "tie"
           ]
         },

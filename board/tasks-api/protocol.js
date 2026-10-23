@@ -55,7 +55,7 @@ export const BUS_AGENT_OPS = Object.freeze(['hello', 'handoff', 'read', 'wait', 
 export const PARK_REASONS = Object.freeze(['user', 'limit', 'auth', 'ask_timeout', 'approval_timeout', 'message_loop']);
 export const OUTCOMES = Object.freeze(['merged', 'pr_opened', 'pr_merged', 'discarded']);
 // The task router's rules (src/route-rules.js): which one picked the AI for a `route` result.
-export const ROUTE_RULES = Object.freeze(['override', 'repo', 'user-rule', 'only', 'default', 'headroom', 'tie']);
+export const ROUTE_RULES = Object.freeze(['override', 'repo', 'user-rule', 'only', 'default', 'headroom', 'usual', 'tie']);
 export const CAPABILITIES = Object.freeze(['background', 'resume', 'hooks', 'mcp', 'permissionRouting', 'modelSelect', 'costReport', 'budget', 'sandbox']);
 
 // Board error codes reused verbatim (shared/protocol.js ERRORS), plus the

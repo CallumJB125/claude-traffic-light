@@ -146,3 +146,13 @@ local('a prior provider plan approval cannot authorize edits for the new provide
   assert.equal(h.task(id).planApproved, false);
   const start = h.log().find(x => x.kind === 'start'); assert.ok(start.argv.some(s => s.includes('\":workspace_roots\"=\"read\"')));
 });
+// Review #42 finding 7: a provider switch is the person's own reviewed choice; the spend cap and usage windows that
+// hold new wrapper tasks never block it (#switchTarget routes with gates:false).
+local('a provider switch is not held by the spend cap or the next AI\'s usage window', async t => {
+  let gate = null;
+  const h = await setup(t, { spendGate: () => gate }), id = await h.parked();
+  gate = { v: 1, cap: 'Plexiform budget cap reached' };
+  h.eng.engine.usage.codex = { status: 'rejected', resetsAt: Date.now() + 3600e3, utilization: 1 };
+  assert.ok((await h.client.getTask(id)).actions.includes('switchAi'));
+  const r = await preview(h, id); assert.equal(r.to, 'codex');
+});

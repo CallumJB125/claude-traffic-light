@@ -322,3 +322,29 @@ test('a held budget refuses a new task with a message; the override needs the na
     assert.equal(yes.ok, true);
   } finally { answer = false; guarded.stop(); }
 });
+
+// Review #42 finding 1: the engine's enforced spend cap gets the composer's "Start anyway" too. A plain create is
+// BUDGET_HELD (canOverride); after the native confirmation the task carries overrideSpendCap and is created.
+test('the engine spend cap: BUDGET_HELD first, then Start anyway through the native confirmation', async () => {
+  const { startMockServer } = await import(mockUrl);
+  const capDir = tmp();
+  const capSrv = await startMockServer({ dir: capDir, speed: 40, hbMs: 200, demo: false, spendCap: true });
+  const asked = [];
+  let yes = false;
+  const capped = createTasksService({ boardHome: capDir, homeDir: fixtureHome, copy: () => {}, isDir: () => true, confirmDialog: async (info) => { asked.push(info); return yes; } });
+  capped.start();
+  try {
+    await until(() => capped.snapshot().conn.status === 'connected');
+    const folder = capped.registerFolder('/Users/demo/Development/acme-web');
+    const draft = { text: 'Tidy the docs', folder: folder.handle, ai: 'claude' };
+    const r = await capped.create(draft);
+    assert.deepEqual([r.ok, r.code, r.canOverride], [false, 'BUDGET_HELD', true]);
+    assert.equal(asked.length, 0, 'no dialog until the person asks to override');
+    const no = await capped.create({ ...draft, overrideBudget: true }, { wcId: 7 });
+    assert.equal(no.cancelled, true);
+    assert.equal(asked.at(-1).label, 'Start anyway');
+    yes = true;
+    const ok = await capped.create({ ...draft, overrideBudget: true }, { wcId: 7 });
+    assert.equal(ok.ok, true, JSON.stringify(ok));
+  } finally { capped.stop(); await capSrv.close(); fs.rmSync(capDir, { recursive: true, force: true }); }
+});

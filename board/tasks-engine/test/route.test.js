@@ -52,6 +52,7 @@ test('the repo preference and the person\'s rules come from policy.json; task te
 }));
 
 test('a tie needs the person: CONFIRM_REQUIRED with two choices, then expectAi picks one', { skip: process.platform === 'win32' }, () => withRouter({}, async (m) => {
+  for (const id of ['claude', 'codex']) m.eng.engine.usage[id] = { status: 'allowed', resetsAt: Date.now() + 3600e3, utilization: 0.4 };
   const r = valid(await m.client.route(m.spec));
   assert.equal(r.decision, 'ask');
   assert.equal(r.reason, 'Claude or Codex: no rule decides, so pick one');
@@ -87,6 +88,7 @@ test('the spend gate holds every AI: route and create refuse with BUDGET_EXCEEDE
 test('a usage window reported by a run moves auto to the AI with headroom; a rejection holds it until the reset', { skip: process.platform === 'win32' }, () => {
   const resetsAt = Math.floor(Date.now() / 1000) + 3600;
   return withRouter({ engineOpts: { defaultAi: 'claude' }, scenario: { steps: [{ rate_limit: { status: 'allowed_warning', utilization: 0.9, resetsAt } }, { result: 'success' }] } }, async (m) => {
+    m.eng.engine.usage.codex = { status: 'allowed', resetsAt: Date.now() + 3600e3, utilization: 0.1 };
     const { id } = await m.client.createTask({ ...m.spec, ai: 'claude' });
     await waitFor(async () => ['in_review', 'done', 'failed'].includes((await m.client.getTask(id)).state), { label: 'task ends' });
     const r = await m.client.route(m.spec);
@@ -117,3 +119,61 @@ test('native-only setups are unaffected: non-wrapper sources keep the plain pick
     for (const id of [auto.id, chosen.id]) await m.client.act(id, 'stop', {});
   });
 });
+
+// Fail safe (plan-orchestrator "O1 fallback"): a malformed usage report is unknown and never moves auto.
+for (const [name, info] of [
+  ['a string utilization', { status: 'allowed_warning', utilization: '0.95', resetsAt: 'future' }],
+  ['no resetsAt', { status: 'allowed_warning', utilization: 0.95 }],
+  ['an unknown status', { status: 'surprise', utilization: 0.95, resetsAt: 'future' }],
+  ['a percent-scale value', { status: 'allowed_warning', utilization: 95, resetsAt: 'future' }],
+]) {
+  test(`a usage report with ${name} counts as unknown: auto stays on the default`, { skip: process.platform === 'win32' }, () => {
+    const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+    const rate = { ...info, ...(info.resetsAt === 'future' ? { resetsAt } : {}) };
+    return withRouter({ engineOpts: { defaultAi: 'claude' }, scenario: { steps: [{ rate_limit: rate }, { result: 'success' }] } }, async (m) => {
+      m.eng.engine.usage.codex = { status: 'allowed', resetsAt: Date.now() + 3600e3, utilization: 0.1 };
+      const { id } = await m.client.createTask({ ...m.spec, ai: 'claude' });
+      await waitFor(async () => ['in_review', 'done', 'failed'].includes((await m.client.getTask(id)).state), { label: 'task ends' });
+      const r = await m.client.route(m.spec);
+      assert.deepEqual([r.ai, r.rule], ['claude', 'default'], JSON.stringify(m.eng.engine.usage.claude));
+    });
+  });
+}
+
+// Review #42 finding 1: over the enforced cap the person may run it anyway. Without the override every wrapper pick is
+// held (BUDGET_EXCEEDED, canOverride); with it (main's native confirm, or the CLI's y/N) the task is created.
+test('spend cap: held without an override, created with the person\'s override (explicit or auto)', { skip: process.platform === 'win32' }, () => {
+  const gate = { v: 1, cap: 'Plexiform budget cap reached' };
+  return withRouter({ engineOpts: { defaultAi: 'claude', spendGate: () => gate } }, async (m) => {
+    const held = (e) => e.code === 'BUDGET_EXCEEDED' && e.details.canOverride === true;
+    await assert.rejects(m.client.createTask({ ...m.spec, ai: 'claude' }), held);
+    await assert.rejects(m.client.createTask(m.spec), held);
+    await assert.rejects(m.client.route({ ...m.spec, ai: 'claude' }), held);
+    assert.equal((await m.client.route({ ...m.spec, overrideSpendCap: true })).ai, 'claude');
+    const a = await m.client.createTask({ ...m.spec, ai: 'claude', overrideSpendCap: true });
+    assert.equal((await m.client.getTask(a.id)).ai.id, 'claude');
+    await waitFor(async () => ['in_review', 'done', 'failed'].includes((await m.client.getTask(a.id)).state), { label: 'task ends' });
+    const b = await m.client.createTask({ ...m.spec, text: 'Tidy the docs', overrideSpendCap: true });
+    assert.ok(b.id);
+    await waitFor(async () => ['in_review', 'done', 'failed'].includes((await m.client.getTask(b.id)).state), { label: 'task ends' });
+  });
+});
+
+// Review #42 finding 2: a report with no utilization (null) says nothing new; it never reads as 0% used.
+test('an invalid utilization (null, "", true, [], a string) keeps the last known reading for the same window', { skip: process.platform === 'win32' }, () => {
+  const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+  return withRouter({ engineOpts: { defaultAi: 'claude' }, scenario: { steps: [{ rate_limit: { status: 'allowed_warning', utilization: 0.9, resetsAt } }, { rate_limit: { status: 'allowed', utilization: null, resetsAt } }, { rate_limit: { status: 'allowed', utilization: '', resetsAt } }, { rate_limit: { status: 'allowed', utilization: true, resetsAt } }, { rate_limit: { status: 'allowed', utilization: [], resetsAt } }, { rate_limit: { status: 'allowed', utilization: '0.1', resetsAt } }, { rate_limit: { status: 'weird', utilization: 0.1, resetsAt } }, { rate_limit: { status: 'allowed' } }, { result: 'success' }] } }, async (m) => {
+    m.eng.engine.usage.codex = { status: 'allowed', resetsAt: Date.now() + 3600e3, utilization: 0.1 };
+    const { id } = await m.client.createTask({ ...m.spec, ai: 'claude' });
+    await waitFor(async () => ['in_review', 'done', 'failed'].includes((await m.client.getTask(id)).state), { label: 'task ends' });
+    assert.equal(m.eng.engine.usage.claude.utilization, 0.9, JSON.stringify(m.eng.engine.usage.claude));
+    assert.deepEqual([(await m.client.route(m.spec)).ai, (await m.client.route(m.spec)).rule], ['codex', 'headroom']);
+  });
+});
+
+// Review #42 finding 3: other sources pick their AI where they always did, so their errors read as before O1.
+test('non-wrapper error order is unchanged: an unavailable AI is reported before the folder checks', { skip: process.platform === 'win32' }, () => withRouter({}, async (m) => {
+  await assert.rejects(m.client.createTask({ text: 'x', cwd: '/nonexistent/zz', source: 'board', sourceMeta: { userId: 'a' }, ai: 'gemini' }), (e) => e.code === 'AI_UNAVAILABLE');
+  await assert.rejects(m.client.createTask({ text: 'x', cwd: '/nonexistent/zz', source: 'board', sourceMeta: { userId: 'a' }, ai: 'claude', budgetUsd: 1 }), (e) => e.code === 'VALIDATION', 'Claude has a native cap, so the folder check answers');
+  await assert.rejects(m.client.createTask({ text: 'x', cwd: '/nonexistent/zz', source: 'board', sourceMeta: { userId: 'a' }, ai: 'codex', budgetUsd: 1 }), (e) => e.code === 'CAPABILITY_MISSING' && e.details.capability === 'budget');
+}));

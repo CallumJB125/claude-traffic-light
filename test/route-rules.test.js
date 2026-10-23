@@ -16,6 +16,8 @@ const ai = (id, extra = {}) => ({ id, installed: true, loggedIn: true, startable
 const BOTH = [ai('claude'), ai('codex')];
 const ALL = [...BOTH, ai('gemini')];
 const r = (input) => R.route({ now: NOW, ais: BOTH, ...input });
+// A known usage reading: a plain number with a known status and a reset ahead (R.known).
+const K = (utilization, extra = {}) => ({ utilization, status: 'allowed', resetsAt: NOW + 3600e3, ...extra });
 
 const CASES = [
   // [name, input, expected subset]
@@ -43,11 +45,31 @@ const CASES = [
     ais: [...BOTH, ai('gemini', { capabilities: { background: true, permissionRouting: true } })], rules: [{ ai: 'codex', keywords: ['docs'] }, { ai: 'claude', keywords: ['docs'] }], text: 'docs' }, { ai: 'claude', rule: 'user-rule' }],
   ['invalid rules are ignored', { rules: [{ ai: 'gpt', keywords: ['x'] }, { ai: 'codex' }, 'nope', null], text: 'x', defaultAi: 'claude' }, { ai: 'claude', rule: 'default' }],
   ['configured default', { defaultAi: 'codex' }, { decision: 'run', ai: 'codex', rule: 'default', confidence: 'default', reason: "Codex: it's your default AI" }],
-  ['a nearly used default steps aside for headroom', { defaultAi: 'codex', usage: { codex: { utilization: 0.82 } } }, { ai: 'claude', rule: 'headroom', reason: 'Claude: Codex is 82% through its usage window' }],
-  ['headroom with both windows known', { usage: { claude: { utilization: 0.2 }, codex: { utilization: 0.6 } } }, { ai: 'claude', rule: 'headroom', reason: 'Claude: most usage left in its window (80% vs 40%)' }],
-  ['headroom within the margin is a tie', { usage: { claude: { utilization: 0.5 }, codex: { utilization: 0.45 } } }, { decision: 'ask', ai: null, rule: 'tie', confidence: 'tie' }],
-  ['no rule, no default, no usage data → ask', {}, { decision: 'ask', ai: null, rule: 'tie', reason: 'Claude or Codex: no rule decides, so pick one' }],
-  ['both nearly used → ask', { defaultAi: 'codex', usage: { claude: { utilization: 0.9 }, codex: { utilization: 0.85 } } }, { decision: 'ask' }],
+  ['a nearly used default steps aside when every window is known', { defaultAi: 'codex', usage: { claude: K(0.3), codex: K(0.82) } }, { ai: 'claude', rule: 'headroom', reason: 'Claude: Codex is 82% through its usage window' }],
+  // Fail safe (plan-orchestrator "O1 fallback"): incomplete usage data never moves a task.
+  ['a nearly used default stays when the other window is unknown', { defaultAi: 'codex', usage: { codex: K(0.82) } }, { ai: 'codex', rule: 'default', reason: "Codex: it's your default AI" }],
+  ['one known near full, the other unknown, no default → the usual pick', { usage: { claude: K(0.95) } }, { ai: 'claude', rule: 'usual', confidence: 'default', reason: 'Claude: the usual pick; no usage data to compare' }],
+  ['malformed utilization counts as unknown', { defaultAi: 'codex', usage: { claude: K(0), codex: K('0.95') } }, { ai: 'codex', rule: 'default' }],
+  ['a percent-scale utilization is unknown, never rescaled', { defaultAi: 'codex', usage: { claude: K(0.1), codex: K(95) } }, { ai: 'codex', rule: 'default' }],
+  ['NaN and negative utilization are unknown', { defaultAi: 'codex', usage: { claude: K(-0.1), codex: K(NaN) } }, { ai: 'codex', rule: 'default' }],
+  ['headroom with both windows known', { usage: { claude: K(0.2), codex: K(0.6) } }, { ai: 'claude', rule: 'headroom', reason: 'Claude: most usage left in its window (80% vs 40%)' }],
+  ['headroom within the margin is a tie', { usage: { claude: K(0.5), codex: K(0.45) } }, { decision: 'ask', ai: null, rule: 'tie', confidence: 'tie' }],
+  ['no rule, no default, no usage data → the usual pick, never a guess', {}, { decision: 'run', ai: 'claude', rule: 'usual', reason: 'Claude: the usual pick; no usage data to compare' }],
+  ['the usual pick skips a filtered AI', { usage: {}, ais: [ai('claude', { loggedIn: false }), ai('codex'), ai('gemini')] }, { ai: 'codex', rule: 'only' }],
+  // The plan's table (plan-orchestrator "O1 fallback"), through R.known inside the router.
+  ['E1: null, "", true, [] and [0.7] are unknown', { defaultAi: 'codex', usage: { claude: K(0.1), codex: K(null) } }, { ai: 'codex', rule: 'default' }],
+  ['E1: an empty string is unknown', { defaultAi: 'codex', usage: { claude: K(0.1), codex: K('') } }, { ai: 'codex', rule: 'default' }],
+  ['E1: true is unknown', { defaultAi: 'codex', usage: { claude: K(0.1), codex: K(true) } }, { ai: 'codex', rule: 'default' }],
+  ['E1: an array is unknown', { defaultAi: 'codex', usage: { claude: K(0.1), codex: K([0.9]) } }, { ai: 'codex', rule: 'default' }],
+  ['E2: an unknown status makes a reading unknown', { defaultAi: 'codex', usage: { claude: K(0.1), codex: K(0.95, { status: 'weird' }) } }, { ai: 'codex', rule: 'default' }],
+  ['no status is unknown', { defaultAi: 'codex', usage: { claude: K(0.1), codex: K(0.95, { status: undefined }) } }, { ai: 'codex', rule: 'default' }],
+  ['no resetsAt is unknown', { defaultAi: 'codex', usage: { claude: K(0.1), codex: K(0.95, { resetsAt: undefined }) } }, { ai: 'codex', rule: 'default' }],
+  ['a past reset is unknown', { defaultAi: 'codex', usage: { claude: K(0.1), codex: K(0.95, { resetsAt: NOW - 1 }) } }, { ai: 'codex', rule: 'default' }],
+  ['a rejected status with a reading counts', { defaultAi: 'codex', usage: { claude: K(0.1), codex: K(0.95, { status: 'rejected' }) } }, { ai: 'claude', rule: 'headroom' }],
+  ['E3: default near full, other known within the margin → the default runs', { defaultAi: 'claude', usage: { claude: K(0.9), codex: K(0.85) } }, { decision: 'run', ai: 'claude', rule: 'default', reason: "Claude: it's your default AI" }],
+  ['E3: default near full, other known with the margin → headroom', { defaultAi: 'claude', usage: { claude: K(0.9), codex: K(0.8) } }, { ai: 'codex', rule: 'headroom', reason: 'Codex: Claude is 90% through its usage window' }],
+  ['no default, both known and equal → ask', { usage: { claude: K(0.4), codex: K(0.4) } }, { decision: 'ask', ai: null, rule: 'tie', reason: 'Claude or Codex: no rule decides, so pick one' }],
+  ['both nearly used within the margin → the default stays', { defaultAi: 'codex', usage: { claude: K(0.9), codex: K(0.85) } }, { ai: 'codex', rule: 'default' }],
   ['ask excludes Codex under auto', { level: 'ask', defaultAi: 'codex' }, { ai: 'claude', rule: 'only' }],
   ['a budget cap excludes Codex under auto', { needsBudget: true, defaultAi: 'codex' }, { ai: 'claude', reason: 'Claude: the only one that can run it; Codex has no native spend cap' }],
   ['a closed spend gate skips that AI', { spend: { codex: true }, defaultAi: 'codex' }, { ai: 'claude', rule: 'only', reason: 'Claude: the only one that can run it; Codex is paused by your spend cap' }],
@@ -77,7 +99,7 @@ test('a usage limit names the reset time', () => {
 });
 
 test('a tie offers the top two, the one with more headroom first', () => {
-  const got = r({ usage: { claude: { utilization: 0.5 }, codex: { utilization: 0.45 } } });
+  const got = r({ usage: { claude: K(0.5), codex: K(0.45) } });
   assert.deepEqual(got.alternatives.slice(0, 2).map((a) => a.ai), ['codex', 'claude']);
   assert.match(got.alternatives[0].reason, /^Codex: /);
 });
@@ -97,7 +119,7 @@ test('a run lists the others with why', () => {
 });
 
 test('pickFromTie: only a choice that was offered', () => {
-  const tie = r({});
+  const tie = r({ usage: { claude: K(0.4), codex: K(0.4) } });
   const picked = R.pickFromTie(tie, 'codex');
   assert.equal(picked.decision, 'run');
   assert.equal(picked.ai, 'codex');
@@ -107,7 +129,7 @@ test('pickFromTie: only a choice that was offered', () => {
 });
 
 test('the router is pure: same input, same output, input untouched', () => {
-  const input = { now: NOW, ais: BOTH, rules: [{ ai: 'codex', keywords: ['refactor'] }], text: 'refactor', usage: { claude: { utilization: 0.3 } } };
+  const input = { now: NOW, ais: BOTH, rules: [{ ai: 'codex', keywords: ['refactor'] }], text: 'refactor', usage: { claude: K(0.3) } };
   const copy = JSON.parse(JSON.stringify(input));
   assert.deepEqual(R.route(input), R.route(input));
   assert.deepEqual(input, copy);
@@ -120,7 +142,7 @@ test('task text is data: it never changes the permission level, and naming an AI
   assert.equal(bad.ai, plain.ai);
   assert.equal(bad.rule, 'default');
   for (const k of Object.keys(bad)) assert.ok(['decision', 'ai', 'rule', 'confidence', 'reason', 'alternatives'].includes(k), `no ${k} in the output`);
-  assert.equal(r({ text: hostile }).decision, 'ask');
+  assert.deepEqual([r({ text: hostile }).ai, r({ text: hostile }).rule], ['claude', 'usual'], 'with no default, the text still names nothing');
 });
 
 test('keyword and glob matching are bounded and treat regex characters literally', () => {
@@ -150,7 +172,7 @@ test('property: reasons are short and name their rule (2000 random inputs)', () 
       installed: rand() < 0.9, loggedIn: pick([true, true, null, false]), startable: rand() < 0.9,
     }));
     const usage = {};
-    for (const id of ['claude', 'codex']) usage[id] = { utilization: maybe(Math.round(rand() * 100) / 100), limitedUntil: maybe(NOW + Math.round((rand() - 0.3) * 1e7)) };
+    for (const id of ['claude', 'codex']) usage[id] = { utilization: maybe(pick([Math.round(rand() * 100) / 100, null, '0.5', true, 95])), status: maybe(pick(['allowed', 'allowed_warning', 'rejected', 'weird'])), resetsAt: maybe(NOW + Math.round((rand() - 0.2) * 1e7)), limitedUntil: maybe(NOW + Math.round((rand() - 0.3) * 1e7)) };
     const input = {
       now: NOW, ais, usage, level: pick(LEVELS), needsBudget: rand() < 0.2, waitForReset: rand() < 0.1,
       want: pick(['auto', 'auto', 'auto', 'claude', 'codex', 'gemini']), repoPreferred: maybe(pick(['claude', 'codex', 'gemini', 'nope'])),
@@ -175,6 +197,17 @@ test('property: reasons are short and name their rule (2000 random inputs)', () 
         assert.ok(got.alternatives.length >= 2);
       }
       if (input.want !== 'auto') assert.equal(got.ai, input.want, 'an explicit choice is never moved');
+      // Fail safe: usage moves a task (headroom, or off the default) only when both windows are known.
+      const known = ['claude', 'codex'].every((id) => R.known(usage[id], NOW) != null);
+      if (!known) assert.notEqual(got.rule, 'headroom', JSON.stringify(input.usage));
+      if (!known && got.decision === 'ask') assert.fail(`asked on incomplete usage: ${JSON.stringify(input.usage)}`);
     }
+  }
+});
+
+test('known(): only a plain 0..1 number with a known status and a reset ahead', () => {
+  assert.equal(R.known(K(0.4), NOW), 0.4);
+  for (const bad of [null, undefined, {}, K(null), K('0.4'), K(true), K([0.4]), K(''), K(NaN), K(-0.1), K(1.01), K(40), K(0.4, { status: 'weird' }), K(0.4, { status: null }), K(0.4, { resetsAt: null }), K(0.4, { resetsAt: '9999999999999' }), K(0.4, { resetsAt: NOW })]) {
+    assert.equal(R.known(bad, NOW), null, JSON.stringify(bad));
   }
 });
