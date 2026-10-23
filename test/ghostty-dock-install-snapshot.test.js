@@ -81,7 +81,7 @@ async function check(srcFile) {
     const src = fs.readFileSync(srcFile, 'utf8');
     const imports = src.match(/require\(\s*['"`](?:node:)?child_process['"`]\s*\)/g) || [];
     if (imports.length !== 1 || !src.includes("const { execFile } = require('node:child_process');")) problems.push('child_process import is not exactly { execFile }');
-    for (const banned of [/process\.env/, /process\s*\[/, /globalThis/, /\bReflect\b/, /\beval\s*\(/, /\bFunction\s*\(/]) if (banned.test(src)) problems.push(`source uses ${banned}`);
+    for (const banned of [/process\.env/, /\benv\b/, /process\s*\[/, /globalThis/, /\bReflect\b/, /\beval\s*\(/, /\bFunction\s*\(/]) if (banned.test(src)) problems.push(`source uses ${banned}`);
   } finally {
     Object.assign(cp, saved);
     for (const k of Object.keys(process.env)) if (!(k in env)) delete process.env[k];
@@ -117,4 +117,19 @@ test('the checks catch the reviewer\'s mutations', async () => {
     const b = await check(run2.file);
     assert.ok(b.some((p) => /one child_process call/.test(p)) && b.some((p) => /exactly \{ execFile \}/.test(p)), JSON.stringify(b));
   } finally { for (const m of [env, run2]) fs.rmSync(m.dir, { recursive: true, force: true }); }
+});
+
+// Reads that dodge `process.env` / `process[`: destructuring, and the process module itself.
+test('the source check also catches env reads that avoid process.env', async () => {
+  const forms = {
+    destructure: "(() => { const { env: e } = process; return e.PLX_CMD; })() || INSTALL_COMMAND",
+    module: "require('node:process').env.PLX_CMD || INSTALL_COMMAND",
+  };
+  const ms = Object.entries(forms).map(([name, expr]) => mutant(name, (s) => s.replace('    INSTALL_COMMAND,\n', `    ${expr},\n`)));
+  try {
+    for (const m of ms) {
+      const p = await check(m.file);
+      assert.ok(p.some((x) => /^source uses .*env/.test(x)), `${m.file}: ${JSON.stringify(p)}`);
+    }
+  } finally { for (const m of ms) fs.rmSync(m.dir, { recursive: true, force: true }); }
 });
