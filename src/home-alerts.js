@@ -21,7 +21,7 @@ const TASK_TEXT_MAX = 20000;
 const AIS = ['claude', 'codex', 'gemini'];
 const project = (cwd) => Organise.projectOf({ cwd: typeof cwd === 'string' ? cwd : null }).heading;
 // Inside a sentence the fallback heading reads badly ("Stuck: Other work silent"), so it becomes a phrase.
-const inSentence = (cwd, none = 'a session') => { const p = project(cwd); return p === Organise.FALLBACK ? none : p; };
+const inSentence = (cwd, none = Organise.SENTENCE_FALLBACK) => { const p = project(cwd); return p === Organise.FALLBACK ? none : p; };
 const mins = (ms) => Math.max(1, Math.round(ms / 60000));
 
 // The handover a resumed task continues from: Plexiform's own doc for that session.

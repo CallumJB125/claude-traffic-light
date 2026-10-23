@@ -701,6 +701,7 @@ test('work-organise: views name a project with projectOf — the folder-leaf cop
     assert.match(src, /projectOf\(/, `${f} names projects with projectOf`);
     assert.doesNotMatch(src, /'(?:Local project|Unknown project|a project|your project|A session|a session)'/, `${f} keeps no fallback of its own`);
   }
+  assert.equal(W.SENTENCE_FALLBACK, 'a session', 'the in-sentence fallback lives here, next to FALLBACK');
 });
 
 test('work-organise: a bare home folder goes from prompts in any form; typed titles keep an ordinary route', () => {

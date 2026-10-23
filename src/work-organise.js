@@ -16,6 +16,8 @@
   const MAX_TITLE = 60;
   const MAX_INPUT = 4000;
   const FALLBACK = 'Other work';
+  // FALLBACK is a heading; inside a sentence ("Stuck: … silent for 7 min") a view says this instead.
+  const SENTENCE_FALLBACK = 'a session';
 
   // heading: a section or status line; label: the short form for a badge, pill or column.
   const BUCKETS = Object.freeze([
@@ -481,7 +483,7 @@
     return { resolve, clear: () => cache.clear(), size: () => cache.size };
   }
 
-  const api = { BUCKETS, FALLBACK, headingOf, MAX_TITLE, bucketOf, projectOf, titleOf, group, createGitInfoResolver, safeText, promptSummary, humaniseBranch };
+  const api = { BUCKETS, FALLBACK, SENTENCE_FALLBACK, headingOf, MAX_TITLE, bucketOf, projectOf, titleOf, group, createGitInfoResolver, safeText, promptSummary, humaniseBranch };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformWorkOrganise = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);
