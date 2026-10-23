@@ -238,6 +238,8 @@ function noticeLine(list) {
 
 // The notice, when the set of waiting notes changed since this session was last told, at a SessionStart, or at
 // the 15-minute refresh; else null. `notified` (main's receipt) never changes the set, so it never re-prints.
+// The receipt is a file any same-user program can write: a forged one can delay the turn notice (never the
+// SessionStart one), not hide the note, which stays waiting until bus_notes reads it.
 function noticeBlock({ adapter, event, self, key, root, now, start }) {
   const list = noticesOf(self);
   const text = noticeLine(list);

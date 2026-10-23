@@ -647,7 +647,9 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     schedule();
   }
   // The hook writes a receipt when it printed a notice (stdout written, not proof anyone read it): those notes
-  // become notified. A forged receipt can only mark them so; the notice stays until bus_notes reads them.
+  // become notified. A forged receipt can only mark them so; the notice stays in the roster until bus_notes reads them.
+  // The same receipt also tells the hook it already printed this set, so a same-user writer that forges it (the version
+  // is a hash of note ids that roster.json holds) can keep the notice off turns; SessionStart still prints it.
   let acking = null;
   function ackNotices(self) {
     if (acking || !busStarted()) return acking;
