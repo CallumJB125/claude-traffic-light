@@ -674,6 +674,15 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   const NOT_BOUND = { reason: 'NOT_BOUND', message: 'Plexiform could not tell which AI session is calling, so it cannot send or read notes for it.' };
   const NOTES_OFF = { reason: 'AWARENESS_OFF', message: 'Your person turned off notes between AI sessions in Plexiform.' };
   const NOTES_HALTED = { reason: 'HALTED', message: 'The agent bus is stopped on this Mac, so notes are held. Your person can resume it from the tray or Sessions.' };
+  // Sessions that have read a note through bus_notes, newest last (at most OWNERS_MAX): their hand-offs carry
+  // after_note, so the run's frame says a note may be behind it (PR #35 review L3). Provenance only, never a refusal.
+  const noteReaders = new Set();
+  function readNote(key) {
+    noteReaders.delete(key);
+    noteReaders.add(key);
+    if (noteReaders.size > OWNERS_MAX) noteReaders.delete(noteReaders.values().next().value);
+  }
+
   // bus_note and bus_notes (/bus ops note and notes): only for a caller verified as a session, never by anything
   // the request says about who it is from. The helper gets arguments main builds.
   async function notesOp(op, args, ident, forward) {
@@ -691,7 +700,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     if (op === 'notes') {
       const r = await forward('notes', { me: { key: b.key }, ...(status ? { status: true } : {}), ...(typeof args.note_id === 'string' && Hook.NOTE_ID.test(args.note_id) ? { note_id: args.note_id } : {}) }, null);
       const read = r && Array.isArray(r.notes) ? r.notes.map((n) => n && n.note_id).filter((id) => typeof id === 'string') : [];
-      if (read.length) { dropNotices(b.key, read); schedule(); }
+      if (read.length) { dropNotices(b.key, read); readNote(b.key); schedule(); }
       log(`[awareness] notes read=${read.length}${r && r.reason ? ` ${String(r.reason).toLowerCase()}` : ''}`);
       return r;
     }
@@ -764,7 +773,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     }
     if (op === 'handoff' || op === 'hello') {
       const b = await bindCaller(ident);
-      if (b.bound) caller = { ...caller, provider: b.provider };
+      if (b.bound) caller = { ...caller, provider: b.provider, ...(op === 'handoff' && noteReaders.has(b.key) ? { after_note: true } : {}) };
     }
     return forward(op, args, caller);
   }

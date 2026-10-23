@@ -1984,7 +1984,8 @@ export class TasksEngine extends EventEmitter {
     if (this.principal(ctx)?.kind === 'relay') throw new ApiError('POLICY_DENIED', 'only the local app can use the agent bus');
     if (!BUS_OPS.includes(op)) throw new ApiError('VALIDATION', 'unknown bus op');
     if (MAIN_ONLY.has(op) && !this.#isMain(ctx)) throw new ApiError('POLICY_DENIED', 'notes come only from Plexiform');
-    const c = caller && typeof caller === 'object' ? { provider: typeof caller.provider === 'string' ? caller.provider.slice(0, 12) : null, cwd: typeof caller.cwd === 'string' && path.isAbsolute(caller.cwd) ? caller.cwd.slice(0, 1024) : null } : null;
+    const c = caller && typeof caller === 'object' ? { provider: typeof caller.provider === 'string' ? caller.provider.slice(0, 12) : null, cwd: typeof caller.cwd === 'string' && path.isAbsolute(caller.cwd) ? caller.cwd.slice(0, 1024) : null,
+      ...(caller.after_note === true ? { after_note: true } : {}) } : null;
     try { return await this.agentBus.op(op, args, c); } catch (e) {
       if (e instanceof BusRefusal) throw new ApiError(['VALIDATION', 'POLICY_DENIED', 'CONFLICT'].includes(e.code) ? e.code : 'INTERNAL', e.message);
       throw e;

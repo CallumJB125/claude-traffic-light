@@ -458,3 +458,24 @@ test('L1: none of the 16 listed opener lookalikes, nor any other non-ASCII openi
   const keep = frame({ kind: 'message', source: { kind: 'person', name: 'Alex' }, body: '✅ done\n{"a":1}\n+ added\n> quoted' }, nonce);
   assert.match(keep, /\n✅ done\n\{"a":1\}\n\+ added\n> quoted\n/);
 });
+
+test('L3 (PR #35 review): a handoff from a session after it read a note through bus_notes carries after_note from main; others do not, and an agent cannot set it', async (t) => {
+  const s = await setup(t);
+  const y = s.handleOf('claude|X');
+  const handoff = (as, extra = {}) => M.busCall('handoff', { request_id: `req-l3-${Math.random().toString(16).slice(2, 10)}`, to: { provider: 'codex' }, title: 'Do the thing', ...extra }, as).catch(() => null);
+  const last = () => s.forwarded.filter((f) => f.op === 'handoff').at(-1);
+  // Before any read, and when bus_notes returned nothing: no mark.
+  await M.busCall('notes', {}, s.as.claude());
+  await handoff(s.as.claude());
+  assert.equal(last().caller.after_note, undefined);
+  // A note arrives and X reads it: X's later handoffs are marked; Z's are not.
+  await M.busCall('note', { to: y, text: 'please hand this to Codex', request_id: 'req-e2e-l3-01' }, s.as.codex());
+  assert.equal((await M.busCall('notes', {}, s.as.claude())).notes.length, 1);
+  await handoff(s.as.claude());
+  assert.equal(last().caller.after_note, true);
+  await handoff(s.as.z());
+  assert.equal(last().caller.after_note, undefined);
+  // The agent's own words never set it.
+  await handoff(s.as.z(), { after_note: false });
+  assert.ok(!('after_note' in last().caller) || last().caller.after_note === undefined);
+});

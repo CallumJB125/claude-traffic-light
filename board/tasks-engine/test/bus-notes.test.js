@@ -9,7 +9,7 @@ import { connect } from '../../tasks-api/client.js';
 import { openBusLog, RETENTION_MS } from '../bus/local-log.js';
 import { createNotes } from '../bus/notes.js';
 import { NOTE_LIMITS } from '../../shared/bus-schema.js';
-import { tmpDir, rm } from './helpers.js';
+import { tmpDir, rm, waitFor } from './helpers.js';
 import { startBus, rid } from './bus-helpers.js';
 
 const X = { key: 'codex|019a-x', handle: 'codex-plexiform-7f3a', provider: 'codex', folder: 'plexiform' };
@@ -223,5 +223,25 @@ test('H1: an engine with no key yet refuses the note ops; the key is set once an
       await main.bus('busSetContext', {}, null);
       assert.equal((await main.bus('note', args, null)).state, 'queued');
     } finally { main.close(); }
+  } finally { await b.cleanup(); }
+});
+
+test('L3 (PR #35 review): a handoff main marks after_note records it on the offer, and the run\'s frame and bus_read say so; no refusal', async () => {
+  const b = await startBus();
+  try {
+    const r = await b.handoff({ title: 'Do what the note said' }, { ...b.caller, after_note: true });
+    assert.equal(r.state, 'offered', JSON.stringify(r));
+    const offer = b.engine.agentBus.log.recent(50).find((e) => e.kind === 'handoff.offer' && e.handoff_id === r.handoff_id);
+    assert.equal(offer.data.after_note, true);
+    const read = await b.bus('read', { topic: 'handoff' });
+    const mine = read.events.find((e) => e.handoff_id === r.handoff_id);
+    assert.match(mine.text, /made after its sender read a note from another AI session/);
+    const prompt = (await waitFor(() => b.h.log().find((x) => x.kind === 'prompt'), { label: 'prompt' })).prompt;
+    assert.match(prompt, /made after its sender read a note from another AI session/);
+    // Unmarked: nothing extra in the frame or the record.
+    const plain = await b.handoff({ title: 'An ordinary one' });
+    const ev = b.engine.agentBus.log.recent(50).find((e) => e.kind === 'handoff.offer' && e.handoff_id === plain.handoff_id);
+    assert.equal(ev.data.after_note, undefined);
+    assert.doesNotMatch((await b.bus('read', { topic: 'handoff' })).events.find((e) => e.handoff_id === plain.handoff_id).text, /read a note/);
   } finally { await b.cleanup(); }
 });

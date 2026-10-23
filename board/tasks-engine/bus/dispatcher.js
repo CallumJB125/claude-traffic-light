@@ -166,7 +166,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       return refusal;
     }
     const ev = envelope({ topic: 'handoff', kind: 'handoff.offer', handoff, request_id: h.request_id, ttlS: h.ttl_s, body: h.brief || null,
-      data: { title: h.title, files: h.files ?? [], branch: h.branch ?? null, requires: { provider: h.to.provider }, budget_usd: h.budget_usd ?? null, reservation } });
+      data: { title: h.title, files: h.files ?? [], branch: h.branch ?? null, requires: { provider: h.to.provider }, budget_usd: h.budget_usd ?? null, reservation, ...(h.after_note ? { after_note: true } : {}) } });
     append(ev, { requestKey: h.requestKey, dedupeKey });
     if (reservation) log.reserve(dayOf(now()), reservation);
     setImmediate(pump);
@@ -177,7 +177,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     const d = ev.data;
     const body = [d.title, ev.body, d.files.length ? `Files: ${d.files.join(', ')}` : '', d.branch ? `Branch: ${d.branch}` : ''].filter(Boolean).join('\n\n');
     const who = { kind: 'session', name: ev.source.tier === 'run_capability' ? 'A Plexiform run' : 'This Mac', provider: ev.source.provider };
-    return frame({ kind: 'handoff', source: who, card_id: ev.card_id, body }, crypto.randomBytes(9).toString('hex'));
+    return frame({ kind: 'handoff', source: who, card_id: ev.card_id, body, afterNote: d.after_note === true }, crypto.randomBytes(9).toString('hex'));
   }
 
   // Claim → engine.createTask. Exactly one start per handoff: the claim CAS hands out one fence.
@@ -365,7 +365,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     return { offset: ev.offset, topic: ev.topic, kind: ev.kind, handoff_id: ev.handoff_id, card_id: ev.card_id, hop: ev.hop, at: ev.created_at,
       from, title: ev.data?.title ?? null,
       ...(result ? { cost_usd: ev.data.cost_usd, cost_basis: ev.data.cost_basis, branch: ev.data.branch } : {}),
-      text: text ? frame({ kind: result ? 'message' : 'handoff', source: who, card_id: ev.card_id, body: text }) : null };
+      text: text ? frame({ kind: result ? 'message' : 'handoff', source: who, card_id: ev.card_id, body: text, afterNote: !result && ev.data?.after_note === true }) : null };
   }
 
   async function op(name, rawArgs = {}, caller = null) {
@@ -397,7 +397,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
         const agent_id = agentFor(provider, repo.root);
         return post({ ...a, requestKey: `${agent_id}|${a.request_id}`, repoRoot: repo.root, brief: a.brief ?? '',
           source: { device_id: deviceId, agent_id, provider, tier: 'local_attested', identity_source: 'local_token' },
-          hop: log.hopOf(await hopDomain(caller), now() - HOUR_MS) + 1, visited: [agent_id] });
+          hop: log.hopOf(await hopDomain(caller), now() - HOUR_MS) + 1, visited: [agent_id], after_note: caller?.after_note === true });
       }
       case 'read': {
         const a = parse(ReadArgs, rawArgs);
