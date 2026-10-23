@@ -388,3 +388,40 @@ test('work-organise: H1 — the prompt is scrubbed once per title', () => {
   titleOf({ firstPrompt: 'Fix the login loop for good' }, { redact });
   assert.equal(calls, 1);
 });
+
+test('work-organise: M1 — a path after any delimiter is removed, and no home folder name is left', () => {
+  const probes = {
+    'see [/Users/sam]': 'see',
+    'log at {/home/sam}': 'log at',
+    'cfg|/etc/shadow': 'cfg',
+    'open ~sam/notes': 'open',
+    'x,/Users/sam/secret': 'x',
+    'a;/Users/sam/b': 'a',
+    'path=(C:\\Users\\sam\\db) ok': 'path= ok',
+    'go to ~sam': 'go to',
+  };
+  for (const [human, want] of Object.entries(probes)) {
+    assert.deepEqual(titleOf({ human }), { title: want, source: 'human' }, human);
+  }
+  assert.deepEqual(titleOf({ firstPrompt: 'fix the bug in [/Users/sam]' }), { title: 'Fix the bug', source: 'prompt' });
+  assert.doesNotMatch(titleOf({ firstPrompt: 'fix the bug in fix/Users/sam' }).title, /Users|sam/, 'a home folder glued to a word goes too');
+  assert.equal(titleOf({ human: 'Set up CI/CD and/or docs' }).title, 'Set up CI/CD and/or docs', 'a slash inside words stays');
+});
+
+test('work-organise: M1 property — typed, card and reported titles, with and without a scrubber, never show a path or the user', () => {
+  const r = rng(424242);
+  for (let i = 0; i < 1500; i++) {
+    const text = randomText(r, 10);
+    for (const source of ['human', 'card', 'reported', 'firstPrompt', 'cronJob', 'project', 'branch']) {
+      for (const opts of [{}, { redact: null }]) {
+        const { title } = titleOf({ [source]: text, provider: 'codex' }, opts);
+        const label = `${source}${opts.redact === null ? ' (renderer)' : ''}: ${JSON.stringify(text)} → ${title}`;
+        assert.ok(Array.from(title).length <= MAX_TITLE, label);
+        assert.ok(!/\/Users\/|\/home\/|[A-Za-z]:\\|\\\\|~\//i.test(title), label);
+        assert.doesNotMatch(title, /(?<![A-Za-z])sam(?![A-Za-z])/i, label);
+        assert.doesNotMatch(title, /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/, label);
+        if (opts.redact !== null) assert.ok(!title.includes('abcdefghijklmnop'), label);
+      }
+    }
+  }
+});

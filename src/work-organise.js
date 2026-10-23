@@ -65,8 +65,15 @@
   const BLOCK = /<([A-Za-z][\w:.-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/g;
   const TAG = /<\/?[A-Za-z][\w:.-]*(?:\s[^<>]*)?\/?>/g;
   const URL_RE = /\b[a-z][a-z0-9+.-]{1,30}:\/\/\S*/gi;
-  // Absolute, home-relative, drive and UNC paths, and dotted relative paths.
-  const PATH_RE = /(?:^|(?<=[\s("'`=:]))(?:~|[A-Za-z]:|\.{1,2})?[\\/](?:[^\s"'`()<>]*)/g;
+  // A path runs to a space, quote or bracket. Home folders, UNC shares and ~ paths go
+  // wherever they are, even glued to a word; any other absolute, drive or dotted path
+  // starts at anything that isn't part of a word (so "CI/CD" and "and/or" stay).
+  const PATH_CHARS = '[^\\s"\'`()<>\\[\\]{}|,;]*';
+  const HOME_RE = new RegExp(`(?:[A-Za-z]:)?[\\\\/]+(?:Users|home)(?:[\\\\/]${PATH_CHARS}|(?![\\w.-]))`, 'g');
+  const UNC_RE = new RegExp(`\\\\\\\\${PATH_CHARS}`, 'g');
+  const TILDE_RE = new RegExp(`~[\\w.-]*[\\\\/]${PATH_CHARS}|(?<![\\w.~%-])~[A-Za-z_][\\w.-]*`, 'g');
+  const PATH_RE = new RegExp(`(?<![\\w.~%-])(?:[A-Za-z]:|\\.{1,2})?[\\\\/]${PATH_CHARS}`, 'g');
+  const stripPaths = (t) => t.replace(HOME_RE, ' ').replace(UNC_RE, ' ').replace(TILDE_RE, ' ').replace(PATH_RE, ' ').replace(REL_PATH, ' ').replace(/[[{(]\s*[\]})]/g, ' ');
   // Relative paths: a word/word token with a file extension or two separators.
   const REL_PATH = /(?<![\w.-])[\w.-]+(?:[\\/][\w.-]+)*[\\/][\w-]+\.[A-Za-z0-9]{1,8}(?![\w.-])|(?<![\w.-])[\w.-]+(?:[\\/][\w.-]+){2,}[\\/]?(?![\w.-])/g;
   const REDACTED = /\[(?:redacted|email|ip|user|host|card|iban|sa-id|ssn|nino|passport)\]|<redacted(?::\w+)?>/i;
@@ -115,10 +122,10 @@
   function prepare(v, redact) {
     const t = normalise(v);
     if (!t.trim() || typeof redact !== 'function') return '';
-    return dropRedacted(stripMarkup(redact(t)).replace(URL_RE, ' ').replace(PATH_RE, ' ').replace(REL_PATH, ' '));
+    return dropRedacted(stripPaths(stripMarkup(redact(t)).replace(URL_RE, ' ')));
   }
   function finish(t, { max = MAX_TITLE, slashes = true } = {}) {
-    const out = (slashes ? t : t.replace(/[\\/]+/g, ' ')).replace(/\s+/g, ' ').trim();
+    const out = (slashes ? t : t.replace(/[\\/]+/g, ' ')).replace(/\s+/g, ' ').replace(/^[\s|,;]+|[\s|,;]+$/g, '');
     return cut(out, max);
   }
 
