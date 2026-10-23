@@ -708,3 +708,26 @@ test('PR4 main.js: native confirm with Cancel default, reveal in Finder, and the
   assert.match(src, /else if \(id === 'agents-review'\) AgentsFind\.openMine\(\);/);
   assert.equal(require('../src/health.js').FIXES['agents-review'], 'Review on Find agents');
 });
+
+// L1 keeps safeStorage's first answer for the run. If the keychain goes away
+// after that, the write itself still fails closed: sealing the new key throws,
+// so no key, backup, ledger or agent file is written.
+test('PR4 L1: sealing that throws after the cached check refuses every write and leaves nothing behind', async () => {
+  const safe = fakeSafe();
+  const s = setup({ safe });
+  const dir = withAgents(s);
+  assert.equal((await s.call('agents:list')).writes.ok, true, 'the cached answer says writes are on');
+  safe.encryptString = () => { throw new Error('keychain gone'); };
+  const before = fs.readdirSync(dir).map((n) => `${n}:${sha(fs.readFileSync(path.join(dir, n)))}`);
+  for (const [ch, ...a] of [['agents:adopt', ['frontend-developer.md']], ['agents:add', RO.id, sha0, ['claude']], ['agents:update', FE.id, sha0], ['agents:remove', FE.id], ['agents:stop-managing'], ['agents:undo-op', '00000000-0000-4000-8000-000000000000']]) {
+    s.state.now += COOLDOWN_GAP;
+    const r = await s.call(ch, ...a);
+    assert.equal(r.ok, false, ch);
+  }
+  assert.equal((await s.call('agents:adopt', ['frontend-developer.md'])).code, 'no-key', 'refused after the dialog, at the key');
+  assert.equal(fs.existsSync(path.join(s.data, 'agent-installs.key')), false);
+  assert.deepEqual(fs.readdirSync(s.data).filter((n) => n.startsWith('agent-')), [], 'no key, ledger, backup or originals');
+  assert.deepEqual(fs.readdirSync(dir).map((n) => `${n}:${sha(fs.readFileSync(path.join(dir, n)))}`), before);
+  assert.equal(fs.existsSync(path.join(s.home, '.codex')), false);
+});
+const COOLDOWN_GAP = 10_001;
