@@ -723,7 +723,7 @@ test('review #2 (live): mcp-server.js answers a tools/call written to its stdin,
   const hits = [];
   const srv = http.createServer((req, res) => { let b = ''; req.on('data', (d) => { b += d; }); req.on('end', () => { hits.push([req.url, b]); res.setHeader('content-type', 'application/json'); res.end('{"peers":[]}'); }); });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
-  t.after(() => srv.close());
+  t.after(() => { srv.closeAllConnections(); srv.close(); });
   fs.writeFileSync(path.join(root, 'port'), String(srv.address().port));
   fs.writeFileSync(path.join(root, 'token'), 'x'.repeat(64), { mode: 0o600 });
   const script = path.join(__dirname, '..', 'mcp-server.js');
@@ -754,7 +754,8 @@ test('mcp-server.js turns off the SIGUSR1 inspector, so no other program can run
   let err = '';
   kid.stderr.on('data', (d) => { err += d; });
   kid.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } } })}\n`);
-  await new Promise((resolve) => kid.stdout.once('data', resolve));
+  // Bounded: a server that never answers must fail this test, not keep it (and the run) alive for ever.
+  await Promise.race([new Promise((resolve) => kid.stdout.once('data', resolve)), new Promise((_, reject) => { const tm = setTimeout(() => reject(new Error('no initialize answer in 15 s')), 15000); tm.unref(); })]);
   kid.kill('SIGUSR1');
   await new Promise((r) => setTimeout(r, 700));
   assert.ok(!/Debugger listening/.test(err), 'no inspector started');

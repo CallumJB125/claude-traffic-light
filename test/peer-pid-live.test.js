@@ -11,6 +11,8 @@ const http = require('node:http');
 const { spawn, execFile } = require('node:child_process');
 const PeerPid = require('../src/peer-pid.js');
 
+// A wait on a child that never comes would keep the test (and its listening server) alive for ever: bounded.
+const within = (p, ms, what) => Promise.race([p, new Promise((_, reject) => { const t = setTimeout(() => reject(new Error(`${what}: nothing in ${ms} ms`)), ms); t.unref(); })]);
 const run = (file, args) => new Promise((resolve, reject) => execFile(file, args, { encoding: 'utf8', timeout: 5000 }, (e, out) => (e ? reject(e) : resolve(out))));
 
 test('live: peer pid, parent and stdio peering from lsof and ps', { skip: process.platform !== 'darwin' && 'macOS only' }, async (t) => {
@@ -32,7 +34,7 @@ test('live: peer pid, parent and stdio peering from lsof and ps', { skip: proces
   t.after(() => { try { process.kill(parent.pid); } catch {} for (const p of kids) { try { process.kill(p); } catch {} } server.closeAllConnections(); server.close(); });
   let kids = [];
   const P = PeerPid.create({ run, platform: 'darwin' });
-  const pids = await new Promise((resolve) => parent.stdout.once('data', (d) => resolve(JSON.parse(String(d)))));
+  const pids = JSON.parse(String(await within(new Promise((resolve) => parent.stdout.once('data', resolve)), 15000, 'the parent\'s pids')));
   kids = [pids.stdio, pids.shell, pids.dup];
   for (let i = 0; i < 100 && seen.size < 4; i += 1) await new Promise((r) => setTimeout(r, 50));
   assert.equal(seen.size, 4, 'all four connected');
@@ -83,7 +85,7 @@ test('live: a process with an inspector listening is seen as listening; one that
   const plain = spawn(process.execPath, ['-e', dial], { stdio: ['pipe', 'pipe', 'ignore'] });
   const inspected = spawn(process.execPath, ['--inspect=127.0.0.1:0', '-e', dial], { stdio: ['pipe', 'pipe', 'pipe'] });
   t.after(() => { plain.kill('SIGKILL'); inspected.kill('SIGKILL'); server.closeAllConnections(); server.close(); });
-  await new Promise((resolve) => inspected.stderr.once('data', resolve));
+  await within(new Promise((resolve) => inspected.stderr.once('data', resolve)), 15000, 'the inspector');
   await new Promise((r) => setTimeout(r, 300));
   const P = PeerPid.create({ run, platform: 'darwin' });
   assert.equal(PeerPid.listening(PeerPid.parseFds(await P.lsof(inspected.pid))), true);
