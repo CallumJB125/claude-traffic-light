@@ -20,7 +20,7 @@
 
   const state = {
     list: null, index: [], categories: {}, catalogSha: null, error: null, writes: null,
-    query: '', filters: { category: '', source: '', tools: '', mine: false },
+    query: '', filters: { category: '', source: '', tools: '', works: '', mine: false },
     shown: PAGE, results: [], added: new Map(), opener: null,
   };
 
@@ -64,7 +64,7 @@
   function run() {
     const f = state.filters;
     const only = f.mine ? new Set(state.added.keys()) : null;
-    state.results = Search.search(state.index, state.query, { category: f.category || null, source: f.source || null, tools: f.tools || null, only });
+    state.results = Search.search(state.index, state.query, { category: f.category || null, source: f.source || null, tools: f.tools || null, works: f.works || null, only });
     state.shown = PAGE;
     render();
   }
@@ -96,11 +96,13 @@
     input.addEventListener('keydown', (e) => { if (e.key === 'Escape' && input.value) { e.preventDefault(); input.value = ''; state.query = ''; run(); focusSearch(); } });
     const cats = Object.keys(state.categories).sort((a, b) => categoryLabel(a).localeCompare(categoryLabel(b)));
     const sources = (state.list.builtFrom || []).map((s) => s.source);
+    const worksTools = (Array.isArray(state.list.tools) ? state.list.tools : []).filter((t) => t && typeof t.platform === 'string' && typeof t.label === 'string');
     return el('div', { class: 'af-controls', role: 'search' },
       input,
       select('af-category', 'Category', 'All categories', cats.map((c) => [c, categoryLabel(c)]), 'category'),
       select('af-source', 'Source', 'All sources', sources.map((s) => [s, sourceLabel(s)]), 'source'),
       select('af-tools', 'Tools it gets', 'Any tools', [['every', 'Every tool'], ['limited', 'Limited tools']], 'tools'),
+      worksTools.length ? select('af-works', 'Works with', 'Works with any tool', worksTools.map((t) => [t.platform, `Works with ${t.label}`]), 'works') : null,
       el('button', { type: 'button', class: 'af-chip', 'aria-pressed': String(state.filters.mine), onclick: () => { state.filters.mine = !state.filters.mine; run(); }, text: 'Added by me' }));
   }
 
@@ -127,7 +129,7 @@
     if (!state.results.length) {
       return el('div', { class: 'af-empty' },
         el('p', { text: state.filters.mine && !state.added.size ? 'You haven\'t added any agents yet.' : 'No agents match. Try "react", "security" or a category.' }),
-        el('button', { type: 'button', class: 'af-btn', onclick: () => { state.query = ''; state.filters = { category: '', source: '', tools: '', mine: false }; run(); focusSearch(); }, text: 'Clear search' }));
+        el('button', { type: 'button', class: 'af-btn', onclick: () => { state.query = ''; state.filters = { category: '', source: '', tools: '', works: '', mine: false }; run(); focusSearch(); }, text: 'Clear search' }));
     }
     const list = el('ul', { class: 'af-grid', id: 'af-grid', 'aria-label': 'Agents' });
     for (const a of state.results.slice(0, state.shown)) list.append(card(a));

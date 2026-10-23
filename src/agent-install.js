@@ -72,7 +72,7 @@ function ledgerValidator(targets, home) {
     && hexOrNull(c.before) && hexOrNull(c.after) && (c.prevFileSha256 === undefined || HEX64.test(c.prevFileSha256))
     && (c.owned === undefined || ownedOk(keyOfRel(c.platform, c.rel), c.owned));
   const opOk = (op) => isObject(op) && typeof op.id === 'string' && /^[\w-]{1,64}$/.test(op.id) && OP_KINDS.has(op.kind)
-    && Array.isArray(op.changes) && op.changes.length <= 64 && op.changes.every((c) => changeOk(op.kind, c))
+    && Array.isArray(op.changes) && op.changes.length <= maxChanges(op.kind) && op.changes.every((c) => changeOk(op.kind, c))
     && (op.kind !== 'add-project' || (op.changes.length === 1 && projectOk(op.project)));
   return {
     ownedOk, opOk, projectOk,
@@ -84,6 +84,10 @@ function ledgerValidator(targets, home) {
   };
 }
 const keyOfRel = (platform, rel) => `${platform}:${rel}`;
+// An add, update or remove touches one file per platform. Adopt and its
+// release cover a whole ~/.claude/agents folder, so a cap of 64 there dropped
+// the op on the next read and its Undo with it (PR 4 fixture: 122 matches).
+const maxChanges = (kind) => (kind === 'adopt' || kind === 'release' ? MAX_ADOPT_SCAN : 64);
 
 // Every owned entry and op carries an HMAC-SHA256 under a per-install key that
 // main keeps sealed by safeStorage (src/agent-install-key.js), so a program
@@ -467,18 +471,40 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     // could follow a link) and copies the entries into it.
     fsApi.mkdirSync(dest, { mode: 0o700 });
     const walk = (a, b) => {
+      // The same names on both sides: a copy with an extra entry is not the folder.
+      if (fsApi.readdirSync(a).sort().join('\0') !== fsApi.readdirSync(b).sort().join('\0')) throw new Error('backup mismatch');
       for (const e of fsApi.readdirSync(a, { withFileTypes: true })) {
         const pa = path.join(a, e.name), pb = path.join(b, e.name);
         const sa = fsApi.lstatSync(pa), sb = fsApi.lstatSync(pb);
+        if ((sa.mode & 0o7777) !== (sb.mode & 0o7777) && !sa.isSymbolicLink()) throw new Error('backup mismatch');
         if (sa.isSymbolicLink()) { if (!sb.isSymbolicLink() || fsApi.readlinkSync(pa) !== fsApi.readlinkSync(pb)) throw new Error('backup mismatch'); }
         else if (sa.isDirectory()) { if (sb.isSymbolicLink() || !sb.isDirectory()) throw new Error('backup mismatch'); walk(pa, pb); }
         else if (sa.isFile()) { if (sb.isSymbolicLink() || !sb.isFile() || sha(fsApi.readFileSync(pa)) !== sha(fsApi.readFileSync(pb))) throw new Error('backup mismatch'); }
       }
     };
+    // cpSync rounds a file's times, skips a link's, and a folder's change as
+    // its copy fills; set every entry's from the source, deepest first, so the
+    // copy is the folder exactly (scripts/agents-fingerprint.js). lutimes never
+    // follows a link, and the copy's entries are all checked to be no links
+    // where the source has none.
+    const times = (a, b) => {
+      for (const e of fsApi.readdirSync(a, { withFileTypes: true })) {
+        const pa = path.join(a, e.name), pb = path.join(b, e.name), st = fsApi.lstatSync(pa);
+        if (st.isDirectory() && !st.isSymbolicLink()) times(pa, pb);
+        fsApi.lutimesSync(pb, st.atimeMs / 1000, st.mtimeMs / 1000);
+      }
+    };
     try {
-      for (const n of fsApi.readdirSync(src).sort()) fsApi.cpSync(path.join(src, n), path.join(dest, n), { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true, verbatimSymlinks: true, dereference: false });
+      for (const n of fsApi.readdirSync(src).sort()) {
+        const from = path.join(src, n), to = path.join(dest, n);
+        // cpSync stats a top-level entry through a link (a dangling one throws);
+        // a link is copied as a link, never followed.
+        if (fsApi.lstatSync(from).isSymbolicLink()) fsApi.symlinkSync(fsApi.readlinkSync(from), to);
+        else fsApi.cpSync(from, to, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true, verbatimSymlinks: true, dereference: false });
+      }
       if (pin() !== pinned || !realDir(dest)) throw new Error('moved');
       walk(src, dest);
+      times(src, dest);
       if (pin() !== pinned) throw new Error('moved');
     } catch (err) {
       if (realDir(dest)) fsApi.rmSync(dest, { recursive: true, force: true });
@@ -536,7 +562,7 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
   function stopManaging() {
     const ledger = readLedger();
     const changes = [];
-    for (const [k, o] of Object.entries(ledger.owned)) if (o.how === 'adopted') { delete ledger.owned[k]; changes.push({ platform: o.platform, rel: o.rel, before: o.sha, after: o.sha, owned: o }); }
+    for (const [k, o] of Object.entries(ledger.owned)) if (o.how === 'adopted' && changes.length < MAX_ADOPT_SCAN) { delete ledger.owned[k]; changes.push({ platform: o.platform, rel: o.rel, before: o.sha, after: o.sha, owned: o }); }
     if (!changes.length) return { ok: true, opId: null, released: [] };
     const op = { id: randomUUID(), kind: 'release', at: new Date(now()).toISOString(), changes };
     ledger.ops.push(op);
@@ -663,6 +689,21 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
   return { platformsFor, preview, add, update, remove, adoptable, adopt, stopManaging, undo, status, addToProject, undoProject, ledgerPath };
 }
 
+/**
+ * The user-scope platforms an agent can be added to at all: its settings pass
+ * frontmatterAllowed and the platform's renderer accepts it. Pure: reads no
+ * file, so the page can filter by it before anything is installed.
+ */
+function worksWith(agent, targets = TARGETS) {
+  if (!frontmatterAllowed(agent.raw)) return [];
+  const out = [];
+  for (const t of targets) {
+    if (t.id === 'cursor-project' || !t.verified) continue;
+    try { if (t.render(agent, {}).ok) out.push(t.id); } catch { /* a renderer that throws counts as "no" */ }
+  }
+  return out;
+}
+
 // For Health: what the ledger says Plexiform manages, checked against disk.
 // Needs no catalogue. null when Find agents was never used.
 // Without the key nothing can be verified, so Health says nothing.
@@ -694,4 +735,4 @@ function ledgerHealth({ home, dataRoot, ledgerKey, fsApi = fs }) {
   return { status: broken ? 'fail' : modified || missing ? 'warn' : 'ok', detail: `${parts.join('; ')}.`, next: modified || missing || broken ? 'Review on Find agents.' : undefined };
 }
 
-module.exports = { createAgentInstaller, ledgerHealth, signLedger, LEDGER_FILE };
+module.exports = { createAgentInstaller, ledgerHealth, signLedger, worksWith, LEDGER_FILE };

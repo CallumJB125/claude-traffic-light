@@ -127,6 +127,41 @@ test('list, detail, targets and status never create the key or call the keychain
   assert.equal(s.key.cached(), null, 'Health sees no key');
 });
 
+test('PR4 Works with: list gives each agent the platforms it renders for, and the tools found here', async () => {
+  const s = setup();
+  const list = await s.call('agents:list');
+  const byId = new Map(list.agents.map((a) => [a.id, a.works]));
+  assert.deepEqual(byId.get(FE.id), ['claude', 'codex', 'gemini', 'copilot', 'opencode']);
+  assert.ok(!byId.get(RO.id).includes('codex'), 'Codex cannot keep a read-only agent');
+  assert.deepEqual(list.tools, [{ platform: 'claude', label: 'Claude Code' }, { platform: 'codex', label: 'Codex' }, { platform: 'gemini', label: 'Gemini CLI' }]);
+  assertClean(list, bannedFor(s));
+});
+
+test('PR4 Works with: an agent with settings Plexiform refuses works with nothing; worked out once per catalogue', async () => {
+  const { worksWith } = require('../src/agent-install.js');
+  const bad = agentOf('agency/hooked', 'Hooked');
+  bad.raw = bad.raw.replace('---\n#', 'hooks: x\n---\n#');
+  assert.deepEqual(worksWith(bad), []);
+  let renders = 0;
+  const T = require('../src/agent-install/targets/index.js').TARGETS.map((t) => ({ ...t, render: (...a) => { renders++; return t.render(...a); } }));
+  assert.equal(worksWith(FE, T).length, 5, 'cursor-project is never a Works with choice');
+  renders = 0;
+  const handlers = new Map();
+  const c = catalogOf();
+  Main.register({ ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) }, allowed: () => true, discoverAllowed: () => true, pageContents: () => null, catalog: () => c, keyStore: createLedgerKeyStore({ file: path.join(tmp(), 'k'), safeStorage: fakeSafe() }), installer: () => null, planner: () => null, tools: () => [], demo: { active: () => false }, pickFolder: () => null, home: tmp(), dataRoot: tmp(), openTools() {}, openFindAgents() {}, targets: T });
+  for (let i = 0; i < 3; i++) assert.equal((await handlers.get('agents:list')({})).ok, true);
+  assert.equal(renders, 2 * 5, 'two agents × five platforms, once');
+});
+
+test('PR4 Works with over the shipped catalogue costs under 300 ms of CPU', () => {
+  const { worksWith } = require('../src/agent-install.js');
+  const c = require('../src/agent-catalog.js').shipped();
+  const t0 = process.cpuUsage();
+  for (const a of c.catalog.agents) worksWith(a);
+  const d = process.cpuUsage(t0);
+  assert.ok((d.user + d.system) / 1000 < 300, `${(d.user + d.system) / 1000} ms`);
+});
+
 test('detail: unknown, overlong and non-string ids are refused; the URL is built in main', async () => {
   const s = setup();
   for (const id of ['nope/x', 'x'.repeat(201), 42, null, { id: FE.id }]) assert.equal((await s.call('agents:detail', id)).ok, false);

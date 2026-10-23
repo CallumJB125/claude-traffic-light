@@ -35,7 +35,7 @@
     return best;
   }
 
-  // filters: { category, source, tools: 'every'|'limited', only: Set<id> }.
+  // filters: { category, source, tools: 'every'|'limited', works: platform id, only: Set<id> }.
   // Duplicates across sources show once (the catalogue's `primary`) unless a
   // source is picked, which lists that source's own copy.
   function passes(a, f) {
@@ -43,6 +43,7 @@
     if (f.source ? a.source !== f.source : a.primary === false) return false;
     if (f.tools === 'every' && !a.everyTool) return false;
     if (f.tools === 'limited' && a.everyTool) return false;
+    if (f.works && !(Array.isArray(a.works) && a.works.includes(f.works))) return false;
     if (f.only && !f.only.has(a.id)) return false;
     return true;
   }

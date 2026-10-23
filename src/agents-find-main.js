@@ -8,6 +8,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { summary } = require('./agent-catalog.js');
+const { worksWith } = require('./agent-install.js');
 
 const CHANNELS = Object.freeze(['agents:list', 'agents:detail', 'agents:targets', 'agents:add', 'agents:undo', 'agents:status', 'agents:add-to-project', 'agents:undo-project', 'agents:open-tools', 'discover:open-find-agents']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -23,10 +24,11 @@ const isId = (s) => typeof s === 'string' && s.length > 0 && s.length <= 200;
  * deps: { ipcMain, allowed(e), discoverAllowed(e), pageContents(), catalog(),
  *   keyStore (a createLedgerKeyStore function with .peek/.cached/.available),
  *   installer(key), planner(), tools(), demo: { active() }, pickFolder(sender),
- *   home, dataRoot, openTools(), openFindAgents(), log, fsApi }
+ *   home, dataRoot, openTools(), openFindAgents(), log, fsApi,
+ *   targets (defaults to the shipped install targets) }
  */
 function register(deps) {
-  const { ipcMain, allowed, discoverAllowed, pageContents, catalog, keyStore, installer, planner, tools, demo, pickFolder, home, dataRoot, openTools, openFindAgents, log = () => {}, fsApi = fs } = deps;
+  const { ipcMain, allowed, discoverAllowed, pageContents, catalog, keyStore, installer, planner, tools, demo, pickFolder, home, dataRoot, openTools, openFindAgents, log = () => {}, fsApi = fs, targets } = deps;
   // Undo is offered only for clicks made in this run; opId → { kind, root }.
   const issued = new Map();
   let busy = false;
@@ -42,6 +44,13 @@ function register(deps) {
     });
   }
   const page = (ch, fn) => handle(ch, allowed, fn);
+
+  // "Works with" per agent, worked out once per catalogue: 713 × 5 pure renders.
+  let works = null;
+  function worksFor(c) {
+    if (works?.sha !== c.sha256) works = { sha: c.sha256, byId: new Map(c.catalog.agents.map((a) => [a.id, worksWith(a, targets)])) };
+    return works.byId;
+  }
 
   function cat() {
     const c = catalog();
@@ -93,7 +102,9 @@ function register(deps) {
     categories: c.catalog.categories,
     builtFrom: c.catalog.sources.map((s) => ({ source: s.id, name: s.name, license: s.license, copyright: s.copyright, url: s.url, sha: s.sha })),
     writes: writesState(),
-    agents: c.catalog.agents.map(summary),
+    agents: c.catalog.agents.map((a) => ({ ...summary(a), works: worksFor(c).get(a.id) })),
+    // The "Works with" choices: user-scope tools found on this computer.
+    tools: platformRows(c).filter(pickable).map((p) => ({ platform: p.platform, label: p.label })),
   })));
 
   page('agents:detail', withCatalog((c, _e, agentId) => {

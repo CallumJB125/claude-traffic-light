@@ -84,6 +84,24 @@ test('filters: category, source, tools, only; duplicates show once unless a sour
   assert.deepEqual(ids('', { only: new Set(['0xfurai/sql-expert']) }), ['0xfurai/sql-expert']);
 });
 
+test('PR4 Works with: a platform filter keeps only agents that render for it, from the list\'s works field', () => {
+  const { worksWith } = require('../src/agent-install.js');
+  const withWorks = Search.buildIndex(shipped.catalog.agents.map((a) => ({ ...Catalog.summary(a), works: worksWith(a) })));
+  const codex = Search.search(withWorks, '', { works: 'codex' }).map((a) => a.id);
+  assert.ok(codex.length > 0);
+  assert.ok(!codex.includes('voltagent/ab-test-analysis'), 'read-only agents are not offered for Codex');
+  assert.ok(Search.search(withWorks, '', { works: 'claude' }).map((a) => a.id).includes('voltagent/ab-test-analysis'));
+  assert.deepEqual(Search.search(index, '', { works: 'codex' }), [], 'an agent without a works list matches no platform');
+  assert.deepEqual(Search.search(withWorks, '', { works: 'nope' }), []);
+});
+
+test('the page offers Works with only for the tools the list names, and Clear search resets it', () => {
+  const view = fs.readFileSync(path.join(__dirname, '..', 'agents-find-view.js'), 'utf8');
+  assert.match(view, /worksTools\.length \? select\('af-works'/);
+  assert.match(view, /works: f\.works \|\| null/);
+  for (const m of view.matchAll(/filters = \{[^}]*\}/g)) assert.match(m[0], /works: ''/);
+});
+
 test('queries are capped: terms, length, and a regex-looking query is just text', () => {
   assert.equal(Search.terms('a b c d e f g h i j k').length, Search.MAX_TERMS);
   assert.ok(Search.terms('x'.repeat(10000)).every((t) => t.length <= 64));
