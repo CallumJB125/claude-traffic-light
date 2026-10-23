@@ -292,3 +292,22 @@ test('a reported task title made of a tagged system block never becomes the card
  assert.equal(r.calls[0].body.title,'Codex · app');
  assert.equal(observation(event({taskTitle:'<system-reminder>x</system-reminder> Fix the login loop'})).title,'Fix the login loop');
 });
+
+// Review L2: the live leak. A reported task title went to the team hub through clean()
+// alone, so IPs, emails, host names and phone numbers reached every team member.
+const PII_TITLE='call +27 82 555 0199 about db1.internal.example.com fe80::1ff:fe23:4567:890a sam@acme.io 10.0.0.5';
+const PII_RAW=['+27 82 555 0199','db1.internal.example.com','fe80::1ff:fe23:4567:890a','sam@acme.io','10.0.0.5'];
+test('team card titles are scrubbed before they leave: first send, idle close and Make a card',async t=>{
+ const r=rig(t);await r.router.observe([event({taskTitle:PII_TITLE})]);
+ r.advance(31000);await r.router.observe([]);
+ assert.equal((await r.router.captureOnce(event({sessionId:'thread-2',taskTitle:PII_TITLE}),routeKey(R))).destination.kind,'team');
+ const team=r.calls.filter(c=>c.kind==='team');
+ assert.ok(team.length>=3,`three team sends, got ${team.length}`);
+ assert.ok(team.some(c=>c.body.status==='idle'),'the idle close went out');
+ for(const c of team){for(const raw of PII_RAW)assert.ok(!c.body.title.includes(raw),`${raw} in ${c.body.title}`);
+  for(const mark of ['[phone]','[host]','[ip]','[email]'])assert.ok(c.body.title.includes(mark),`${mark} missing from ${c.body.title}`);}
+});
+test('a local (My board) card keeps its title as reported',async t=>{
+ const r=rig(t,{resolveRepo:async()=>null});await r.router.observe([event({taskTitle:PII_TITLE})]);
+ assert.equal(r.calls[0].kind,'local');assert.equal(r.calls[0].body.title,PII_TITLE);
+});

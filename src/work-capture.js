@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { toolEnv } = require('./tool-path');
 const { redactSecrets } = require('./secret-patterns');
+const { scrubTitle } = require('./scrub');
 const { withDeadline, GRACE_MS } = require('./bounded-io');
 const WorkRecord = require('./work-record');
 const { untag } = require('../hooks/handover-tap.js');
@@ -24,6 +25,9 @@ const BACKFILL_DELAY_MS = 20000;
 const BACKFILL_EVERY_MS = 60000;
 // The title capture used before WorkRecords: the AI's name and the folder's.
 const FALLBACK_TITLE = /^(?:Claude(?: Code)?|Codex|Cursor|Gemini|Hermes) · /;
+// Every title bound for a team hub, whatever made it (review L2): clean() only removes
+// secrets, so IPs, emails, host names and phone numbers went to the whole team.
+const hubTitle = (text) => scrubTitle(text).trim().slice(0,200);
 const clean = (text,max) => redactSecrets(String(text??'').slice(0,max*2),{docExamples:false})
   .replace(/\b(?:bdt|brt|btk|btr|inv|clinv|pfi|pfm|pfr|pfc|pfcode)_[A-Za-z0-9_-]{43}\b/g,'<redacted:token>')
   .replace(/\b(?:brt1|bmr1)\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'<redacted:token>')
@@ -208,7 +212,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       if(fingerprint){e.attempt_fingerprint=fingerprint;e.last_seen=now();}},ACK_RESERVE_BYTES))return;
     if(!live()||!force&&raw&&!fresh(raw))return;
     let result;
-    try {result=entry.destination.kind==='team'?await sendTeam(entry.destination,body):await sendLocal(body);}
+    try {result=entry.destination.kind==='team'?await sendTeam(entry.destination,{...body,title:hubTitle(body.title)}):await sendLocal(body);}
     catch {log('automatic card update deferred');return;}
     if(!result?.ok){log('automatic card update deferred');return;}
     const before=JSON.stringify([state.tasks[key].card_id,state.tasks[key].status,state.tasks[key].title,state.tasks[key].untracked]);
@@ -432,4 +436,4 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     backfill,startBackfill,
     async stop(){stopped=true;latest=null;if(backfillTimer){clearTimeout(backfillTimer);backfillTimer=null;}await active;},idle:()=>active??Promise.resolve()};
 }
-module.exports={createWorkCapture,observation,isBackgroundSession,BACKGROUND_TITLE,routeFor,repoFor,clean,phase,routeKey,prBody};
+module.exports={createWorkCapture,observation,isBackgroundSession,BACKGROUND_TITLE,routeFor,repoFor,clean,hubTitle,phase,routeKey,prBody};
