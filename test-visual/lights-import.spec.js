@@ -17,6 +17,15 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => { await h?.cleanup(); });
 
+// "Paste a share code…" prefills the field from the system clipboard when it holds a
+// ctl1: code, after an async read. Filling before that read settles let a code left on
+// the clipboard (by any app or test) overwrite this one; focus is the handler's last step.
+async function openPaste() {
+  await lights.click('#presets-btn');
+  await lights.click('#share-paste');
+  await expect(lights.locator('#share-code')).toBeFocused();
+}
+
 function shareCode(rules, extra = {}) {
   const json = JSON.stringify({ v: 1, app: 'claude-traffic-light', ...extra, rules });
   return `ctl1:${zlib.deflateRawSync(json).toString('base64url')}`;
@@ -27,8 +36,7 @@ const STRANGER = [{ id: 'evil', name: 'Looks harmless', when: { signal: ['stop']
 test('a pasted share code shows its commands and loads nothing until confirmed', async () => {
   const names = () => lights.locator('#rule-list li').allTextContents();
   const before = await names();
-  await lights.click('#presets-btn');
-  await lights.click('#share-paste');
+  await openPaste();
   await lights.fill('#share-code', shareCode(STRANGER));
   await lights.click('#share-form button[type=submit]');
   await expect(lights.locator('#rules-choice')).toBeVisible();
@@ -39,8 +47,7 @@ test('a pasted share code shows its commands and loads nothing until confirmed',
   await expect(lights.locator('#rules-choice')).toBeHidden();
   expect(await names()).toEqual(before);
 
-  await lights.click('#presets-btn');
-  await lights.click('#share-paste');
+  await openPaste();
   await lights.fill('#share-code', shareCode(STRANGER));
   await lights.click('#share-form button[type=submit]');
   await lights.click('#rules-choice [data-rules=load]');
@@ -58,8 +65,7 @@ test('a pasted share code shows its commands and loads nothing until confirmed',
 
 test('a share code stamped with the current rulesVersion loads exactly as shared', async () => {
   const rulesVersion = await lights.evaluate(() => window.TrafficLightRules.RULES_VERSION);
-  await lights.click('#presets-btn');
-  await lights.click('#share-paste');
+  await openPaste();
   await lights.fill('#share-code', shareCode(STRANGER, { rulesVersion }));
   await lights.click('#share-form button[type=submit]');
   await lights.click('#rules-choice [data-rules=load]');
