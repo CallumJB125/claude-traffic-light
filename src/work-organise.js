@@ -115,12 +115,9 @@
   let defaultRedact = null;
   if (typeof module === 'object' && module.exports && typeof require === 'function') {
     try {
-      const { redactSecretsPass, PATTERNS } = require('./scrub.js');
-      // TODO(organised views PR 5 / PR 10): titles are local display text today. Before any
-      // title leaves the machine (share_summaries cards on the hub, Pi title suggestions), also
-      // scrub IPv6 addresses (PATTERNS.IPV6), internal host names (BARE_HOST not on the keep
-      // list) and phone numbers, which this pass lets through (review L2).
-      defaultRedact = (t) => redactSecretsPass(t).replace(PATTERNS.EMAIL, '[email]').replace(PATTERNS.IPV4, '[ip]');
+      // The same scrub as a title bound for a team hub (review L2), so a title made here
+      // can be shared later (PR 5 cards, PR 10 suggestions) without a second pass.
+      defaultRedact = require('./scrub.js').scrubTitle;
     } catch { defaultRedact = null; }
   }
 
