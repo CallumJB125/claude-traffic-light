@@ -814,7 +814,13 @@
         <option value="off">Off</option>
       </select>
     </label>
-    <div class="hint">Ghostty Dock is a third-party terminal app (github.com/andrewbakercloudscale/ghossty-dock) with no license; Plexiform does not include any of it. When you have installed it yourself, clicking one of its sessions goes to that exact tab, and a task you take over can open in it. Plexiform only ever asks it to focus a tab or open a new one, never to type, press keys or read the screen. Whether it was found shows under Health.</div>
+    <div class="row" id="ghostty-dock-actions">
+      <button type="button" class="secondary" id="ghostty-dock-install" hidden>Install Ghostty Dock…</button>
+      <button type="button" class="secondary" id="ghostty-dock-recheck" hidden>Check again</button>
+      <button type="button" class="secondary" id="ghostty-dock-github">View on GitHub</button>
+    </div>
+    <div class="hint" id="ghostty-dock-status" role="status" aria-live="polite"></div>
+    <div class="hint">Ghostty Dock is a third-party terminal app by Andrew Baker (github.com/andrewbakercloudscale/ghossty-dock) with no license; Plexiform does not include any of it. Install opens Terminal with Andrew's own installer command and runs it only when you press Return there. Once it is installed, clicking a session that runs in it goes to that exact tab, even one Plexiform first saw in another terminal, and a task you take over can open in it. Plexiform only asks it to list its sessions, focus a tab or open a new one, never to type, press keys or read the screen. Whether it was found shows under Health.</div>
   </div>
 
   <h2>Command line</h2>

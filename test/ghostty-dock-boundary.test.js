@@ -10,7 +10,7 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
-const DOCK_MODULES = ['src/ghostty-dock.js', 'src/focus/ghostty-dock.js'];
+const DOCK_MODULES = ['src/ghostty-dock.js', 'src/focus/ghostty-dock.js', 'src/ghostty-dock-install.js'];
 const FORBIDDEN_OPS = ['send', 'keys', 'read', 'wait'];
 const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
 
@@ -145,4 +145,46 @@ test('launchTerminal is only wired in main.js getTasks and only called after the
   for (const f of ['src/signal-server.js', 'mcp-server.js', 'src/agent-bus-main.js', 'src/agent-mail.js']) {
     assert.doesNotMatch(read(f), /jumpToSession|launchTerminal|openTerminal\(/, f);
   }
+});
+
+// The guided install (src/ghostty-dock-install.js): the command is one fixed
+// literal that nothing passed in can change, and only Settings or Home reach it.
+test('the installer command is a fixed literal, used only by the one-use script, never built from input', () => {
+  const src = code(read('src/ghostty-dock-install.js'));
+  assert.match(src, /const INSTALL_COMMAND = 'curl -fsSL https:\/\/raw\.githubusercontent\.com\/andrewbakercloudscale\/ghossty-dock\/main\/get\.sh \| bash';/);
+  assert.match(src, /const REPO_URL = 'https:\/\/github\.com\/andrewbakercloudscale\/ghossty-dock';/);
+  assert.doesNotMatch(src, /process\.env|process\.argv|loadConfig|ipcRenderer/);
+  assert.doesNotMatch(src, /INSTALL_COMMAND\s*=(?!=)[^;]*\n[\s\S]*INSTALL_COMMAND\s*=(?!=)/, 'assigned once');
+  assert.match(src, /function scriptBody\(file, dir\)/, 'the script takes only its own path and folder');
+  // Plexiform never runs the installer itself: its only process is `open -a Terminal <file>`.
+  const procs = [...src.matchAll(/execFile\(([^)]*)\)/g)].map((m) => m[1]);
+  assert.equal(procs.length, 1);
+  assert.match(procs[0], /^'\/usr\/bin\/open', \['-a', 'Terminal', file\]/);
+  assert.doesNotMatch(src, /\b(?:spawn|exec|execSync|fork)\(|fetch\(|net\.request|https?\.get/);
+  for (const f of ['main.js', 'settings.js', 'settings-preload.js', 'home.js']) assert.doesNotMatch(read(f), /get\.sh/, `${f} names the installer`);
+});
+
+test('the install handler is Settings- or Home-only and takes an action name; Health routes fixed ids to it', () => {
+  const main = read('main.js');
+  assert.match(main, /GhosttyDockInstall\.register\(\{ utilityHandle, allowed: \(e\) => settingsOnly\(e\) \|\| fromUtilityPage\(e, 'home'\), controller: ghosttyDockInstaller \}\);/);
+  assert.equal((main.match(/ghosttyDockInstaller\.act\(/g) || []).length, 1);
+  assert.match(main, /ghosttyDockInstaller\.act\(id === 'ghostty-dock-install' \? 'install' : 'recheck'\)/);
+  assert.equal((main.match(/'ghostty-dock-install'/g) || []).length, 3, 'the health-fix route (twice) and the Health row fix id, nothing else');
+  assert.match(read('settings-preload.js'), /ipcRenderer\.invoke\('ghostty-dock-install', \['status', 'install', 'recheck', 'github'\]\.includes\(action\) \? action : 'status'\)/);
+});
+
+test('Dock list output is asked for only on a click, and only ids and status words come out of it', () => {
+  assert.deepEqual(callSites('main.js', 'dockStatusFor(').filter((h) => h !== 'async function dockStatusFor('), [
+    'async function jumpToNeeding(',
+    'async function runAction(',
+    "ipcMain.handle('go-to-needing-session'",
+  ].sort());
+  assert.deepEqual(callSites('main.js', 'GhosttyDock.listStatus('), ['async function dockStatusFor(']);
+  const term = code(read('src/terminal.js'));
+  assert.equal((term.match(/listStatus\(/g) || []).length, 1, 'adoptIntoDock only');
+  const dock = code(read('src/ghostty-dock.js'));
+  const parse = dock.slice(dock.indexOf('function parseList('), dock.indexOf('let listMemo'));
+  assert.match(parse, /seen\.set\(key, tokens\[0\]\)/);
+  assert.doesNotMatch(parse, /console\.|log\(/, 'nothing from the list is logged');
+  for (const f of ['src/signal-server.js', 'mcp-server.js', 'src/agent-bus-main.js', 'src/agent-mail.js']) assert.doesNotMatch(read(f), /listStatus|parseList|adoptIntoDock/, f);
 });

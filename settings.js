@@ -292,6 +292,29 @@
     };
     window.settingsApi.cliStatus().then(showCli);
     document.getElementById('cli-install').addEventListener('click', async () => showCli(await window.settingsApi.cliInstall()));
+    // Ghostty Dock: Install only where it can be installed and isn't yet; Check again when installed but not usable.
+    const showDock = (r, note) => {
+      if (!r) return;
+      const install = document.getElementById('ghostty-dock-install');
+      const recheck = document.getElementById('ghostty-dock-recheck');
+      const off = document.getElementById('ghosttyDock').value === 'off';
+      install.hidden = off || r.show !== 'install';
+      recheck.hidden = off || r.show !== 'recheck';
+      install.disabled = false;
+      const el = document.getElementById('ghostty-dock-status');
+      el.textContent = note || r.message || r.error || (r.cancelled ? 'Not installed.' : '')
+        || (r.launched || r.watching ? 'Terminal is open with the installer. Press Return there to install; Plexiform checks for Ghostty Dock every few seconds.' : '')
+        || (r.show === 'recheck' ? `Installed, but not used yet: ${r.reason}.` : r.reason === 'ready' ? 'Installed and in use.' : '');
+    };
+    const dockAct = async (action) => {
+      try { showDock(await window.settingsApi.ghosttyDock(action)); } catch (err) { showDock({}, err.message); }
+    };
+    dockAct('status');
+    document.getElementById('ghostty-dock-install').addEventListener('click', (ev) => { ev.currentTarget.disabled = true; dockAct('install'); });
+    document.getElementById('ghostty-dock-recheck').addEventListener('click', () => dockAct('recheck'));
+    document.getElementById('ghostty-dock-github').addEventListener('click', () => dockAct('github'));
+    document.getElementById('ghosttyDock').addEventListener('change', () => setTimeout(() => dockAct('status'), 300));
+    window.settingsApi.onGhosttyDockChanged((r) => { showDock(r); document.getElementById('health-recheck')?.click(); });
     window.settingsApi.signalEndpoint().then((e) => { document.getElementById('endpoint').textContent = `http://127.0.0.1:${e.port}/signal`; document.getElementById('emit-path').textContent = e.emit; if (e.token) document.getElementById('token-path').textContent = e.token; });
     const showGit = (g) => {
       if (!g) return;

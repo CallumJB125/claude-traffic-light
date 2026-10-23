@@ -229,7 +229,8 @@ test('detection is cached for 60 s and a failed call drops the cache', async () 
     assert.equal(GhosttyDock.current({ home: h.home, uid: UID, platform: 'darwin', now: 30000 }).trusted, true, 'cached');
     assert.equal(GhosttyDock.current({ home: h.home, uid: UID, platform: 'darwin', now: 61001 }).trusted, false, 'expired');
     fs.chmodSync(h.where.apiDir, 0o700);
-    await GhosttyDock.run('list', [], { dock: DOCK, exec: async () => ({ ok: false }) });
+    // list (like focus) first asks macOS whether the app is running; the CLI call itself then fails.
+    await GhosttyDock.run('list', [], { dock: DOCK, exec: async (f) => (f === '/usr/bin/osascript' ? { ok: true, stdout: 'true\n' } : { ok: false }) });
     assert.equal(GhosttyDock.current({ home: h.home, uid: UID, platform: 'darwin', now: 61002 }).trusted, true, 'invalidated');
   } finally { h.done(); GhosttyDock.invalidate(); }
 });
