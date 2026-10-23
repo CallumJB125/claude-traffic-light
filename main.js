@@ -561,7 +561,7 @@ const WorkScopeView = require('./src/work-scope-view.js');
 let wrappedWorkRows = [];
 function pushWrappedWork() {
   if (DEMO) return;
-  const records = withScope(require('./src/wrapped-work.js').recordsFor(wrappedWorkRows, { host: LOCAL_HOST }));
+  const records = require('./src/wrapped-work.js').wrappedRecords(wrappedWorkRows, { host: LOCAL_HOST, scopeFor: withScope });
   buddyWin?.wrappedWorkChanged?.(records);
 }
 function withScope(sessions) {

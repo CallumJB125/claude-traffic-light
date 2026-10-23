@@ -23,10 +23,21 @@ function recordsFor(rows, { host }) {
     if (!r || !TASK_ID.test(r.taskId) || (r.ai !== 'claude' && r.ai !== 'codex') || typeof r.root !== 'string' || !path.isAbsolute(r.root)) continue;
     const signal = Object.prototype.hasOwnProperty.call(SIGNAL, r.state) ? SIGNAL[r.state] : null;
     if (!signal || !Number.isFinite(r.changedAt)) continue;
-    out.push({ source: r.ai, sessionId: r.taskId, taskId: r.taskId, host, cwd: r.root,
-      taskTitle: typeof r.title === 'string' && r.title.trim() ? r.title.slice(0, 200) : 'Task', signal, updatedAt: new Date(r.changedAt).toISOString() });
+    const text = (v) => (typeof v === 'string' && v.trim() ? v.slice(0, 200) : null);
+    // No taskTitle for an untitled task: its team card reads "Claude · <folder>" like a native session's. localTitle (the
+    // prompt's first line) is read by work-capture for a My board card only.
+    const title = text(r.title), localTitle = text(r.localTitle);
+    out.push({ source: r.ai, sessionId: r.taskId, taskId: r.taskId, host, cwd: r.root, ...(title ? { taskTitle: title } : {}),
+      ...(localTitle ? { localTitle } : {}), signal, updatedAt: new Date(r.changedAt).toISOString() });
   }
   return out;
 }
 
-module.exports = { recordsFor, SIGNAL };
+// main's records for work-capture: recordsFor, then scopeFor (records → the same records, each with the scope a session
+// in that folder gets), so a personal folder's wrapped task goes to My board exactly as a session there would.
+function wrappedRecords(rows, { host, scopeFor }) {
+  const scoped = scopeFor(recordsFor(rows, { host }));
+  return Array.isArray(scoped) ? scoped : [];
+}
+
+module.exports = { recordsFor, wrappedRecords, SIGNAL };

@@ -513,7 +513,10 @@ export class TasksEngine extends EventEmitter {
       if (t.workedAt == null || !t.cardAi || !LOCAL_SOURCES.includes(t.source) || t.parentId) continue;
       const root = t.repo?.root ?? t.worktree;
       if (typeof root !== 'string') continue;
-      rows.push({ taskId: t.id, ai: t.cardAi, title: t.title, state: t.state, blockedKind: t.blockedKind ?? null, root, changedAt: Math.max(t.stateSince ?? 0, t.workedAt) });
+      // A team card gets a title only when the person gave the task one; an untitled task's title is the first line of
+      // its prompt, which only My board (on this Mac) may show.
+      const titled = typeof t.spec?.title === 'string' && t.spec.title.trim() !== '';
+      rows.push({ taskId: t.id, ai: t.cardAi, title: titled ? t.title : null, localTitle: t.title, state: t.state, blockedKind: t.blockedKind ?? null, root, changedAt: Math.max(t.stateSince ?? 0, t.workedAt) });
     }
     // Live tasks first, so finished ones can never push a long-running card out of the 20.
     const live = (r) => (LEASED.has(r.state) ? 0 : 1);

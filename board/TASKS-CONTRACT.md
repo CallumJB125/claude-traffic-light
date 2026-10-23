@@ -460,11 +460,11 @@ Served by Buddy's global MCP server (for the user's ordinary sessions) and by th
 
 The Tasks API is unchanged. Over the utility process's parentPort only (never to a renderer), after each task save the
 engine sends main `tasks.work` when it changed, `[]` on close (main also treats a helper exit as `[]`): at most 20 rows
-`{taskId, ai, title, state, blockedKind, root, changedAt}`, live tasks first and then newest first, one per `local`/`cli` claude/codex task
+`{taskId, ai, title, localTitle, state, blockedKind, root, changedAt}` (`title` is null unless the person gave the task a title; `localTitle` is the task's title, which for an untitled task is its prompt's first line, and work-capture uses it for a `local` card only), live tasks first and then newest first, one per `local`/`cli` claude/codex task
 without a parent that did real work. Real work is sticky and persisted: `workedAt` is set the first time the task
 edits a file (`touched`) or reaches 60 s in total in `running`/`quiet` (`activeMs`), and `cardAi` (the AI at that
 moment) is what `ai` reports from then on, so a provider switch stays one card. Main turns rows into session-shaped
-records (`src/wrapped-work.js`) for work-capture's own session path; no task text, AI reply, outcome or failure
+records (`src/wrapped-work.js` `wrappedRecords`, with the folder's scope as for a session) for work-capture's own session path; no task text, AI reply, outcome or failure
 reason is sent.
 
 ## 15. Failure table (plan §8) → states, events, actions

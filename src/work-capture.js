@@ -186,7 +186,9 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
   const run=o=>o.run_id?{...o,session_id:o.run_id}:o;
   const shareSalt=()=>crypto.createHash('sha256').update(`work-record:${state.install_id}`).digest('hex').slice(0,16);
   const call=(fn,o)=>{try{return typeof fn==='function'?fn(o)??null:null;}catch{return null;}};
-  const recordFor=(o,raw,entry=null)=>WorkRecord.build({install_id:state.install_id,o,raw,facts:factsOf(run(o)),repo_id:entry?.destination.kind==='team'?entry.destination.repo_id:null,
+  // A wrapped task's localTitle (its prompt's first line) titles a My board card only; a team record never sees it.
+  const localOnly=(raw,entry)=>entry?.destination.kind==='local'&&typeof raw?.localTitle==='string'&&!untag(raw.taskTitle)?{...raw,taskTitle:raw.localTitle}:raw;
+  const recordFor=(o,raw,entry=null)=>WorkRecord.build({install_id:state.install_id,o,raw:localOnly(raw,entry),facts:factsOf(run(o)),repo_id:entry?.destination.kind==='team'?entry.destination.repo_id:null,
     handover:entry?call(handoverFor,run(o)):null,spend:entry?call(spendFor,run(o)):null,home});
   const shows=rec=>!!(rec&&(rec.goal||rec.summary||rec.files.edited.length));
   const placeless=cwd=>typeof cwd!=='string'||!path.isAbsolute(cwd)||path.resolve(cwd)===path.parse(path.resolve(cwd)).root||typeof home==='string'&&home!==''&&path.resolve(cwd)===path.resolve(home);

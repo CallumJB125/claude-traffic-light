@@ -8,7 +8,7 @@ import { providerFixture } from './provider-switch-helpers.js';
 import { IpcClient } from '../../mcp/ipc.js';
 
 const local = process.platform === 'win32' ? test.skip : test;
-const KEYS = ['taskId', 'ai', 'title', 'state', 'blockedKind', 'root', 'changedAt'].sort();
+const KEYS = ['taskId', 'ai', 'title', 'localTitle', 'state', 'blockedKind', 'root', 'changedAt'].sort();
 const idle = { steps: [{ tool: 'Read', input: { file_path: 'README.md' }, ms: 60000 }] };
 
 local('an edit makes it real work at once: one row with title, state and folder only; [] when the engine closes', async () => {
@@ -23,6 +23,7 @@ local('an edit makes it real work at once: one row with title, state and folder 
     assert.equal(rows[0].taskId, id);
     assert.equal(rows[0].ai, 'claude');
     assert.equal(rows[0].title, 'Write the notes');
+    assert.equal(rows[0].localTitle, 'Write the notes');
     assert.equal(rows[0].root, task.repo?.root ?? task.worktree);
     assert.ok(task.touched.includes('notes.txt'));
     assert.ok(task.workedAt != null && task.cardAi === 'claude');
@@ -50,6 +51,9 @@ local('no edits: nothing until a minute of work in total, then the row; a spin-o
     skew = 61_000;
     const rows = await waitFor(() => seen.findLast(r => r.length), { label: 'row after a minute' });
     assert.deepEqual(rows.map(r => r.taskId), [id], 'the spin-off is not listed');
+    // Untitled: its title is the prompt's first line, which is for My board only.
+    assert.equal(rows[0].title, null);
+    assert.equal(rows[0].localTitle, 'Just look');
   } finally { ipc?.close(); await h.close(); rm(dir); }
 });
 
@@ -67,4 +71,21 @@ local('a provider switch keeps the AI that began the work, so it stays one card'
   assert.equal(last[0].taskId, id);
   assert.equal(last[0].ai, 'claude');
   assert.equal(last[0].state, 'in_review');
+});
+
+// Live before finished (pr50 review): the stopped task changed last, and the running one still comes first.
+const edit = { steps: [{ tool: 'Write', input: { file_path: 'notes.txt', content: 'x\n' } }, { tool: 'Read', input: { file_path: 'README.md' }, ms: 60000 }] };
+
+local('live tasks come before finished ones, even when the finished one changed more recently', async () => {
+  const dir = tmpDir(), repo = makeRepo(dir), seen = [];
+  const h = await startEngine({ dir, scenario: edit, engineOpts: { maxParallel: 4, onWork: rows => seen.push(rows) } });
+  try {
+    const a = (await h.client.createTask({ title: 'Older, still running', text: 'a', cwd: repo.checkout, permissionLevel: 'auto-edits' })).id;
+    const b = (await h.client.createTask({ title: 'Newer, stopped', text: 'b', cwd: repo.checkout, permissionLevel: 'auto-edits' })).id;
+    await waitFor(() => seen.findLast(r => r.length === 2), { label: 'two rows' });
+    await h.client.act(b, 'stop');
+    const rows = await waitFor(() => { const r = seen.at(-1); return r.length === 2 && !['running', 'quiet'].includes(r.find(x => x.taskId === b)?.state) && r; }, { label: 'b stopped' });
+    assert.ok(rows.find(x => x.taskId === b).changedAt > rows.find(x => x.taskId === a).changedAt, 'the stopped task changed last');
+    assert.deepEqual(rows.map(r => r.taskId), [a, b], 'the live task first');
+  } finally { await h.close(); rm(dir); }
 });

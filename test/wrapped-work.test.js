@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createWorkCapture, observation } = require('../src/work-capture');
-const { recordsFor, SIGNAL } = require('../src/wrapped-work');
+const { recordsFor, wrappedRecords, SIGNAL } = require('../src/wrapped-work');
 const { testTempDir } = require('./helpers/tmp');
 
 const T = 100000;
@@ -51,7 +51,7 @@ test('records: only title, state and folder cross; malformed rows are dropped; a
   assert.equal(rec.taskId, 'tsk_abc123');
   for (const bad of [null, row({ taskId: '../x' }), row({ ai: 'gemini' }), row({ root: 'relative' }), row({ root: null }), row({ changedAt: 'now' })]) assert.deepEqual(wrapped([bad]), []);
   assert.equal(wrapped(Array.from({ length: 30 }, (_, i) => row({ taskId: `tsk_n${i}` }))).length, 20);
-  assert.equal(wrapped([row({ title: '' })])[0].taskTitle, 'Task');
+  assert.equal(wrapped([row({ title: '' })])[0].taskTitle, undefined);
 });
 
 test('a wrapped card goes out through the very same team send call as a native session\'s, with the same title handling', async (t) => {
@@ -168,4 +168,32 @@ test('native only: with no wrapped records, the capture file bytes and every sen
   assert.ok(before.bytes.equals(empty.bytes), 'byte-identical capture file');
   assert.ok(before.bytes.equals(none.bytes));
   assert.equal(empty.calls, before.calls);
+});
+
+test('an untitled task: its prompt\'s first line never reaches a team, even with summaries shared; My board shows it', async (t) => {
+  const PROMPT = 'Tell Dana her review score is 2/5 before the layoffs list';
+  const untitled = row({ title: null, localTitle: PROMPT });
+  for (const share of [false, true]) {
+    const r = rig(t, { getRoutes: async () => ({ routes: [{ ...R, share_summaries: share }], complete: true }) });
+    await r.router.observe([], { wrapped: wrapped([untitled]) });
+    r.advance(1000);
+    await r.router.observe([], { wrapped: wrapped([{ ...untitled, state: 'in_review', changedAt: T + 1000 }]) });
+    assert.ok(r.calls.length >= 1 && r.calls.every((c) => c.kind === 'team'));
+    assert.match(r.calls[0].body.title, /^Claude(?: Code)? · app$/, 'the AI and folder, like a native session');
+    assert.ok(!JSON.stringify(r.calls).includes('Dana'), `share_summaries=${share}: the prompt stays on this Mac`);
+    assert.ok(!JSON.stringify(await r.router.shareableRecords()).includes('Dana'));
+  }
+  const mine = rig(t);
+  await mine.router.observe([], { wrapped: wrapped([untitled]).map((x) => ({ ...x, scope: { state: 'personal' } })) });
+  assert.equal(mine.calls[0].kind, 'local');
+  assert.equal(mine.calls[0].body.title, PROMPT);
+});
+
+test('main\'s records: wrappedRecords applies scopeFor, so a personal folder\'s task goes to My board', async (t) => {
+  const scopeFor = (recs) => recs.map((x) => ({ ...x, scope: x.cwd === '/personal/notes' ? { state: 'personal' } : null }));
+  const recs = wrappedRecords([row({ taskId: 'tsk_mine', root: '/personal/notes' }), row({ taskId: 'tsk_team' })], { host: 'mac', scopeFor });
+  const r = rig(t);
+  await r.router.observe([], { wrapped: recs });
+  const byTask = Object.fromEntries(r.calls.map((c) => [c.body.session_id, c.kind]));
+  assert.deepEqual(byTask, { tsk_mine: 'local', tsk_team: 'team' });
 });
