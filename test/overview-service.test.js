@@ -61,3 +61,14 @@ test('Overview board and managed rows name their bucket; the directory files the
   const m=await managed(state,label);assert.equal(m.status,label);assert.equal(m.bucket,bucket,label);assert.equal(m.detail,label);assert.equal(filed(m).state,{check:'Finished — check it',stuck:'Stuck or failed',working:'Working on it',idle:'Idle'}[bucket],label);
  }
 });
+
+test('Overview managed tasks waiting on the person are Needs you whatever their run state',async()=>{
+ const {createSessionDirectory}=require('../src/session-directory');
+ const managed=t=>createOverviewService({now:()=>time,managed:()=>({conn:{status:'connected'},tasks:[{id:'t1',title:'Managed task',ai:{id:'codex'},green:false,actions:[],...t}]})}).snapshot().then(s=>s.sessions[0]);
+ for(const t of [{state:'parked',label:'Paused',actions:['answer','resume']},{state:'parked',label:'Paused',parkReason:'limit'},{state:'parked',label:'Paused',parkReason:'auth'},{state:'queued',label:'Queued',awaitingConfirm:true,actions:['approve','deny','stop']},{state:'queued',label:'Queued',awaitingConfirm:true}]){
+  const m=await managed(t);assert.equal(m.bucket,'needs',JSON.stringify(t));
+  const e=createSessionDirectory({now:()=>time}).mine({work:[m]})[0];assert.equal(e.state,'Needs you');assert.equal(e.input,true);
+ }
+ assert.equal((await managed({state:'parked',label:'Paused',parkReason:'user'})).bucket,'idle');
+ assert.equal((await managed({state:'queued',label:'Queued'})).bucket,'working');
+});

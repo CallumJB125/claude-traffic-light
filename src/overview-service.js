@@ -64,6 +64,13 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
  const RUN_BUCKET={running:'working',quiet:'working',claimed:'working',queued:'working',reconnecting:'working',handing_over:'working',blocked:'needs',in_review:'check',orphaned:'stuck',failed:'stuck',stalled:'stuck',parked:'idle',suspended:'idle',unresponsive:'idle',handed_over:'idle',done:'idle'};
  const PLAIN_LABELS=new Set(['Working','Running','Waiting on you','Needs you','Unknown']);
  const placed=(status,bucket)=>({status,bucket,...(PLAIN_LABELS.has(status)||status===Organise.headingOf(bucket)?{}:{detail:status})});
+ // A managed task waiting on the person needs them whatever its run state: an open ask or a
+ // confirm to approve (its actions say so), or parked until they log in or their limit resets.
+ const managedBucket=t=>{
+  const actions=Array.isArray(t.actions)?t.actions:[];
+  if(actions.includes('answer')||actions.includes('approve')||(t.state==='queued'&&t.awaitingConfirm===true)||(t.state==='parked'&&['limit','auth'].includes(t.parkReason)))return 'needs';
+  return typeof t.state==='string'&&Object.hasOwn(RUN_BUCKET,t.state)?RUN_BUCKET[t.state]:'idle';
+ };
  const boardPlaced=(data,row)=>{
   const status=managedStatus(data,row);
   // Blocked with no decision for this person is stuck on something else, not waiting on them.
@@ -127,7 +134,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   const local=managed();if(local?.conn?.status==='connected'&&Array.isArray(local.tasks))for(const t of local.tasks.slice(0,200)){
    if(!object(t)||!id(t.id)||t.hub)continue;if(rows.length>=200){omitted++;continue;}
    const connected=t.stale!==true,live=connected&&t.green===true;
-   const dto={id:stable(['task',t.id]),handle:null,label:'Managed task',provider:provider(t.ai?.id,t.ai?.model),device:{label:'This device',local:true},board:{label:'Personal tasks',kind:'personal'},project:clean(t.repo?.name,100)||'Local project',...placed(clean(t.label,40)||'Unknown',typeof t.state==='string'&&Object.hasOwn(RUN_BUCKET,t.state)?RUN_BUCKET[t.state]:'idle'),freshness:live?'recent':connected?'unknown':'stale',age_ms:live?0:null,task:task(t),children:[],capabilities:{open:capability(typeof openManaged==='function','Open Tasks','The Tasks page is unavailable.'),message:capability(live&&Array.isArray(t.actions)&&t.actions.includes('message')&&typeof messageManaged==='function','Message','This task cannot receive messages in its current state.')}};
+   const dto={id:stable(['task',t.id]),handle:null,label:'Managed task',provider:provider(t.ai?.id,t.ai?.model),device:{label:'This device',local:true},board:{label:'Personal tasks',kind:'personal'},project:clean(t.repo?.name,100)||'Local project',...placed(clean(t.label,40)||'Unknown',managedBucket(t)),freshness:live?'recent':connected?'unknown':'stale',age_ms:live?0:null,task:task(t),children:[],capabilities:{open:capability(typeof openManaged==='function','Open Tasks','The Tasks page is unavailable.'),message:capability(live&&Array.isArray(t.actions)&&t.actions.includes('message')&&typeof messageManaged==='function','Message','This task cannot receive messages in its current state.')}};
    if(rows.some(r=>r.id===dto.id))continue;
    register(dto,{kind:'managed',id:t.id,state:t.state,provider:t.ai?.id},next);rows.push(dto);meta.set(dto.id,{kind:'task'});
   }
