@@ -44,10 +44,11 @@ test('the one-use script prints the command, waits for Return, then runs exactly
     assert.match(lines[1], /^\/bin\/mkdir '.*\/started' 2>\/dev\/null \|\| exit 0$/);
     assert.match(lines[2], /^\/bin\/rm -f '.*continue\.command'$/);
     assert.match(lines[3], /^trap '.*rm -rf.*' EXIT$/);
-    const ask = lines.findIndex((l) => l.includes('Press Return to install, or close this window to cancel.'));
-    const read = lines.indexOf('read -r _ || exit 1');
+    const ask = lines.findIndex((l) => l.includes('Press Return or type y to install; anything else cancels.'));
+    const read = lines.indexOf('IFS= read -r reply || exit 1');
     const runs = lines.indexOf(UPSTREAM);
-    assert.ok(ask > 0 && read > ask && runs === read + 1, 'asks, waits for a line, then runs');
+    assert.ok(ask > 0 && read > ask && runs === read + 2, 'asks, waits for a line, checks it, then runs');
+    assert.match(lines[read + 1], /^\[\[ -z \$reply \|\| \$reply == \[yY\] \]\] \|\| \{ print -r -- 'Cancelled: nothing was installed\.'; exit 1; \}$/);
     assert.ok(lines.slice(0, read).some((l) => l.includes(UPSTREAM) && l.startsWith('print -r -- ')), 'shows the command before it runs');
     assert.equal(lines.filter((l) => l === UPSTREAM).length, 1, 'runs it once');
     assert.equal((body.match(/curl /g) || []).length, 2, 'once shown, once run, nothing else downloads');

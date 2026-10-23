@@ -60,8 +60,10 @@ function scriptBody(file, dir) {
     say('This will run:'),
     say(`  ${INSTALL_COMMAND}`),
     say(''),
-    say('Press Return to install, or close this window to cancel.'),
-    'read -r _ || exit 1',
+    say('Press Return or type y to install; anything else cancels.'),
+    // Typing "no" and Return must not install: only an empty line or y/Y says yes.
+    'IFS= read -r reply || exit 1',
+    `[[ -z $reply || $reply == [yY] ]] || { ${say('Cancelled: nothing was installed.')}; exit 1; }`,
     INSTALL_COMMAND,
     'result=$?',
     say(''),
