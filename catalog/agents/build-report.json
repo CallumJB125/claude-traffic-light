@@ -120,6 +120,17 @@
       ]
     },
     {
+      "id": "agency/threat-detection-engineer",
+      "path": "security/security-threat-detection-engineer.md",
+      "flags": [
+        {
+          "rule": "exfiltration",
+          "line": 343,
+          "excerpt": "curl -k -u \"${{ secrets.SPLUNK_USER }}:${{ secrets.SPLUNK_PASS }}\" \\"
+        }
+      ]
+    },
+    {
       "id": "voltagent/healthcare-admin",
       "path": "categories/07-specialized-domains/healthcare-admin.md",
       "flags": [
@@ -814,21 +825,21 @@
   ],
   "overridden": [],
   "counts": {
-    "total": 714,
-    "unique": 648,
+    "total": 713,
+    "unique": 647,
     "bySource": {
-      "agency": 278,
+      "agency": 277,
       "voltagent": 162,
       "wshobson": 137,
       "0xfurai": 137
     },
     "primaryBySource": {
-      "agency": 262,
+      "agency": 261,
       "voltagent": 160,
       "wshobson": 95,
       "0xfurai": 131
     },
     "fallbackIcons": 0,
-    "review": 659
+    "review": 658
   }
 }

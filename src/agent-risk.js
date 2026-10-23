@@ -7,21 +7,25 @@
 const { DESTRUCTIVE_CMDS } = require('./auto-rules.js');
 const { findSecrets } = require('./secret-patterns.js');
 
-const RULES_VERSION = 1;
+const RULES_VERSION = 2;
 const MAX_FLAGS = 20;
 const EXCERPT = 160;
 
 // Hosts a link to which is ordinary reference material, not a destination.
 const URL_ALLOW = /^(?:[a-z0-9-]+\.)*(?:github\.com|githubusercontent\.com|gitlab\.com|mozilla\.org|w3\.org|whatwg\.org|python\.org|nodejs\.org|npmjs\.com|rust-lang\.org|go\.dev|golang\.org|microsoft\.com|apple\.com|android\.com|google\.com|googleapis\.com|anthropic\.com|claude\.com|openai\.com|aws\.amazon\.com|amazon\.com|cloud\.google\.com|azure\.com|kubernetes\.io|docker\.com|owasp\.org|nist\.gov|wikipedia\.org|ietf\.org|schema\.org|example\.com|example\.org|localhost)$/i;
 
+const FETCH = String.raw`(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)`;
+const RUNNER = String.raw`(?:(?:ba|z|da|k)?sh|python[23]?|node|perl|ruby|php|iex|pwsh|powershell|invoke-expression)`;
 const HIGH = [
-  { rule: 'pipe-to-shell', re: /\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/i, why: 'Downloads a script and runs it in a shell.' },
+  { rule: 'pipe-to-shell', re: new RegExp(String.raw`\b${FETCH}\b[^\n|]*\|\s*(?:sudo\s+(?:-\S+\s+)*)?${RUNNER}\b`, 'i'), why: 'Downloads a script and runs it in a shell.' },
+  { rule: 'download-and-run', re: new RegExp(String.raw`\$\(\s*(?:curl|wget)\b|\beval\b[^\n]{0,40}\b(?:curl|wget)\b|\b${FETCH}\b[^\n]*(?:&&|;|\|\|)\s*(?:sudo\s+)?(?:${RUNNER}\s|chmod\s+\+x\b|\.\/)`, 'i'), why: 'Downloads a script and runs it.' },
   { rule: 'pipe-to-shell', re: /\b(?:ba|z)?sh\s+<\(\s*(?:curl|wget)\b/i, why: 'Downloads a script and runs it in a shell.' },
   { rule: 'permission-bypass', re: /--dangerously-skip-permissions|--dangerously-bypass-approvals-and-sandbox|\bbypassPermissions\b|--yolo\b|approval_policy\s*=\s*["']?never/i, why: 'Turns off the AI tool\'s permission prompts.' },
   { rule: 'sensitive-config', re: /\b(?:write|edit|modify|append|add|update|overwrite|change|replace|insert)\b[^\n]{0,80}(?:~\/\.ssh\b|authorized_keys|\.bashrc\b|\.zshrc\b|\.bash_profile\b|\.zprofile\b|(?:~|\$HOME)\/\.profile\b|\.claude\/settings(?:\.local)?\.json|\.mcp\.json|mcpServers|\.codex\/config\.toml)/i, why: 'Tells the AI to change shell start-up files, SSH keys, hooks or MCP config.' },
   { rule: 'sensitive-config', re: />>?\s*(?:~|\$HOME)\/\.(?:ssh\/|bashrc|zshrc|bash_profile|zprofile|profile)\b/i, why: 'Writes into SSH or shell start-up files.' },
   { rule: 'base64-blob', re: /[A-Za-z0-9+/]{200,}={0,2}/, why: 'A long encoded blob that cannot be read before adding.' },
-  { rule: 'exfiltration', re: /\b(?:send|post|upload|exfiltrate|transmit|forward|report|beacon)\b[^\n]{0,80}\b(?:to|at)\s+<?https?:\/\/(?!(?:www\.)?example\.(?:com|org)\b|localhost\b|127\.0\.0\.1\b)/i, why: 'Tells the AI to send data to a web address.' },
+  { rule: 'exfiltration', re: /\b(?:send|post|upload|exfiltrate|transmit|forward|report|beacon)\b[^\n]{0,80}(?:\b(?:to|at)\s+|:\s*)<?https?:\/\/(?!(?:www\.)?example\.(?:com|org)\b|localhost\b|127\.0\.0\.1\b)/i, why: 'Tells the AI to send data to a web address.' },
+  { rule: 'exfiltration', re: /\bcurl\b[^\n]*\s(?:-d\s*['"]?@|--data(?:-binary|-raw|-urlencode)?[\s=]+['"]?@|-F\s*['"]?[\w.-]+=@|--form[\s=]+['"]?[\w.-]+=@|-T\s|--upload-file\s)/i, why: 'Uploads a local file to a web address.' },
   { rule: 'hidden-characters', re: /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/, why: 'Invisible or text-direction characters can hide instructions.' },
 ];
 
@@ -45,8 +49,22 @@ function fenced(text) {
  * `tools` is the declared tool list, or null when the author declared none.
  * Returns { level: 'none'|'review'|'high', flags: [{ level, rule, line, excerpt, why }] }.
  */
+// Joins shell line continuations (a backslash at the end of a line) so a
+// command split across lines is scanned as one. `at` maps an index in the
+// joined text back to the original.
+function joinContinuations(text) {
+  const re = /\\\r?\n[ \t]*/g;
+  const cuts = [];
+  let joined = '', last = 0, m;
+  while ((m = re.exec(text))) { joined += `${text.slice(last, m.index)} `; cuts.push([joined.length, m.index + m[0].length]); last = m.index + m[0].length; }
+  joined += text.slice(last);
+  const at = (i) => { let orig = i; for (const [j, o] of cuts) { if (j > i) break; orig = o + (i - j); } return cuts.length && i >= cuts[0][0] ? orig : i; };
+  return { joined, at };
+}
+
 function scanAgent({ body, tools = null, frontmatter = '' }) {
   const text = String(body ?? '');
+  const { joined, at } = joinContinuations(text);
   const flags = [];
   const seen = new Set();
   const add = (level, rule, index, why, src = text, lineOffset = 0) => {
@@ -59,12 +77,12 @@ function scanAgent({ body, tools = null, frontmatter = '' }) {
   for (const r of HIGH) {
     const re = new RegExp(r.re.source, r.re.flags.includes('g') ? r.re.flags : `${r.re.flags}g`);
     let m;
-    while ((m = re.exec(text))) { add('high', r.rule, m.index, r.why); if (m[0].length === 0) re.lastIndex++; }
+    while ((m = re.exec(joined))) { add('high', r.rule, at(m.index), r.why); if (m[0].length === 0) re.lastIndex++; }
   }
   // The frontmatter gets the same high rules; its flags are reported on line 0.
   const fm = String(frontmatter ?? '');
   for (const r of HIGH) {
-    const m = new RegExp(r.re.source, r.re.flags.replace('g', '')).exec(fm);
+    const m = new RegExp(r.re.source, r.re.flags.replace('g', '')).exec(joinContinuations(fm).joined);
     if (m && !seen.has(`${r.rule}:0`) && flags.length < MAX_FLAGS) { seen.add(`${r.rule}:0`); flags.push({ level: 'high', rule: r.rule, line: 0, excerpt: `(frontmatter) ${excerpt(lineAt(fm, m.index).text)}`.slice(0, EXCERPT), why: r.why }); }
   }
   for (const h of findSecrets(text, { classes: ['credential'] })) add('high', 'secret', h.index, 'Looks like a real credential.');
