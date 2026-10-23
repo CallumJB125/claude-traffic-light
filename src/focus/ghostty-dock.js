@@ -38,7 +38,11 @@ const script = {
   app: GhosttyDock.APP,
   needs: { permission: 'automation', app: GhosttyDock.APP, reason: 'so a click can switch to the Ghostty Dock tab your session is running in' },
   canHandle: (s, ctx) => isDock(s, ctx) && !!ctx.ghosttyDock.installed && !!Ids.launchCwd(s),
-  focus: (s, { exec }) => runScript(exec, SCRIPT, [Ids.launchCwd(s)]),
+  // The only Dock tab in that folder, not one picked by session id: so not `exact`.
+  focus: async (s, { exec }) => {
+    const r = await runScript(exec, SCRIPT, [Ids.launchCwd(s)]);
+    return r.ok ? { ok: true, exact: false, byFolder: true } : r;
+  },
   SCRIPT,
 };
 

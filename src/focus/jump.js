@@ -1,13 +1,17 @@
 // The click → tab decision, free of Electron so it can be tested directly.
 // `focus` is focusSession, `activate` is the old activate-the-app jump.
 const { ADAPTERS } = require('./index.js');
+const ADOPT_MS = 2500;
 
 // A session reported from another machine: its host is a name the user typed
 // and its ids describe that machine's terminals, so nothing here may act on
 // it — not the adapters, and not activating a local app either.
 const isRemote = (s) => !!(s && (s.remote || s.device || String(s.sessionId || '').startsWith('remote:')));
 
-function createJumper({ localHost, platform, focus, activate, explainer, log = () => {} }) {
+// `adopt(session)` may answer a copy of the session to focus instead: one
+// Ghostty Dock lists under its exact id, though its hook recorded another
+// app (src/terminal.js). It answers null to leave the session as it is.
+function createJumper({ localHost, platform, focus, activate, explainer, adopt = null, log = () => {} }) {
   let current = null; // { key, gen, promise } of the jump in flight
   let gen = 0;
 
@@ -35,12 +39,30 @@ function createJumper({ localHost, platform, focus, activate, explainer, log = (
     // A pane dialog's session has no host: it is a pane on this Mac.
     const here = !!session && (!session.host || session.host === localHost);
     if (platform === 'darwin' && here) {
-      if (!session.terminal) { log('no terminal recorded; nothing switched'); return stale() ? null : cantJump(null); }
-      const r = await focus(session, { onNeeds: (needs) => explainer.onNeeds(needs), isCancelled: stale, log });
+      let adopted = null;
+      // Bounded, so a slow Dock costs a jump to another terminal at most this long.
+      if (adopt) {
+        let timer;
+        try { adopted = await Promise.race([adopt(session), new Promise((r) => { timer = setTimeout(() => r(null), ADOPT_MS); })]); } catch (e) { log(`adopt failed: ${e.message}`); }
+        clearTimeout(timer);
+      }
       if (stale()) return null;
+      const target = adopted || session;
+      if (!target.terminal && !adopted) { log('no terminal recorded; nothing switched'); return stale() ? null : cantJump(null); }
+      if (adopted) log(`listed by ${adopted.hostApp}; trying it first`);
+      const ctx = { onNeeds: (needs) => explainer.onNeeds(needs), isCancelled: stale, log };
+      let used = target;
+      let r = await focus(used, ctx);
+      if (stale()) return null;
+      if (adopted && !r.ok && session.terminal) {
+        log(`${r.adapter || adopted.hostApp}: ${r.reason || 'failed'}; trying the recorded terminal`);
+        used = session;
+        r = await focus(used, ctx);
+        if (stale()) return null;
+      }
       if (r.ok) {
         const adapter = ADAPTERS.find((a) => a.id === String(r.adapter).split('+').pop());
-        return { app: r.app || session.hostApp || (adapter && adapter.app) || 'terminal', exact: !!r.exact };
+        return { app: r.app || used.hostApp || (adapter && adapter.app) || 'terminal', exact: !!r.exact, ...(r.byFolder ? { byFolder: true } : {}) };
       }
       log(`${r.adapter || 'no adapter'}: ${r.reason || 'failed'}; nothing switched`);
       if (r.denied) explainer.onDenied(r.needs);
@@ -67,4 +89,4 @@ function createJumper({ localHost, platform, focus, activate, explainer, log = (
   };
 }
 
-module.exports = { createJumper, isRemote };
+module.exports = { createJumper, isRemote, ADOPT_MS };

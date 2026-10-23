@@ -191,7 +191,7 @@ test('each op has a fixed argument shape: no free command line, no names or fold
   assert.equal(calls[0][2].timeout, GhosttyDock.OPEN_TIMEOUT_MS, 'room for the Automation prompt');
   assert.ok(GhosttyDock.OPEN_TIMEOUT_MS >= 30000);
   assert.equal((await GhosttyDock.run('open', ['/Users/me/repo', '--command', `'${file}'`], { dock: { ...DOCK, canOpen: false }, exec, tmpRoot })).ok, false);
-  await GhosttyDock.run('list', [], { dock: DOCK, exec });
+  await GhosttyDock.run('list', ['--json'], { dock: DOCK, exec });
   await GhosttyDock.run('notify', [`Plexiform: done\u0007${'x'.repeat(300)}`], { dock: DOCK, exec });
   const title = calls.at(-1)[1][1];
   assert.ok(title.length <= 120 && !/[\0-\x1f]/.test(title), 'one clipped title');
@@ -229,7 +229,8 @@ test('detection is cached for 60 s and a failed call drops the cache', async () 
     assert.equal(GhosttyDock.current({ home: h.home, uid: UID, platform: 'darwin', now: 30000 }).trusted, true, 'cached');
     assert.equal(GhosttyDock.current({ home: h.home, uid: UID, platform: 'darwin', now: 61001 }).trusted, false, 'expired');
     fs.chmodSync(h.where.apiDir, 0o700);
-    await GhosttyDock.run('list', [], { dock: DOCK, exec: async () => ({ ok: false }) });
+    // list (like focus) first asks macOS whether the app is running; the CLI call itself then fails.
+    await GhosttyDock.run('list', ['--json'], { dock: DOCK, exec: async (f) => (f === '/usr/bin/osascript' ? { ok: true, stdout: 'true\n' } : { ok: false }) });
     assert.equal(GhosttyDock.current({ home: h.home, uid: UID, platform: 'darwin', now: 61002 }).trusted, true, 'invalidated');
   } finally { h.done(); GhosttyDock.invalidate(); }
 });

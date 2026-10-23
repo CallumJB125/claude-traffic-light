@@ -190,6 +190,19 @@ function showNote({ title, body, onClick }) {
   note.show();
 }
 
+// A session started inside Ghostty Dock can still be recorded as another app
+// (stock Ghostty's TERM_PROGRAM, or a session from before Dock was installed).
+// When Dock is on and trusted and lists that exact session id, the jump
+// targets Dock instead. Only the id is compared; Dock's output never names
+// the session or changes anything else about it.
+async function adoptIntoDock(s, { mode, dock: Dock = GhosttyDock, detect = Dock.detect, listStatus = Dock.listStatus } = {}) {
+  if (!s || mode === 'off' || s.hostApp === Dock.APP || !Dock.validSessionId(s.sessionId)) return null;
+  const dock = detect();
+  if (!dock || !dock.trusted) return null;
+  const listed = await listStatus({ dock });
+  return listed && listed.has(s.sessionId.toLowerCase()) ? { ...s, hostApp: Dock.APP } : null;
+}
+
 // Getters, because main.js requires this module before it has worked out its
 // home folder (a demo run moves it) or its host tag.
 module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = () => 'auto' }) => {
@@ -214,6 +227,7 @@ module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = 
       platform: process.platform,
       // Ghostty Dock's trust is checked afresh on every click on one of its sessions, right before its CLI runs.
       focus: (s, over) => Focus.focusSession(s, { ...over, ghosttyDock: s && s.hostApp === GhosttyDock.APP && getGhosttyDockMode() !== 'off' ? GhosttyDock.detect() : null }),
+      adopt: (s) => adoptIntoDock(s, { mode: getGhosttyDockMode() }),
       activate: activateTerminalApp,
       explainer,
       log: (msg) => console.log(`[jump] ${msg}`),
@@ -240,6 +254,7 @@ module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = 
     escapeForAppleScript,
     activateTerminalApp,
     jumpToSession,
+    adoptIntoDock,
     isRemote: Jump.isRemote,
     osa,
     frontmostApp,

@@ -48,6 +48,7 @@ const Setup = require('./setup.js');
 const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
 const GhosttyDock = require('./src/ghostty-dock.js');
+const NeedingQueue = require('./src/needing-queue.js');
 const Voice = require('./src/voice.js');
 const Compaction = require('./src/compaction.js');
 const Health = require('./src/health.js');
@@ -3747,24 +3748,26 @@ utilityHandle('get-aggregate-status', e => widgetOnly(e) || widgetConfigSender(e
   return { ...state, providerStatus: ProviderStatus.snapshot({ sessions: localSessions(state.sessions || []), online }), look: { ...state.look, facing } };
 });
 
-// Click handler: jump to whichever session needs the user — the ones whose
-// live signal is a waiting one. Cycles through them, oldest first; a limit
-// hit jumps the queue.
+// Ghostty Dock's own view of which of its sessions need you, when it is on
+// and trusted: only UUIDs and status words (src/ghostty-dock.js parseListJson).
+async function dockStatusFor(sessions) {
+  if (!IS_MAC || GhosttyDock.modeOf(loadConfig()) === 'off' || !sessions.some((s) => GhosttyDock.validSessionId(s.sessionId) && !WAITING_SIGNALS.has(s.signal))) return null;
+  try { return await GhosttyDock.listStatus({ dock: GhosttyDock.detect() }); } catch { return null; }
+}
+
+// Click handler: jump to whichever session needs the user (src/needing-queue.js):
+// blocked ones longest-waiting first, then finished turns; a limit hit jumps
+// the queue. Repeat clicks cycle through them.
 ipcMain.handle('go-to-needing-session', async () => {
   const sessions = localSessions(aggregateState().sessions);
-  const needing = sessions
-    .filter((s) => WAITING_SIGNALS.has(s.signal))
-    .sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
+  const queue = NeedingQueue.needingQueue(sessions, { dockStatus: await dockStatusFor(sessions) });
 
-  if (needing.length === 0) {
+  if (queue.length === 0) {
     cycleIndex = 0;
     // Nothing here to jump to, but say where the waiting is.
     const away = aggregateState().sessions.find((s) => s.remote && WAITING_SIGNALS.has(s.signal));
     return away ? { opened: 'remote', total: 0, feedback: `waiting on ${away.deviceName}` } : { opened: 'none', total: 0 };
   }
-
-  const limits = needing.filter((s) => s.signal === 'limit-hit');
-  const queue = limits.length > 0 ? limits : needing;
 
   cycleIndex = cycleIndex % queue.length;
   const target = queue[cycleIndex];
@@ -3774,10 +3777,12 @@ ipcMain.handle('go-to-needing-session', async () => {
   clipboard.writeText(target.cwd);
   const folderHint = Rules.folderOf(target.cwd);
   const activated = await jumpToSession(target, folderHint);
+  const appOnly = activated && !activated.cant && !activated.exact && !activated.byFolder;
   return {
     opened: activated?.app || 'none-found',
     exact: activated?.exact || false,
     ...(activated?.cant ? { note: activated.cant, feedback: activated.cant, command: activated.command || null } : {}),
+    ...(appOnly ? { feedback: NeedingQueue.jumpFeedback(folderHint, queue.length > 1 ? ` (${shownIndex}/${queue.length})` : '', activated) } : {}),
     cwd: target.cwd,
     signal: target.signal,
     index: shownIndex,
@@ -4257,7 +4262,8 @@ async function runAction(action, st) {
   const folderHint = cwd ? Rules.folderOf(cwd) : '';
   switch (action.type) {
     case 'jump': {
-      if (!needing.length) {
+      // Ghostty Dock can promote a session the filter above sees as running, so ask the queue too.
+      if (!needing.length && !NeedingQueue.needingQueue(local, { dockStatus: await dockStatusFor(local) }).length) {
         const away = st.sessions.find((s) => s.remote && WAITING_SIGNALS.has(s.signal));
         return away ? { feedback: `waiting on ${away.deviceName}` } : { react: { eyes: 'surprised', pose: 'bounce' }, feedback: 'boop' };
       }
@@ -4320,13 +4326,11 @@ async function runAction(action, st) {
 
 async function jumpToNeeding() {
   const sessions = localSessions(aggregateState().sessions);
-  const needing = sessions.filter((s) => WAITING_SIGNALS.has(s.signal)).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
-  if (!needing.length) {
+  const queue = NeedingQueue.needingQueue(sessions, { dockStatus: await dockStatusFor(sessions) });
+  if (!queue.length) {
     const away = aggregateState().sessions.find((s) => s.remote && WAITING_SIGNALS.has(s.signal));
     return away ? `waiting on ${away.deviceName}` : 'nothing waiting';
   }
-  const limits = needing.filter((s) => s.signal === 'limit-hit');
-  const queue = limits.length > 0 ? limits : needing;
   cycleIndex = cycleIndex % queue.length;
   const target = queue[cycleIndex];
   const shownIndex = cycleIndex + 1;
@@ -4335,8 +4339,7 @@ async function jumpToNeeding() {
   const folderHint = Rules.folderOf(target.cwd);
   const activated = await jumpToSession(target, folderHint);
   const badge = queue.length > 1 ? ` (${shownIndex}/${queue.length})` : '';
-  if (activated?.cant) return `${folderHint}${badge}: ${activated.cant}`;
-  return `→ ${folderHint}${badge}${activated?.exact ? ' · tab found' : ''} · path copied`;
+  return NeedingQueue.jumpFeedback(folderHint, badge, activated);
 }
 
 ipcMain.handle('gesture', async (e, gesture) => {
@@ -4930,6 +4933,28 @@ ipcMain.handle('connect-agent', async (e, which) => {
 });
 ipcMain.handle('git-status', (e) => settingsOnly(e) ? ({ ...git.status(), enabled: loadConfig().gitSignals !== false }) : null);
 utilityHandle('signal-endpoint', e => settingsOnly(e) || widgetConfigSender(e), () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));
+// Preferences / Health → "Install Ghostty Dock…" (src/ghostty-dock-install.js): Settings or Home only, an action name and nothing else.
+const GhosttyDockInstall = require('./src/ghostty-dock-install.js');
+const dockNotes = new Set();
+const ghosttyDockInstaller = GhosttyDockInstall.createController({
+  dock: GhosttyDock,
+  getMode: () => GhosttyDock.modeOf(loadConfig()),
+  shell,
+  confirm: async (opts) => {
+    const wc = buddyWin?.pageWebContents('settings') || buddyWin?.pageWebContents('home');
+    const parent = wc ? BrowserWindow.fromWebContents(wc) : null;
+    return (parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts)).response;
+  },
+  notify: (text) => {
+    if (!Notification.isSupported()) return;
+    const note = new Notification({ title: 'Ghostty Dock', body: text, silent: true });
+    dockNotes.add(note);
+    note.on('close', () => dockNotes.delete(note));
+    note.show();
+  },
+  changed: (s) => buddyWin?.sendToPage('settings', 'ghostty-dock-changed', s),
+});
+GhosttyDockInstall.register({ utilityHandle, allowed: (e) => settingsOnly(e) || fromUtilityPage(e, 'home'), controller: ghosttyDockInstaller });
 require('./src/cli-install.js').register({ utilityHandle, allowed: settingsOnly, dialog, BrowserWindow, home: os.homedir(), packaged: app.isPackaged, resourcesPath: process.resourcesPath, appDir: __dirname });
 // Not the signal server's port: an ssh -R tunnel makes this one reachable to
 // every user of the far host, so it serves only the signed device route.
@@ -4968,6 +4993,16 @@ utilityHandle('remote-revoke', settingsOnly, (_e, id) => {
 // ── Health (Preferences → Health, tray Health…) ────────────────────────────
 // The updater answers synchronously from its last check.
 const updateStatus = () => (Updater ? Updater.healthStatus() : { state: 'unknown' });
+// The Health row, plus its Install / Check again button when Preferences would show one.
+function ghosttyDockHealthRow() {
+  const dock = GhosttyDock.current();
+  const mode = GhosttyDock.modeOf(loadConfig());
+  const row = GhosttyDock.healthRow(dock, mode);
+  const { show } = GhosttyDockInstall.offer(dock, { mode });
+  if (show === 'install') return { ...row, fix: 'ghostty-dock-install', fixLabel: 'Install Ghostty Dock…' };
+  if (show === 'recheck') return { ...row, fix: 'ghostty-dock-recheck', fixLabel: 'Check again' };
+  return row;
+}
 function healthReport() {
   const report = Health.runChecks({
     home: os.homedir(),
@@ -4983,7 +5018,7 @@ function healthReport() {
     signal: { listening: !!signalServer?.listening, port: SIGNAL_PORT, error: signalServerError },
     burst: BurstIpc.status(),
     burstFacts: BurstIpc.healthFacts(),
-    ghosttyDock: IS_MAC ? GhosttyDock.healthRow(GhosttyDock.current(), GhosttyDock.modeOf(loadConfig())) : null,
+    ghosttyDock: IS_MAC ? ghosttyDockHealthRow() : null,
   });
   // Dev runs share the machine with a real install and never rewrite its hooks.
   report.checks = report.checks.map(({ fix, fixLabel, ...c }) =>
@@ -4999,6 +5034,13 @@ ipcMain.handle('health-fix', (e, id) => {
     return require('./adapters/hermes-activity').connect({ home: os.homedir(), runtime: HOOK_RUNTIME })
       .then((r) => r.ok ? null : r.error || 'Hermes activity could not be connected.', (err) => err.message)
       .then((error) => { console.log(`[health] fix "connect-hermes"${error ? ` failed: ${error}` : ''}`); return { error, report: healthReport() }; });
+  }
+  if (id === 'ghostty-dock-install' || id === 'ghostty-dock-recheck') {
+    return ghosttyDockInstaller.act(id === 'ghostty-dock-install' ? 'install' : 'recheck').then((r) => {
+      const error = r.error || null;
+      console.log(`[health] fix ${JSON.stringify(id)}${error ? ` failed: ${error}` : r.cancelled ? ' cancelled' : ''}`);
+      return { error, cancelled: r.cancelled === true, report: healthReport() };
+    });
   }
   // burst-<action>: an allow-listed Burst mutation (src/burst-ipc.js), behind its own consent dialog.
   if (typeof id === 'string' && id.startsWith('burst-')) {
