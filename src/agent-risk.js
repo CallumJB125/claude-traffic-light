@@ -61,8 +61,12 @@ function scanAgent({ body, tools = null, frontmatter = '' }) {
     let m;
     while ((m = re.exec(text))) { add('high', r.rule, m.index, r.why); if (m[0].length === 0) re.lastIndex++; }
   }
-  const fmHidden = HIGH.find((r) => r.rule === 'hidden-characters');
-  if (fmHidden.re.test(String(frontmatter))) flags.push({ level: 'high', rule: 'hidden-characters', line: 0, excerpt: '(frontmatter)', why: fmHidden.why });
+  // The frontmatter gets the same high rules; its flags are reported on line 0.
+  const fm = String(frontmatter ?? '');
+  for (const r of HIGH) {
+    const m = new RegExp(r.re.source, r.re.flags.replace('g', '')).exec(fm);
+    if (m && !seen.has(`${r.rule}:0`) && flags.length < MAX_FLAGS) { seen.add(`${r.rule}:0`); flags.push({ level: 'high', rule: r.rule, line: 0, excerpt: `(frontmatter) ${excerpt(lineAt(fm, m.index).text)}`.slice(0, EXCERPT), why: r.why }); }
+  }
   for (const h of findSecrets(text, { classes: ['credential'] })) add('high', 'secret', h.index, 'Looks like a real credential.');
 
   for (const f of fenced(text)) {

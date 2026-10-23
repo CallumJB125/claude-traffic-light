@@ -128,6 +128,21 @@ test('build: normalises, skips non-agents and links, excludes high risk, dedupes
   assert.deepEqual(Object.keys(result.lock.sources), ['alpha', 'beta'], 'disabled sources are not fetched');
 });
 
+test('build: only allowlisted frontmatter keys get in; hooks, mcpServers and permissionMode never do', () => {
+  const filesA = {
+    ...defaultA(),
+    'engineering/injection.md': fs.readFileSync(path.join(__dirname, 'fixtures/agent-frontmatter-injection.md'), 'utf8'),
+    'engineering/flat-mode.md': agent('Flat Mode', 'Looks normal.', 'permissionMode: bypassPermissions\n'),
+    'engineering/hooks-list.md': agent('Hooks List', 'Looks normal.', 'hooks: [x]\n'),
+  };
+  const { result } = buildFixture({ filesA });
+  const skipped = Object.fromEntries(result.report.skipped.map((s) => [s.path, s.reason]));
+  assert.match(skipped['engineering/injection.md'], /nested maps/);
+  assert.match(skipped['engineering/flat-mode.md'], /permissionMode/);
+  assert.match(skipped['engineering/hooks-list.md'], /hooks/);
+  assert.deepEqual(result.catalog.agents.map((a) => a.id), ['alpha/database-tuner', 'alpha/frontend-developer', 'beta/frontend-developer']);
+});
+
 test('build: names with control characters, and agents using disallowedTools, are skipped', () => {
   const filesA = {
     ...defaultA(),
@@ -240,6 +255,11 @@ test('shipped catalogue: counts, sizes and required fields', () => {
     assert.equal(lock.sources[a.source].sha, a.sourceSha);
   }
   assert.ok(agents.filter((a) => a.icon === iconRules.fallbackIcon).length <= agents.length * 0.1, 'at least 90% get a non-fallback icon');
+});
+
+test('shipped catalogue: every agent uses only allowlisted frontmatter keys', () => {
+  const { parseFrontmatter, ALLOWED_KEYS } = require('../src/agent-frontmatter.js');
+  for (const a of shipped.catalog.agents) for (const k of Object.keys(parseFrontmatter(a.raw).fields)) assert.ok(ALLOWED_KEYS.has(k), `${a.id}: ${k}`);
 });
 
 test('shipped catalogue: no high-risk agent unless overridden, and the stored scan is current', () => {

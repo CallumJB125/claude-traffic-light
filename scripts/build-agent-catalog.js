@@ -21,7 +21,7 @@ const path = require('node:path');
 const zlib = require('node:zlib');
 const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const { parseFrontmatter, str } = require('../src/agent-frontmatter.js');
+const { parseFrontmatter, str, ALLOWED_KEYS } = require('../src/agent-frontmatter.js');
 const { scanAgent, RULES_VERSION } = require('../src/agent-risk.js');
 
 const SCHEMA = 1;
@@ -207,8 +207,10 @@ function build(root, opts = {}) {
       if (!name || !description || name.length > 120 || !slugify(name)) { report.skipped.push({ source: src.id, path: rel, reason: 'no usable name or description' }); continue; }
       // A name ends up on one line in other platforms' files, so it may not hold line breaks or control characters.
       if (/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/u.test(name)) { report.skipped.push({ source: src.id, path: rel, reason: 'name contains control characters' }); continue; }
-      // Exclusions can't be carried to the other platforms, which would get the excluded tools.
-      if (fm.fields.disallowedTools !== undefined) { report.skipped.push({ source: src.id, path: rel, reason: 'uses disallowedTools, which other platforms cannot honour' }); continue; }
+      // Only allowlisted keys: hooks, mcpServers, permissionMode and the like act
+      // beyond the prompt, and disallowedTools can't be carried to other platforms.
+      const extra = Object.keys(fm.fields).filter((k) => !ALLOWED_KEYS.has(k));
+      if (extra.length) { report.skipped.push({ source: src.id, path: rel, reason: `frontmatter key not allowed: ${extra.join(', ')}` }); continue; }
       const slug = slugify(name);
       const division = path.posix.dirname(rel) === '.' ? '' : path.posix.dirname(rel).replace(/^categories\//, '').replace(/^plugins\/([^/]+)\/agents$/, '$1').replace(/^agents$/, '');
       const key = src.dedupeKey === 'stem' ? slugify(path.posix.basename(rel, '.md')) : slug;
@@ -238,7 +240,7 @@ function build(root, opts = {}) {
         name, slug, key, description: desc,
         oneLiner: ov.oneLiner ?? clip(firstSentence(desc), 120),
         bestWhen: ov.bestWhen ?? bestWhenOf(desc),
-        category: null, division, tags: [...new Set(division.split('/').filter(Boolean).concat(toolList(fm.fields.services) ?? []))],
+        category: null, division, tags: [...new Set(division.split('/').filter(Boolean).concat(toolList(fm.fields.services?.map?.((s) => (typeof s === 'string' ? s : s.name)) ?? fm.fields.services) ?? []))],
         tools: { declared, effective: declared ?? 'all' },
         model: str(fm.fields, 'model'),
         vibe: str(fm.fields, 'vibe'), upstreamColor: str(fm.fields, 'color'), upstreamEmoji: str(fm.fields, 'emoji'),

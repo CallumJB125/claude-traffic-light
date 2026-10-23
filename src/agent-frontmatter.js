@@ -9,6 +9,37 @@ const MAX_FIELDS = 64;
 const KEY = /^([A-Za-z_][A-Za-z0-9_-]{0,63}):(?:[ \t]+(.*))?$/;
 // Control characters other than tab and newline (a CR before a newline is folded first).
 const CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F]/;
+// The only keys a catalogue agent may carry. Anything else (hooks, mcpServers,
+// permissionMode, disallowedTools, …) could change what the AI tool does
+// beyond the prompt, so such an agent is left out at build and refused at install.
+const ALLOWED_KEYS = new Set(['name', 'description', 'model', 'color', 'emoji', 'vibe', 'tools', 'author', 'services']);
+const NESTED_KEY = /^\s*(?:-\s+)?[A-Za-z_][\w-]*:(?:\s|$)/;
+// agency-agents lists services as `- name: … / url: … / tier: …`: the one
+// nested shape read, as a list of one-level maps of plain values.
+const MAP_LIST_KEYS = new Set(['services']);
+const MAP_ITEM = /^([ \t]*)-[ \t]+([A-Za-z_][\w-]*):(?:[ \t]+(.*))?$/;
+const MAP_FIELD = /^([ \t]+)([A-Za-z_][\w-]*):(?:[ \t]+(.*))?$/;
+
+function mapList(key, cont) {
+  const out = [];
+  let item = null, fieldIndent = null;
+  const put = (k, val) => {
+    if (k === '__proto__' || Object.hasOwn(item, k)) fail(`duplicate key ${k} in ${key}`);
+    const s = (val ?? '').trim();
+    if (!s || /^[[{|>]/.test(s)) fail(`nested maps are not supported (${key})`);
+    item[k] = unquote(s);
+  };
+  for (const l of cont) {
+    if (!l.trim()) continue;
+    let m = l.match(MAP_ITEM);
+    if (m) { item = Object.create(null); out.push(item); fieldIndent = m[1].length + 2; put(m[2], m[3]); continue; }
+    m = l.match(MAP_FIELD);
+    if (!m || !item || m[1].length !== fieldIndent) fail(`nested maps are not supported (${key})`);
+    put(m[2], m[3]);
+  }
+  if (out.length > 32) fail(`too many items in ${key}`);
+  return out;
+}
 
 class FrontmatterError extends Error {}
 const fail = (msg) => { throw new FrontmatterError(msg); };
@@ -81,6 +112,10 @@ function parseFrontmatter(text) {
     while (i + 1 < lines.length && (/^[ \t]/.test(lines[i + 1]) || !lines[i + 1].trim())) cont.push(lines[++i]);
     while (cont.length && !cont.at(-1).trim()) cont.pop();
     const v = value.trim();
+    // Real YAML would read these lines as a nested map, so they are refused
+    // rather than folded into a string.
+    if (!v && MAP_LIST_KEYS.has(key) && cont.some((l) => MAP_ITEM.test(l))) { fields[key] = mapList(key, cont); continue; }
+    if (!v && cont.some((l) => NESTED_KEY.test(l))) fail(`nested maps are not supported (${key})`);
     if (/^[|>][-+]?$/.test(v)) {
       const indent = Math.min(...cont.filter((l) => l.trim()).map((l) => l.match(/^[ \t]*/)[0].length));
       const body = cont.map((l) => l.slice(Math.min(indent, l.length)));
@@ -104,11 +139,11 @@ function parseFrontmatter(text) {
   return { fields, frontmatter, bodyOffset };
 }
 
-/** The string value of a field, or null. Lists join with ", ". */
+/** The string value of a field, or null. Lists join with ", "; a map item gives its name. */
 function str(fields, key) {
   const v = fields[key];
   if (v == null) return null;
-  return Array.isArray(v) ? v.join(', ') : String(v);
+  return Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : x.name ?? '')).join(', ') : String(v);
 }
 
-module.exports = { parseFrontmatter, str, FrontmatterError, MAX_BYTES };
+module.exports = { parseFrontmatter, str, FrontmatterError, MAX_BYTES, ALLOWED_KEYS };
