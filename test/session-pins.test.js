@@ -123,3 +123,13 @@ test('pins: status filters saved under the old state words migrate once to bucke
   assert.deepEqual(again, saved);
   for (const id of P.BUCKET_IDS) assert.equal(P.parse(JSON.stringify({ filters: [{ name: 'x', values: { status: id } }] })).filters[0].values.status, id);
 });
+
+test('pins: an unrecognised saved status word is dropped, not turned into an Idle filter', () => {
+  const s = P.parse(JSON.stringify({ filters: [
+    { name: 'Odd', values: { status: 'garbage', person: 'Ana' } }, { name: 'Only odd', values: { status: 'Some future label' } },
+    { name: 'Known idle', values: { status: 'Ended' } },
+  ] }));
+  assert.equal(s.upgraded, true);
+  assert.deepEqual(s.filters, [{ name: 'Odd', values: { person: 'Ana' } }, { name: 'Known idle', values: { status: 'idle' } }]);
+  for (const v of ['__proto__', 'constructor', 'toString']) assert.deepEqual(P.parse(JSON.stringify({ filters: [{ name: 'x', values: { status: v, person: 'Bo' } }] })).filters[0].values, { person: 'Bo' }, v);
+});

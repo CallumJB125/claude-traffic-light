@@ -11,8 +11,9 @@
   const BUCKET_IDS = ['needs', 'working', 'check', 'stuck', 'idle'];
   // A status filter is a bucket id. Ones saved before that hold the old state words
   // ("Needs input", "Working", "Ended"); they map once to the bucket those words now
-  // fall in, and a bucket id maps to itself, so loading again changes nothing.
-  const statusId = v => BUCKET_IDS.includes(v) ? v : Organise ? Organise.bucketOf(v) : v;
+  // fall in, and a bucket id maps to itself, so loading again changes nothing. A word that
+  // names no known state is dropped (no status filter) rather than guessed as Idle.
+  const statusId = v => BUCKET_IDS.includes(v) ? v : !Organise ? v : Organise.knowsState(v) ? Organise.bucketOf(v) : '';
   const keyOf = e => e && typeof e === 'object' ? [str(e.owner?.name, 200), str(e.provider?.id, 120), str(e.board?.label, 200), str(e.task?.title, 400)].join('\u001f') : '';
   const empty = () => ({ pins: [], filters: [], collections: [] });
   const validKey = k => typeof k === 'string' && k.length <= 1000 && k.split('\u001f').length === 4 && k !== '\u001f\u001f\u001f';
@@ -43,7 +44,9 @@
           if (k !== 'status') return [k, f.values[k]];
           const id = statusId(f.values[k]); if (id !== f.values[k]) upgraded = true;
           return [k, id];
-        })) })) : [];
+        }).filter(([, val]) => val)) }))
+        // A saved filter left with nothing to narrow by is gone, as saveFilter would never keep one.
+        .filter(f => Object.keys(f.values).length) : [];
       return { pins: [...new Set(pins)], filters, collections, ...(upgraded ? { upgraded } : {}) };
     } catch { return empty(); }
   }

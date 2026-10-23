@@ -63,6 +63,8 @@
     if (id === 'check' && o.changes === false) return 'idle';
     return id;
   }
+  // Whether a state word is one bucketOf actually knows, rather than one it files under Idle by default.
+  const knowsState = (v) => typeof v === 'string' && Object.hasOwn(BUCKET_OF, v.trim().toLowerCase().slice(0, 60));
   // The same input → the bucket's heading, so a view never names a state its own way.
   const headingOf = (input) => BUCKET_BY_ID[bucketOf(input)].heading;
 
@@ -484,7 +486,7 @@
     return { resolve, clear: () => cache.clear(), size: () => cache.size };
   }
 
-  const api = { BUCKETS, FALLBACK, SENTENCE_FALLBACK, headingOf, MAX_TITLE, bucketOf, projectOf, titleOf, group, createGitInfoResolver, safeText, promptSummary, humaniseBranch };
+  const api = { BUCKETS, FALLBACK, SENTENCE_FALLBACK, headingOf, MAX_TITLE, bucketOf, knowsState, projectOf, titleOf, group, createGitInfoResolver, safeText, promptSummary, humaniseBranch };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformWorkOrganise = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);
