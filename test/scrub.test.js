@@ -260,3 +260,22 @@ test('scrubTitle and scrub: a North American number needs NANP area code and exc
   }
   for (const p of ['(415) 555-0100', '415-555-0100', '1-800-555-0100', '415.555.0100']) assert.equal(scrubTitle(`call ${p}`), 'call [phone]', p);
 });
+
+test('scrubText: zero-width, full-width and other compatibility forms cannot hide a match (#52 follow-up)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  const cases = [
+    ['call +27​82 555 0199', 'call [phone]'], ['call +27 82 555 0199', 'call [phone]'],
+    ['call ＋２７ ８２ ５５５ ０１９９', 'call [phone]'], ['ping 10​.0.0.5', 'ping [ip]'],
+    ['ping 10.0.0.5⁠', 'ping [ip]'], ['ssh db​.corp.acme.internal', 'ssh [host]'], ['mail sam＠acme.com', 'mail [email]'],
+    ['mail sam@acme‍.com', 'mail [email]'], ['ping 10.0.‮0.5', 'ping [ip]'], ['tag 10.0.0.5\u{E0041}\u{E0042}', 'tag [ip]'],
+    ['ssh nas͏.local', 'ssh [host]'],
+  ];
+  for (const [input, want] of cases) assert.equal(scrubTitle(input), want, JSON.stringify(input));
+  // Format characters that mean something between other letters stay.
+  for (const keep of ['family \u{1F468}‍\u{1F469}‍\u{1F467}', 'می‌خواهم', 'сервер работает']) assert.equal(scrubTitle(keep), keep, keep);
+  // NFKC growth is capped: ㌕ grows 5x, U+FDFA 18x.
+  for (const big of ['㌕'.repeat(20000), 'ﷺ'.repeat(20000), '​'.repeat(1e6)]) {
+    const t = performance.now(); const out = scrubTitle(big);
+    assert.ok(out.length <= 64 * 1024 && performance.now() - t < 500, `${out.length} chars in ${Math.round(performance.now() - t)} ms`);
+  }
+});

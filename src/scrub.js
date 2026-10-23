@@ -350,13 +350,31 @@ const privateHost = (host, port, hubHost = null) => {
   return !KEEP_HOSTS.has(h) && h !== hubHost;
 };
 
+// Invisible and compatibility characters can split a number or a name so no pattern sees
+// it ("+27\u200b82 555 0199", full-width "＋２７", "sam＠acme.com"). Tag characters (ASCII
+// smuggling), the combining grapheme joiner and Hangul fillers always go. Other format
+// characters (zero-width, bidi) go next to ASCII, where they could hide a match, and stay
+// between other letters, where they mean something (an emoji ZWJ sequence, Persian ZWNJ).
+// NFKC then folds full-width and other compatibility forms. NFKC can grow text up to 18
+// times, so the input is capped before it and the output after.
+const TEXT_MAX = 64 * 1024;
+const ALWAYS_INVISIBLE = /[\u{E0000}-\u{E007F}\u034F\u115F\u1160\u3164\uFFA0]/gu;
+// One pass over each run (a lookahead after \p{Cf}+ would backtrack through a long run).
+const FORMAT_RUN = /\p{Cf}+/gu;
+const PRINTABLE_ASCII = /[\x21-\x7e]/;
+const nearAscii = (m, at, all) => (PRINTABLE_ASCII.test(all[at - 1] ?? '') || PRINTABLE_ASCII.test(all[at + m.length] ?? '') ? '' : m);
+function plainText(text) {
+  const strip = (t) => t.replace(ALWAYS_INVISIBLE, '').replace(FORMAT_RUN, nearAscii);
+  return strip(strip(text.slice(0, TEXT_MAX)).normalize('NFKC').slice(0, TEXT_MAX));
+}
+
 // Text on its way to a team hub or a teammate (review L2): a title, a task's report.
 // Unlike scrub() it labels what it removes ([ip], [host], [phone], [email]) instead of
 // hashing, so the text still reads. Line breaks and spacing are kept.
 //   hubHost: the destination hub's host name, the one tailnet name the text may keep
 function scrubText(text, { hubHost = null } = {}) {
   const hub = typeof hubHost === 'string' && hubHost ? hubHost.toLowerCase() : null;
-  let out = redactSecretsPass(String(text ?? ''));
+  let out = redactSecretsPass(plainText(String(text ?? '')));
   out = out.replace(PATTERNS.EMAIL, '[email]');
   out = out.replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8})(:\d{1,5})?/gi, (m, scheme, host, port) => (privateHost(host, port, hub) ? `${scheme}[host]` : m));
   // "1.2.3.4-beta" is a version with a prerelease tag, not an address.
