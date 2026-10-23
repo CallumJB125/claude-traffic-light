@@ -972,3 +972,17 @@ test('PR3 review 6: peek() and cached() never make a key or touch safeStorage wi
   assert.deepEqual(again.peek(), made, 'peek loads an existing key');
   assert.deepEqual(again.cached(), made);
 });
+
+test('PR3 review L1: available() asks safeStorage once per run, however often the page lists', () => {
+  const { createLedgerKeyStore } = require('../src/agent-install-key.js');
+  let asked = 0;
+  const safe = { isEncryptionAvailable: () => { asked++; return true; }, encryptString: (t) => Buffer.from(`sealed:${t}`), decryptString: (b) => b.toString().slice(7) };
+  const k = createLedgerKeyStore({ file: path.join(tmp(), 'agent-installs.key'), safeStorage: safe });
+  for (let i = 0; i < 3; i++) assert.equal(k.available(), true);
+  assert.equal(k().length, 32, 'making the key reuses the cached answer');
+  assert.equal(asked, 1);
+  let no = 0;
+  const off = createLedgerKeyStore({ file: path.join(tmp(), 'k'), safeStorage: { isEncryptionAvailable: () => { no++; return false; } } });
+  for (let i = 0; i < 3; i++) assert.equal(off.available(), false);
+  assert.equal(no, 1);
+});

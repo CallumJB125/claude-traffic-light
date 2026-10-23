@@ -14,13 +14,16 @@ const path = require('node:path');
 const WEAK_LINUX_BACKENDS = new Set(['basic_text', 'unknown']);
 
 function createLedgerKeyStore({ file, safeStorage, fsApi = fs, platform = process.platform }) {
-  let failed = null, key = null;
+  let failed = null, key = null, canSeal = null;
   const fail = (msg) => { failed = new Error(msg); throw failed; };
+  // Asked once per run: every page list calls available(), and the answer
+  // doesn't change while the app runs (only called after app ready).
   const sealable = () => {
+    if (canSeal !== null) return canSeal;
     try {
-      if (!safeStorage || !safeStorage.isEncryptionAvailable()) return false;
-      return platform !== 'linux' || !WEAK_LINUX_BACKENDS.has(safeStorage.getSelectedStorageBackend?.() ?? 'unknown');
-    } catch { return false; }
+      if (!safeStorage || !safeStorage.isEncryptionAvailable()) return (canSeal = false);
+      return (canSeal = platform !== 'linux' || !WEAK_LINUX_BACKENDS.has(safeStorage.getSelectedStorageBackend?.() ?? 'unknown'));
+    } catch { return (canSeal = false); }
   };
   function load({ create }) {
     if (key) return key;
