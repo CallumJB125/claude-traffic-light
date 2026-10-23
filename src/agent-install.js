@@ -433,14 +433,18 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     walk(dir, '');
     return out.join('\n');
   }
+  // Backups by name, oldest first. A name dated after now (a clock once set
+  // wrong, or planted) is never reused, counted or pruned (review PR 4 P1).
   function backupsIn(root) {
-    return fsApi.readdirSync(root).filter((n) => BACKUP_NAME.test(n) && fsApi.lstatSync(path.join(root, n)).isDirectory()).sort();
+    const nowName = `claude-agents-${stamp(now()).replace(/Z$/, '999Z')}`;
+    return fsApi.readdirSync(root).filter((n) => BACKUP_NAME.test(n) && n.slice(0, nowName.length) <= nowName && fsApi.lstatSync(path.join(root, n)).isDirectory()).sort();
   }
 
   // Copies ~/.claude/agents to a dated folder in the data folder, keeping links
   // as links, and checks every regular file's bytes in the copy. An unchanged
   // folder reuses its newest backup, and only the newest MAX_BACKUPS are kept.
-  function backupClaudeAgents() {
+  // keep: backup names that must survive pruning (those of adopts not undone).
+  function backupClaudeAgents(keep = new Set()) {
     const src = path.join(HOME, CLAUDE_DIR);
     const root = path.join(DATA, BACKUPS_DIR);
     fsApi.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -461,8 +465,22 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     };
     walk(src, dest);
     fsApi.chmodSync(dest, 0o700);
-    for (const old of backupsIn(root).slice(0, -MAX_BACKUPS)) fsApi.rmSync(path.join(root, old), { recursive: true, force: true });
+    prune(root, new Set([...keep, path.basename(dest)]));
+    if (!fsApi.lstatSync(dest).isDirectory()) throw new Error('backup gone');
     return dest;
+  }
+  // Keeps at most MAX_BACKUPS, never deleting the oldest (the folder before
+  // Plexiform managed anything), the current one, or any in `keep`.
+  function prune(root, keep) {
+    const all = backupsIn(root);
+    if (all.length) keep.add(all[0]);
+    let extra = all.length - MAX_BACKUPS;
+    for (const n of all) {
+      if (extra <= 0) break;
+      if (keep.has(n)) continue;
+      fsApi.rmSync(path.join(root, n), { recursive: true, force: true });
+      extra--;
+    }
   }
 
   /**
@@ -473,9 +491,10 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     const found = adoptable();
     const chosen = rels === null ? found.matches : found.matches.filter((m) => Array.isArray(rels) && rels.includes(m.rel));
     if (!chosen.length) return { ok: true, opId: null, adopted: [], backup: null };
-    let backup;
-    try { backup = backupClaudeAgents(); } catch { return refuse('backup', 'Could not back up ~/.claude/agents first, so nothing was adopted.'); }
     const ledger = readLedger();
+    const inUse = new Set(ledger.ops.filter((o) => o.kind === 'adopt' && !o.undone && typeof o.backup === 'string').map((o) => path.basename(o.backup)));
+    let backup;
+    try { backup = backupClaudeAgents(inUse); } catch { return refuse('backup', 'Could not back up ~/.claude/agents first, so nothing was adopted.'); }
     const at = new Date(now()).toISOString();
     const changes = [];
     for (const m of chosen) {

@@ -414,6 +414,52 @@ test('adoption refuses a linked agents folder and never backs one up', () => {
   assert.ok(!fs.existsSync(path.join(data, 'agent-backups')));
 });
 
+// Security review PR 4 P1 (poc8): pruning by name removed the backup it had
+// just made when future-dated names were there, so the op named a gone folder.
+test('PR4 P1: future-dated backup names never cost the new backup, and an adopt\'s backup outlives later ones', () => {
+  const { home, data, inst } = setup();
+  const dir = path.join(home, '.claude/agents');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'frontend-developer.md'), FE.raw);
+  const root = path.join(data, 'agent-backups');
+  fs.mkdirSync(root, { recursive: true });
+  const future = [0, 1, 2, 3, 4].map((i) => `claude-agents-2099010${i}T000000000Z-0000000${i}`);
+  for (const n of future) fs.mkdirSync(path.join(root, n));
+  const a = inst.adopt();
+  assert.equal(a.ok, true);
+  const op = JSON.parse(fs.readFileSync(inst.ledgerPath, 'utf8')).ops.at(-1);
+  assert.ok(fs.statSync(path.join(data, op.backup)).isDirectory(), 'the backup the op names exists');
+  for (const n of future) assert.ok(fs.existsSync(path.join(root, n)), 'future-dated names are left alone, not pruned or reused');
+
+  // Seven adopt clicks, each with a changed folder: the first adopt's backup
+  // stays while that adopt is not undone, and so does the oldest.
+  const agents = [0, 1, 2, 3, 4, 5, 6].map((i) => agentOf(`agency/a${i}`, { name: `Agent ${i}` }));
+  const t = setup({ agents });
+  const tdir = path.join(t.home, '.claude/agents');
+  fs.mkdirSync(tdir, { recursive: true });
+  let clock = Date.parse('2026-10-23T10:00:00Z');
+  const it = createAgentInstaller({ ledgerKey: KEY, home: t.home, dataRoot: t.data, catalog: catalogOf(agents), now: () => (clock += 1000) });
+  const firsts = [];
+  for (const [i, ag] of agents.entries()) {
+    fs.writeFileSync(path.join(tdir, `${ag.slug}.md`), ag.raw);
+    const r = it.adopt([`.claude/agents/${ag.slug}.md`]);
+    assert.equal(r.ok, true, `adopt ${i}`);
+    firsts.push(JSON.parse(fs.readFileSync(it.ledgerPath, 'utf8')).ops.at(-1).backup);
+  }
+  for (const b of firsts) assert.ok(fs.existsSync(path.join(t.data, b)), `${b} is kept while its adopt stands`);
+  // Undo them all but the first; the next adopt prunes back down, keeping the first.
+  const ops = JSON.parse(fs.readFileSync(it.ledgerPath, 'utf8')).ops;
+  for (const o of ops.slice(1)) assert.equal(it.undo(o.id).ok, true);
+  fs.writeFileSync(path.join(tdir, 'mine.md'), 'mine\n');
+  const last = it.adopt([`.claude/agents/${agents[3].slug}.md`]);
+  assert.equal(last.ok, true);
+  const left = fs.readdirSync(path.join(t.data, 'agent-backups'));
+  assert.ok(left.length <= 5, `${left.length} kept`);
+  assert.ok(left.includes(path.basename(firsts[0])), 'the first (oldest, still adopted) backup is kept');
+  const newest = JSON.parse(fs.readFileSync(it.ledgerPath, 'utf8')).ops.at(-1).backup;
+  assert.ok(left.includes(path.basename(newest)), 'the backup just made is kept');
+});
+
 test('Cursor "Add to a project…" is off by default; when on it writes one .mdc and undoes', () => {
   const { inst, cat } = setup();
   const project = tmp();
@@ -638,14 +684,23 @@ test('security L3: backups are reused when nothing changed and capped at the new
   assert.equal(again.backup, first.backup, 'an unchanged folder reuses its last backup');
   const backups = () => fs.readdirSync(path.join(data, 'agent-backups')).sort();
   assert.equal(backups().length, 1);
+  // Undone adopts free their backups for pruning (PR 4 P1: a backup an adopt
+  // still relies on, the oldest and the newest are never pruned).
+  let prev = again;
   for (let i = 0; i < 7; i++) {
-    inst.stopManaging();
+    inst.undo(prev.opId);
     fs.writeFileSync(path.join(dir, `mine-${i}.md`), `mine ${i}\n`);
     const a = inst.adopt();
     assert.deepEqual(fs.readdirSync(a.backup).sort(), ['frontend-developer.md', ...Array.from({ length: i + 1 }, (_, j) => `mine-${j}.md`)].sort());
+    prev = a;
   }
   assert.equal(backups().length, 5);
   assert.ok(fs.existsSync(path.join(data, 'agent-backups', backups().at(-1), 'mine-6.md')), 'the newest is kept');
+  assert.equal(path.join(data, 'agent-backups', backups()[0]), first.backup, 'the oldest is kept');
+  // An adopt that stands keeps its backup however many come after.
+  inst.stopManaging();
+  for (let i = 7; i < 14; i++) { fs.writeFileSync(path.join(dir, `mine-${i}.md`), 'x'); inst.stopManaging(); inst.adopt(); }
+  assert.ok(backups().includes(path.basename(prev.backup)), 'still adopted, so kept');
 });
 
 test('security L3: PRIVACY.md lists the local files Find agents keeps and the folders it writes', () => {
