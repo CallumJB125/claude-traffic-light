@@ -85,6 +85,7 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
   const ledgerPath = path.join(DATA, LEDGER_FILE);
   let writesDone = 0; // tests: fail on the Nth write
   const validator = ledgerValidator(targets, HOME);
+  const catalogHashes = new Set(catalog.catalog.agents.map((a) => a.fileSha256));
 
   // ── ledger ──────────────────────────────────────────────────────────────
   function readLedger() {
@@ -133,12 +134,17 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
     if (sha(fsApi.readFileSync(file, 'utf8')) !== h) throw new Error('kept copy does not match');
     return h;
   }
-  function original(h) {
+  // Bytes to put back into a target's folder: the kept copy, and only if it
+  // is in the format that target writes (never hooks or other settings).
+  function original(h, platform) {
+    const t = platform === 'cursor' ? targets.find((x) => x.id === 'cursor-project') : byId.get(platform);
+    if (!t?.accepts) throw new Error('unknown target');
     const file = path.join(DATA, ORIGINALS_DIR, h);
     const st = fsApi.lstatSync(file);
     if (st.isSymbolicLink() || !st.isFile()) throw new Error('kept copy is not a regular file');
     const text = fsApi.readFileSync(file, 'utf8');
     if (sha(text) !== h) throw new Error('kept copy is damaged');
+    if (!t.accepts(text)) throw new Error('kept copy is not an agent file this tool takes');
     return text;
   }
 
@@ -268,7 +274,7 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
       const cur = current(c.rel);
       if (!cur.ok) continue;
       try {
-        if (c.after === null) { if (cur.text == null) files.writeTarget(c.rel, original(c.before), 0o644, { exclusive: true }); } else if (cur.sha === c.after) files.writeTarget(c.rel, original(c.before), 0o644);
+        if (c.after === null) { if (cur.text == null) files.writeTarget(c.rel, original(c.before, c.platform), 0o644, { exclusive: true }); } else if (cur.sha === c.after) files.writeTarget(c.rel, original(c.before, c.platform), 0o644);
       } catch { /* left as it is; the file shows as modified */ }
     }
   }
@@ -487,18 +493,21 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
           if (cur.text == null) { conflicts.push({ path: label, reason: 'The file is gone; nothing to restore over.' }); delete ledger.owned[k]; continue; }
           if (cur.sha !== c.before) {
             if (!o || cur.sha !== o.sha) { conflicts.push({ path: label, reason: 'Changed outside Plexiform, so it is kept as it is.' }); delete ledger.owned[k]; continue; }
-            write(c.rel, original(c.before));
+            // Only bytes that were a catalogue agent can have been adopted: this
+            // catalogue's, or the original the adoption itself recorded (signed, R1b).
+            if (!catalogHashes.has(c.before) && !(o?.how === 'adopted' && o.original === c.before)) { conflicts.push({ path: label, reason: 'The kept copy is not a catalogue agent, so it is not put back.' }); delete ledger.owned[k]; continue; }
+            write(c.rel, original(c.before, c.platform));
           }
           delete ledger.owned[k];
         } else if (op.kind === 'update') {
           if (!o || o.sha !== c.after) { conflicts.push({ path: label, reason: 'Plexiform no longer manages this file as updated, so it is kept.' }); continue; }
           if (cur.sha !== c.after) { conflicts.push({ path: label, reason: 'Changed since the update, so it is kept.' }); continue; }
-          write(c.rel, original(c.before));
+          write(c.rel, original(c.before, c.platform));
           Object.assign(o, { sha: c.before, fileSha256: c.prevFileSha256 });
         } else if (op.kind === 'remove' || op.kind === 'release') {
           if (c.after === null && c.before !== null) {
             if (cur.text != null) { conflicts.push({ path: label, reason: 'A file is there again, so it is kept.' }); continue; }
-            write(c.rel, original(c.before), { exclusive: true });
+            write(c.rel, original(c.before, c.platform), { exclusive: true });
           } else if (c.before !== null && cur.sha !== c.before) { conflicts.push({ path: label, reason: 'Changed since, so Plexiform does not manage it again.' }); continue; }
           if (c.owned && (c.before !== null || c.after !== null)) ledger.owned[k] = c.owned;
         }

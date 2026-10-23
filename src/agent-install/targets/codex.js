@@ -7,12 +7,32 @@
 // https://learn.chatgpt.com/docs/agent-configuration/subagents)
 const { tomlString, body, slugOf, has, oneLine, EDITS } = require('./common.js');
 
+// The file it writes, line by line: an optional leading comment, the three
+// one-line strings, and optionally [features] shell_tool = false.
+const STR = String.raw`"(?:[^"\\\u0000-\u001F\u007F]|\\(?:[btnfr"\\]|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}))*"`;
+const LINE = new RegExp(String.raw`^(name|description|developer_instructions) = ${STR}$`);
+function accepts(text) {
+  const lines = String(text).replace(/\n$/, '').split('\n');
+  const seen = new Set();
+  let i = 0;
+  if (lines[0]?.startsWith('# ') && !/[\u0000-\u001F\u007F]/.test(lines[0])) i = 1;
+  for (; i < lines.length; i++) {
+    const m = lines[i].match(LINE);
+    if (m && !seen.has(m[1])) { seen.add(m[1]); continue; }
+    break;
+  }
+  if (seen.size !== 3) return false;
+  const rest = lines.slice(i);
+  return rest.length === 0 || (rest.length === 3 && rest[0] === '' && rest[1] === '[features]' && rest[2] === 'shell_tool = false');
+}
+
 module.exports = {
   id: 'codex',
   label: 'Codex',
   dir: '.codex/agents',
   ext: '.toml',
   verified: true,
+  accepts,
   render(agent, { alt = false } = {}) {
     const slug = slugOf(agent, alt);
     const notes = [];

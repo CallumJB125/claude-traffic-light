@@ -6,7 +6,9 @@
 // Docs: https://geminicli.com/docs/core/subagents/ ,
 // https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md,
 // tool names: https://github.com/google-gemini/gemini-cli/tree/main/docs/tools
-const { yamlString, body, slugOf } = require('./common.js');
+const { yamlString, body, slugOf, frontmatterKeysWithin } = require('./common.js');
+
+const KEYS = new Set(['name', 'description', 'tools']);
 
 const TOOLS = { Read: ['read_file'], Write: ['write_file'], Edit: ['replace'], MultiEdit: ['replace'], Bash: ['run_shell_command'], Grep: ['grep_search'], Glob: ['glob'], LS: ['list_directory'], WebFetch: ['web_fetch'], WebSearch: ['google_web_search'] };
 
@@ -17,6 +19,7 @@ module.exports = {
   ext: '.md',
   verified: true,
   TOOLS,
+  accepts: (text) => frontmatterKeysWithin(text, KEYS),
   render(agent, { alt = false } = {}) {
     const name = slugOf(agent, alt);
     if (!/^[a-z0-9_-]+$/.test(name)) return { ok: false, reason: 'Gemini CLI does not accept this agent\'s name.' };

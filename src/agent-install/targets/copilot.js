@@ -6,7 +6,9 @@
 // means every tool. The prompt body is capped at 30,000 characters.
 // Docs: https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/create-custom-agents-for-cli ,
 // https://docs.github.com/en/copilot/reference/custom-agents-configuration
-const { yamlString, body, slugOf } = require('./common.js');
+const { yamlString, body, slugOf, frontmatterKeysWithin } = require('./common.js');
+
+const KEYS = new Set(['name', 'description', 'tools']);
 
 module.exports = {
   id: 'copilot',
@@ -14,6 +16,7 @@ module.exports = {
   dir: '.copilot/agents',
   ext: '.agent.md',
   verified: true,
+  accepts: (text) => frontmatterKeysWithin(text, KEYS),
   render(agent, { alt = false } = {}) {
     const slug = slugOf(agent, alt);
     const text = body(agent);
