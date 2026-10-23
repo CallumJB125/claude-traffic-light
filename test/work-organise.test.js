@@ -553,3 +553,15 @@ test('work-organise: L6 — markup is stripped before redaction, so a tag cannot
   }
   assert.equal(W.titleOf({ team: false, firstPrompt: 'Fix the lo<wbr>gin loop' }).title, 'Fix the login loop', 'a lone tag inside a word joins it');
 });
+
+test('work-organise: renderer mode (no scrubber) still strips paths, control and invisible characters from typed titles', () => {
+  const none = { redact: null };
+  const zw = String.fromCodePoint(0x200b), tagA = String.fromCodePoint(0xe0061), rlo = String.fromCodePoint(0x202e), bel = String.fromCharCode(7);
+  for (const source of ['human', 'card', 'reported']) {
+    const { title } = W.titleOf({ [source]: `Fix${zw} the${tagA} [/Users/sam/app] ${rlo}cfg|/etc/hosts loop${bel} ~sam/x C:\\Users\\sam\\y` }, none);
+    assert.equal(title, 'Fix the cfg loop', `${source}: ${JSON.stringify(title)}`);
+  }
+  assert.equal(W.titleOf({ provider: 'codex', project: `a${zw}pp${bel}` }, none).title, 'Codex session in app');
+  assert.equal(W.titleOf({ provider: 'codex', project: '/Users/sam/app' }, none).title, 'Codex session', 'a path is not a project name');
+  assert.equal(W.projectOf({ cwd: `/x/a${tagA}pp${bel}` }, none).heading, 'app');
+});

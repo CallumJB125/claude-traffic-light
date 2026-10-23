@@ -74,7 +74,8 @@
   const UNC_RE = new RegExp(`\\\\\\\\${PATH_CHARS}`, 'g');
   const TILDE_RE = new RegExp(`~[\\w.-]*[\\\\/]${PATH_CHARS}|(?<![\\w.~%-])~[A-Za-z_][\\w.-]*`, 'g');
   const PATH_RE = new RegExp(`(?<![\\w.~%-])(?:[A-Za-z]:|\\.{1,2})?[\\\\/]${PATH_CHARS}`, 'g');
-  const stripPaths = (t) => t.replace(HOME_RE, ' ').replace(UNC_RE, ' ').replace(TILDE_RE, ' ').replace(PATH_RE, ' ').replace(REL_PATH, ' ').replace(/[[{(]\s*[\]})]/g, ' ');
+  // A pipe glued to a removed path (cfg|/etc/hosts) goes with it.
+  const stripPaths = (t) => t.replace(/\|(?=[~\\/]|[A-Za-z]:[\\/])/g, ' ').replace(HOME_RE, ' ').replace(UNC_RE, ' ').replace(TILDE_RE, ' ').replace(PATH_RE, ' ').replace(REL_PATH, ' ').replace(/[[{(]\s*[\]})]/g, ' ');
   // Relative paths: a word/word token with a file extension or two separators.
   const REL_PATH = /(?<![\w.-])[\w.-]+(?:[\\/][\w.-]+)*[\\/][\w-]+\.[A-Za-z0-9]{1,8}(?![\w.-])|(?<![\w.-])[\w.-]+(?:[\\/][\w.-]+){2,}[\\/]?(?![\w.-])/g;
   const REDACTED = /\[(?:redacted|email|ip|user|host|card|iban|sa-id|ssn|nino|passport)\]|<redacted(?::\w+)?>/i;
