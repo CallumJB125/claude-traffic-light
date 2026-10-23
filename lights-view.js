@@ -316,11 +316,47 @@
     try { config = await window.lightsApi.saveConfig({ character: R.normalizeCharacter(next) }); } catch (err) { flash(`Save failed: ${err.message}`); return; }
     renderEditor(); renderStage();
   }
+  // Every picker tile is a whole rig (~2k elements). Building them all made Lights open
+  // with ~199k elements and froze each editor redraw for most of a second, so a tile
+  // builds its rig the first time it comes into view. Tiles already in view when the
+  // editor draws are built in that same pass, so a redraw never shows empty tiles.
+  const RIG_MARGIN = 300;
+  const rigLooks = new WeakMap();
+  let rigBatch = [];
+  const lazyRigs = new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) mountLazyRig(e.target);
+  }, { rootMargin: `${RIG_MARGIN}px 0px` });
+  function mountLazyRig(el) {
+    const look = rigLooks.get(el);
+    if (!look) return;
+    rigLooks.delete(el);
+    lazyRigs.unobserve(el);
+    mountRig(el).setLook(look);
+    el.dataset.rig = 'mounted';
+  }
+  function lazyRig(el, look) {
+    rigLooks.set(el, look);
+    el.dataset.rig = 'pending';
+    rigBatch.push(el);
+  }
+  function flushLazyRigs() {
+    const batch = rigBatch;
+    rigBatch = [];
+    for (const el of batch) {
+      const b = el.getBoundingClientRect();
+      if (b.width && b.bottom >= -RIG_MARGIN && b.top <= innerHeight + RIG_MARGIN) mountLazyRig(el);
+      else lazyRigs.observe(el);
+    }
+  }
+
   function renderEditor() {
     const r = selected();
     const ed = $('editor');
     ed.classList.toggle('disabled', !r);
     if (!r) return;
+    // Every tile row below is rebuilt, so tiles still waiting from the last draw are gone.
+    lazyRigs.disconnect();
+    rigBatch = [];
     $('name').value = r.name;
     $('enabled').checked = r.enabled;
     $('enabled').disabled = r.locked;
@@ -392,8 +428,7 @@
       const lbl = document.createElement('span');
       lbl.textContent = p === null ? 'keep' : p;
       b.appendChild(lbl);
-      const m = mountRig(mini);
-      m.setLook({ lamp: 'off', eyes: p === 'sleep' ? 'closed' : 'default', pose: p || 'none', text: 'HEY' });
+      lazyRig(mini, { lamp: 'off', eyes: p === 'sleep' ? 'closed' : 'default', pose: p || 'none', text: 'HEY' });
       if (p === null) mini.style.opacity = '0.35';
       b.addEventListener('click', () => { r.then.pose = p; touch(); });
       poses.appendChild(b);
@@ -415,7 +450,7 @@
         const lbl = document.createElement('span');
         lbl.textContent = o === null ? 'keep' : (opts.label && opts.label(o)) || ({ h3: '3 lamps', v3: 'vertical', h1: '1 lamp', h5: '5 lamps' })[o] || o;
         b.appendChild(lbl);
-        mountRig(mini).setLook({ lamp: 'off', eyes: 'default', pose: 'none', ...lookFor(o) });
+        lazyRig(mini, { lamp: 'off', eyes: 'default', pose: 'none', ...lookFor(o) });
         if (o === null) mini.style.opacity = '0.35';
         b.addEventListener('click', () => { onPick(o); if (!opts.noKeep) touch(); });
         const extra = o !== null && opts.extra && opts.extra(o);
@@ -483,7 +518,7 @@
       const lbl = document.createElement('span');
       lbl.textContent = m;
       b.appendChild(lbl);
-      mountRig(mini).setLook({ lamp: 'off', eyes: m, pose: 'none' });
+      lazyRig(mini, { lamp: 'off', eyes: m, pose: 'none' });
       b.addEventListener('click', () => { r.then.eyes = m; touch(); });
       moods.appendChild(b);
     }
@@ -537,6 +572,7 @@
     $('text-row').hidden = !(r.then.pose === 'banner' || r.then.pose === 'bubble');
     $('text-row').querySelector('.lbl').textContent = r.then.pose === 'bubble' ? 'Bubble says' : 'Banner says';
     $('text').value = r.then.text || '';
+    flushLazyRigs();
   }
 
   function touch() {

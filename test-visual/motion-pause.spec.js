@@ -208,13 +208,19 @@ test('the editor stage follows its window focus: display clock focused, ambient 
   await expect.poll(stageLoops).toEqual(['running']);
 });
 
-// The editor mounts a live rig per picker tile (~165); only the few in view
-// may animate, and a minimised editor holds everything.
+// The editor has a picker tile per option (~165). Tiles out of view have no rig until
+// they are scrolled to; a built tile scrolled away again stops animating, and a
+// minimised editor holds everything.
 test('the Lights editor animates only what is in view, and holds while minimised', async () => {
   await widget.evaluate(() => window.trafficLight.openLights());
   const lights = await windowByFile(h.app, 'lights.html');
   await lights.waitForLoadState('load');
-  await expect.poll(() => lights.evaluate(() => document.querySelectorAll('svg.rig.offscreen').length)).toBeGreaterThan(100);
+  await expect.poll(() => lights.evaluate(() => document.querySelectorAll('.mini[data-rig="pending"]').length)).toBeGreaterThan(100);
+  const last = lights.locator('.mini').last();
+  await last.scrollIntoViewIfNeeded();
+  await expect(last).toHaveAttribute('data-rig', 'mounted');
+  await lights.evaluate(() => window.scrollTo(0, 0));
+  await expect.poll(() => lights.evaluate(() => document.querySelectorAll('svg.rig.offscreen').length)).toBeGreaterThan(0);
   const running = () => lights.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running' && a.effect.target.closest('svg.rig.offscreen')).length);
   expect(await running()).toBe(0);
   const lightsPaused = () => lights.evaluate(() => document.body.classList.contains('motion-paused'));
