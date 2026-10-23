@@ -475,7 +475,8 @@ test('PR4 P2: an agents folder swapped for a link during the backup is refused, 
   fs.writeFileSync(path.join(victim, 'frontend-developer.md'), FE.raw);
   fs.chmodSync(victim, 0o755);
   let swapped = false;
-  const fsApi = { ...fs, cpSync: (src, dest, o) => { if (!swapped) { swapped = true; fs.renameSync(dir, `${dir}.real`); fs.symlinkSync(victim, dir); } return fs.cpSync(src, dest, o); } };
+  // Swapped as the copy starts: once the backup folder is made.
+  const fsApi = { ...fs, mkdirSync: (p, o) => { const out = fs.mkdirSync(p, o); if (!swapped && /\/agent-backups\/(\.tmp-)?claude-agents-[^/]+$/.test(String(p))) { swapped = true; fs.renameSync(dir, `${dir}.real`); fs.symlinkSync(victim, dir); } return out; } };
   const inst = createAgentInstaller({ ledgerKey: KEY, home, dataRoot: data, catalog: catalogOf([FE, RO]), fsApi });
   const r = inst.adopt();
   assert.equal(swapped, true);

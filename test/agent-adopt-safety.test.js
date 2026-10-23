@@ -41,6 +41,8 @@ function setup() {
 }
 const owned = (s) => JSON.parse(fs.readFileSync(s.it.ledgerPath, 'utf8')).owned;
 const ownedCount = (s) => (fs.existsSync(s.it.ledgerPath) ? Object.keys(owned(s)).length : 0);
+// The backup folder itself (staged or final), not something inside it.
+const isBackupDir = (p) => /\/agent-backups\/(\.tmp-)?claude-agents-[^/]+$/.test(String(p));
 const backupsOf = (s) => (fs.existsSync(path.join(s.data, 'agent-backups')) ? fs.readdirSync(path.join(s.data, 'agent-backups')).sort() : []);
 const diff = (a, b) => { const A = new Set(a), B = new Set(b); return { gone: a.filter((l) => !B.has(l)), added: b.filter((l) => !A.has(l)) }; };
 
@@ -120,7 +122,9 @@ test('step 1b: a backup with one changed byte, an extra entry or a different mod
   for (const [what, fn] of Object.entries(spoil)) {
     const s = setup();
     const before = s.fp();
-    const fsApi = new Proxy(fs, { get: (t, k) => (k === 'cpSync' ? (src, dest, o) => { t.cpSync(src, dest, o); fn(dest); } : t[k]) });
+    // Spoiled as soon as the copy is done: the first look inside the backup folder.
+    let spoiled = false;
+    const fsApi = new Proxy(fs, { get: (t, k) => (k === 'readdirSync' ? (p, ...a) => { if (!spoiled && isBackupDir(p)) { spoiled = true; fn(p); } return t.readdirSync(p, ...a); } : t[k]) });
     const r = s.inst(shipped, { fsApi }).adopt();
     assert.equal(r.status, 'backup', what);
     assert.equal(ownedCount(s), 0, what);
@@ -362,7 +366,8 @@ test('change 8: hostile folders and files: swaps, links, planted backups, a link
     fs.chmodSync(victim, 0o755);
     const was = outside(s, [victim]);
     let swapped = false;
-    const fsApi = new Proxy(fs, { get: (t, k) => (k === 'cpSync' ? (...a) => { if (!swapped) { swapped = true; t.renameSync(s.fx.dir, `${s.fx.dir}.real`); t.symlinkSync(victim, s.fx.dir); } return t.cpSync(...a); } : t[k]) });
+    // Swapped as the copy starts: once the backup folder is made.
+    const fsApi = new Proxy(fs, { get: (t, k) => (k === 'mkdirSync' ? (p, ...a) => { const out = t.mkdirSync(p, ...a); if (!swapped && isBackupDir(p)) { swapped = true; t.renameSync(s.fx.dir, `${s.fx.dir}.real`); t.symlinkSync(victim, s.fx.dir); } return out; } : t[k]) });
     const r = s.inst(shipped, { fsApi }).adopt();
     assert.equal(r.status, 'backup');
     assert.deepEqual(outside(s, [victim]), was, 'no outside folder changed, modes included');
@@ -574,9 +579,11 @@ test('M1: restoring folder modes never follows a link and never touches anything
   const s = setup();
   const victim = path.join(s.home, 'elsewhere');
   fs.chmodSync(victim, 0o755);
-  // Swap a copied folder for a link as soon as cpSync puts it in the backup.
-  const fsApi = new Proxy(fs, { get: (tg, k) => (k === 'cpSync' ? (from, to, o) => { const out = tg.cpSync(from, to, o); if (String(to).endsWith('/private')) { tg.rmSync(to, { recursive: true }); tg.symlinkSync(victim, to); } return out; } : tg[k]) });
+  // Swap the copied folder for a link once the copy is done, before modes are set.
+  let swapped = false;
+  const fsApi = new Proxy(fs, { get: (tg, k) => (k === 'readdirSync' ? (p, ...a) => { if (!swapped && isBackupDir(p)) { swapped = true; const to = path.join(p, 'private'); tg.rmSync(to, { recursive: true }); tg.symlinkSync(victim, to); } return tg.readdirSync(p, ...a); } : tg[k]) });
   const r = s.inst(shipped, { fsApi }).adopt();
+  assert.ok(swapped);
   assert.equal(r.ok, false);
   assert.equal(fs.statSync(victim).mode & 0o7777, 0o755, 'the link target\'s mode is unchanged');
   assert.deepEqual(backupsOf(s), []);
@@ -689,4 +696,74 @@ test('an entry of yours named x (a folder or a link) does not block adopting or 
     assert.equal(plan.ok, true);
     assert.ok(plan.items.length > 0 && plan.items.every((i) => i.state !== 'gone-now'), JSON.stringify(plan.items.filter((i) => i.state === 'gone-now').slice(0, 3)));
   }
+});
+
+// Review #54 M4: Node's native cpSync aborts the whole process (an uncaught
+// C++ filesystem_error) when a folder vanishes mid-copy, and a crashed adopt
+// left a partial folder under a valid backup name, listed as a real backup.
+test('M4a: a backup that stops part way (and is never cleaned up) is never listed, and the next backup clears it', () => {
+  const s = setup();
+  const team = path.join(s.fx.dir, 'team');
+  let made = false, stopped = false;
+  // A stop part way through the copy, with the clean-up failing too: what a crash leaves.
+  const fsApi = new Proxy(fs, { get: (t, k) => {
+    if (k === 'mkdirSync') return (p, ...a) => { const out = t.mkdirSync(p, ...a); if (isBackupDir(p)) made = true; return out; };
+    if (k === 'lstatSync') return (p, ...a) => { if (made && !stopped && p === team) { stopped = true; throw Object.assign(new Error('gone'), { code: 'ENOENT' }); } return t.lstatSync(p, ...a); };
+    if (k === 'rmSync') return () => { throw new Error('crashed before clean-up'); };
+    return t[k];
+  } });
+  const r = s.inst(shipped, { fsApi }).adopt();
+  assert.ok(stopped, 'the copy stopped part way');
+  assert.equal(r.ok, false);
+  const left = backupsOf(s);
+  assert.equal(left.length, 1, 'the partial folder is still there');
+  assert.ok(left[0].startsWith('.tmp-claude-agents-'), left[0]);
+  assert.ok(fs.readdirSync(path.join(s.data, 'agent-backups', left[0])).length > 0, 'and holds part of a copy');
+  const fresh = s.inst();
+  assert.deepEqual(fresh.backups(), [], 'never listed as a backup');
+  assert.equal(fresh.backupPath(left[0].replace(/^\.tmp-/, '')), null);
+  // The next backup clears it.
+  const a = fresh.adopt([`.claude/agents/${s.fx.exact[0].name}`]);
+  assert.equal(a.ok, true, a.error);
+  assert.deepEqual(backupsOf(s), [a.backup]);
+});
+
+test('M4b: a subfolder removed or replaced by a link while it is copied refuses the adopt, without crashing, and leaves nothing', () => {
+  for (const how of ['removed', 'link']) {
+    const s = setup();
+    const team = path.join(s.fx.dir, 'team');
+    const victim = path.join(s.home, 'elsewhere');
+    const was = fs.readdirSync(victim).sort().join();
+    let fired = false;
+    // As the copy opens the first file inside team/.
+    const fsApi = new Proxy(fs, { get: (t, k) => (k === 'openSync' ? (p, ...a) => {
+      if (!fired && String(p).startsWith(team + path.sep)) {
+        fired = true;
+        t.rmSync(team, { recursive: true });
+        if (how === 'link') t.symlinkSync(victim, team);
+      }
+      return t.openSync(p, ...a);
+    } : t[k]) });
+    const r = s.inst(shipped, { fsApi }).adopt();
+    assert.ok(fired, `${how}: the copy reads files itself, so the race ran`);
+    assert.equal(r.ok, false, how);
+    assert.equal(r.status, 'backup', how);
+    assert.deepEqual(backupsOf(s), [], `${how}: nothing left, not even a staged folder`);
+    assert.equal(ownedCount(s), 0, how);
+    assert.equal(fs.readdirSync(victim).sort().join(), was, `${how}: nothing written outside`);
+  }
+});
+
+test('M4b: the copy reads no FIFO swapped in for a file, and refuses it', () => {
+  const s = setup();
+  const target = path.join(s.fx.dir, 'team', fs.readdirSync(path.join(s.fx.dir, 'team'))[0]);
+  let fired = false;
+  const fsApi = new Proxy(fs, { get: (t, k) => (k === 'openSync' ? (p, ...a) => {
+    if (!fired && p === target) { fired = true; t.rmSync(p); execFileSync('mkfifo', [p]); }
+    return t.openSync(p, ...a);
+  } : t[k]) });
+  const r = s.inst(shipped, { fsApi }).adopt();
+  assert.ok(fired);
+  assert.equal(r.ok, false);
+  assert.deepEqual(backupsOf(s), []);
 });
