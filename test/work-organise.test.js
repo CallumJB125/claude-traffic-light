@@ -741,3 +741,9 @@ test('work-organise: session, agent, deps and other non-work words after an agen
   }
   assert.equal(t('codex/eng-42'), 'ENG-42');
 });
+
+test('titleOf: the default redaction is the hub title scrub (review L2)', () => {
+  const { title } = W.titleOf({ team: false, reported: 'call +27 82 555 0199 about db1.internal.example.com fe80::1ff:fe23:4567:890a' });
+  assert.doesNotMatch(title, /555 0199|db1\.internal|fe80::/, title);
+  assert.equal(W.titleOf({ team: false, reported: 'Bump node 22.4.1 for ENG-42 at 10:30' }).title, 'Bump node 22.4.1 for ENG-42 at 10:30');
+});

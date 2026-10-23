@@ -191,3 +191,17 @@ test('transcript and hook prompts drop leading tagged blocks and keep the real r
   Tap.mutate(f, 'prompt-submit', { prompt: '<system-reminder>only harness text</system-reminder>' }, '2026-10-07T10:01:00.000Z');
   assert.equal(f.lastPrompt, 'rename the config loader');
 });
+
+test('forShare: phone numbers and internal host names go from shared text too (review L2)', () => {
+  const rec = { ...WorkRecord.build({ install_id: INSTALL, o: o(), raw: {}, facts: facts({ lastAssistant: 'Rang +44 20 7946 0958' }), home: HOME }), rev: 1 };
+  const shared = WorkRecord.forShare({ ...rec, title: 'call +27 82 555 0199 re db1.internal.example.com', summary: 'Rang +44 20 7946 0958', goal: 'ping 082 555 0199' }, { share_summaries: true }, { salt: 's' });
+  for (const f of ['title', 'summary', 'goal']) assert.doesNotMatch(shared[f], /555 0199|7946 0958|db1\.internal/, `${f}: ${shared[f]}`);
+  assert.match(shared.title, /\[phone\]/);
+});
+
+test('forShare: a tailnet name other than the route hub goes from shared text (#52 review)', () => {
+  const rec = { ...WorkRecord.build({ install_id: INSTALL, o: o(), raw: {}, facts: facts({ lastAssistant: 'x' }), home: HOME }), rev: 1 };
+  const shared = WorkRecord.forShare({ ...rec, summary: 'ssh callums-mac.tail1234.ts.net and plexi.tail1234.ts.net, call 415-555-0100' }, { share_summaries: true, hub: 'https://plexi.tail1234.ts.net' }, { salt: 's' });
+  assert.doesNotMatch(shared.summary, /callums-mac|555-0100/, shared.summary);
+  assert.match(shared.summary, /plexi\.tail1234\.ts\.net/);
+});
