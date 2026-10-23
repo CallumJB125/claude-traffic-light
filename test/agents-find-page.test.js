@@ -169,18 +169,55 @@ test('the page keeps the strict CSP and loads only its own scripts', () => {
   for (const src of html.match(/src="[^"]+"/g)) assert.ok(fs.existsSync(path.join(ROOT, src.slice(5, -1))), src);
 });
 
-test('the page never parses third-party text as markup', () => {
-  for (const f of ['agents-find-view.js', 'agent-icons.js', 'src/agent-catalog-search.js', 'src/agent-prompt-render.js']) {
-    const js = read(f);
-    for (const sink of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', 'DOMParser', 'createContextualFragment', 'eval(', 'new Function', 'srcdoc']) assert.ok(!js.includes(sink), `${f}: ${sink}`);
-    assert.ok(!/\bhref\b/.test(js), `${f}: no links`);
-    assert.ok(!/\bfetch\(|XMLHttpRequest|WebSocket/.test(js), `${f}: no network`);
+test('the page never parses third-party text as markup, and has no links (the window opens any http(s) link)', () => {
+  for (const f of ['agents-find.html', 'agents-find-view.js', 'agents-find-preload.js', 'agent-icons.js', 'src/agent-catalog-search.js', 'src/agent-prompt-render.js']) {
+    // Same-origin stylesheets are the only href the page may carry.
+    const js = read(f).replace(/<link rel="stylesheet" href="[a-z-]+\.css">/g, '');
+    for (const sink of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', 'DOMParser', 'createContextualFragment', 'new Function', 'srcdoc', '<a ', "setAttribute('style'", 'setAttribute("style"', '.src =', "el('a'", "createElement('a')", 'window.open']) assert.ok(!js.includes(sink), `${f}: ${sink}`);
+    assert.ok(!/\beval\b/.test(js), `${f}: eval`);
+    assert.ok(!/\bhref\b/.test(js), `${f}: no href`);
+    assert.ok(!/\bfetch\(|XMLHttpRequest|WebSocket|EventSource|sendBeacon/.test(js), `${f}: no network`);
   }
+});
+
+test('the preload exposes only the Find agents calls and rebuilds every argument', () => {
+  const src = read('agents-find-preload.js');
+  const exposed = {};
+  const invoked = [];
+  const electron = { contextBridge: { exposeInMainWorld: (k, v) => { exposed[k] = v; } }, ipcRenderer: { invoke: (...a) => { invoked.push(a); return Promise.resolve(null); } } };
+  new Function('require', src)((m) => (m === 'electron' ? electron : null));
+  assert.deepEqual(Object.keys(exposed), ['agentsApi']);
+  assert.deepEqual(Object.keys(exposed.agentsApi).sort(), ['add', 'addToProject', 'detail', 'list', 'openTools', 'status', 'targets', 'undo', 'undoProject']);
+  const evil = { platform: 'claude', alt: 'yes', path: '/etc', toString: () => 'x' };
+  exposed.agentsApi.add({ toString: () => 'a'.repeat(500) }, 'f'.repeat(100), [evil, 'codex', ...Array(30).fill('gemini')]);
+  const [ch, id, sha, plats] = invoked.at(-1);
+  assert.equal(ch, 'agents:add');
+  assert.equal(id.length, 200);
+  assert.equal(sha.length, 64);
+  assert.equal(plats.length, 16);
+  assert.deepEqual(plats[0], { platform: 'claude', alt: false });
+  assert.notEqual(plats[0], evil);
+  assert.equal(plats[1], 'codex');
+  exposed.agentsApi.addToProject('x', 'y', '/etc/passwd');
+  assert.deepEqual(invoked.at(-1), ['agents:add-to-project', 'x', 'y']);
+  exposed.agentsApi.undo({});
+  assert.deepEqual(invoked.at(-1), ['agents:undo', '[object Object]']);
+});
+
+test('the page is registered in the Agents section with its own glyph', () => {
+  const Pages = require('../buddy-window/pages.js');
+  const p = Pages.pageById('agents-find');
+  assert.equal(p.file, 'agents-find.html');
+  assert.equal(p.preload, 'agents-find-preload.js');
+  assert.ok(Pages.SECTIONS.find((s) => s.id === 'sessions').pages.includes('agents-find'));
+  assert.ok(read('buddy-window/sidebar.js').includes("'find-agents': ['M6.5 2a2"));
+  const pkg = JSON.parse(read('package.json'));
+  for (const f of ['agents-find.html', 'agents-find-preload.js', 'agents-find-view.js', 'agents-find-view.css', 'agent-icons.js']) assert.ok(pkg.build.files.includes(f), f);
 });
 
 test('the page names only ids, the catalogue sha, platforms and an undo id', () => {
   const js = read('agents-find-view.js');
   const calls = [...js.matchAll(/api\.(\w+)\(([^)]*)\)/g)].map((m) => `${m[1]}(${m[2]})`);
-  const allowed = new Set(['list()', 'status()', 'detail(a.id)', 'targets(a.id)', 'add(a.id, catalogSha, platforms)', 'undo(opId)', 'addToProject(a.id, state.catalogSha)', 'openTools()']);
+  const allowed = new Set(['list()', 'status()', 'detail(a.id)', 'targets(a.id)', 'add(a.id, catalogSha, platforms)', 'undo(opId)', 'addToProject(a.id, state.catalogSha)', 'undoProject(r.opId)', 'openTools()']);
   for (const c of calls) assert.ok(allowed.has(c), c);
 });

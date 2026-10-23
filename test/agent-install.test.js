@@ -845,3 +845,35 @@ test('security K1: on Linux the ledger key refuses a basic_text or unknown safeS
   for (const backend of ['gnome_libsecret', 'kwallet5']) assert.equal(createLedgerKeyStore({ file: path.join(tmp(), 'k'), safeStorage: fakeSafe(backend), platform: 'linux' })().length, 32, backend);
   assert.equal(createLedgerKeyStore({ file: path.join(tmp(), 'k'), safeStorage: fakeSafe('basic_text'), platform: 'darwin' })().length, 32);
 });
+
+test('PR3 review 1: undo refuses a kind it has no branch for, and a project add stays undoable', () => {
+  const s = setup({ enableCursorProject: true });
+  const project = path.join(tmp(), 'proj');
+  fs.mkdirSync(project);
+  const pr = s.inst.addToProject(FE.id, project, { catalogSha: s.cat.sha256 });
+  assert.equal(pr.ok, true);
+  assert.equal(s.inst.undo(pr.opId).ok, false, 'an add-project op is not undone by undo()');
+  assert.ok(s.inst.status().ops.some((o) => o.id === pr.opId), 'and is still listed');
+  assert.equal(s.inst.undoProject(pr.opId).ok, true);
+  const a = s.add(FE.id, ['claude']);
+  assert.equal(s.inst.undoProject(a.installId).ok, false, 'an add op is not undone by undoProject()');
+  assert.equal(s.inst.undo(a.installId).ok, true);
+});
+
+test('PR3 review 6: peek() and cached() never make a key or touch safeStorage without a key file', () => {
+  const { createLedgerKeyStore } = require('../src/agent-install-key.js');
+  let calls = 0;
+  const safe = { isEncryptionAvailable: () => { calls++; return true; }, encryptString: (t) => { calls++; return Buffer.from(`sealed:${t}`); }, decryptString: (b) => { calls++; return b.toString().slice(7); } };
+  const file = path.join(tmp(), 'agent-installs.key');
+  const k = createLedgerKeyStore({ file, safeStorage: safe });
+  assert.equal(k.cached(), null);
+  assert.equal(k.peek(), null);
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(calls, 0);
+  const made = k();
+  assert.equal(k.cached(), made);
+  const again = createLedgerKeyStore({ file, safeStorage: safe });
+  assert.equal(again.cached(), null, 'a new run has nothing cached until it loads');
+  assert.deepEqual(again.peek(), made, 'peek loads an existing key');
+  assert.deepEqual(again.cached(), made);
+});

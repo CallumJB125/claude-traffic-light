@@ -16,18 +16,20 @@ const WEAK_LINUX_BACKENDS = new Set(['basic_text', 'unknown']);
 function createLedgerKeyStore({ file, safeStorage, fsApi = fs, platform = process.platform }) {
   let failed = null, key = null;
   const fail = (msg) => { failed = new Error(msg); throw failed; };
-  return function ledgerKey() {
+  const sealable = () => {
+    try {
+      if (!safeStorage || !safeStorage.isEncryptionAvailable()) return false;
+      return platform !== 'linux' || !WEAK_LINUX_BACKENDS.has(safeStorage.getSelectedStorageBackend?.() ?? 'unknown');
+    } catch { return false; }
+  };
+  function load({ create }) {
     if (key) return key;
     if (failed) throw failed;
-    const sealable = (() => {
-      try {
-        if (!safeStorage || !safeStorage.isEncryptionAvailable()) return false;
-        return platform !== 'linux' || !WEAK_LINUX_BACKENDS.has(safeStorage.getSelectedStorageBackend?.() ?? 'unknown');
-      } catch { return false; }
-    })();
-    if (!sealable) fail('agent ledger key needs safeStorage, which is not available');
     let text = null;
     try { text = fsApi.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') fail(`agent ledger key unreadable (${e.code || 'error'})`); }
+    // Peeking with no key file is the common case: no keychain access at all.
+    if (text === null && !create) return null;
+    if (!sealable()) fail('agent ledger key needs safeStorage, which is not available');
     if (text !== null) {
       let hex = null;
       try { const d = JSON.parse(text); hex = safeStorage.decryptString(Buffer.from(String(d.data), 'base64')); } catch { hex = null; }
@@ -39,10 +41,19 @@ function createLedgerKeyStore({ file, safeStorage, fsApi = fs, platform = proces
     const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     fsApi.writeFileSync(tmp, JSON.stringify({ v: 1, data: safeStorage.encryptString(hex).toString('base64') }), { mode: 0o600, flag: 'wx' });
     // link, not rename: a key another run made first is kept, not replaced.
-    try { fsApi.linkSync(tmp, file); } catch (e) { if (e.code !== 'EEXIST') { fsApi.unlinkSync(tmp); throw e; } fsApi.unlinkSync(tmp); failed = null; return ledgerKey(); }
+    try { fsApi.linkSync(tmp, file); } catch (e) { if (e.code !== 'EEXIST') { fsApi.unlinkSync(tmp); throw e; } fsApi.unlinkSync(tmp); failed = null; return load({ create }); }
     fsApi.unlinkSync(tmp);
     return (key = Buffer.from(hex, 'hex'));
-  };
+  }
+  /** The key, made on first use. Only a write (add) calls this. */
+  function ledgerKey() { return load({ create: true }); }
+  /** The existing key, or null when there is no key file. Never makes one. */
+  ledgerKey.peek = () => load({ create: false });
+  /** The key only if this run already loaded it: no file or keychain access (Health). */
+  ledgerKey.cached = () => key;
+  /** Whether a key could be kept here at all: asks safeStorage, never the keychain item. */
+  ledgerKey.available = () => !failed && sealable();
+  return ledgerKey;
 }
 
 module.exports = { createLedgerKeyStore };

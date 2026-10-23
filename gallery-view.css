@@ -40,3 +40,4 @@ body.discover .recipes { display: block; height: 100%; box-sizing: border-box; }
 .cg-drawer-actions { margin-top: 14px; }
 .cg-stage { display: grid; place-items: center; margin: 6px 0; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg); }
 .cg-stage svg.rig { width: 144px; height: 184px; }
+.cg-gallery .recipes-head .btn.link { margin-top: 8px; }

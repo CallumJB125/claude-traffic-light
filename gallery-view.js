@@ -250,6 +250,11 @@
     const title = el('div');
     title.append(el('h2', null, 'Discover'), el('p', null, 'Recipes, widget characters, widget rules and setups other people shared on plexiform.dev. Gallery recipes only read: they plan and report and never change files. Open any item to see everything it contains before it is added, and nothing runs when you add it.'));
     title.firstChild.id = 'cg-title';
+    // Agents have their own page (agents-find.html); this only opens it.
+    if (window.findAgentsApi) {
+      const go = btn('Looking for agents for Claude Code, Codex and others? Find agents →', 'link', () => window.findAgentsApi.open());
+      title.append(go);
+    }
     head.append(title);
     const where = el('div', 'recipes-where');
     if (data) {

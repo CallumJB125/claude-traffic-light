@@ -39,6 +39,8 @@ const PAGES = [
   { id: 'tasks', title: 'Tasks', icon: 'tasks', kind: 'local', file: 'tasks.html', preload: 'tasks-preload.js', query: { embedded: '1' }, group: 'work' },
   // The community gallery (src/gallery.js): recipes, characters, widget rules, setups and packs from the site.
   { id: 'discover', title: 'Discover', icon: 'puzzle', kind: 'local', file: 'discover.html', preload: 'discover-preload.js', group: 'work' },
+  // Find agents (src/agents-find-main.js serves its IPC): the bundled, pinned agent catalogue and + to your AI tools.
+  { id: 'agents-find', title: 'Find agents', icon: 'find-agents', kind: 'local', file: 'agents-find.html', preload: 'agents-find-preload.js', group: 'work' },
   // localScreen: the account page's explainer for the local board, which has no integrations of its own.
   { id: 'integrations', title: 'Integrations', icon: 'plug', kind: 'hub', view: 'integrations', localScreen: 'integrations', group: 'team' },
   { id: 'team', title: 'Team', icon: 'team', kind: 'local', screen: 'team', group: 'team' },
@@ -84,7 +86,7 @@ const GROUPS = [
 const SECTIONS = [
   { id: 'home', title: 'Home', icon: 'sun', default: 'home', pages: ['home'] },
   { id: 'board', title: 'Projects', icon: 'board', default: 'board', pages: ['board', 'tasks', 'board:table', 'board:history', 'board:calendar', 'board:timeline', 'board:dashboard'] },
-  { id: 'sessions', title: 'Agents', icon: 'layers', default: 'overview', pages: ['overview', 'sessions', 'timeline', 'checkpoints', 'memory', 'discover'] },
+  { id: 'sessions', title: 'Agents', icon: 'layers', default: 'overview', pages: ['overview', 'sessions', 'timeline', 'checkpoints', 'memory', 'discover', 'agents-find'] },
   { id: 'inbox', title: 'Inbox', icon: 'bell', default: 'waiting', pages: ['waiting', 'myday'] },
   { id: 'team', title: 'Team', icon: 'team', default: 'team', pages: ['team', 'integrations', 'account'] },
   { id: 'usage', title: 'Usage & cost', icon: 'chart', default: 'usage', heading: 'Workspace', menu: 'more', pages: ['usage', 'stats', 'clients'] },

@@ -83,7 +83,7 @@
     const n = state.list?.count;
     const sources = (state.list?.builtFrom || []).map((s) => sourceLabel(s.source));
     const sub = state.list
-      ? `${n} agents from ${sources.join(', ')}, pinned ${state.list.pinnedOn}. Nothing is downloaded: the list ships with Plexiform.`
+      ? `${n} agents from ${sources.join(', ')}, each pinned to a fixed version. Nothing is downloaded: the list ships with Plexiform.`
       : 'Ready-made agents for Claude Code, Codex, Gemini, Copilot and OpenCode.';
     return el('header', { class: 'af-head' },
       el('div', {}, el('h1', { id: 'af-title', text: 'Find agents' }), el('p', { text: sub })),
@@ -375,7 +375,7 @@
     else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
   }
 
-  const OUTCOME = { added: 'Added', 'already-there': 'Already there', skipped: 'Skipped', failed: 'Failed', 'rolled-back': 'Not added' };
+  const OUTCOME = { added: 'Added', 'already-there': 'Already there', 'already-added': 'Already added', 'update-available': 'Already added (newer version available)', skipped: 'Skipped', failed: 'Failed', 'rolled-back': 'Not added', 'not-tried': 'Not added' };
   async function doAdd(a, catalogSha, platforms, btn) {
     btn.disabled = true;
     btn.textContent = 'Adding…';
@@ -420,7 +420,19 @@
     btn.disabled = false;
     if (r?.code === 'cancelled') return;
     state.popOpener = btn;
-    showPop(a, el('p', { role: 'status', text: r?.ok ? `Added to the project: ${r.path}` : r?.error || 'Nothing was added.' }), [el('button', { type: 'button', class: 'af-btn primary', 'data-confirm': '', onclick: closePop, text: 'Done' })]);
+    const text = !r?.ok ? r?.error || 'Nothing was added.' : r.status === 'added' ? `Added to the project: ${r.path}` : `${OUTCOME[r.status] || 'Skipped'}: ${r.path}${r.reason ? `. ${r.reason}` : ''}`;
+    showPop(a, el('p', { role: 'status', text }), [el('button', { type: 'button', class: 'af-btn primary', 'data-confirm': '', onclick: closePop, text: 'Done' })]);
+    if (r?.ok && r.opId) {
+      const undo = el('button', { type: 'button', class: 'af-btn', text: 'Undo' });
+      undo.addEventListener('click', async () => {
+        undo.disabled = true;
+        const u = await api.undoProject(r.opId).catch(() => null);
+        $pop.querySelector('p').textContent = u?.ok ? (u.conflicts.length ? `Kept ${u.conflicts[0].path}: ${u.conflicts[0].reason}` : 'Undone. The rule Plexiform added is gone.') : u?.error || 'Undo didn\'t work.';
+        undo.remove();
+        $pop.querySelector('[data-confirm]')?.focus();
+      });
+      $pop.querySelector('.af-pop-actions').prepend(undo);
+    }
   }
 
   // ── keys ──────────────────────────────────────────────────────────────────

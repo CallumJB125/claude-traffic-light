@@ -29,6 +29,10 @@ contextBridge.exposeInMainWorld('vibeApi', {
   remixInstall: () => ipcRenderer.invoke('vibe:remix-install'),
   reportLink: (link, reason) => ipcRenderer.invoke('vibe:report-link', String(link), String(reason || '')),
 });
+// Opens the Find agents page; takes nothing.
+contextBridge.exposeInMainWorld('findAgentsApi', {
+  open: () => ipcRenderer.invoke('discover:open-find-agents'),
+});
 contextBridge.exposeInMainWorld('demoApi', {
   state: () => ipcRenderer.invoke('demo:state'),
   exit: () => ipcRenderer.invoke('demo:exit'),
