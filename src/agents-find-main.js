@@ -459,11 +459,13 @@ function register(deps) {
     showItem(dir);
     return { ok: true };
   });
-  page('agents:backup-plan', (_e, id) => {
+  // Under the write lock: it hashes up to 64 MB of backup, so one at a time
+  // and never during another action (review #54 L3).
+  page('agents:backup-plan', (_e, id) => locked(() => {
     if (!backupArg(id)) return { ok: false, code: 'unavailable', error: 'That backup is gone.' };
     const r = reader().restoreBackupPlan(id);
     return r.ok ? { ok: true, items: r.items } : fail(r);
-  });
+  }));
 
   return { channels: CHANNELS, issued, showMine: () => { pendingShow = 'mine'; } };
 }
