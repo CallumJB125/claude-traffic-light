@@ -38,6 +38,7 @@ const CARD_LIMITS = Object.freeze({ burst: 3, burstMs: 10 * 60_000, sessionDay: 
 // A soft guard only: the session's own hook facts say it edited a file or has run over a minute. That session can write
 // its own facts, so this is no security boundary; it keeps an honest AI from carding a one-line question.
 const REAL_WORK_MS = 60_000;
+const CARD_TIMEOUT_MS = 20 * 1000;
 const PRUNE_BATCH = 10;
 const OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0);
 const CONTEXT_PROVIDERS = new Set(['claude', 'codex', 'gemini']);
@@ -153,7 +154,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   // is a process's start in the runner's form (ps lstart, TZ=UTC, C locale), compared with the engine's record.
   wrappedRuns = () => [], utcStart = null,
   // bus_card_add: addAgentCard(session, args) files the card (src/work-capture.js); sessionFacts(session) are its hook facts.
-  addAgentCard = async () => ({ reason: 'UNAVAILABLE', message: 'Plexiform cannot add cards here.' }), sessionFacts = () => null }) {
+  addAgentCard = async () => ({ reason: 'UNAVAILABLE', message: 'Plexiform cannot add cards here.' }), sessionFacts = () => null, cardTimeoutMs = CARD_TIMEOUT_MS }) {
   const rosterDir = path.join(rootDir, 'awareness');
   const rosterFile = path.join(rosterDir, 'roster.json');
   const run = (file, args, timeout = EXEC_TIMEOUT_MS) => new Promise((resolve, reject) => {
@@ -833,9 +834,16 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
       const limited = await countCard(b.key);
       if (limited) { log('[awareness] card rate'); return limited; }
       let r;
+      const unavailable = { reason: 'UNAVAILABLE', message: 'Plexiform could not add the card just now. Retry later with the same request_id.' };
+      // A hung hub send must not hold this session's one card slot forever (#55 review L3). A retry with the same
+      // request_id is safe: the card's task_id comes from it, so the hub keeps one card.
+      let timer = null;
       try {
-        r = await addAgentCard(b.session, { title, details, request_id: args.request_id, handle: me.handle, folder: who.folder, after_note: noteReaders.has(b.key) });
-      } catch { r = { reason: 'UNAVAILABLE', message: 'Plexiform could not add the card just now. Retry later with the same request_id.' }; }
+        r = await Promise.race([
+          addAgentCard(b.session, { title, details, request_id: args.request_id, handle: me.handle, folder: who.folder, after_note: noteReaders.has(b.key) }),
+          new Promise((resolve) => { timer = setTimer(() => resolve(unavailable), cardTimeoutMs); }),
+        ]);
+      } catch { r = unavailable; } finally { if (timer) clearTimer(timer); }
       log(`[awareness] card ${r && r.reason ? String(r.reason).toLowerCase() : r && r.duplicate ? 'duplicate' : r && r.card_id ? 'added' : 'error'}`);
       if (!r || typeof r !== 'object') return { reason: 'UNAVAILABLE', message: 'Plexiform could not add the card just now.' };
       if (r.reason) return { reason: String(r.reason).slice(0, 32), message: typeof r.message === 'string' ? r.message.slice(0, 200) : '', ...(typeof r.fix === 'string' ? { fix: r.fix.slice(0, 200) } : {}) };

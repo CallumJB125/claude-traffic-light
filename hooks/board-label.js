@@ -7,13 +7,17 @@
 const BOARD_NAME_MAX = 60;
 const MARKS_PER_BASE = 2;
 const KEEP = /[^\p{L}\p{N}\p{M} .,\-_&+/#():!]/gu;
+// \p{L} includes modifier letters that look like quotes (U+02BA, U+02BB, U+02BC, U+02EE, U+A78B/A78C saltillo).
+// The Spacing Modifier Letters block and the saltillo range go; CJK modifier letters such as U+30FC stay.
+const QUOTE_LIKE = /[\u02B0-\u02FF\uA788-\uA78C]/gu;
 
 function boardLabel(value) {
   if (typeof value !== 'string') return '';
   const s = value.slice(0, 1000).normalize('NFKC')
     .replace(/\p{Default_Ignorable_Code_Point}/gu, '')
     .replace(/[\p{Z}\s]/gu, ' ')
-    .replace(KEEP, '');
+    .replace(KEEP, '')
+    .replace(QUOTE_LIKE, '');
   // Zalgo: at most two combining marks after a base character, none after a space or at the start.
   let out = '';
   let marks = 0;

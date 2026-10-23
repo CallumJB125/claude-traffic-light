@@ -158,3 +158,12 @@ test('PR B card_add: each session has its own count and the Mac\'s day counts bo
   assert.deepEqual(Object.keys(saved.sessions).sort(), ['claude|X', `codex|${r.w.T}`]);
   assert.deepEqual(r.adds.map((x) => x.s.sessionId).sort(), ['X', r.w.T].sort());
 });
+
+test('PR B card_add: a hung board send times out as UNAVAILABLE and frees the session\'s one card slot (#55 review L3)', async (t) => {
+  let calls = 0;
+  const r = rig(t, { add: async () => { calls += 1; if (calls === 1) return new Promise(() => {}); return { card_id: 'c2', title: 'Next', board: { kind: 'personal' } }; }, make: { cardTimeoutMs: 40 } });
+  const hung = await r.call({ title: 'Fix', request_id: rid() });
+  assert.equal(hung.reason, 'UNAVAILABLE');
+  assert.match(hung.message, /same request_id/);
+  assert.equal((await r.call({ title: 'Next', request_id: rid() })).card_id, 'c2', 'the slot is free after the timeout');
+});
