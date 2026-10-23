@@ -81,3 +81,18 @@ test('O1b: the helper\'s wrapped runs reach main, and none once it exits; a run\
   assert.deepEqual(runs.at(-1), []);
   await s.stop({ final: true });
 });
+test('O3: the helper\'s real-work rows reach main, and none once it exits; a stale child is ignored', async () => {
+  const children = []; const work = [];
+  const s = createTasksSupervisor({ fork: () => { const c = new Child(); children.push(c); return c; }, entry, dataDir, onWork: (r) => work.push(r) });
+  const p = s.ensure(); const c = children[0];
+  c.emit('message', { type: 'tasks.listening', socket, epoch }); await p;
+  const row = { taskId: 'tsk_a1', ai: 'claude', title: 'Fix', state: 'running', root: '/r', changedAt: 1 };
+  c.emit('message', { type: 'tasks.work', rows: [row] });
+  c.emit('message', { type: 'tasks.work', rows: { not: 'a list' } });
+  assert.deepEqual(work, [[row], []]);
+  c.emit('exit', 1);
+  assert.deepEqual(work.at(-1), []);
+  c.emit('message', { type: 'tasks.work', rows: [row] });
+  assert.deepEqual(work.at(-1), []);
+  await s.stop({ final: true });
+});

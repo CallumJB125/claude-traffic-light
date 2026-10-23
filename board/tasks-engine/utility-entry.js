@@ -50,6 +50,7 @@ try {
     stopGraceMs: 1500,
     onRuns: (runs) => { try { parent?.postMessage({ type: 'tasks.runs', runs }); } catch { /* main is gone */ } },
     peersFor,
+    onWork: (rows) => { try { parent?.postMessage({ type: 'tasks.work', rows }); } catch { /* main is gone */ } },
   });
   if (closing) await engine.close();
   else parent?.postMessage({ type: 'tasks.listening', socket: engine.socketPath, epoch: engine.epoch });

@@ -456,6 +456,17 @@ plexiform run "<text>" | -        (- reads the text from stdin)
 
 Served by Buddy's global MCP server (for the user's ordinary sessions) and by the per-run MCP server (so a task can spin off a sub-task). Input `SpinOffInput {task, cwd?, backend?, surface?, planFirst?, permissionLevel? (no bypass), budgetUsd?, baseBranch?}` (JSON Schema in `$defs`), output `SpinOffOutput {taskId, state, reason, duplicate}`. It calls `createTask` with `source:'mcp'`, `sourceMeta.parentSessionId` when known, `cwd` defaulting to the calling session's cwd, and `requestId` = sha256(parent session + cwd + task text) truncated, so an agent's retry within 24 h doesn't create a twin. §9.2 `mcp` rules apply.
 
+### 14.1 Automatic cards for wrapped tasks (O3)
+
+The Tasks API is unchanged. Over the utility process's parentPort only (never to a renderer), after each task save the
+engine sends main `tasks.work` when it changed, `[]` on close (main also treats a helper exit as `[]`): at most 20 rows
+`{taskId, ai, title, state, blockedKind, root, changedAt}`, live tasks first and then newest first, one per `local`/`cli` claude/codex task
+without a parent that did real work. Real work is sticky and persisted: `workedAt` is set the first time the task
+edits a file (`touched`) or reaches 60 s in total in `running`/`quiet` (`activeMs`), and `cardAi` (the AI at that
+moment) is what `ai` reports from then on, so a provider switch stays one card. Main turns rows into session-shaped
+records (`src/wrapped-work.js`) for work-capture's own session path; no task text, AI reply, outcome or failure
+reason is sent.
+
 ## 15. Failure table (plan §8) → states, events, actions
 
 | Failure | Detected by | State / events | Actions offered |

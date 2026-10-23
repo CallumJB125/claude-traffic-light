@@ -48,6 +48,10 @@ export const SCHEMA = JSON.parse(fs.readFileSync(path.join(here, '..', 'tasks-ap
 
 // States with a (possibly dead) agent behind them: they get a LeaseView.
 const LEASED = new Set(['claimed', 'running', 'quiet', 'blocked', 'handing_over', 'suspended', 'unresponsive', 'orphaned']);
+// O3: a wrapped task is real work (gets a card) once it edits a file or has been working for a minute in total.
+const ACTIVE = new Set(['running', 'quiet']);
+const REAL_WORK_MS = 60_000;
+const WORK_ROWS_MAX = 20;
 // States that hold a parallel-task slot (§13).
 const SLOT = new Set(['claimed', 'running', 'quiet', 'blocked', 'handing_over']);
 // What this engine implements today; the face's other actions are filtered
@@ -465,6 +469,7 @@ export class TasksEngine extends EventEmitter {
     if (this.closed || this.tasks.get(task.id) !== task) return;
     this.store.saveTask(task, this.tasks);
     this.#publishRuns();
+    this.#publishWork();
   }
 
   // O1b: the live processes of the person's own wrapped tasks (local and cli), for main to attest and show to
@@ -490,6 +495,36 @@ export class TasksEngine extends EventEmitter {
     if (sig === this.runsSig) return;
     this.runsSig = sig;
     try { this.opts.onRuns(rows); } catch { /* main may be gone */ }
+  }
+
+  // O3: the person's own wrapped tasks that did real work, for main's automatic cards (work-capture). Title and
+  // state only: never the task text, the AI's words, an outcome or a failure reason. The AI is the one that was
+  // running when the work began (cardAi), so a provider switch stays one card.
+  #markWork(task) {
+    if (task.workedAt != null || !LOCAL_SOURCES.includes(task.source) || task.parentId) return;
+    if (task.ai?.id !== 'claude' && task.ai?.id !== 'codex') return;
+    task.workedAt = this.now();
+    task.cardAi = task.ai.id;
+    this.#save(task);
+  }
+  #workRows() {
+    const rows = [];
+    for (const t of this.tasks.values()) {
+      if (t.workedAt == null || !t.cardAi || !LOCAL_SOURCES.includes(t.source) || t.parentId) continue;
+      const root = t.repo?.root ?? t.worktree;
+      if (typeof root !== 'string') continue;
+      rows.push({ taskId: t.id, ai: t.cardAi, title: t.title, state: t.state, blockedKind: t.blockedKind ?? null, root, changedAt: Math.max(t.stateSince ?? 0, t.workedAt) });
+    }
+    // Live tasks first, so finished ones can never push a long-running card out of the 20.
+    const live = (r) => (LEASED.has(r.state) ? 0 : 1);
+    return rows.sort((a, b) => live(a) - live(b) || b.changedAt - a.changedAt || (a.taskId < b.taskId ? -1 : 1)).slice(0, WORK_ROWS_MAX);
+  }
+  #publishWork(rows = this.closing ? [] : this.#workRows()) {
+    if (typeof this.opts.onWork !== 'function') return;
+    const sig = JSON.stringify(rows);
+    if (sig === this.workSig) return;
+    this.workSig = sig;
+    try { this.opts.onWork(rows); } catch { /* main may be gone */ }
   }
 
   #emit(task, type, fields) {
@@ -518,6 +553,7 @@ export class TasksEngine extends EventEmitter {
 
   #setState(task, state, fields = {}) {
     const prev = task.state;
+    if (ACTIVE.has(prev) && state !== prev) task.activeMs = (task.activeMs ?? 0) + Math.max(0, this.now() - task.stateSince);
     Object.assign(task, { blockedKind: null, failKind: null, failReason: null, parkReason: null, outcome: null, queueReason: null }, fields, { state });
     if (state !== prev) task.stateSince = this.now();
     this.#save(task);
@@ -1342,6 +1378,7 @@ export class TasksEngine extends EventEmitter {
     const rel = filterPath(realish(path.isAbsolute(p) ? p : path.join(task.worktree, p)), task.worktree);
     if (!rel || rel === '.' || task.touched.includes(rel)) return;
     task.touched.push(rel);
+    this.#markWork(task);
     if (task.repo) this.#emit(task, 'claims', { repo: task.repo.root, claims: this.#claims(task.repo.root) });
   }
 
@@ -2169,6 +2206,7 @@ export class TasksEngine extends EventEmitter {
     if ([...this.tasks.values()].some((t) => t.state === 'queued' && (t.spec.startAfter != null || t.spec.window || t.spec.afterReset))) this.#schedule();
     for (const task of this.tasks.values()) {
       if (!LEASED.has(task.state)) continue;
+      if (task.workedAt == null && ACTIVE.has(task.state) && (task.activeMs ?? 0) + now - task.stateSince >= REAL_WORK_MS) this.#markWork(task);
       this.#wallClock(task, now);
       if (task.state === 'running' && task.lastActivity != null && now - task.lastActivity > T_QUIET_MS && !this.runs.get(task.id)?.toolInFlight) {
         this.#setState(task, 'quiet');
@@ -2193,6 +2231,7 @@ export class TasksEngine extends EventEmitter {
     if (this.closePromise) return this.closePromise;
     this.closing = true;
     this.#publishRuns([]);
+    this.#publishWork([]);
     clearInterval(this.tick);
     clearInterval(this.detectTimer);
     for (const t of this.timers) clearTimeout(t);
