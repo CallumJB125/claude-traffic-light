@@ -337,6 +337,9 @@
   function lazyRig(el, look) {
     rigLooks.set(el, look);
     el.dataset.rig = 'pending';
+    // The tile's caption names it; a rig's own text (banner words, sign digits) read
+    // out as an image of junk, so the drawing is hidden from assistive tech.
+    el.setAttribute('aria-hidden', 'true');
     rigBatch.push(el);
   }
   function flushLazyRigs() {

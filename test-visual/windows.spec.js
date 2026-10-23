@@ -48,7 +48,13 @@ test('lights window opens with a bounded DOM', async () => {
   await last.scrollIntoViewIfNeeded();
   await expect(last).toHaveAttribute('data-rig', 'mounted');
   await expect(last.locator('svg')).toHaveCount(1);
-  await lights.evaluate(() => window.scrollTo(0, 0));
+  // A built tile reads as its caption only, not as the rig's text.
+  await expect(last).toHaveAttribute('aria-hidden', 'true');
+  const tile = last.locator('xpath=ancestor::button[1]');
+  await expect(tile).toHaveAccessibleName((await tile.locator('span').textContent()).trim());
+  const pose = lights.locator('#poses .posebtn').filter({ hasText: 'banner' });
+  await expect(pose).toHaveAccessibleName('banner');
+  await lights.evaluate(() => { document.getElementById('editor').scrollTop = 0; });
 });
 
 // Tiles mount on first sight (lights-view.js lazyRig); wait until every tile in the
