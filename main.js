@@ -3749,7 +3749,7 @@ utilityHandle('get-aggregate-status', e => widgetOnly(e) || widgetConfigSender(e
 });
 
 // Ghostty Dock's own view of which of its sessions need you, when it is on
-// and trusted: only UUIDs and status words (src/ghostty-dock.js parseList).
+// and trusted: only UUIDs and status words (src/ghostty-dock.js parseListJson).
 async function dockStatusFor(sessions) {
   if (!IS_MAC || GhosttyDock.modeOf(loadConfig()) === 'off' || !sessions.some((s) => GhosttyDock.validSessionId(s.sessionId) && !WAITING_SIGNALS.has(s.signal))) return null;
   try { return await GhosttyDock.listStatus({ dock: GhosttyDock.detect() }); } catch { return null; }

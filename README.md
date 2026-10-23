@@ -345,8 +345,8 @@ asks it to focus or open a tab, never to type, press keys or read the
 screen, and task and agent bus runs can't write to its request folder or
 replace its programs. Sessions started before this version keep their old
 "Ghostty" label until they restart; a click on one still goes to its exact
-Ghostty Dock tab when `ghostty-dock list` shows that session id. From that
-list Plexiform keeps only session ids and status words, for two seconds, and
+Ghostty Dock tab when `ghostty-dock list --json` shows that session id. From
+that list Plexiform keeps only session ids and status words, for two seconds, and
 a session Ghostty Dock shows as waiting joins the "needs you" queue (only one
 Plexiform already knows by that id). When only the app came forward and no
 tab could be picked, the widget says so. Preferences → **Ghostty Dock** turns

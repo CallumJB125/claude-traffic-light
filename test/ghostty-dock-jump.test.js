@@ -22,41 +22,15 @@ function listExec(stdout, { up = true } = {}) {
   const calls = [];
   return { calls, exec: async (file, args, opts) => { calls.push({ file, args, opts }); if (running(file, args)) return { ok: up, stdout: up ? 'true\n' : 'false\n' }; return { ok: true, stdout, stderr: '' }; } };
 }
-const row = (status, name, id) => `${status}  ${name}  main  :3000  $1.20  ${id}`;
+const row = (status, name, id) => JSON.stringify([{ status, name, session_id: id, branch: 'main' }]);
 
-test('parseList keeps only status + full UUID rows and drops everything else', () => {
-  const out = [
-    row('waiting', 'api', SID),
-    row('running', 'web app with spaces', SID2),
-    'finished  no-id-row  main', // no session id
-    `pwned  x  ${'2'.repeat(8)}-2222-2222-2222-222222222222`, // unknown status word
-    `waiting  lookalike  ${SID.slice(0, -1)}`, // one char short
-    `waiting  lookalike  ${SID}x`, // trailing junk
-    `waiting  ${SID}  name-ends-with-a-uuid`, // a UUID that isn't the last token
-    '\u001b[31mwaiting\u001b[0m  ansi  3c8dab63-2e4f-4071-9bac-3d4e5f6a7b8c',
-    '',
-  ].join('\n');
-  const m = GhosttyDock.parseList(out);
-  assert.deepEqual([...m.entries()], [[SID, 'waiting'], [SID2, 'running']]);
-});
-
-test('parseList drops a UUID listed twice, caps huge output and never throws on junk', () => {
-  const dup = [row('waiting', 'a', SID), row('running', 'b', SID.toUpperCase())].join('\n');
-  assert.equal(GhosttyDock.parseList(dup).size, 0);
-  for (const junk of [undefined, null, 42, {}, '\0\0\0']) assert.equal(GhosttyDock.parseList(junk).size, 0);
-  const many = Array.from({ length: 5000 }, (_, i) => row('waiting', 'n', `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`)).join('\n');
-  assert.ok(GhosttyDock.parseList(many).size <= 500, 'line cap');
-  const huge = `${'x'.repeat(2 * 1024 * 1024)}\n${row('waiting', 'late', SID)}`;
-  assert.equal(GhosttyDock.parseList(huge).has(SID), false, 'byte cap: rows past the first 256 KB are not read');
-});
-
-test('listStatus runs only the argument-free list op, after a running check, bounded and cached for 2 s', async () => {
+test('listStatus runs only `list --json`, after a running check, bounded and cached for 2 s', async () => {
   GhosttyDock.invalidateList();
   const { calls, exec } = listExec(row('waiting', 'api', SID));
   const a = await GhosttyDock.listStatus({ dock: DOCK, exec, now: 1000 });
   assert.equal(a.get(SID), 'waiting');
   assert.deepEqual(calls.map((c) => [c.file, c.args[0]]), [['/usr/bin/osascript', '-e'], [CLI, 'list']]);
-  assert.deepEqual(calls[1].args, ['list']);
+  assert.deepEqual(calls[1].args, ['list', '--json']);
   assert.equal(calls[1].opts.timeout, GhosttyDock.LIST_TIMEOUT_MS);
   assert.deepEqual(calls[1].opts.env, DOCK.env);
   await GhosttyDock.listStatus({ dock: DOCK, exec, now: 2500 });
@@ -70,7 +44,7 @@ test('listStatus runs only the argument-free list op, after a running check, bou
   assert.equal(await GhosttyDock.listStatus({ dock: DOCK, exec: down.exec, now: 9000 }), null);
   assert.equal(down.calls.length, 1, 'no CLI call while Dock is not running');
   GhosttyDock.invalidateList();
-  await assert.rejects(GhosttyDock.run('list', ['--json'], { dock: DOCK, exec }), /bad arguments/);
+  await assert.rejects(GhosttyDock.run('list', [], { dock: DOCK, exec }), /bad arguments/);
 });
 
 // ── adoption ───────────────────────────────────────────────────────────────

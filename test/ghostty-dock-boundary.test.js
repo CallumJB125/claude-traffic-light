@@ -183,8 +183,10 @@ test('Dock list output is asked for only on a click, and only ids and status wor
   const term = code(read('src/terminal.js'));
   assert.equal((term.match(/listStatus\(/g) || []).length, 1, 'adoptIntoDock only');
   const dock = code(read('src/ghostty-dock.js'));
-  const parse = dock.slice(dock.indexOf('function parseList('), dock.indexOf('let listMemo'));
-  assert.match(parse, /seen\.set\(key, tokens\[0\]\)/);
+  const parse = dock.slice(dock.indexOf('function parseListJson('), dock.indexOf('let listMemo'));
+  assert.match(parse, /const \{ status, session_id: id \} = row;/, 'only status and session_id are read');
+  assert.match(dock, /if \(op === 'list'\) return args\.length === 1 && args\[0\] === '--json' \? \['--json'\] : null;/, 'list takes exactly --json');
+  assert.match(dock, /run\('list', \['--json'\]/);
   assert.doesNotMatch(parse, /console\.|log\(/, 'nothing from the list is logged');
-  for (const f of ['src/signal-server.js', 'mcp-server.js', 'src/agent-bus-main.js', 'src/agent-mail.js']) assert.doesNotMatch(read(f), /listStatus|parseList|adoptIntoDock/, f);
+  for (const f of ['src/signal-server.js', 'mcp-server.js', 'src/agent-bus-main.js', 'src/agent-mail.js']) assert.doesNotMatch(read(f), /listStatus|parseListJson|adoptIntoDock/, f);
 });

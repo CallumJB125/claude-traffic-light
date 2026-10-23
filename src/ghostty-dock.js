@@ -2,13 +2,13 @@
 // Ghostty Dock (https://github.com/andrewbakercloudscale/ghossty-dock) is a
 // third-party app with no license, so nothing of it is copied here. Plexiform
 // only calls the user's own installed CLI the way its public README shows:
-// `ghostty-dock focus <session>`, `ghostty-dock list` and `ghostty-dock open <dir> --command <cmd>`.
+// `ghostty-dock focus <session>`, `ghostty-dock list --json` and `ghostty-dock open <dir> --command <cmd>`.
 //
 // The ops are a frozen allow-list, and run() fixes each op's argument shape:
 // focus takes one session id, open takes a folder plus the quoted path of a
 // Plexiform one-use continue.command file, list takes nothing, notify one
-// short title. list's output is parsed down to session ids and status words
-// (parseList) and nothing else is kept. Nothing here can type into a terminal, press keys in it, read
+// short title, list exactly `--json`. list's output is parsed down to
+// session ids and status words (parseListJson) and nothing else is kept. Nothing here can type into a terminal, press keys in it, read
 // its screen or run an arbitrary command. Only main-process handlers reached
 // from a person's click use this module (test/ghostty-dock-boundary.test.js).
 const fs = require('fs');
@@ -30,9 +30,12 @@ const TITLE_MAX = 120;
 const LIST_TIMEOUT_MS = 2500;
 const LIST_CACHE_MS = 2000;
 const LIST_MAX_BYTES = 256 * 1024;
-const LIST_MAX_LINES = 500;
-// The status words Dock's list prints first on each row; 'waiting' is its "needs you".
-const LIST_STATUSES = Object.freeze(['waiting', 'running', 'finished', 'idle', 'shell']);
+const LIST_MAX_ROWS = 500;
+// Deep enough for Dock's array of row objects (and the arrays inside a row, such as ports), no deeper.
+const LIST_MAX_DEPTH = 4;
+// The Claude session statuses Dock reports; 'waiting' is its "needs you". Its
+// 'shell' rows are plain terminals with no Claude session, so they are never kept.
+const LIST_STATUSES = Object.freeze(['waiting', 'running', 'finished', 'idle']);
 // The CLI finds jq and uuidgen on PATH: a fixed one, never the app's inherited
 // PATH, which a planted value could point at another jq.
 const FIXED_PATH = Object.freeze(['/usr/bin', '/bin', '/usr/sbin', '/sbin', '/opt/homebrew/bin', '/usr/local/bin']);
@@ -147,7 +150,8 @@ function oneUseFile(cmd, tmpRoot) {
 function shaped(op, args, tmpRoot) {
   if (!Array.isArray(args) || args.some((a) => typeof a !== 'string')) return null;
   if (op === 'focus') return args.length === 1 && validSessionId(args[0]) ? [args[0]] : null;
-  if (op === 'list') return args.length === 0 ? [] : null;
+  // Only the JSON form: the text form puts the session id where an empty-column row's name lands.
+  if (op === 'list') return args.length === 1 && args[0] === '--json' ? ['--json'] : null;
   if (op === 'notify') {
     if (args.length !== 1) return null;
     const title = args[0].replace(/[\0-\x1f\x7f]/g, ' ').trim().slice(0, TITLE_MAX);
@@ -180,23 +184,40 @@ async function run(op, args, { dock, exec = execCli, tmpRoot = os.tmpdir() } = {
   return op === 'list' ? { ok: true, out: String(r.stdout || '') } : { ok: true };
 }
 
-// Dock's list output is another app's text (session names are whatever the
-// user or an agent typed), so it is untrusted: a row counts only when its first
-// token is a known status word and its last token a full session UUID. All
-// else (names, branches, ports, cost, anything malformed) is dropped unread
-// and never logged. A UUID seen twice is ambiguous and dropped too.
-// Returns Map<lowercase uuid, status>.
-function parseList(out) {
+// `list --json` is another app's output (session names are whatever the
+// user or an agent typed), so it is untrusted. It must be one JSON array of
+// row objects, under a size and nesting cap; from each row only `status` (from
+// a closed set) and `session_id` (a full UUID) are read. Names, folders,
+// branches, ports, cost and anything malformed are dropped unread and never
+// logged; a UUID seen twice is ambiguous and dropped too. Anything else, such
+// as an older text-only list, answers null: no adoption, no Dock status.
+// Returns Map<lowercase uuid, status> or null.
+function tooDeep(text, max) {
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (inString) {
+      if (c === '\\') i += 1;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === '[' || c === '{') { depth += 1; if (depth > max) return true; } else if (c === ']' || c === '}') depth -= 1;
+  }
+  return false;
+}
+function parseListJson(out) {
+  if (typeof out !== 'string' || out.length > LIST_MAX_BYTES || tooDeep(out, LIST_MAX_DEPTH)) return null;
+  let rows;
+  try { rows = JSON.parse(out); } catch { return null; }
+  if (!Array.isArray(rows)) return null;
   const seen = new Map();
   const dup = new Set();
-  const text = typeof out === 'string' ? out.slice(0, LIST_MAX_BYTES) : '';
-  for (const line of text.split('\n').slice(0, LIST_MAX_LINES)) {
-    const tokens = line.trim().split(/\s+/);
-    if (tokens.length < 2 || !LIST_STATUSES.includes(tokens[0])) continue;
-    const id = tokens[tokens.length - 1];
-    if (!validSessionId(id)) continue;
+  for (const row of rows.slice(0, LIST_MAX_ROWS)) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+    const { status, session_id: id } = row;
+    if (!LIST_STATUSES.includes(status) || !validSessionId(id)) continue;
     const key = id.toLowerCase();
-    if (seen.has(key)) dup.add(key); else seen.set(key, tokens[0]);
+    if (seen.has(key)) dup.add(key); else seen.set(key, status);
   }
   for (const k of dup) seen.delete(k);
   return seen;
@@ -208,8 +229,8 @@ let listMemo = null;
 async function listStatus({ dock, exec = execCli, now = Date.now() } = {}) {
   if (!dock || !dock.trusted || !dock.cli) return null;
   if (listMemo && now - listMemo.at < LIST_CACHE_MS && listMemo.cli === dock.cli) return listMemo.value;
-  const r = await run('list', [], { dock, exec });
-  const value = r.ok ? parseList(r.out) : null;
+  const r = await run('list', ['--json'], { dock, exec });
+  const value = r.ok ? parseListJson(r.out) : null;
   listMemo = { at: now, cli: dock.cli, value };
   return value;
 }
@@ -224,4 +245,4 @@ function healthRow(dock, mode) {
   return { status: 'ok', detail: `Installed. Clicking a Ghostty Dock session goes to its exact tab. Its hook and Plexiform's both run on each Claude tool call. ${link}` };
 }
 
-module.exports = { OPS, BUNDLE_ID, APP, CACHE_MS, OPEN_TIMEOUT_MS, LIST_TIMEOUT_MS, LIST_CACHE_MS, LIST_STATUSES, FIXED_PATH, RUNNING_SCRIPT, validSessionId, normalizeMode, modeOf, locations, detect, current, invalidate, run, execCli, parseList, listStatus, invalidateList, healthRow };
+module.exports = { OPS, BUNDLE_ID, APP, CACHE_MS, OPEN_TIMEOUT_MS, LIST_TIMEOUT_MS, LIST_CACHE_MS, LIST_STATUSES, LIST_MAX_BYTES, FIXED_PATH, RUNNING_SCRIPT, validSessionId, normalizeMode, modeOf, locations, detect, current, invalidate, run, execCli, parseListJson, listStatus, invalidateList, healthRow };
