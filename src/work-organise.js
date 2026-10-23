@@ -177,7 +177,9 @@
   const leafOf = (p) => {
     if (typeof p !== 'string') return '';
     const parts = p.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean);
-    return parts.length ? parts[parts.length - 1] : '';
+    const leaf = parts.length ? parts[parts.length - 1] : '';
+    // "." and ".." name no folder.
+    return /^\.{1,2}$/.test(leaf.trim()) ? '' : leaf;
   };
   const trimSlash = (p) => (typeof p === 'string' ? p.replace(/\\/g, '/').replace(/\/+$/, '') : '');
   const plainName = (s) => cut(normalise(s).replace(/[\\/]+/g, ' ').replace(/\s+/g, ' ').trim());

@@ -680,3 +680,8 @@ test('work-organise: a bare home folder goes whatever its case', () => {
   }
   assert.equal(W.titleOf({ team: false, human: 'go home now' }).title, 'go home now', 'no separator, no path');
 });
+
+test('work-organise: a "." or ".." folder is no project name', () => {
+  for (const cwd of ['..', '.', '/a/b/..', 'C:\\x\\.', '../']) assert.equal(W.projectOf({ cwd }).heading, 'Other work', cwd);
+  assert.equal(W.projectOf({ cwd: '/a/.config' }).heading, '.config');
+});
