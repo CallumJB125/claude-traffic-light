@@ -51,7 +51,7 @@ test('the fixtures are clearly sample data: realistic sessions, a question, spen
   const s = Demo.fixtures(1000);
   assert.equal(s.demo, true);
   assert.ok(s.running.items.length >= 3);
-  assert.ok(s.running.items.some((i) => i.status === 'Waiting on you'));
+  assert.ok(s.running.items.some((i) => i.status === 'Needs you'));
   assert.equal(s.needs.total, 1);
   assert.ok(s.today.spend.spent > 0);
   assert.ok(s.team.cards.length && s.team.cards.every((c) => c.board === 'Sample board' && c.key.startsWith('DEMO-')));

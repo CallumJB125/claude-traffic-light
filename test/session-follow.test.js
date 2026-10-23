@@ -2,7 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const F = require('../src/session-follow.js');
 
-const e = (name, title, state = 'Working', input = false) => ({ id: 'x', owner: { name }, provider: { id: 'codex' }, board: { label: 'App' }, task: { title }, state, input });
+// Directory entries name states with the bucket headings; the old words map to heading + detail.
+const SHAPES = { Working: { state: 'Working on it', bucket: 'working' }, 'Needs input': { state: 'Needs you', bucket: 'needs' }, 'Turn failed': { state: 'Stuck or failed', bucket: 'stuck', detail: 'Turn failed' }, Ended: { state: 'Idle', bucket: 'idle', detail: 'Ended' } };
+const e = (name, title, state = 'Working', input = false) => ({ id: 'x', owner: { name }, provider: { id: 'codex' }, board: { label: 'App' }, task: { title }, ...SHAPES[state], input });
 const now = 5_000_000;
 
 test('follow: one event per transition into needs-input, finished or failed; same observation never fires twice', () => {

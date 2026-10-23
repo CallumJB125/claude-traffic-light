@@ -1,4 +1,5 @@
 'use strict';
+const ORGANISE = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'work-organise.js'), 'utf8'); // views read their state words from it
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -19,7 +20,7 @@ function setup(api, initialHidden = false) {
   let hidden = initialHidden; const intervals = [];
   Object.defineProperty(dom.window.document, 'hidden', { get: () => hidden });
   dom.window.setInterval = callback => { intervals.push(callback); return intervals.length; };
-  dom.window.overviewApi = api; dom.window.eval(script);
+  dom.window.overviewApi = api; dom.window.eval(ORGANISE);dom.window.eval(script);
   return { dom, document: dom.window.document, intervals, hide(value) { hidden = value; dom.window.document.dispatchEvent(new dom.window.Event('visibilitychange')); }, close() { dom.window.close(); } };
 }
 const click = (f, key) => [...f.document.querySelectorAll('button[data-focus]')].find(el => el.dataset.focus === key)?.click();

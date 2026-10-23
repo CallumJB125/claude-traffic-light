@@ -16,13 +16,16 @@
   const MAX_TITLE = 60;
   const MAX_INPUT = 4000;
   const FALLBACK = 'Other work';
+  // FALLBACK is a heading; inside a sentence ("Stuck: … silent for 7 min") a view says this instead.
+  const SENTENCE_FALLBACK = 'a session';
 
+  // heading: a section or status line; label: the short form for a badge, pill or column.
   const BUCKETS = Object.freeze([
-    Object.freeze({ id: 'needs', heading: 'Needs you', order: 0, collapsed: false }),
-    Object.freeze({ id: 'working', heading: 'Working on it', order: 1, collapsed: false }),
-    Object.freeze({ id: 'check', heading: 'Finished — check it', order: 2, collapsed: false }),
-    Object.freeze({ id: 'stuck', heading: 'Stuck or failed', order: 3, collapsed: false }),
-    Object.freeze({ id: 'idle', heading: 'Idle', order: 4, collapsed: true }),
+    Object.freeze({ id: 'needs', heading: 'Needs you', label: 'Needs you', order: 0, collapsed: false }),
+    Object.freeze({ id: 'working', heading: 'Working on it', label: 'Working on it', order: 1, collapsed: false }),
+    Object.freeze({ id: 'check', heading: 'Finished — check it', label: 'Check it', order: 2, collapsed: false }),
+    Object.freeze({ id: 'stuck', heading: 'Stuck or failed', label: 'Stuck or failed', order: 3, collapsed: false }),
+    Object.freeze({ id: 'idle', heading: 'Idle', label: 'Idle', order: 4, collapsed: true }),
   ]);
   const BUCKET_BY_ID = Object.freeze(Object.fromEntries(BUCKETS.map((b) => [b.id, b])));
 
@@ -40,7 +43,11 @@
     idle: ['idle', 'idle-nudge', 'ready', 'session-start', 'ended', 'session-end', 'stale', 'status unknown', 'todo', 'parked',
       'suspended', 'done', 'merged', 'approved_done', 'last reported: needs input', 'unknown'],
   });
-  const BUCKET_OF = Object.freeze(Object.fromEntries(Object.entries(SIGNALS).flatMap(([id, keys]) => keys.map((k) => [k, id]))));
+  // A view's own words map back too: "working on it", "check it".
+  const BUCKET_OF = Object.freeze(Object.fromEntries([
+    ...Object.entries(SIGNALS).flatMap(([id, keys]) => keys.map((k) => [k, id])),
+    ...BUCKETS.flatMap((b) => [[b.heading.toLowerCase(), b.id], [b.label.toLowerCase(), b.id]]),
+  ]));
 
   // signal | state | {signal|state|status, fail_kind, changes} → bucket id.
   // A failure that is a limit or budget needs the person, not a retry; a turn
@@ -56,6 +63,10 @@
     if (id === 'check' && o.changes === false) return 'idle';
     return id;
   }
+  // Whether a state word is one bucketOf actually knows, rather than one it files under Idle by default.
+  const knowsState = (v) => typeof v === 'string' && Object.hasOwn(BUCKET_OF, v.trim().toLowerCase().slice(0, 60));
+  // The same input → the bucket's heading, so a view never names a state its own way.
+  const headingOf = (input) => BUCKET_BY_ID[bucketOf(input)].heading;
 
   // ---- untrusted text ----
   const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
@@ -72,13 +83,20 @@
   const PATH_CHARS = '[^\\s"\'`()<>\\[\\]{}|,;]*';
   const HOME_RE = new RegExp(`(?:[A-Za-z]:)?(?<![\\\\/])[\\\\/]+(?:Users|home)(?:[\\\\/]${PATH_CHARS}|(?![\\w.-]))`, 'g');
   const UNC_RE = new RegExp(`\\\\\\\\${PATH_CHARS}`, 'g');
-  // A home folder named without its leading slash ("see Users/sam", "home/sam/x"), and $HOME.
-  const BARE_HOME_RE = new RegExp(`(?<![\\w.~%$-])(?:Users|home)[\\\\/]+${PATH_CHARS}`, 'g');
+  // A home folder named without its leading slash ("see home/sam", "users\\sam"), any case.
+  const PATH_SEG = '[^\\s"\'`()<>\\[\\]{}|,;\\\\/]+';
+  const ANY_HOME = '(?:[Uu][Ss][Ee][Rr][Ss]|[Hh][Oo][Mm][Ee])';
+  const LEAD = '(?<![\\w.~%$-])';
+  const BARE_HOME_RE = new RegExp(`${LEAD}${ANY_HOME}[\\\\/]+${PATH_SEG}${PATH_CHARS}`, 'g');
+  // A title a person typed can name a route such as "Fix home/about page", so there a
+  // two-segment one goes only when nothing but punctuation follows it; deeper paths
+  // and macOS's own "Users/sam" always go.
+  const TYPED_HOME_RE = new RegExp(`${LEAD}(?:Users[\\\\/]+${PATH_SEG}${PATH_CHARS}|${ANY_HOME}[\\\\/]+${PATH_SEG}(?:[\\\\/]+${PATH_CHARS}|(?=\\s*(?:$|[;,:!?.)\\]}>"\'\`|]))))`, 'g');
   const HOME_VAR_RE = new RegExp(`\\$(?:\\{HOME\\}|HOME(?![\\w]))${PATH_CHARS}`, 'g');
   const TILDE_RE = new RegExp(`~[\\w.-]*[\\\\/]${PATH_CHARS}|(?<![\\w.~%-])~[A-Za-z_][\\w.-]*`, 'g');
   const PATH_RE = new RegExp(`(?<![\\w.~%-])(?:[A-Za-z]:|\\.{1,2})?[\\\\/]${PATH_CHARS}`, 'g');
   // A pipe glued to a removed path (cfg|/etc/hosts) goes with it.
-  const stripPaths = (t) => t.replace(/\|(?=[~\\/]|[A-Za-z]:[\\/])/g, ' ').replace(HOME_RE, ' ').replace(HOME_VAR_RE, ' ').replace(BARE_HOME_RE, ' ').replace(UNC_RE, ' ').replace(TILDE_RE, ' ').replace(PATH_RE, ' ').replace(REL_PATH, ' ').replace(/[[{(]\s*[\]})]/g, ' ');
+  const stripPaths = (t, typed = false) => t.replace(/\|(?=[~\\/]|[A-Za-z]:[\\/])/g, ' ').replace(HOME_RE, ' ').replace(HOME_VAR_RE, ' ').replace(typed ? TYPED_HOME_RE : BARE_HOME_RE, ' ').replace(UNC_RE, ' ').replace(TILDE_RE, ' ').replace(PATH_RE, ' ').replace(REL_PATH, ' ').replace(/[[{(]\s*[\]})]/g, ' ');
   // Relative paths: a word/word token with a file extension or two separators.
   const REL_PATH = /(?<![\w.-])[\w.-]+(?:[\\/][\w.-]+)*[\\/][\w-]+\.[A-Za-z0-9]{1,8}(?![\w.-])|(?<![\w.-])[\w.-]+(?:[\\/][\w.-]+){2,}[\\/]?(?![\w.-])/g;
   // Percent-encoding is undone once, for printable ASCII only, so "%2FUsers%2Fsam" is a path the
@@ -134,15 +152,15 @@
   // Untrusted text → safe display text, or '' when nothing usable is left.
   // `slashes: false` also turns any remaining / or \ into a space, for text
   // that was derived (not typed as a title by a person).
-  function safeText(v, { redact, max = MAX_TITLE, slashes = true } = {}) {
-    return finish(prepare(v, redact), { max, slashes });
+  function safeText(v, { redact, max = MAX_TITLE, slashes = true, typed = false } = {}) {
+    return finish(prepare(v, redact, typed), { max, slashes });
   }
   // Normalised, scrubbed and stripped, but not yet cut: one scrub serves every use of a prompt.
-  function prepare(v, redact) {
+  function prepare(v, redact, typed = false) {
     const t = decodePercent(normalise(v));
     if (!t.trim() || typeof redact !== 'function') return '';
     // Markup goes before the scrubber reads it: a tag inside a token would hide it.
-    return dropEncoded(dropRedacted(stripPaths(redact(stripMarkup(t)).replace(URL_RE, ' '))));
+    return dropEncoded(dropRedacted(stripPaths(redact(stripMarkup(t)).replace(URL_RE, ' '), typed)));
   }
   function finish(t, { max = MAX_TITLE, slashes = true } = {}) {
     const out = (slashes ? t : t.replace(/[\\/]+/g, ' ')).replace(/\s+/g, ' ').replace(/^[\s|,;]+|[\s|,;]+$/g, '');
@@ -174,7 +192,9 @@
   const leafOf = (p) => {
     if (typeof p !== 'string') return '';
     const parts = p.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean);
-    return parts.length ? parts[parts.length - 1] : '';
+    const leaf = parts.length ? parts[parts.length - 1] : '';
+    // "." and ".." name no folder.
+    return /^\.{1,2}$/.test(leaf.trim()) ? '' : leaf;
   };
   const trimSlash = (p) => (typeof p === 'string' ? p.replace(/\\/g, '/').replace(/\/+$/, '') : '');
   const plainName = (s) => cut(normalise(s).replace(/[\\/]+/g, ' ').replace(/\s+/g, ' ').trim());
@@ -195,9 +215,10 @@
   }
 
   // Branch → sub-label: agent and kind prefixes dropped, separators shown as ›.
-  const PREFIX_WORDS = 'claude|codex|cursor|gemini|hermes|copilot|aider|agent|bot|feat|feature|fix|bugfix|hotfix|chore|docs|doc|refactor|test|tests|wip|spike|release|perf|ci|build|style';
-  const BRANCH_PREFIX = new RegExp(`^(?:${PREFIX_WORDS})[/_-]+`, 'i');
-  const PREFIX_WORD = new RegExp(`^(?:${PREFIX_WORDS})$`, 'i');
+  const AGENT_WORDS = 'claude|codex|cursor|gemini|hermes|copilot|aider|agent|bot';
+  const KIND_WORDS = 'feat|feature|fix|bugfix|hotfix|chore|docs|doc|refactor|test|tests|wip|spike|release|perf|ci|build|style';
+  const BRANCH_PREFIX = new RegExp(`^(?:${AGENT_WORDS}|${KIND_WORDS})[/_-]+`, 'i');
+  const KIND_WORD = new RegExp(`^(?:${KIND_WORDS})$`, 'i');
   function branchSub(branch, defaultBranch, redact) {
     const b = cleanBranch(branch, redact);
     if (!b || DEFAULT_BRANCHES.has(b.toLowerCase()) || (typeof defaultBranch === 'string' && b === defaultBranch)) return null;
@@ -238,23 +259,34 @@
   const aiName = (p) => (typeof p === 'string' && Object.hasOwn(AI_NAMES, p.trim().toLowerCase()) ? AI_NAMES[p.trim().toLowerCase()] : 'AI');
 
   // ABC-123 (not a standard such as UTF-8 or SHA-256), #123, gh-123.
-  const NOT_TICKETS = new Set(['UTF', 'SHA', 'ISO', 'GPT', 'RFC', 'CVE', 'MD', 'AES', 'RSA', 'HTTP', 'TLS', 'SSL', 'IPV', 'ES', 'ECMA', 'PEP', 'ARM', 'X', 'GH', 'PR', 'CSS', 'H', 'MP', 'COVID', 'F', 'B', 'IE', 'WCAG', 'OAUTH', 'S3', 'EC2', 'P', 'Q', 'V', 'ISSUE', 'BUG', 'BETA', 'ALPHA', 'RC', 'STEP', 'PHASE', 'PART', 'ROUND', 'WAVE', 'DAY', 'WEEK', 'SPRINT', 'PY', 'K8S',
-    // Runtimes, platforms and release words: "node-22", "release-2", "v-3", "ios-17".
-    'NODE', 'NODEJS', 'PYTHON', 'GO', 'GOLANG', 'JAVA', 'JDK', 'JRE', 'RUBY', 'RUST', 'PHP', 'PERL', 'DOTNET', 'NET', 'DENO', 'BUN', 'NPM', 'PNPM', 'YARN',
+  const NOT_TICKETS = new Set(['UTF', 'SHA', 'ISO', 'GPT', 'RFC', 'CVE', 'MD', 'AES', 'RSA', 'HTTP', 'TLS', 'SSL', 'IPV', 'ES', 'ECMA', 'PEP', 'ARM', 'X', 'GH', 'PR', 'CSS', 'H', 'MP', 'COVID', 'F', 'B', 'IE', 'WCAG', 'OAUTH', 'S3', 'EC2', 'P', 'Q', 'V', 'ISSUE', 'BUG', 'BETA', 'ALPHA', 'RC', 'STEP', 'PHASE', 'PART', 'ROUND', 'WAVE', 'DAY', 'WEEK', 'SPRINT', 'PY', 'K8S']);
+  // Runtimes, platforms and release words: "node-22", "release-2", "ios-17". Written in
+  // capitals they can be a real project key (IOS-12, API-77, SDK-3), so only the lower-case
+  // branch path skips them.
+  const RELEASE_WORDS = new Set(['NODE', 'NODEJS', 'PYTHON', 'GO', 'GOLANG', 'JAVA', 'JDK', 'JRE', 'RUBY', 'RUST', 'PHP', 'PERL', 'DOTNET', 'NET', 'DENO', 'BUN', 'NPM', 'PNPM', 'YARN',
     'TS', 'JS', 'KOTLIN', 'SWIFT', 'SCALA', 'ELIXIR', 'ERLANG', 'LUA', 'GCC', 'CLANG', 'LLVM', 'CUDA', 'REACT', 'VUE', 'ANGULAR', 'NEXT', 'NUXT', 'SVELTE', 'VITE',
     'WEBPACK', 'IOS', 'IPADOS', 'MACOS', 'ANDROID', 'WIN', 'WINDOWS', 'UBUNTU', 'DEBIAN', 'ALPINE', 'CHROME', 'FIREFOX', 'SAFARI', 'PG', 'POSTGRES', 'MYSQL', 'REDIS',
-    'OPENSSL', 'LTS', 'API', 'SDK', 'RELEASE', 'VERSION', 'VER', 'REV', 'RC', 'PATCH', 'MINOR', 'MAJOR', 'HOTFIX', 'BUILD', 'TAG']);
+    'OPENSSL', 'LTS', 'API', 'SDK', 'RELEASE', 'VERSION', 'VER', 'REV', 'PATCH', 'MINOR', 'MAJOR', 'HOTFIX', 'BUILD', 'TAG']);
   const TICKET = /(?<![A-Za-z0-9])(?:gh-(\d{1,6})|([A-Z][A-Z0-9]{1,9})-(\d{1,6})|#(\d{1,6}))(?![A-Za-z0-9])/gi;
-  // In a branch, Linear's lower-case key also counts, but only straight after a person's
-  // segment, the shape Linear generates: "sam/abc-123-fix-login". Not "feat/node-22-upgrade",
-  // "release-2-prep" or "work-organise-2026-10-23".
+  // In a branch, Linear's lower-case key also counts, but only straight after a person's or an
+  // agent's segment, the shapes Linear and agents generate: "sam/abc-123-fix-login",
+  // "codex/eng-42". Not after a kind ("feat/node-22-upgrade"), nor "release-2-prep" or
+  // "work-organise-2026-10-23".
   const BRANCH_TICKET = /^([^\\/]+)[\\/]([a-z][a-z0-9]{1,9})-(\d{1,6})(?=$|[-_./])/;
+  // What a branch says it does, or what made it, is never its ticket key: "codex/fix-12-bugs",
+  // "agent/add-3-tests", "claude/session-2026-10-23", "bot/deps-2".
+  const BRANCH_VERB = new RegExp(`^(?:${KIND_WORDS}|bug|issue|task|add|update|remove|improve|change|session|sessions|agent|agents|deps|dep|deps-dev|tmp|temp|draft|experiment|try|attempt|run|job)$`, 'i');
+  // Copilot names its branch for the GitHub issue it was given: copilot/fix-1234 is issue #1234.
+  const COPILOT_ISSUE = /^copilot[\\/]fix-(\d{1,6})$/i;
   function branchTicket(branch) {
     if (typeof branch !== 'string') return null;
+    const issue = COPILOT_ISSUE.exec(branch);
+    if (issue) return { id: `#${issue[1]}`, match: issue[0] };
     const upper = ticketIn(branch);
-    if (upper) return upper;
+    if (upper && !BRANCH_VERB.test(upper.id.split('-')[0])) return upper;
     const m = BRANCH_TICKET.exec(branch);
-    if (!m || PREFIX_WORD.test(m[1]) || NOT_TICKETS.has(m[2].toUpperCase())) return null;
+    const key = m && m[2].toUpperCase();
+    if (!m || KIND_WORD.test(m[1]) || BRANCH_VERB.test(m[2]) || NOT_TICKETS.has(key) || RELEASE_WORDS.has(key)) return null;
     return { id: `${m[2].toUpperCase()}-${m[3]}`, match: `${m[2]}-${m[3]}` };
   }
   // Elsewhere a key must be written in capitals: lower-case "organise-2026" is a word and a year.
@@ -315,7 +347,7 @@
     const shared = o.shareSummaries === true || o.share_summaries === true;
     const local = o.team === false && o.shareSummaries === undefined && o.share_summaries === undefined;
     const promptsAllowed = (shared || local) && typeof redact === 'function';
-    const typed = (v) => safeText(v, { redact: typeof redact === 'function' ? redact : (t) => t });
+    const typed = (v) => safeText(v, { redact: typeof redact === 'function' ? redact : (t) => t, typed: true });
     for (const source of ['human', 'card', 'reported']) {
       const t = typed(o[source]);
       if (t && hasWords(t, 1)) return { title: t, source };
@@ -454,7 +486,7 @@
     return { resolve, clear: () => cache.clear(), size: () => cache.size };
   }
 
-  const api = { BUCKETS, FALLBACK, MAX_TITLE, bucketOf, projectOf, titleOf, group, createGitInfoResolver, safeText, promptSummary, humaniseBranch };
+  const api = { BUCKETS, FALLBACK, SENTENCE_FALLBACK, headingOf, MAX_TITLE, bucketOf, knowsState, projectOf, titleOf, group, createGitInfoResolver, safeText, promptSummary, humaniseBranch };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformWorkOrganise = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -14,8 +14,8 @@ function fixture(over={}){
 }
 test('Overview current card title wins and DTO excludes private identities, paths and receipt bodies',async()=>{const x=fixture();const s=await x.svc.snapshot();assert.equal(s.sessions.length,1);const r=s.sessions[0];assert.equal(r.task.title,'Human edited task');assert.equal(r.capabilities.message.enabled,true);assert.match(r.handle,/^[a-f0-9-]{36}$/);for(const secret of ['private-session','/Users/private','"run"','"member"','"repo"'])assert(!JSON.stringify(s).includes(secret));assert.deepEqual(await x.svc.message({handle:r.handle,text:' Selected message '}),{ok:true,status:'queued',error:''});assert.equal(x.sends,1);});
 test('Overview unbound reported provider and opted local model have UUID handles and honest unavailable controls',async()=>{const x=fixture({work:async()=>({sources:[],capture:[]})});x.raw.source='ollama';x.raw.model='qwen3:8b';x.raw.taskTitle='Explicitly reported task';x.raw.updatedAt=at(20);const r=(await x.svc.snapshot()).sessions[0];assert.equal(r.provider.kind,'local');assert.match(r.provider.label,/qwen3:8b/);assert.equal(r.task.title,'Explicitly reported task');assert.equal(r.capabilities.message.enabled,false);assert.equal((await x.svc.message({handle:r.handle,text:'Hi'})).status,'unavailable');});
-test('Overview parent Stop preserves a working child; own bound fresh child request reports Waiting',async()=>{const x=fixture();x.raw.codexClosedTurn=true;x.raw.signal='stop';x.raw.codexAgents=[{id:'child',status:'working',since:at(10),turnId:'ct',codexInputRequests:[]}];let r=(await x.svc.snapshot()).sessions[0];assert.equal(r.children[0].status,'Working');x.raw.codexAgents[0].codexInputRequests=[{id:'ask',turnId:'ct',kind:'async',askedAt:at(20)}];r=(await x.svc.snapshot()).sessions[0];assert.equal(r.children[0].status,'Waiting on you');x.raw.codexAgents[0].codexInputRequests[0].askedAt=at(90001);r=(await x.svc.snapshot()).sessions[0];assert.equal(r.children[0].status,'Working');});
-test('Overview parent and child Waiting agree for actual open current child requests',async()=>{const x=fixture();x.raw.codexAgents=[{id:'child',status:'working',since:at(10),turnId:'ct',codexInputRequests:[{id:'ask',turnId:'ct',kind:'sync',askedAt:at(20)}]}];const r=(await x.svc.snapshot()).sessions[0];assert.equal(r.status,'Waiting on you');assert.equal(r.children[0].status,'Waiting on you');});
+test('Overview parent Stop preserves a working child; own bound fresh child request reports Waiting',async()=>{const x=fixture();x.raw.codexClosedTurn=true;x.raw.signal='stop';x.raw.codexAgents=[{id:'child',status:'working',since:at(10),turnId:'ct',codexInputRequests:[]}];let r=(await x.svc.snapshot()).sessions[0];assert.equal(r.children[0].status,'Working on it');x.raw.codexAgents[0].codexInputRequests=[{id:'ask',turnId:'ct',kind:'async',askedAt:at(20)}];r=(await x.svc.snapshot()).sessions[0];assert.equal(r.children[0].status,'Needs you');x.raw.codexAgents[0].codexInputRequests[0].askedAt=at(90001);r=(await x.svc.snapshot()).sessions[0];assert.equal(r.children[0].status,'Working on it');});
+test('Overview parent and child Waiting agree for actual open current child requests',async()=>{const x=fixture();x.raw.codexAgents=[{id:'child',status:'working',since:at(10),turnId:'ct',codexInputRequests:[{id:'ask',turnId:'ct',kind:'sync',askedAt:at(20)}]}];const r=(await x.svc.snapshot()).sessions[0];assert.equal(r.status,'Needs you');assert.equal(r.children[0].status,'Needs you');});
 for(const mutation of ['archive','fence','run','membership','principal','connection','human-title'])test(`Overview refuses changed ${mutation} before explicit message`,async()=>{const x=fixture();const r=(await x.svc.snapshot()).sessions[0];if(mutation==='archive')x.row.card.archived=true;if(mutation==='fence')x.row.card.fence++;if(mutation==='run')x.row.card.run.id='replacement';if(mutation==='membership')x.row.member_id='other';if(mutation==='principal')x.data.principal.user_id='other';if(mutation==='connection')x.data.agents[0].connection='unavailable';if(mutation==='human-title')x.row.card.title='New human-selected task';assert.equal((await x.svc.message({handle:r.handle,text:'Hi'})).ok,false);assert.equal(x.sends,0);});
 test('Overview disabled capability cannot be forged using an otherwise valid bound handle',async()=>{const x=fixture();x.raw.codexHookAt=at(90001);const r=(await x.svc.snapshot()).sessions[0];assert.equal(r.capabilities.message.enabled,false);assert.equal((await x.svc.message({handle:r.handle,text:'Hi'})).status,'unavailable');assert.equal(x.sends,0);});
 test('Overview consumes message handles once, refresh retires old handles and TTL expires',async()=>{const x=fixture();let r=(await x.svc.snapshot()).sessions[0];const results=await Promise.all([x.svc.message({handle:r.handle,text:'Hi'}),x.svc.message({handle:r.handle,text:'Hi'})]);assert.equal(results.filter(r=>r.ok).length,1);assert.equal(x.sends,1);r=(await x.svc.snapshot()).sessions[0];await x.svc.snapshot();assert.equal((await x.svc.open({handle:r.handle})).status,'stale');r=(await x.svc.snapshot()).sessions[0];x.tick(45001);assert.equal((await x.svc.open({handle:r.handle})).status,'stale');});
@@ -43,4 +43,41 @@ test('Overview actor/principal changes retire bound reported and managed row ide
   const after=(await x.svc.snapshot()).sessions[0];assert.notEqual(after.id,before.id);assert.equal(after.task.title,before.task.title);assert.equal(after.capabilities.message.enabled,true);
   assert.equal((await x.svc.message({handle:before.handle,text:'Old actor draft'})).ok,false);assert(!JSON.stringify(after).includes('replacement-principal'));assert(!JSON.stringify(after).includes('replacement-member'));
  }
+});
+
+test('Overview board and managed rows name their bucket; the directory files them without guessing from labels',async()=>{
+ const {createSessionDirectory}=require('../src/session-directory');
+ const filed=row=>createSessionDirectory({now:()=>time}).mine({work:[row]})[0];
+ const x=fixture({sessions:()=>[]});
+ const board=async(state,decision=false)=>{x.row.card.run_state=state;x.data.decisions=decision?[{card_id:'card',board_id:'board',member_id:'member',kind:'question'}]:[];return (await x.svc.snapshot()).sessions[0];};
+ for(const [state,status,bucket,detail] of [['running','Working','working',undefined],['claimed','Starting','working','Starting'],['handing_over','Moving to another AI','working','Moving to another AI'],['unresponsive','No recent signal','idle','No recent signal'],['failed','Stopped','stuck','Stopped'],['in_review','In review','check','In review'],['blocked','Blocked','stuck','Blocked']]){
+  const r=await board(state);assert.equal(r.status,status,state);assert.equal(r.bucket,bucket,state);assert.equal(r.detail,detail,state);
+ }
+ let r=await board('blocked');const e=filed(r);assert.equal(e.state,'Stuck or failed');assert.equal(e.input,false,'a Blocked card with no decision for this person is not waiting on them');
+ r=await board('blocked',true);assert.equal(r.bucket,'needs');assert.equal(filed(r).input,true);
+ r=await board('unresponsive');assert.equal(filed(r).state,'Idle');assert.equal(filed(r).detail,'No recent signal');
+ const managed=(state,label)=>createOverviewService({now:()=>time,managed:()=>({conn:{status:'connected'},tasks:[{id:'t1',title:'Managed task',ai:{id:'codex'},state,label,green:false,actions:[]}]})}).snapshot().then(s=>s.sessions[0]);
+ for(const [state,label,bucket] of [['in_review','Ready to review','check'],['failed','Stopped at cap','stuck'],['claimed','Starting','working'],['handing_over','Moving to another AI','working'],['unresponsive','No signal','idle']]){
+  const m=await managed(state,label);assert.equal(m.status,label);assert.equal(m.bucket,bucket,label);assert.equal(m.detail,label);assert.equal(filed(m).state,{check:'Finished — check it',stuck:'Stuck or failed',working:'Working on it',idle:'Idle'}[bucket],label);
+ }
+});
+
+test('Overview managed tasks waiting on the person are Needs you whatever their run state',async()=>{
+ const {createSessionDirectory}=require('../src/session-directory');
+ const managed=t=>createOverviewService({now:()=>time,managed:()=>({conn:{status:'connected'},tasks:[{id:'t1',title:'Managed task',ai:{id:'codex'},green:false,actions:[],...t}]})}).snapshot().then(s=>s.sessions[0]);
+ for(const t of [{state:'parked',label:'Paused',actions:['answer','resume']},{state:'parked',label:'Paused',parkReason:'limit'},{state:'parked',label:'Paused',parkReason:'auth'},{state:'queued',label:'Queued',awaitingConfirm:true,actions:['approve','deny','stop']},{state:'queued',label:'Queued',awaitingConfirm:true}]){
+  const m=await managed(t);assert.equal(m.bucket,'needs',JSON.stringify(t));
+  const e=createSessionDirectory({now:()=>time}).mine({work:[m]})[0];assert.equal(e.state,'Needs you');assert.equal(e.input,true);
+ }
+ assert.equal((await managed({state:'parked',label:'Paused',parkReason:'user'})).bucket,'idle');
+ assert.equal((await managed({state:'queued',label:'Queued'})).bucket,'working');
+});
+
+test('Overview a run stopped at a usage limit or its budget is Needs you, other failures stay Stuck or failed',async()=>{
+ const managed=t=>createOverviewService({now:()=>time,managed:()=>({conn:{status:'connected'},tasks:[{id:'t1',title:'Managed task',ai:{id:'codex'},green:false,actions:[],state:'failed',...t}]})}).snapshot().then(s=>s.sessions[0]);
+ for(const [failKind,label,bucket] of [['budget','Stopped at cap','needs'],['limit','Plan limit reached','needs'],['crash','Failed','stuck'],[undefined,'Stopped','stuck']]){
+  const m=await managed({failKind,label});assert.equal(m.bucket,bucket,label);assert.equal(m.status,label);
+ }
+ const x=fixture({sessions:()=>[]});x.row.card.run_state='failed';
+ for(const [fail_kind,bucket] of [['limit','needs'],['budget','needs'],['network','stuck'],[undefined,'stuck']]){x.row.card.fail_kind=fail_kind;assert.equal((await x.svc.snapshot()).sessions[0].bucket,bucket,String(fail_kind));}
 });

@@ -10,6 +10,7 @@
 // panel never claims a step that nothing confirmed.
 
 const { summary } = require('./ai-tools.js');
+const Organise = require('./work-organise.js');
 
 const DONE = 'done';
 const TODO = 'todo';
@@ -104,7 +105,8 @@ function createForHelp({ report, account, tasks, tools = () => null, now = Date.
 // and offers Undo instead of a checkbox.
 const SOURCE_TOOL = { 'claude-code': 'claude', 'cursor-agent': 'cursor' };
 const toolOf = (s) => { const src = String(s?.source || 'claude'); return SOURCE_TOOL[src] || src; };
-const folderOf = (cwd) => String(cwd || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
+// No folder name: the sentence leaves the place out ("Codex is working.").
+const folderOf = (cwd) => { const name = Organise.projectOf({ cwd: typeof cwd === 'string' ? cwd : null }).heading; return name === Organise.FALLBACK ? '' : name; };
 
 // The session most recently heard from, in words: "Codex is working in api."
 function firstSession(sessions, tools) {

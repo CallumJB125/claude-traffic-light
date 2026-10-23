@@ -22,7 +22,17 @@ const { validActivity } = require('./session-activity');
 const CAPABILITIES = Object.freeze(['discovery', 'telemetry', 'taskReporting', 'receive', 'reply', 'resume', 'steer', 'interrupt', 'remoteControl']);
 const STALE_MS = 90_000;
 const MAX_ENTRIES = 300, MAX_CHILDREN = 64;
-const TEAM_STATES = Object.freeze({ working: 'Working', waiting: 'Waiting', input: 'Needs input', idle: 'Idle', ended: 'Ended' });
+const Organise = require('./work-organise');
+// State words are the five bucket headings (work-organise.js); a detail keeps what the
+// bucket alone would lose ("Ended", "Compacting").
+const TEAM_STATES = Object.freeze(['working', 'waiting', 'input', 'idle', 'ended']);
+const stateOf = (input, detail = null) => {
+  const bucket = Organise.bucketOf(input);
+  return { state: Organise.headingOf(bucket), bucket, ...(detail ? { detail } : {}) };
+};
+const teamState = (v) => (TEAM_STATES.includes(v) ? stateOf(v, v === 'ended' ? 'Ended' : null) : stateOf(null));
+// A row from overview-service already carries its bucket; its status words map back too.
+const rowState = (r) => stateOf(Organise.BUCKETS.some((b) => b.id === r.bucket) ? r.bucket : str(r.status, 40), str(r.detail, 40) || null);
 const CODEX_UNMANAGED = require('./provider-capabilities.json').platforms.find((p) => p.id === 'codex').reasons.existing;
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const str = (v, max) => (typeof v === 'string' ? clean(v, max) : '');
@@ -85,7 +95,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
     const provider = { id: str(row.provider?.id, 40) || 'unknown', label: str(row.provider?.label, 120) || 'Local AI', kind: row.provider?.kind === 'local' ? 'local' : 'integrated' };
     const message = row.capabilities?.message ?? {}, codex = provider.id === 'codex';
     const observedOnly = kind === 'reported' && message.enabled !== true;
-    const state = str(row.status, 40) || 'Unknown';
+    const st = rowState(row);
     const entry = {
       id: publicId(['work', row.id]), kind: kind === 'reported' ? 'observed' : kind, owner: { name: 'You', self: true, initials: 'Y' },
       scope: m.teamKey ? 'team' : 'personal', teams: teamBadges(m.teamKey ? [{ key: m.teamKey, name: m.teamName }] : []),
@@ -94,7 +104,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
       provider, device: { label: str(row.device?.label, 80) || 'Unknown device', local: row.device?.local === true }, project: str(row.project, 100) || null,
       looseEnds: looseEndsOf(row.looseEnds),
       task: taskOf({ human: m.humanTitle, card: row.task?.status === 'tracked' && kind !== 'reported' ? row.task.title : null, reported: row.task?.status === 'tracked' && kind === 'reported' ? row.task.title : null }),
-      state, input: state === 'Waiting on you', ...t, nativeSessionId:m.nativeSessionId,nativeTurnId:m.nativeTurnId,selfReported: null,
+      ...st, input: st.bucket === 'needs', ...t, nativeSessionId:m.nativeSessionId,nativeTurnId:m.nativeTurnId,selfReported: null,
       provenance: kind === 'reported' ? ['observed'] : kind === 'board' ? ['board'] : ['plexiform-tasks'],
       capabilities: capabilities({
         discovery: cap(true), telemetry: cap(true),
@@ -113,11 +123,11 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
       if (!object(child) || typeof child.id !== 'string') continue;
       const self = child.reporting?.source === 'self-reported';
       const ct = timing(`work-child:${child.id}`, Number.isFinite(child.age_ms) ? time - child.age_ms : null, time);
-      const cstate = str(child.status, 40) || 'Unknown';
+      const cst = rowState(child);
       entry.children.push({
-        id: publicId(['work-child', child.id]), parent: entry.id, label: str(child.label, 80) || 'Agent', state: cstate, input: cstate === 'Waiting on you',
+        id: publicId(['work-child', child.id]), parent: entry.id, label: str(child.label, 80) || 'Agent', ...cst, input: cst.bucket === 'needs',
         task: taskOf({ reported: child.task?.status === 'tracked' ? child.task.title : null }), ...ct,
-        selfReported: self && Number.isSafeInteger(child.reporting.observed_at) ? { state: cstate, at: child.reporting.observed_at } : null,
+        selfReported: self && Number.isSafeInteger(child.reporting.observed_at) ? { state: cst.state, at: child.reporting.observed_at } : null,
         provenance: [self ? 'self-reported' : 'observed'],
       });
     }
@@ -131,7 +141,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
     const mine = existing && s.provider?.id !== 'claude-channel' ? [] : (Array.isArray(shares) ? shares : []).filter((x) => object(x) && x.session === s.session);
     const interact = mine.filter((x) => x.scope === 'interact');
     const label = str(s.provider?.label, 120) || 'AI';
-    const status = s.status === 'working' ? 'Working' : s.status === 'ended' ? 'Ended' : s.status === 'compacting' ? 'Compacting' : 'Ready';
+    const status = s.status === 'working' ? stateOf('working') : s.status === 'ended' ? stateOf('idle', 'Ended') : s.status === 'compacting' ? stateOf('working', 'Compacting') : stateOf('idle');
     const live = s.status !== 'ended';
     const inputTime = freshness(stamp(s.reporting?.input?.observed_at),time);
     const staleInput = live && s.reporting?.input?.needed === true && inputTime.freshness !== 'recent';
@@ -143,7 +153,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
       board: { label: existing ? 'Started outside Plexiform' : 'Started by Plexiform', kind: 'personal' }, card: null,
       provider: { id: str(s.provider?.id, 80) || 'unknown', label, kind: /^local-/.test(String(s.provider?.id)) ? 'local' : 'integrated', ...(str(s.provider?.model, 200) ? { model: str(s.provider.model, 200) } : {}) },
       device: { label: 'This device', local: true }, project: null,
-      task: taskOf({ reported: s.reporting?.task?.title }), state: staleInput ? 'Last reported: Needs input' : live && s.input_needed === true ? 'Needs input' : status, input: live && !staleInput && s.input_needed === true, ...t, selfReported: null, provenance: ['owned'],
+      task: taskOf({ reported: s.reporting?.task?.title }), ...(staleInput ? stateOf('idle', 'Last reported needing you') : live && s.input_needed === true ? stateOf('needs') : status), input: live && !staleInput && s.input_needed === true, ...t, selfReported: null, provenance: ['owned'],
       capabilities: capabilities({
         discovery: cap(true), telemetry: cap(true),
         taskReporting: cap(!!s.reporting?.task?.title, 'No task has been reported for this session.'),
@@ -159,8 +169,8 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
     for (const c of (Array.isArray(s.reporting?.children) ? s.reporting.children : []).slice(0, MAX_CHILDREN)) {
       if (!object(c) || typeof c.ref !== 'string') continue;
       const ct = timing(`owned-child:${s.session}:${c.ref}`, c.observed_at, time);
-      const childState = Object.hasOwn(TEAM_STATES, c.state) ? TEAM_STATES[c.state] : 'Unknown';
-      entry.children.push({ id: publicId(['owned-child', s.session, c.ref]), parent: entry.id, label: str(c.name,80)||'Agent', state: childState, input: childState==='Needs input', task: taskOf({reported:c.task_title}), ...ct, reporting:{source:str(c.source,40),observedAt:c.observed_at}, selfReported:c.source==='self-reported'?{state:childState,at:c.observed_at}:null,provenance:['owned',...(c.source==='self-reported'?['self-reported']:[])], capabilities: capabilities({ discovery:cap(true), telemetry:cap(true), taskReporting:cap(!!c.task_title,'Task not reported.') }) });
+      const childState = teamState(c.state);
+      entry.children.push({ id: publicId(['owned-child', s.session, c.ref]), parent: entry.id, label: str(c.name,80)||'Agent', ...childState, input: c.state==='input', task: taskOf({reported:c.task_title}), ...ct, reporting:{source:str(c.source,40),observedAt:c.observed_at}, selfReported:c.source==='self-reported'?{state:childState.state,at:c.observed_at}:null,provenance:['owned',...(c.source==='self-reported'?['self-reported']:[])], capabilities: capabilities({ discovery:cap(true), telemetry:cap(true), taskReporting:cap(!!c.task_title,'Task not reported.') }) });
     }
     if(s.reporting?.task){entry.reporting={source:str(s.reporting.task.source,40),observedAt:s.reporting.task.observed_at};if(s.reporting.task.source==='human')entry.task.source='human';}
     if(staleInput)Object.assign(entry,inputTime,{observedAt:Number.isFinite(stamp(s.reporting.input.observed_at))?stamp(s.reporting.input.observed_at):null});
@@ -175,7 +185,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
     if (!owned.children.length) owned.children = observed.children.map((c) => ({ ...c, parent: owned.id }));
     const rank = { unknown: 0, reported: 1, board: 2, human: 3 };
     if ((rank[observed.task.source] ?? 0) > (rank[owned.task.source] ?? 0)) owned.task = observed.task;
-    if (observed.input && ['Working','Needs input'].includes(owned.state)) { owned.input = true; owned.state = observed.state; }
+    if (observed.input && ['working', 'needs'].includes(owned.bucket)) { owned.input = true; owned.state = observed.state; owned.bucket = observed.bucket; delete owned.detail; }
   }
 
   function mine({ work = [], meta = new Map(), owned = [], shares = [] } = {}) {
@@ -217,11 +227,22 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
     const self = x.owner.id === viewer.id;
     if (self && x.kind !== 'board-run') return null;
     const ownerName = str(x.owner.name, 80) || 'Teammate';
+    // A teammate's session waiting on input needs them, not the viewer: display only, the bucket stays.
+    // Cut so the state stays inside the page's 80-character limit, which counts UTF-16 units
+    // (an emoji is two): a longer one fails validation and blanks the whole Team view. Never
+    // split a surrogate pair at the cut.
+    const shortName = (n) => {
+      if (n.length <= 60) return n;
+      let end = 59; const c = n.charCodeAt(end - 1); if (c >= 0xd800 && c <= 0xdbff) end--;
+      return `${n.slice(0, end).trimEnd()}…`;
+    };
+    const needsWho = self ? Organise.headingOf('needs') : str(x.owner.name, 80) ? `Needs ${shortName(str(x.owner.name, 80))}` : 'Needs them';
+    const whose = (v) => (v.bucket === 'needs' ? { ...v, state: needsWho } : v);
     const t = timing(`team:${team.key}:${x.ref}`, x.observed_at, time);
-    const sr = object(x.self_reported) && Object.hasOwn(TEAM_STATES, x.self_reported.state) && Number.isFinite(stamp(x.self_reported.at)) ? { state: TEAM_STATES[x.self_reported.state], at: stamp(x.self_reported.at) } : null;
-    const state = Object.hasOwn(TEAM_STATES, x.state) ? TEAM_STATES[x.state] : 'Unknown';
+    const sr = object(x.self_reported) && TEAM_STATES.includes(x.self_reported.state) && Number.isFinite(stamp(x.self_reported.at)) ? { state: whose(teamState(x.self_reported.state)).state, at: stamp(x.self_reported.at) } : null;
+    const st = whose(teamState(x.state));
     const online = x.online === true && t.freshness === 'recent';
-    const canSend = share.scope === 'interact', live = state !== 'Ended';
+    const canSend = share.scope === 'interact', live = x.state !== 'ended';
     const why = (ok, base) => (!canSend ? `${ownerName} shared this session with your team to watch only.` : !live ? 'This session has ended.' : !online ? `${ownerName}'s computer is offline or this report is stale.` : ok ? '' : base);
     const caps = object(x.capabilities) ? x.capabilities : {};
     const id = publicId(['team', team.key, x.ref]);
@@ -233,7 +254,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
       provider: { id: str(x.provider?.id, 40) || 'unknown', label: str(x.provider?.label, 120) || 'AI', kind: x.provider?.kind === 'local' ? 'local' : 'integrated' },
       device: { label: str(x.device?.label, 80) || 'Unknown device', local: false }, project: null,
       task: taskOf({ human: object(x.card) && x.card.edited_by === 'human' ? x.card.title : null, card: object(x.card) ? x.card.title : null, reported: x.task_title }),
-      state, input: live && (state === 'Needs input' || x.input_needed === true), ...t, selfReported: sr,
+      ...st, input: live && (x.state === 'input' || x.input_needed === true), ...t, selfReported: sr,
       provenance: [x.messageContract === 'task-inbox' ? 'board' : 'shared', ...(sr ? ['self-reported'] : [])],
       messageContract: x.messageContract === 'task-inbox' ? 'task-inbox' : 'live',
       activity: activityOf(x.activity, time),
@@ -257,15 +278,15 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
       if (!entry.card && x.task_source === 'human') entry.task.source = 'human';
     }
     if(live && x.input_reported_needed===true && freshness(stamp(x.input_observed_at),time).freshness!=='recent'){
-      entry.state='Last reported: Needs input';entry.input=false;
+      Object.assign(entry,stateOf('idle','Last reported needing you'));entry.input=false;
       Object.assign(entry,freshness(stamp(x.input_observed_at),time),{observedAt:Number.isFinite(stamp(x.input_observed_at))?stamp(x.input_observed_at):null});
     }
     for (const c of (Array.isArray(x.children) ? x.children : []).slice(0, MAX_CHILDREN)) {
       if (!object(c) || typeof c.ref !== 'string') continue;
       // Each child keeps its own report time; the parent's activity never refreshes it.
       const ct = timing(`team-child:${team.key}:${x.ref}:${c.ref}`, c.observed_at, time);
-      const cstate = Object.hasOwn(TEAM_STATES, c.state) ? TEAM_STATES[c.state] : 'Unknown';
-      entry.children.push({ id: publicId(['team-child', team.key, x.ref, c.ref]), parent: id, label: str(c.name, 80) || 'Agent', state: cstate, input: cstate === 'Needs input', task: taskOf({ reported: c.task_title }), ...ct, reporting:{source:['human','provider','self-reported','observed'].includes(c.source)?c.source:'unknown',observedAt:c.observed_at},selfReported: c.source==='self-reported'?{state:cstate,at:c.observed_at}:null, provenance: ['shared',...(c.source==='self-reported'?['self-reported']:[])] });
+      const cst = whose(teamState(c.state));
+      entry.children.push({ id: publicId(['team-child', team.key, x.ref, c.ref]), parent: id, label: str(c.name, 80) || 'Agent', ...cst, input: c.state === 'input', task: taskOf({ reported: c.task_title }), ...ct, reporting:{source:['human','provider','self-reported','observed'].includes(c.source)?c.source:'unknown',observedAt:c.observed_at},selfReported: c.source==='self-reported'?{state:cst.state,at:c.observed_at}:null, provenance: ['shared',...(c.source==='self-reported'?['self-reported']:[])] });
     }
     return { entry, ref: x.ref, scope: share.scope };
   }
@@ -292,7 +313,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
     const children = entries.flatMap((e) => e.children);
     const recent = (e) => e.freshness === 'recent';
     return {
-      sessions: entries.length, working: entries.filter((e) => recent(e) && e.state === 'Working').length,
+      sessions: entries.length, working: entries.filter((e) => recent(e) && e.bucket === 'working').length,
       input: [...entries, ...children].filter((e) => recent(e) && e.input).length, children: children.length,
       stale: entries.filter((e) => e.freshness !== 'recent').length, team: entries.filter((e) => e.scope === 'team').length,
     };

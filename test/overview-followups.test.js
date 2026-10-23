@@ -1,4 +1,5 @@
 'use strict';
+const ORGANISE = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'work-organise.js'), 'utf8'); // views read their state words from it
 // Renderer/preload tests use synthetic queue and provider state only.
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),crypto=require('node:crypto'),{JSDOM}=require('jsdom');
 const read=f=>fs.readFileSync(path.join(__dirname,'..',f),'utf8');
@@ -16,7 +17,7 @@ function harness(){
   cancel:async r=>{const i=items.find(i=>i.id===r.id);i.status='cancelled';i.text='';i.reason='Cancelled before dispatch.';return{ok:true};},
   discard:async r=>{items=items.filter(i=>i.id!==r.id);return{ok:true};},
  }};
- dom.window.overviewApi=api;dom.window.eval(read('overview-directory.js'));dom.window.OverviewDirectory.start({focusOwned(){},composeWork(){}});
+ dom.window.overviewApi=api;dom.window.eval(ORGANISE);dom.window.eval(read('overview-directory.js'));dom.window.OverviewDirectory.start({focusOwned(){},composeWork(){}});
  const refresh=async()=>{await dom.window.OverviewDirectory.refresh();await tick();},button=label=>[...doc.querySelectorAll('button')].find(b=>b.textContent===label&&!b.hidden);
  return{dom,doc,api,refresh,button,calls:()=>({queueCalls,reviewCalls}),requests:()=>({reviewRequests,queueRequests}),setScope:s=>scope=s,setPending:p=>pending=p,setListPending:p=>listPending=p,close:()=>dom.window.close()};
 }

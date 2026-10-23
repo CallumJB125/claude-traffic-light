@@ -4,6 +4,7 @@ const LooseEnds=require('./burst-loose-ends-view');
 // tokens, source session IDs, filesystem paths or authority objects cross IPC.
 const crypto=require('node:crypto');
 const Session=require('./session-overview');
+const Organise=require('./work-organise');
 const Machine=require('../hooks/session-machine');
 const AgentReports=require('./agent-self-report');
 const {clean}=require('./work-capture');
@@ -59,6 +60,26 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   const labels={quiet:'Quiet',claimed:'Starting',queued:'Queued',parked:'Parked',suspended:'Suspended',reconnecting:'Reconnecting',unresponsive:'No recent signal',orphaned:'Orphaned',handing_over:'Moving to another AI',handed_over:'Moved to another AI',in_review:'In review',done:'Done',failed:'Stopped'};
   return typeof state==='string'&&Object.hasOwn(labels,state)?labels[state]:'Unknown';
  };
+ // Board and managed rows name their bucket so no view has to guess it from these labels.
+ const RUN_BUCKET={running:'working',quiet:'working',claimed:'working',queued:'working',reconnecting:'working',handing_over:'working',blocked:'needs',in_review:'check',orphaned:'stuck',failed:'stuck',stalled:'stuck',parked:'idle',suspended:'idle',unresponsive:'idle',handed_over:'idle',done:'idle'};
+ const PLAIN_LABELS=new Set(['Working','Running','Waiting on you','Needs you','Unknown']);
+ const placed=(status,bucket)=>({status,bucket,...(PLAIN_LABELS.has(status)||status===Organise.headingOf(bucket)?{}:{detail:status})});
+ // A managed task waiting on the person needs them whatever its run state: an open ask or a
+ // confirm to approve (its actions say so), or parked until they log in or their limit resets.
+ // A run that stopped at a usage limit or its budget waits on the person too (work-organise's rule).
+ const PERSON_FAIL=['limit','budget'];
+ const managedBucket=t=>{
+  const actions=Array.isArray(t.actions)?t.actions:[];
+  if(t.state==='failed'&&PERSON_FAIL.includes(t.failKind))return 'needs';
+  if(actions.includes('answer')||actions.includes('approve')||(t.state==='queued'&&t.awaitingConfirm===true)||(t.state==='parked'&&['limit','auth'].includes(t.parkReason)))return 'needs';
+  return typeof t.state==='string'&&Object.hasOwn(RUN_BUCKET,t.state)?RUN_BUCKET[t.state]:'idle';
+ };
+ const boardPlaced=(data,row)=>{
+  const status=managedStatus(data,row);
+  // Blocked with no decision for this person is stuck on something else, not waiting on them.
+  const bucket=status==='Waiting on you'||(row.card.run_state==='failed'&&PERSON_FAIL.includes(row.card.fail_kind))?'needs':status==='Blocked'?'stuck':['Connection unavailable','No recent activity','Unknown'].includes(status)?'idle':RUN_BUCKET[row.card.run_state]??'idle';
+  return placed(status,bucket);
+ };
  function register(row,entry,next){const handle=crypto.randomUUID();next.set(handle,{...entry,canOpen:row.capabilities.open.enabled===true,canMessage:row.capabilities.message.enabled===true,expires:now()+45000});row.handle=handle;return row;}
  async function snapshot(){
   const generation=++epoch;handles.clear();const time=now();if(!permitted())return{schema:1,status:'unavailable',observed_at:time,omitted:0,sessions:[]};
@@ -86,16 +107,16 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
    if(raw.source==null)raw={...raw,source:'claude'};const elapsed=age(raw.source==='codex'&&raw.codexLifecycle===1?raw.codexHookAt:raw.updatedAt,time),fresh=freshness(elapsed),bound=binding(raw),card=bound?.row.card;
    const identity=stable(['reported',raw.device??'local',raw.source??'unknown',raw.sessionId??null,raw.taskId??'session',card?.id??null,bound?actorOf(bound.data,bound.row):null,bound?.source.key??null,parentId]);
    const projected=Session.snapshot({sessions:[{...raw,remote:false,device:null}],now:time}).sessions[0];
-   let status=projected?.status??'Unknown';if(raw.source==='codex'&&Machine.codexInputPending?.(raw,time))status='Waiting on you';
-   const dto={id:identity,handle:null,label:parentId?'Agent':'Session',provider:provider(raw.source,raw.model),device:{label:raw.remote||raw.device?clean(raw.deviceName||'Paired device',80):'This device',local:!raw.remote&&!raw.device},board:{label:bound?clean(bound.row.board_name,80)||'Board':raw.scope?.state==='personal'?'Personal':'Unassigned',kind:bound?bound.source.kind:raw.scope?.state==='personal'?'personal':'unknown'},project:Session.snapshot({sessions:[{cwd:raw.cwd}],now:time}).sessions[0]?.project??'Local project',looseEnds:parentId?null:looseBadge(raw.cwd),status,freshness:fresh,age_ms:elapsed,task:task(card??(typeof raw.taskTitle==='string'?{title:raw.taskTitle}:null)),children:[],handoffs:personHandoffs(card,bound?.data.principal?.member_id??null),capabilities:{open:capability(!!bound,'Open card',bound?'':'No current tracked card is available.'),message:capability(!!bound&&liveOwn(bound.data,bound.row)&&fresh==='recent'&&!!card.repo?.id&&typeof bound.source.send==='function','Message',(!bound&&unmanaged(raw.source))||'A current owned runner with messaging is required.')}};
+   let status=projected?.status??Organise.headingOf(null),bucket=projected?.bucket??'idle',detail=projected?.detail??null;if(raw.source==='codex'&&Machine.codexInputPending?.(raw,time)){bucket='needs';status=Organise.headingOf(bucket);detail=null;}
+   const dto={id:identity,handle:null,label:parentId?'Agent':'Session',provider:provider(raw.source,raw.model),device:{label:raw.remote||raw.device?clean(raw.deviceName||'Paired device',80):'This device',local:!raw.remote&&!raw.device},board:{label:bound?clean(bound.row.board_name,80)||'Board':raw.scope?.state==='personal'?'Personal':'Unassigned',kind:bound?bound.source.kind:raw.scope?.state==='personal'?'personal':'unknown'},project:Session.snapshot({sessions:[{cwd:raw.cwd}],now:time}).sessions[0]?.project??Organise.FALLBACK,looseEnds:parentId?null:looseBadge(raw.cwd),status,bucket,...(detail?{detail}:{}),freshness:fresh,age_ms:elapsed,task:task(card??(typeof raw.taskTitle==='string'?{title:raw.taskTitle}:null)),children:[],handoffs:personHandoffs(card,bound?.data.principal?.member_id??null),capabilities:{open:capability(!!bound,'Open card',bound?'':'No current tracked card is available.'),message:capability(!!bound&&liveOwn(bound.data,bound.row)&&fresh==='recent'&&!!card.repo?.id&&typeof bound.source.send==='function','Message',(!bound&&unmanaged(raw.source))||'A current owned runner with messaging is required.')}};
    if(bound){usedCards.add(cardIdentity(bound.source,bound.data,bound.row));register(dto,{kind:'board',bound,pin:keyOf(bound.row)},next);meta.set(identity,{kind:'board',boardRunId:card.run?.id,...teamMeta(bound.source,bound.row)});}else{register(dto,{kind:'reported'},next);meta.set(identity,{kind:'reported',nativeSessionId:raw.sessionId,nativeTurnId:raw.codexTurnId??null});}
    const children=Array.isArray(raw.source==='codex'?raw.codexAgents:raw.agents)?(raw.source==='codex'?raw.codexAgents:raw.agents):[];
    for(const child of children.slice(0,64)){
     if(!object(child)||typeof child.status!=='string'||!['working','waiting','done'].includes(child.status))continue;
     const reportedAges=[age(child.updatedAt??child.since,time),...(raw.source==='codex'?Machine.codexInputEntries({source:'codex',codexLifecycle:1,codexTurnId:child.turnId,codexInputRequests:child.codexInputRequests}).map(r=>age(r.askedAt,time)):[])].filter(n=>n!==null);
-    const childAge=reportedAges.length?Math.min(...reportedAges):null,childFresh=freshness(childAge),childDto={id:stable([identity,'child',child.id??dto.children.length]),handle:null,label:clean(child.name??'Agent',80)||'Agent',status:child.status==='done'?'Stopped':child.status==='waiting'?'Waiting on you':'Working',freshness:childFresh,age_ms:childAge,task:task(typeof child.taskTitle==='string'?{title:child.taskTitle}:null),capabilities:{open:capability(false,'Open','This reported agent has no supported open target.'),message:capability(false,'Message','This reported agent has no supported message interface.')}};
+    const childAge=reportedAges.length?Math.min(...reportedAges):null,childFresh=freshness(childAge),childDto={id:stable([identity,'child',child.id??dto.children.length]),handle:null,label:clean(child.name??'Agent',80)||'Agent',status:Organise.headingOf(child.status==='done'?'idle':child.status==='waiting'?'needs':'working'),freshness:childFresh,age_ms:childAge,task:task(typeof child.taskTitle==='string'?{title:child.taskTitle}:null),capabilities:{open:capability(false,'Open','This reported agent has no supported open target.'),message:capability(false,'Message','This reported agent has no supported message interface.')}};
     // A parent Stop does not end independently reported child work.
-    if(raw.source==='codex'&&['working','waiting'].includes(child.status)&&Machine.codexInputPending({source:'codex',codexLifecycle:1,codexClosedTurn:false,codexTurnId:child.turnId,codexInputRequests:child.codexInputRequests},time))childDto.status='Waiting on you';
+    if(raw.source==='codex'&&['working','waiting'].includes(child.status)&&Machine.codexInputPending({source:'codex',codexLifecycle:1,codexClosedTurn:false,codexTurnId:child.turnId,codexInputRequests:child.codexInputRequests},time))childDto.status=Organise.headingOf('needs');
     if(!dto.children.some(c=>c.id===childDto.id))dto.children.push(childDto);
    }
    for(const child of AgentReports.project(raw,time)){
@@ -110,13 +131,13 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   for(const {source,data}of good){for(const row of data.cards){const card=row?.card;if(!object(card)||!id(card.id)||!id(row.board_id)||!id(row.member_id)||card.archived||!card.run||!id(card.run.id)||!data.agents.some(a=>a.card_id===card.id&&a.board_id===row.board_id&&a.member_id===row.member_id))continue;
    const identity=cardIdentity(source,data,row);if(usedCards.has(identity)||rows.some(r=>r.id===identity))continue;if(rows.length>=200){omitted++;continue;}
    const live=liveOwn(data,row),elapsed=Number.isFinite(card.live?.hb_age_ms)&&card.live.hb_age_ms>=0?card.live.hb_age_ms:null;
-   const dto={id:identity,handle:null,label:'Managed session',provider:provider(card.run.ai,card.run.model),device:{label:clean(card.run.device_name,80)||'Runner device',local:source.kind==='personal'},board:{label:clean(row.board_name,80)||'Board',kind:source.kind},project:clean(card.repo?.short_name,100)||'Project not reported',status:managedStatus(data,row),freshness:freshness(elapsed),age_ms:elapsed,task:task(card),children:[],handoffs:personHandoffs(card,data.principal?.member_id??null),capabilities:{open:capability(true,'Open card',''),message:capability(live&&!!card.repo?.id&&typeof source.send==='function','Message','A current owned runner with messaging is required.')}};
+   const dto={id:identity,handle:null,label:'Managed session',provider:provider(card.run.ai,card.run.model),device:{label:clean(card.run.device_name,80)||'Runner device',local:source.kind==='personal'},board:{label:clean(row.board_name,80)||'Board',kind:source.kind},project:clean(card.repo?.short_name,100)||'Project not reported',...boardPlaced(data,row),freshness:freshness(elapsed),age_ms:elapsed,task:task(card),children:[],handoffs:personHandoffs(card,data.principal?.member_id??null),capabilities:{open:capability(true,'Open card',''),message:capability(live&&!!card.repo?.id&&typeof source.send==='function','Message','A current owned runner with messaging is required.')}};
    register(dto,{kind:'board',bound:{source,data,row},pin:keyOf(row)},next);rows.push(dto);meta.set(identity,{kind:'board',boardRunId:card.run.id,...teamMeta(source,row)});
   }}
   const local=managed();if(local?.conn?.status==='connected'&&Array.isArray(local.tasks))for(const t of local.tasks.slice(0,200)){
    if(!object(t)||!id(t.id)||t.hub)continue;if(rows.length>=200){omitted++;continue;}
    const connected=t.stale!==true,live=connected&&t.green===true;
-   const dto={id:stable(['task',t.id]),handle:null,label:'Managed task',provider:provider(t.ai?.id,t.ai?.model),device:{label:'This device',local:true},board:{label:'Personal tasks',kind:'personal'},project:clean(t.repo?.name,100)||'Local project',status:clean(t.label,40)||'Unknown',freshness:live?'recent':connected?'unknown':'stale',age_ms:live?0:null,task:task(t),children:[],capabilities:{open:capability(typeof openManaged==='function','Open Tasks','The Tasks page is unavailable.'),message:capability(live&&Array.isArray(t.actions)&&t.actions.includes('message')&&typeof messageManaged==='function','Message','This task cannot receive messages in its current state.')}};
+   const dto={id:stable(['task',t.id]),handle:null,label:'Managed task',provider:provider(t.ai?.id,t.ai?.model),device:{label:'This device',local:true},board:{label:'Personal tasks',kind:'personal'},project:clean(t.repo?.name,100)||'Local project',...placed(clean(t.label,40)||'Unknown',managedBucket(t)),freshness:live?'recent':connected?'unknown':'stale',age_ms:live?0:null,task:task(t),children:[],capabilities:{open:capability(typeof openManaged==='function','Open Tasks','The Tasks page is unavailable.'),message:capability(live&&Array.isArray(t.actions)&&t.actions.includes('message')&&typeof messageManaged==='function','Message','This task cannot receive messages in its current state.')}};
    if(rows.some(r=>r.id===dto.id))continue;
    register(dto,{kind:'managed',id:t.id,state:t.state,provider:t.ai?.id},next);rows.push(dto);meta.set(dto.id,{kind:'task'});
   }

@@ -8,6 +8,9 @@
 (() => {
   const api = window.overviewApi;
   if (!api || typeof api.directory !== 'function') return;
+  // State words, quick filters and the project fallback come from src/work-organise.js.
+  const W = window.PlexiformWorkOrganise;
+  const isWorking = e => W.bucketOf(e.bucket || e.state) === 'working';
   const $ = id => document.getElementById(id);
   const obj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const str = (v, max = 1000) => typeof v === 'string' && v.length <= max;
@@ -52,20 +55,22 @@
   let hooks = null, view = 'mine', team = null, read = 0, received = 0, selected = null, teamFocus = 'all';
   const lists = { mine: { rows: new Map(), data: null }, team: { rows: new Map(), data: null } };
   const TEAM_FILTERS = ['person', 'project', 'task', 'platform', 'device', 'status'];
-  const keyOf = (e, f) => f === 'person' ? e.owner.name : f === 'project' ? e.board.label || 'No project reported' : f === 'task' ? e.task.title : f === 'platform' ? e.provider.label : f === 'device' ? e.device.label : e.state;
+  const keyOf = (e, f) => f === 'person' ? e.owner.name : f === 'project' ? e.board.label || W.FALLBACK : f === 'task' ? e.task.title : f === 'platform' ? e.provider.label : f === 'device' ? e.device.label : e.bucket || W.bucketOf(e.state);
   const freshNow = (e, data) => {
     if (e.freshness !== 'recent' || e.ageMs === null) return { freshness: e.freshness, ageMs: e.ageMs };
     const a = e.ageMs + Math.max(0, Date.now() - data.observed_at);
     return { freshness: a > 90_000 ? 'stale' : 'recent', ageMs: a };
   };
-  const stateText = (e, f) => f.freshness === 'recent' ? e.state : `${e.state} · ${f.freshness === 'stale' ? 'Stale' : 'Freshness unknown'}`;
-  const tone = (e, f) => f.freshness !== 'recent' ? f.freshness : e.input ? 'waiting' : e.state === 'Working' ? 'working' : '';
+  const stateText = (e, f) => { const s = typeof e.detail === 'string' && e.detail ? `${e.state} (${e.detail.toLowerCase()})` : e.state; return f.freshness === 'recent' ? s : `${s} · ${f.freshness === 'stale' ? 'Stale' : 'Freshness unknown'}`; };
+  const tone = (e, f) => f.freshness !== 'recent' ? f.freshness : e.input ? 'waiting' : isWorking(e) ? 'working' : '';
   // Optional page helpers (src/session-pulse.js etc.); each feature is absent when its script is not loaded.
   const Pulse = window.PlexiformPulse || null, Pins = window.PlexiformPins || null, Follow = window.PlexiformFollow || null, Requests = window.PlexiformRequests || null, Presence = window.PlexiformPresence || null, Palette = window.PlexiformPalette || null, Availability = window.PlexiformAvailability || null;
   // Per-viewer conveniences only (pins, follows, saved filters); sharing and permissions never live here.
   const store = { read(k, parse) { try { return parse(localStorage.getItem(k)); } catch { return parse(null); } }, write(k, v) { try { localStorage.setItem(k, v); } catch { /* unavailable */ } } };
   let pins = Pins ? store.read('plexiform.pins', Pins.parse) : null, follows = Follow ? store.read('plexiform.follows', Follow.parse) : null;
   const savePins = () => { if (Pins) store.write('plexiform.pins', Pins.serialize(pins)); };
+  // Saved status filters from before bucket ids are rewritten once, on the first load after the change.
+  if (pins?.upgraded) { delete pins.upgraded; savePins(); }
   const saveFollows = () => { if (Follow) store.write('plexiform.follows', Follow.serialize(follows)); };
   const RECEIPT_TEXT = { sending: 'Drafted · review and send', sent: 'Sent', acknowledged: 'Acknowledged', answered: 'Answered', expired: 'Expired, no reply' };
 
@@ -506,14 +511,16 @@
   }
   function renderSummary(data) {
     const c = data.entries, kids = c.flatMap(e => e.children), f = e => freshNow(e, data).freshness === 'recent';
-    const metrics = [[c.length, data.view === 'mine' ? 'My sessions' : 'Shared sessions'], [c.filter(e => f(e) && e.state === 'Working').length, 'Working now'], [[...c, ...kids].filter(e => f(e) && e.input).length, data.view === 'mine' ? 'Need you' : 'Need input'], [kids.length, 'Child agents']];
+    const metrics = [[c.length, data.view === 'mine' ? 'My sessions' : 'Shared sessions'], [c.filter(e => f(e) && isWorking(e)).length, W.headingOf('working')], [[...c, ...kids].filter(e => f(e) && e.input).length, W.headingOf('needs')], [kids.length, 'Child agents']];
     return metrics.map(([n, l]) => { const m = el('div', '', 'metric'); m.append(el('strong', String(n)), el('span', l)); return m; });
   }
   function teamFilters(data) {
     for (const f of TEAM_FILTERS) {
-      const s = $(`team-${f}-filter`), prev = s.value, values = [...new Set(data.entries.map(e => keyOf(e, f)))].sort((a, b) => a.localeCompare(b));
-      s.replaceChildren(Object.assign(el('option', `All`), { value: '' }), ...values.map(x => Object.assign(el('option', x), { value: x })));
-      if (prev && !values.includes(prev)) s.append(Object.assign(el('option', `${prev} · none now`), { value: prev }));
+      const s = $(`team-${f}-filter`), prev = s.value, seen = new Set(data.entries.map(e => keyOf(e, f)));
+      // Status options are buckets, in bucket order, shown by heading.
+      const values = f === 'status' ? W.BUCKETS.map(b => b.id).filter(id => seen.has(id)) : [...seen].sort((a, b) => a.localeCompare(b)), text = x => f === 'status' ? W.headingOf(x) : x;
+      s.replaceChildren(Object.assign(el('option', `All`), { value: '' }), ...values.map(x => Object.assign(el('option', text(x)), { value: x })));
+      if (prev && !values.includes(prev)) s.append(Object.assign(el('option', `${text(prev)} · none now`), { value: prev }));
       s.value = prev;
     }
   }
@@ -525,7 +532,7 @@
     if (query && ![e.task.title, e.owner.name, e.provider.label, e.device.label, e.board.label, e.card?.key || ''].join(' ').toLocaleLowerCase().includes(query)) return false;
     if (activeCollection && !(Pins && Pins.inCollection(pins, activeCollection, e))) return false;
     const fresh = freshNow(e, data).freshness;
-    return teamFocus === 'all' || teamFocus === 'attention' && needsInput(e, data) || teamFocus === 'working' && fresh === 'recent' && e.state === 'Working' || teamFocus === 'stale' && fresh !== 'recent';
+    return teamFocus === 'all' || teamFocus === 'attention' && needsInput(e, data) || teamFocus === 'working' && fresh === 'recent' && isWorking(e) || teamFocus === 'stale' && fresh !== 'recent';
   };
   function resetTeamFilters() {
     for (const f of TEAM_FILTERS) $(`team-${f}-filter`).value = '';
@@ -555,12 +562,12 @@
     teamFilters(data);
     renderSavedFilters();
     $('team-summary').replaceChildren(...renderSummary(data));
-    const counts = { all: data.entries.length, attention: data.entries.filter(e => needsInput(e, data)).length, working: data.entries.filter(e => e.state === 'Working' && freshNow(e, data).freshness === 'recent').length, stale: data.entries.filter(e => freshNow(e, data).freshness !== 'recent').length };
-    const labels = { all: 'All sessions', attention: 'Need input', working: 'Working', stale: 'Stale / unknown' };
+    const counts = { all: data.entries.length, attention: data.entries.filter(e => needsInput(e, data)).length, working: data.entries.filter(e => isWorking(e) && freshNow(e, data).freshness === 'recent').length, stale: data.entries.filter(e => freshNow(e, data).freshness !== 'recent').length };
+    const labels = { all: 'All sessions', attention: W.headingOf('needs'), working: W.headingOf('working'), stale: 'Stale / unknown' };
     for (const b of document.querySelectorAll('[data-team-focus]')) { const key = b.dataset.teamFocus; b.setAttribute('aria-pressed', String(key === teamFocus)); set(b, `${labels[key]} · ${counts[key]}`); }
 
     const group = $('team-group').value || 'person', groups = new Map();
-    for (const v of all) { if (!v.gone && !matches(v.entry, data)) continue; const k = v.gone ? 'No longer listed' : keyOf(v.entry, group); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(v); }
+    for (const v of all) { if (!v.gone && !matches(v.entry, data)) continue; const k = v.gone ? 'No longer listed' : group === 'status' ? W.headingOf(keyOf(v.entry, group)) : keyOf(v.entry, group); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(v); }
     if (!l.groups) l.groups = new Map();
     const pinnedGroup = k => Pins && groups.get(k).some(v => !v.gone && Pins.pinned(pins, v.entry));
     const blocks = [...groups.keys()].sort((a, b) => a === 'No longer listed' ? 1 : b === 'No longer listed' ? -1 : Number(pinnedGroup(b)) - Number(pinnedGroup(a)) || a.localeCompare(b)).map(k => {

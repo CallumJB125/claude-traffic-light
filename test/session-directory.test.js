@@ -101,7 +101,7 @@ test('team freshness: replay cannot refresh observedAt; children keep their own 
   const read = (over) => d.team({ team: TEAM, viewer: VIEWER, member: true, hubEntries: [hubEntry(over)] }).entries[0];
   let e = read({ observed_at: T0 - 1000, children: [{ ref: 'k', name: 'Sub', state: 'working', observed_at: T0 - 200_000 }], self_reported: { state: 'working', at: T0 - 10 } });
   assert.equal(e.freshness, 'recent'); assert.equal(e.children[0].freshness, 'stale', 'parent activity does not refresh a child');
-  assert.deepEqual(e.selfReported, { state: 'Working', at: T0 - 10 }); assert.deepEqual(e.provenance, ['shared', 'self-reported']);
+  assert.deepEqual(e.selfReported, { state: 'Working on it', at: T0 - 10 }); assert.deepEqual(e.provenance, ['shared', 'self-reported']);
   now = T0 + 200_000;
   e = read({ observed_at: T0 - 5000 }); // an older event replayed
   assert.equal(e.observedAt, T0 - 1000); assert.equal(e.freshness, 'stale');
@@ -194,7 +194,7 @@ test('directory never joins different native sessions or old turns with matching
 test('owned reporting keeps human task and self-reported child provenance and independent clocks',()=>{
  const d=createSessionDirectory({now:()=>T0});
  const [e]=d.mine({owned:[owned({reporting:{task:{title:'Human task',source:'human',observed_at:T0-1000},children:[{ref:'private-child',name:'Reviewer',state:'working',task_title:'Review',source:'self-reported',observed_at:T0-100000}]} })]});
- assert.equal(e.task.source,'human');assert.equal(e.children[0].freshness,'stale');assert.equal(e.children[0].selfReported.state,'Working');assert.equal(JSON.stringify(e).includes('private-child'),false);
+ assert.equal(e.task.source,'human');assert.equal(e.children[0].freshness,'stale');assert.equal(e.children[0].selfReported.state,'Working on it');assert.equal(JSON.stringify(e).includes('private-child'),false);
 });
 
 
@@ -206,15 +206,15 @@ test('folding a native-bound observation preserves a human title over reported w
 
 test('stale input reports keep last-reported context without renewed input or freshness',()=>{
  const d=createSessionDirectory({now:()=>T0});const [e]=d.mine({owned:[owned({input_needed:true,reporting:{input:{needed:true,observed_at:T0-90001,source:'observed'},children:[]}})]});
- assert.equal(e.input,false);assert.equal(e.state,'Last reported: Needs input');assert.equal(e.freshness,'stale');assert.equal(e.ageMs,90001);
- const {entries}=d.team({team:TEAM,viewer:VIEWER,member:true,hubEntries:[hubEntry({input_needed:false,input_reported_needed:true,input_observed_at:T0-90001})]});assert.equal(entries[0].input,false);assert.equal(entries[0].freshness,'stale');assert.equal(entries[0].state,'Last reported: Needs input');
+ assert.equal(e.input,false);assert.equal(e.state,'Idle');assert.equal(e.detail,'Last reported needing you');assert.equal(e.freshness,'stale');assert.equal(e.ageMs,90001);
+ const {entries}=d.team({team:TEAM,viewer:VIEWER,member:true,hubEntries:[hubEntry({input_needed:false,input_reported_needed:true,input_observed_at:T0-90001})]});assert.equal(entries[0].input,false);assert.equal(entries[0].freshness,'stale');assert.equal(entries[0].state,'Idle');assert.equal(entries[0].detail,'Last reported needing you');
 });
 
 
 test('authoritative ended state wins over prior fresh or stale input reports',()=>{
  const d=createSessionDirectory({now:()=>T0});for(const at of [T0-1000,T0-90001]){
-  const [e]=d.mine({owned:[owned({status:'ended',input_needed:true,reporting:{input:{needed:true,observed_at:at},children:[]}})]});assert.equal(e.state,'Ended');assert.equal(e.input,false);
-  const {entries}=d.team({team:TEAM,viewer:VIEWER,member:true,hubEntries:[hubEntry({state:'ended',input_needed:true,input_reported_needed:true,input_observed_at:at})]});assert.equal(entries[0].state,'Ended');assert.equal(entries[0].input,false);
+  const [e]=d.mine({owned:[owned({status:'ended',input_needed:true,reporting:{input:{needed:true,observed_at:at},children:[]}})]});assert.equal(e.state,'Idle');assert.equal(e.detail,'Ended');assert.equal(e.input,false);
+  const {entries}=d.team({team:TEAM,viewer:VIEWER,member:true,hubEntries:[hubEntry({state:'ended',input_needed:true,input_reported_needed:true,input_observed_at:at})]});assert.equal(entries[0].state,'Idle');assert.equal(entries[0].detail,'Ended');assert.equal(entries[0].input,false);
  }
 });
 
@@ -234,4 +234,36 @@ test('team board runs include own unbound runs, dedupe exact managed identity an
   model = d.team({ team: TEAM, viewer: VIEWER, member: true, personal, hubEntries: [peer, hubEntry({ ref: 'different', kind: 'board-run', boardRunId: `${run}-other`, messageContract: 'task-inbox', owner: { id: VIEWER.id, name: 'Me' } })] });
   assert.equal(model.entries.length, 2, 'only exact own managed run is deduplicated');
   assert.ok(!JSON.stringify(model.entries).includes(run));
+});
+
+test('every state is one of the five bucket headings, with input only where a person is asked', () => {
+  const W = require('../src/work-organise');
+  const headings = W.BUCKETS.map((b) => b.heading);
+  const d = createSessionDirectory({ now: () => T0 });
+  const { entries } = d.team({ team: TEAM, viewer: VIEWER, member: true, hubEntries: ['working', 'waiting', 'input', 'idle', 'ended', 'bogus'].map((state, i) => hubEntry({ ref: `r${i}`, state })) });
+  for (const e of entries) assert.equal(e.state, e.bucket === 'needs' ? 'Needs Bob' : W.headingOf(e.bucket), e.state);
+  assert.ok(entries.every((e) => e.bucket === 'needs' || headings.includes(e.state)));
+  assert.deepEqual(entries.map((e) => [e.bucket, e.detail ?? null, e.input]), [
+    ['working', null, false], ['needs', null, false], ['needs', null, true], ['idle', null, false], ['idle', 'Ended', false], ['idle', null, false],
+  ]);
+  const [w] = d.mine({ work: [work({ status: 'Needs you', bucket: 'needs' })] });
+  assert.equal(w.state, 'Needs you'); assert.equal(w.input, true);
+});
+
+test('a teammate’s waiting session reads "Needs <name>" (or "Needs them"), keeping the needs bucket', () => {
+  const d = createSessionDirectory({ now: () => T0 });
+  const read = (over) => d.team({ team: TEAM, viewer: VIEWER, member: true, hubEntries: [hubEntry(over)] }).entries[0];
+  let e = read({ state: 'input' });
+  assert.equal(e.state, 'Needs Bob'); assert.equal(e.bucket, 'needs'); assert.equal(e.input, true);
+  e = read({ state: 'input', owner: { id: 'u-bob', name: '' } });
+  assert.equal(e.state, 'Needs them'); assert.equal(e.bucket, 'needs');
+  e = read({ state: 'working', self_reported: { state: 'input', at: new Date(T0 - 1000).toISOString() } });
+  assert.equal(e.selfReported.state, 'Needs Bob');
+  assert.equal(read({ state: 'working' }).state, 'Working on it');
+});
+
+test('a teammate’s child agent waiting on input reads "Needs <name>" too', () => {
+  const d = createSessionDirectory({ now: () => T0 });
+  const [e] = d.team({ team: TEAM, viewer: VIEWER, member: true, hubEntries: [hubEntry({ children: [{ ref: 'c1', name: 'Reviewer', state: 'input', observed_at: new Date(T0 - 1000).toISOString() }] })] }).entries;
+  assert.equal(e.children[0].state, 'Needs Bob'); assert.equal(e.children[0].bucket, 'needs'); assert.equal(e.children[0].input, true);
 });

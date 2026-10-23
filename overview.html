@@ -39,7 +39,7 @@
         <label>Project / board<select id="team-project-filter"></select></label>
       </div>
       <div class="team-filter-bottom"><div class="session-quick-filters" role="group" aria-label="Show team work">
-        <button type="button" data-team-focus="all" aria-pressed="true">All sessions</button><button type="button" data-team-focus="attention" aria-pressed="false">Need input</button><button type="button" data-team-focus="working" aria-pressed="false">Working</button><button type="button" data-team-focus="stale" aria-pressed="false">Stale</button>
+        <button type="button" data-team-focus="all" aria-pressed="true">All sessions</button><button type="button" data-team-focus="attention" aria-pressed="false">Needs you</button><button type="button" data-team-focus="working" aria-pressed="false">Working on it</button><button type="button" data-team-focus="stale" aria-pressed="false">Stale</button>
       </div><button type="button" id="team-clear-filters" class="filter-reset">Reset filters</button></div>
       <details class="team-more-filters"><summary>More filters and grouping</summary><div class="team-filter-main">
         <label>Group by<select id="team-group"><option value="person">Teammate</option><option value="project">Project / board</option><option value="task">Task or card</option><option value="platform">AI tool</option><option value="device">Device</option><option value="status">Status</option></select></label>
@@ -141,6 +141,7 @@
   <p class="disclosure">Activity comes from supported reports. A recent report does not verify that a task succeeded. Silent sessions become stale; missing task or child-agent metadata stays unknown. Private chats are not read.</p>
 </main>
 <script src="src/session-router.js"></script>
+<script src="src/work-organise.js"></script>
 <script src="src/session-pulse.js"></script>
 <script src="src/availability.js"></script>
 <script src="src/session-pins.js"></script>

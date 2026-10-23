@@ -10,12 +10,15 @@
   const ESCALATE_MS = 5 * 60 * 1000;
   const HEADLINE_MAX = 80;
 
+  // The project name and the "needs you" words come from src/work-organise.js, as in every view.
+  const Organise = typeof module === 'object' && module.exports && typeof require === 'function' ? require('./work-organise.js') : (typeof self !== 'undefined' ? self : globalThis).PlexiformWorkOrganise;
+  const NEEDS = Organise.headingOf('needs');
   const KIND_LABEL = {
     permission: 'Permission',
     plan: 'Plan approval',
     question: 'Question',
     elicitation: 'Input requested',
-    notification: 'Needs your input',
+    notification: NEEDS,
     blocked: 'Blocked',
     dialog: 'Terminal dialog',
   };
@@ -24,8 +27,7 @@
   const cut = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
   function project(input) {
-    const parts = String(input?.cwd || '').split(/[\\/]/).filter(Boolean);
-    return parts.length ? parts[parts.length - 1] : 'session';
+    return Organise.projectOf({ cwd: typeof input?.cwd === 'string' ? input.cwd : null }).heading;
   }
 
   function headline(input) {
@@ -38,7 +40,7 @@
       case 'blocked': h = 'Needs your decision'; break;
       default: h = oneLine(i.title) || oneLine(i.text);
     }
-    return cut(oneLine(h) || KIND_LABEL[i.kind] || 'Waiting', HEADLINE_MAX);
+    return cut(oneLine(h) || KIND_LABEL[i.kind] || NEEDS, HEADLINE_MAX);
   }
 
   function ageMs(input, now = Date.now()) {
@@ -188,7 +190,7 @@
   // Screen-reader name for a row.
   function rowLabel(input, now = Date.now()) {
     const age = ageText(input, now);
-    return `${KIND_LABEL[input?.kind] || 'Waiting'} in ${project(input)}: ${headline(input)}${age ? `, ${age}` : ''}${expired(input, now) ? ', answer in terminal' : ''}`;
+    return `${KIND_LABEL[input?.kind] || NEEDS} in ${project(input)}: ${headline(input)}${age ? `, ${age}` : ''}${expired(input, now) ? ', answer in terminal' : ''}`;
   }
 
   return { ESCALATE_MS, KIND_LABEL, project, headline, ageMs, ageText, escalated, expired, canAnswer, canOpen, primary, denyOption, optionTone, questionAnswer, formFields, formContent, visible, queue, step, rowLabel };

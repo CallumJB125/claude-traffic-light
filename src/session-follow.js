@@ -9,7 +9,7 @@
   const str = (v, max) => typeof v === 'string' && v.length <= max ? v : '';
   const keyOf = e => e && typeof e === 'object' ? [str(e.owner?.name, 200), str(e.provider?.id, 120), str(e.board?.label, 200), str(e.task?.title, 400)].join('\u001f') : '';
   const TRANSITIONS = Object.freeze({ attention: 'needs input', finished: 'finished', failed: 'failed' });
-  const transitionOf = e => e.input ? 'attention' : e.state === 'Ended' ? 'finished' : e.state === 'Turn failed' ? 'failed' : null;
+  const transitionOf = e => e.input ? 'attention' : e.detail === 'Ended' ? 'finished' : e.detail === 'Turn failed' ? 'failed' : null;
   const empty = () => ({ follows: [], events: [] });
   function parse(raw) {
     try {

@@ -10,7 +10,7 @@ test('the title is the project folder name, never the path', () => {
   const c = V.sessionCard({ sessionId: 's1', cwd: '/Users/me/work/plexiform', signal: 'tool-use', tool: 'Bash' }, { now: NOW });
   assert.equal(c.title, 'plexiform');
   assert.ok(!JSON.stringify(c).includes('/Users/me'));
-  assert.equal(V.sessionCard({ cwd: '/' }, { now: NOW }).title, 'session');
+  assert.equal(V.sessionCard({ cwd: '/' }, { now: NOW }).title, 'Other work');
 });
 
 test('a working session says its tool and how long it has run, in words', () => {
@@ -21,7 +21,7 @@ test('a working session says its tool and how long it has run, in words', () => 
 
 test('a waiting session says since when and offers Answer', () => {
   const c = V.sessionCard({ sessionId: 's1', cwd: '/p/a', signal: 'permission-ask', tool: 'Bash', updatedAt: ago(7) }, { now: NOW });
-  assert.match(c.state, /^waiting on you since 7 min/);
+  assert.match(c.state, /^Needs you since 7 min/);
   assert.equal(c.waiting, true);
   assert.deepEqual(c.actions, ['open', 'answer', 'pin']);
 });
@@ -75,4 +75,15 @@ test('the card carries the latest recap, stuck help, the deploy line and a pause
   assert.equal(mate.recap, null);
   assert.equal(mate.deploy, '');
   assert.ok(!mate.actions.includes('resume-nudges'));
+});
+
+test('state words are the bucket headings; a running tool says more than Working on it', () => {
+  const state = (signal, extra = {}) => V.sessionCard({ sessionId: 's', signal, ...extra }, { now: NOW }).state;
+  assert.equal(state('idle'), 'Idle');
+  assert.equal(state('session-end'), 'Idle');
+  assert.equal(state('stop'), 'Finished — check it');
+  assert.equal(state('turn-failed'), 'Stuck or failed');
+  assert.equal(state('prompt-submit'), 'Working on it');
+  assert.equal(state('tool-use', { tool: 'Bash' }), 'Bash');
+  assert.equal(V.sessionCard({ signal: 'stop' }, { now: NOW }).waiting, true, 'the widget still treats a stopped turn as your turn');
 });

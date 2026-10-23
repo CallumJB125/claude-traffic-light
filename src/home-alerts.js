@@ -12,13 +12,16 @@ const SessionHandover = require('./session-handover.js');
 const { isRemote } = require('./remote-devices.js');
 const BurstView = require('./burst-view.js');
 const LooseEnds = require('./burst-loose-ends-view.js');
+const Organise = require('./work-organise.js');
 
 const MAX_CARDS = 5;
 const ATTENTION_KINDS = new Set(['broken', 'too_old', 'ca_untrusted', 'hosts_missing', 'console_down', 'gateway_stale']);
 const MAIL_HANDLE = 'agent-mail';
 const TASK_TEXT_MAX = 20000;
 const AIS = ['claude', 'codex', 'gemini'];
-const project = (cwd) => (typeof cwd === 'string' && cwd ? path.basename(cwd.replace(/[\\/]+$/, '')) || cwd : 'a session');
+const project = (cwd) => Organise.projectOf({ cwd: typeof cwd === 'string' ? cwd : null }).heading;
+// Inside a sentence the fallback heading reads badly ("Stuck: Other work silent"), so it becomes a phrase.
+const inSentence = (cwd, none = Organise.SENTENCE_FALLBACK) => { const p = project(cwd); return p === Organise.FALLBACK ? none : p; };
 const mins = (ms) => Math.max(1, Math.round(ms / 60000));
 
 // The handover a resumed task continues from: Plexiform's own doc for that session.
@@ -59,7 +62,7 @@ function createHomeAlerts({ sessions = () => [], burst = () => null, burstView =
       seen.add(key);
       if (dismissed.has(key)) continue;
       const remote = isRemote(s);
-      out.stuck.push({ key, session: s, view: { title: `Stuck: ${project(s.cwd)} silent for ${mins(s.stuck.sinceMs)} min`, meta: [Limits.labelOf(Limits.providerOf(s.source)), s.stuck.tool ? `last tool ${s.stuck.tool}` : null, remote && s.deviceName ? `on ${s.deviceName}` : null].filter(Boolean).join(' · '), canOpen: !remote, canHand: !remote } });
+      out.stuck.push({ key, session: s, view: { title: `Stuck: ${inSentence(s.cwd)} silent for ${mins(s.stuck.sinceMs)} min`, meta: [Limits.labelOf(Limits.providerOf(s.source)), s.stuck.tool ? `last tool ${s.stuck.tool}` : null, remote && s.deviceName ? `on ${s.deviceName}` : null].filter(Boolean).join(' · '), canOpen: !remote, canHand: !remote } });
     }
     const entries = Limits.collect({ burst: safe(burst, null), tasks: safe(tasks, []), sessions: live, now: t });
     const covered = new Set();
@@ -186,7 +189,7 @@ function createHomeAlerts({ sessions = () => [], burst = () => null, burstView =
       if (!c.view.canResume) return { ok: false, error: 'This one cannot be resumed at reset.' };
       const doc = await docFor(c.session);
       if (!doc) return { ok: false, error: 'No handover has been written for this session yet, so there is nothing to continue from.' };
-      const ok = await confirm({ project: project(c.session.cwd), where: c.session.cwd, provider: Limits.labelOf(c.provider), at: Limits.clock(c.resetAtMs, now()) });
+      const ok = await confirm({ project: inSentence(c.session.cwd, 'this session'), where: c.session.cwd, provider: Limits.labelOf(c.provider), at: Limits.clock(c.resetAtMs, now()) });
       if (!ok) return { ok: false, cancelled: true };
       const r = await resume({ session: c.session, provider: c.provider, resetAtMs: c.resetAtMs, doc });
       if (!r || !r.ok) return { ok: false, error: (r && r.error) || 'Tasks could not queue it.' };

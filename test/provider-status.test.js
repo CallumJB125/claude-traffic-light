@@ -8,15 +8,15 @@ const snap = sessions => Provider.snapshot({ sessions, now });
 test('multi-provider reporting is named from closed labels and outputs no raw local session fields', () => {
   const result = snap([row('codex'), row('claude-code'), row('cursor'), row('gemini'), row('provider private name')]);
   assert.deepEqual(result.providers.map(p => p.provider), ['Claude', 'Codex', 'Cursor', 'Gemini', 'Local AI']);
-  assert.ok(result.providers.every(p => p.state === 'working' && p.recent === 1));
+  assert.ok(result.providers.every(p => p.state === 'Working on it' && p.recent === 1));
   for (const secret of ['private-id', '/private/path', 'private tool', 'private chat', 'provider private name']) assert.equal(JSON.stringify(result).includes(secret), false);
   assert.match(result.detail, /not a check that work succeeded/);
 });
 test('stale missing future and invalid report timestamps never count as current work', () => {
   const result = snap([row('codex', { updatedAt: new Date(now - 90001).toISOString() }), row('cursor', { updatedAt: undefined }), row('gemini', { updatedAt: 'bad' }), row('claude', { updatedAt: new Date(now + 1).toISOString() })]);
-  assert.equal(result.providers.find(p => p.provider === 'Codex').state, 'stale');
-  assert.ok(result.providers.every(p => p.state !== 'working' && p.recent === 0));
-  assert.equal(snap([row('codex', { updatedAt: new Date(now - 90000).toISOString() })]).providers[0].state, 'working');
+  assert.equal(result.providers.find(p => p.provider === 'Codex').state, 'Idle');
+  assert.ok(result.providers.every(p => p.state !== 'Working on it' && p.recent === 0));
+  assert.equal(snap([row('codex', { updatedAt: new Date(now - 90000).toISOString() })]).providers[0].state, 'Working on it');
 });
 test('remote and device-backed sources are excluded from local provider claims', () => {
   for (const marker of [{ remote: true }, { device: 'private remote' }, { sessionId: 'remote:x' }]) assert.equal(snap([row('codex', marker)]).providers.length, 0);
@@ -24,13 +24,13 @@ test('remote and device-backed sources are excluded from local provider claims',
 });
 test('actual lifecycle parent report controls children and closed turn attribution', () => {
   const closed = row('codex', { codexLifecycle: 1, codexHookAt: new Date(now - 1000).toISOString(), codexClosedTurn: true, codexAgents: [{ status: 'working' }] });
-  assert.equal(snap([closed]).providers[0].state, 'turn stopped');
+  assert.equal(snap([closed]).providers[0].state, 'Finished — check it');
   assert.equal(snap([closed]).providers[0].working_agents, 0, 'closed parent cannot claim current child work');
   assert.equal(snap([{ ...closed, codexClosedTurn: false }]).providers[0].working_agents, 1);
-  assert.equal(snap([{ ...closed, codexHookAt: new Date(now - 100000).toISOString() }]).providers[0].state, 'stale');
-  assert.equal(snap([{ ...closed, codexHookAt: undefined }]).providers[0].state, 'unknown');
-  assert.equal(snap([{ ...closed, codexAgents: [{ status: 'done' }, { status: ['working'] }] }]).providers[0].state, 'turn stopped');
-  assert.equal(snap([row('codex', { signal: 'stop', codexAgents: [{ status: 'working' }] })]).providers[0].state, 'turn stopped', 'unbound child list does not prove lifecycle work');
+  assert.equal(snap([{ ...closed, codexHookAt: new Date(now - 100000).toISOString() }]).providers[0].state, 'Idle');
+  assert.equal(snap([{ ...closed, codexHookAt: undefined }]).providers[0].state, 'Idle');
+  assert.equal(snap([{ ...closed, codexAgents: [{ status: 'done' }, { status: ['working'] }] }]).providers[0].state, 'Finished — check it');
+  assert.equal(snap([row('codex', { signal: 'stop', codexAgents: [{ status: 'working' }] })]).providers[0].state, 'Finished — check it', 'unbound child list does not prove lifecycle work');
 });
 test('offline and unavailable projections do not invent live reports; bounded census stays explicit', () => {
   assert.match(Provider.snapshot({ sessions: [row('codex')], online: false, now }).headline, /^Offline — Codex last reported$/);
@@ -40,8 +40,8 @@ test('offline and unavailable projections do not invent live reports; bounded ce
 });
 test('provider state preserves needs-input priority and actual report provenance across a provider', () => {
   const result = snap([row('codex'), row('codex', { signal: 'permission-ask' }), row('cursor', { signal: 'stop' })]);
-  assert.equal(result.providers.find(p => p.provider === 'Codex').state, 'needs input');
-  assert.equal(result.providers.find(p => p.provider === 'Cursor').state, 'turn stopped');
+  assert.equal(result.providers.find(p => p.provider === 'Codex').state, 'Needs you');
+  assert.equal(result.providers.find(p => p.provider === 'Cursor').state, 'Finished — check it');
 });
 test('Help provider headline never mutates even default-looking human rule names text actions or look', () => {
   const rule = Rules.normalizeRule({ id: 'working', name: 'Claude is working', when: { signal: ['tool-use'] }, then: { lamp: 'green', pose: 'banner', text: 'MY HUMAN SIGN', clicks: { click: { action: 'url', arg: 'https://example.test/human' } } } });
@@ -49,7 +49,7 @@ test('Help provider headline never mutates even default-looking human rule names
   const state = { ...resolved, firedNames: ['Claude is working'], reason: 'session', sessions: [session] };
   const before = JSON.stringify({ rule, state });
   const help = Help.explain(state, [rule], { providerStatus: snap([session]) });
-  assert.equal(help.headline, 'Codex: working');
+  assert.equal(help.headline, 'Codex: Working on it');
   assert.ok(help.why.some(w => w.label === 'Rule' && w.value === '“Claude is working”'));
   assert.ok(help.why.some(w => w.label === 'Sign' && w.value === '“MY HUMAN SIGN”'));
   assert.equal(JSON.stringify({ rule, state }), before);
@@ -57,7 +57,7 @@ test('Help provider headline never mutates even default-looking human rule names
 test('manual preview and travel explanations retain exact existing headline and report separate provider status', () => {
   for (const reason of ['manual', 'preview', 'travel']) {
     const h = Help.explain({ reason, look: { name: 'Human custom state' }, sessions: [] }, [], { providerStatus: snap([row('codex')]) });
-    assert.equal(h.headline, 'Human custom state'); assert.equal(h.providerStatus.headline, 'Codex: working');
+    assert.equal(h.headline, 'Human custom state'); assert.equal(h.providerStatus.headline, 'Codex: Working on it');
   }
 });
 
@@ -80,18 +80,18 @@ test('actual widget tooltip quotes original owner while manual state is retained
   const source = fs.readFileSync(path.join(__dirname, '..', 'widget.js'), 'utf8');
   const begin = source.indexOf('  const count = data.sessions'); const end = source.indexOf('\n}', begin);
   for (const reason of ['session', 'manual', 'preview', 'travel']) {
-    const data = { reason, sessions: [], firedNames: ['Claude is working'], providerStatus: { headline: 'Codex: working' }, look: { name: 'Human sign' } };
+    const data = { reason, sessions: [], firedNames: ['Claude is working'], providerStatus: { headline: 'Codex: Working on it' }, look: { name: 'Human sign' } };
     const tooltip = {};
     vm.runInNewContext(source.slice(begin, end), { data, look: data.look, tooltip, TOOLTIP_MAX: 90 });
     assert.ok(tooltip.textContent.includes('Claude is working'));
-    assert.equal(tooltip.textContent.includes('Codex: working'), reason === 'session');
+    assert.equal(tooltip.textContent.includes('Codex: Working on it'), reason === 'session');
     if (reason === 'session') assert.match(tooltip.textContent, /Rule “Claude is working”/);
   }
 });
 
 test('compaction reports a concrete provider state and never an undefined headline', () => {
   const result = snap([row('claude', { signal: 'compact' })]);
-  assert.equal(result.providers[0].state, 'compacting'); assert.equal(result.headline, 'Claude: compacting');
+  assert.equal(result.providers[0].state, 'Working on it'); assert.equal(result.headline, 'Claude: Working on it');
 });
 
 test('provider confidence and last-seen metadata stay bounded and honest offline', () => {
@@ -101,4 +101,15 @@ test('provider confidence and last-seen metadata stay bounded and honest offline
   assert.equal(offline.online, false); assert.equal(offline.latest_age_ms, 1000);
   const unavailable = Provider.snapshot({ available: false, now });
   assert.equal(unavailable.available, false); assert.equal(unavailable.latest_age_ms, null);
+});
+
+test('a failed or limited session outranks one still working in the provider line, as before the bucket change', () => {
+  for (const [signal, bucket, state] of [['turn-failed', 'stuck', 'Stuck or failed'], ['error', 'stuck', 'Stuck or failed'], ['limit-hit', 'needs', 'Needs you']]) {
+    for (const rows of [[row('codex'), row('codex', { signal })], [row('codex', { signal }), row('codex')]]) {
+      const p = snap(rows).providers[0];
+      assert.equal(p.bucket, bucket, signal); assert.equal(p.state, state, signal);
+    }
+  }
+  assert.equal(snap([row('codex', { signal: 'turn-failed' }), row('codex', { signal: 'waiting' })]).providers[0].state, 'Needs you');
+  assert.equal(snap([row('codex', { signal: 'stop' }), row('codex')]).providers[0].state, 'Working on it');
 });

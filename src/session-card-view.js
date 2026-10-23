@@ -8,15 +8,14 @@
 const WAITING = new Set(['permission-ask', 'limit-hit', 'idle-nudge', 'stop', 'turn-failed', 'user-question', 'question-ask']);
 const IDLE = new Set(['idle', 'idle-nudge', 'stop', 'session-end']);
 const MAX = 80;
+const Organise = require('./work-organise.js');
 
 const str = (v, max = MAX) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f‪-‮⁦-⁩]/g, '').trim().slice(0, max) : '');
 const stamp = (v) => { const t = typeof v === 'number' ? v : Date.parse(v || ''); return Number.isFinite(t) && t > 0 ? t : null; };
 
-// The project folder's name, never the whole path (the path is the person's own business).
+// The project's name (projectOf), never the whole path (the path is the person's own business).
 function titleOf(session) {
-  const parts = str(session && session.cwd, 1000).split(/[\\/]/).filter(Boolean);
-  const leaf = parts.at(-1);
-  return leaf && leaf !== '.' && leaf !== '..' ? leaf.slice(0, MAX) : 'session';
+  return Organise.projectOf({ cwd: str(session && session.cwd, 1000) || null }).heading;
 }
 
 // "2 min", "1 h 05", "3 days": coarse on purpose, it is read at a glance.
@@ -74,12 +73,13 @@ function sessionCard(session, { now = Date.now(), spend = null, teammate = null,
   const since = stamp(s.signalSince) || stamp(s.updatedAt);
   const started = stamp(s.startedAt) || stamp(s.createdAt);
   const parts = [];
-  if (waiting) {
-    const ago = since ? words(now - since) : '';
-    parts.push(`waiting on you${ago && ago !== 'under a minute' ? ` since ${ago}` : ''}`);
-  } else if (idle) parts.push('idle');
-  else if (tool) parts.push(tool);
-  else parts.push('working');
+  // State words are the bucket headings (work-organise.js); a running tool says more than "Working on it".
+  if (waiting || idle) {
+    const bucket = Organise.bucketOf(signal);
+    const ago = bucket === 'needs' && since ? words(now - since) : '';
+    parts.push(`${Organise.headingOf(bucket)}${ago && ago !== 'under a minute' ? ` since ${ago}` : ''}`);
+  } else if (tool) parts.push(tool);
+  else parts.push(Organise.headingOf('working'));
   const runFor = started ? words(now - started) : !waiting && !idle && since ? words(now - since) : '';
   if (runFor && !(waiting && !started)) parts.push(`${started ? 'running' : 'on it'} for ${runFor}`);
   if (s.remote) parts.push(`on ${str(s.deviceName, 60) || 'another device'}`);

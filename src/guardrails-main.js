@@ -18,6 +18,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const G = require('./guardrails.js');
 const CheckpointGit = require('./checkpoint-git.js');
+const Organise = require('./work-organise.js');
 
 const DIR = 'guardrails';
 const MAX_FILE = 1 << 20;
@@ -32,7 +33,7 @@ function writeJson(file, obj) {
   fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, file);
 }
-const project = (top) => (top ? path.basename(String(top).replace(/[\\/]+$/, '')) : 'a project');
+const project = (top) => Organise.projectOf({ toplevel: top ? String(top) : null }).heading;
 const inside = (root, p) => { const r = path.relative(root, p); return !!r && !r.startsWith('..') && !path.isAbsolute(r); };
 
 /**

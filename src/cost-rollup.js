@@ -7,6 +7,7 @@
 // names and titles are user data and stay plain strings for textContent.
 const Usage = require('../usage.js');
 const { cleanTitle } = require('./title-clean.js');
+const Organise = require('./work-organise.js');
 
 const DAY_MS = 86400000;
 const RANGES = { today: { days: 1, label: 'Today' }, '7d': { days: 7, label: 'Last 7 days' }, '30d': { days: 30, label: 'Last 30 days' } };
@@ -16,7 +17,10 @@ const TOP = 8;
 const r4 = (n) => Math.round(n * 1e4) / 1e4;
 const startOfDay = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
 const str = (v, max = 200) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
-const folderOf = (t) => str(t.cwd ? String(t.cwd).split(/[\\/]/).filter(Boolean).pop() : null) || str(t.project) || 'Unknown project';
+const folderOf = (t) => {
+  const name = t.cwd ? Organise.projectOf({ cwd: String(t.cwd) }).heading : Organise.FALLBACK;
+  return name !== Organise.FALLBACK ? name : str(t.project) || Organise.FALLBACK;
+};
 const familyOf = (k) => (k === 'fable-5' ? 'fable' : k);
 const MODEL_LABEL = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
 

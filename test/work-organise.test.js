@@ -14,6 +14,15 @@ test('work-organise: five buckets, fixed order and plain headings', () => {
   assert.deepEqual(BUCKETS.map((b) => b.order), [0, 1, 2, 3, 4]);
   assert.deepEqual(BUCKETS.filter((b) => b.collapsed).map((b) => b.id), ['idle']);
   assert.ok(Object.isFrozen(BUCKETS) && Object.isFrozen(BUCKETS[0]));
+  assert.deepEqual(BUCKETS.map((b) => b.label), ['Needs you', 'Working on it', 'Check it', 'Stuck or failed', 'Idle'], 'Review is "Check it" on a badge');
+});
+
+test('work-organise: headingOf names any state with its bucket heading; unknown is Idle', () => {
+  assert.equal(W.headingOf('permission-ask'), 'Needs you');
+  assert.equal(W.headingOf({ state: 'in_review' }), 'Finished — check it');
+  assert.equal(W.headingOf('turn-failed'), 'Stuck or failed');
+  assert.equal(W.headingOf('no-such-state'), 'Idle');
+  assert.equal(W.headingOf(null), 'Idle');
 });
 
 test('work-organise: bucketOf maps hook signals, capture phases, board states and today\'s labels', () => {
@@ -478,14 +487,12 @@ test('work-organise: L3/N2 — lower-case Linear-style tickets count only after 
   assert.deepEqual(t('feat/node-22-upgrade'), { title: 'Node 22 upgrade', source: 'branch' }, 'a runtime version is no ticket');
   assert.equal(t('release-2-prep').source, 'branch', 'a release number is no ticket');
   assert.equal(t('abc-123-fix-login').source, 'branch', 'no person segment');
-  assert.equal(t('claude/eng-42').source, 'branch', 'an agent prefix is not a person');
   assert.equal(t('sam/node-22-upgrade').source, 'branch');
   assert.equal(t('sam/python-3-12').source, 'branch');
   assert.equal(t('sam/ios-17-fix').source, 'branch');
   assert.equal(t('sam/v-2-layout').source, 'branch');
   assert.equal(t('sam/x/abc-123').source, 'branch', 'only directly after the first segment');
   assert.deepEqual(W.titleOf({ team: false, branch: 'feat/ENG-42-fix' }), { title: 'ENG-42 · Fix', source: 'ticket' }, 'capitals still count anywhere');
-  assert.equal(W.titleOf({ team: false, branch: 'feat/NODE-22' }).source, 'branch');
   assert.deepEqual(t('codex/work-organise-2026-10-23'), { title: 'Work organise', source: 'branch' }, 'a word then a date is no ticket');
   assert.deepEqual(t('feat/utf-8-paths'), { title: 'Utf 8 paths', source: 'branch' }, 'standards stay excluded');
   assert.deepEqual(t('fix/v-2-layout'), { title: 'V 2 layout', source: 'branch' });
@@ -596,7 +603,7 @@ test('work-organise: renderer mode (no scrubber) still strips paths, control and
 test('work-organise: N3 — percent-encoded, bare and $HOME home folders leave no name behind', () => {
   const probes = [
     'check %2FUsers%2Fsam%2Fx', 'check %2Fhome%2Fsam', 'check file%3A%2F%2F%2FUsers%2Fsam', 'check %252FUsers%252Fsam',
-    'see Users/sam', 'see Users\\sam\\x', 'check home/sam', 'check home/sam/notes.txt', 'check x$HOME/sam', 'check ${HOME}/sam/x', 'check $HOME',
+    'see Users/sam', 'see Users\\sam\\x', 'check home/sam/x', 'check home/sam/notes.txt', 'check x$HOME/sam', 'check ${HOME}/sam/x', 'check $HOME',
   ];
   for (const text of probes) {
     for (const [label, title] of [
@@ -639,4 +646,98 @@ test('work-organise: N4 — runs of slashes and crafted nested tags stay fast (u
   }
   assert.equal(titleOf({ team: false, human: 'fix C:\\Users\\sam\\x now' }).title, 'fix now', 'a drive home folder still goes');
   assert.equal(titleOf({ team: false, human: 'fix //Users/sam now' }).title, 'fix now', 'a doubled slash still goes');
+});
+
+test('work-organise: R1 — runtime and release words are skipped only as lower-case branch keys', () => {
+  const t = (input) => W.titleOf({ team: false, ...input });
+  assert.deepEqual(t({ branch: 'feat/IOS-12-dark-mode' }), { title: 'IOS-12 · Dark mode', source: 'ticket' });
+  assert.deepEqual(t({ branch: 'API-77' }), { title: 'API-77', source: 'ticket' });
+  assert.deepEqual(t({ human: 'SDK-3 retry' }), { title: 'SDK-3 retry', source: 'human' });
+  assert.match(t({ firstPrompt: 'Fix SDK-3 retry loop' }).title, /^SDK-3 · /, 'a capital key in a prompt counts');
+  assert.equal(t({ branch: 'feat/NODE-22' }).source, 'ticket');
+  assert.equal(t({ branch: 'sam/node-22-upgrade' }).source, 'branch', 'lower case it is still a version');
+  assert.equal(t({ branch: 'sam/ios-17-fix' }).source, 'branch');
+  assert.equal(t({ branch: 'feat/UTF-8-paths' }).source, 'branch', 'standards stay excluded in capitals');
+});
+
+test('work-organise: R2 — lower-case Linear keys count after an agent prefix, not after a kind', () => {
+  const t = (branch) => W.titleOf({ team: false, branch });
+  assert.deepEqual(t('claude/eng-42'), { title: 'ENG-42', source: 'ticket' });
+  assert.deepEqual(t('codex/abc-123-fix-login'), { title: 'ABC-123 · Fix login', source: 'ticket' });
+  assert.deepEqual(t('Cursor/eng-7-tidy'), { title: 'ENG-7 · Tidy', source: 'ticket' });
+  assert.equal(t('feat/eng-42').source, 'branch', 'a kind prefix still is not a person');
+  assert.equal(t('fix/abc-123-login').source, 'branch');
+  assert.equal(t('codex/node-22-upgrade').source, 'branch', 'release words still skipped');
+  assert.deepEqual(t('codex/work-organise-2026-10-23'), { title: 'Work organise', source: 'branch' });
+});
+
+test('work-organise: a bare home folder goes whatever its case', () => {
+  for (const text of ['see users/sam/x', 'see USERS/sam/notes', 'see Home/sam/x', 'see HOME\\sam\\notes']) {
+    for (const opts of [{}, { redact: null }]) {
+      assert.equal(W.titleOf({ team: false, human: text }, opts).title, 'see', `${JSON.stringify(text)}${opts.redact === null ? ' (renderer)' : ''}`);
+    }
+    assert.equal(W.titleOf({ team: false, firstPrompt: text }).title, 'See', text);
+  }
+  assert.equal(W.titleOf({ team: false, human: 'go home now' }).title, 'go home now', 'no separator, no path');
+});
+
+test('work-organise: a "." or ".." folder is no project name', () => {
+  for (const cwd of ['..', '.', '/a/b/..', 'C:\\x\\.', '../']) assert.equal(W.projectOf({ cwd }).heading, 'Other work', cwd);
+  assert.equal(W.projectOf({ cwd: '/a/.config' }).heading, '.config');
+});
+
+test('work-organise: bucketOf reads its own headings and labels back', () => {
+  for (const b of W.BUCKETS) {
+    assert.equal(W.bucketOf(b.heading), b.id, b.heading);
+    assert.equal(W.bucketOf(b.label.toUpperCase()), b.id, b.label);
+  }
+});
+
+test('work-organise: views name a project with projectOf — the folder-leaf copies and their fallbacks are gone', () => {
+  const files = ['session-overview', 'session-card-view', 'input-view', 'home-alerts', 'guardrails-main', 'cost-rollup', 'setup-checklist', 'explain-main'];
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', `${f}.js`), 'utf8');
+    assert.match(src, /require\('\.\/work-organise(?:\.js)?'\)/, `${f} uses work-organise`);
+    assert.match(src, /projectOf\(/, `${f} names projects with projectOf`);
+    assert.doesNotMatch(src, /'(?:Local project|Unknown project|a project|your project|A session|a session)'/, `${f} keeps no fallback of its own`);
+  }
+  assert.equal(W.SENTENCE_FALLBACK, 'a session', 'the in-sentence fallback lives here, next to FALLBACK');
+});
+
+test('work-organise: a bare home folder goes from prompts in any form; typed titles keep an ordinary route', () => {
+  const bare = ['see home/sam', 'see home/sam/', 'see (home/sam)', 'see users/sam', 'see USERS/sam', 'see Home/sam', 'see users\\sam', 'see users/sam/notes'];
+  for (const text of bare) {
+    assert.equal(W.titleOf({ team: false, firstPrompt: text }).title, 'See', `prompt: ${text}`);
+    for (const opts of [{}, { redact: null }]) {
+      assert.equal(W.titleOf({ team: false, human: text }, opts).title, 'see', `typed: ${text}`);
+    }
+  }
+  for (const opts of [{}, { redact: null }]) {
+    const typed = (human) => W.titleOf({ team: false, human }, opts).title;
+    assert.doesNotMatch(typed('cd home/sam; ls'), /sam/);
+    assert.equal(typed('Fix home/about page'), 'Fix home/about page');
+    assert.equal(typed('Update users/settings tab'), 'Update users/settings tab');
+    assert.equal(typed('open Home/sam/projects/app now'), 'open now');
+    assert.equal(typed('see Users/sam page'), 'see page', 'macOS Users/<name> goes even with words after it');
+  }
+  assert.doesNotMatch(W.titleOf({ team: false, firstPrompt: 'cd home/sam; ls' }).title, /sam/);
+});
+
+test('work-organise: a branch verb after an agent prefix is never a ticket; copilot/fix-<n> is issue #<n>', () => {
+  const t = (branch) => W.titleOf({ team: false, branch }).title;
+  assert.equal(t('copilot/fix-1234'), '#1234');
+  assert.equal(t('codex/fix-12-bugs'), '12 bugs');
+  for (const b of ['codex/fix-12-bugs', 'codex/FIX-12', 'claude/feat-9-login', 'agent/add-3-tests', 'codex/hotfix-7', 'cursor/chore-4-deps', 'bot/bug-5', 'codex/issue-6', 'codex/refactor-2-auth', 'codex/docs-1', 'codex/test-3']) {
+    assert.doesNotMatch(t(b), /^(?:FIX|FEAT|ADD|HOTFIX|CHORE|BUG|ISSUE|REFACTOR|DOCS|TEST)-\d/, b);
+  }
+  assert.equal(t('codex/eng-42'), 'ENG-42');
+  assert.equal(t('sam/abc-123-fix-login'), 'ABC-123 · Fix login');
+});
+
+test('work-organise: session, agent, deps and other non-work words after an agent prefix are not tickets', () => {
+  const t = (branch) => W.titleOf({ team: false, branch }).title;
+  for (const b of ['claude/session-2026-10-23', 'claude/agent-3', 'bot/deps-2', 'codex/wip-4', 'codex/tmp-5', 'codex/ci-6', 'codex/release-7', 'codex/SESSION-9']) {
+    assert.doesNotMatch(t(b), /^[A-Z]+-\d/, b);
+  }
+  assert.equal(t('codex/eng-42'), 'ENG-42');
 });

@@ -7,7 +7,7 @@ const { JSDOM } = require('jsdom');
 const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 const html = read('home.html');
-const SCRIPTS = ['src/attention-inbox.js', 'src/session-follow.js', 'src/teammate-tour.js', 'home.js', 'home-inbox-view.js'].map(read);
+const SCRIPTS = ['src/work-organise.js', 'src/attention-inbox.js', 'src/session-follow.js', 'src/teammate-tour.js', 'home.js', 'home-inbox-view.js'].map(read);
 const tick = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
 const NOW = Date.UTC(2026, 9, 18, 12);
 const state = { observed_at: NOW, banner: null, needs: { total: 1, items: [{ headline: 'Allow git push?', kind: 'permission', project: 'app', age: '2 min', late: false }] }, running: { quiet: 0, items: [] }, today: { spend: null, longestWaitMs: null }, team: null, morning: { count: 1, costUsd: 0, items: [{ title: 'Nightly tests', state: 'failed', summary: 'exit 1' }], asks: [], more: 0 } };

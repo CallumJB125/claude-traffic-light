@@ -93,7 +93,7 @@
     }
     const list = node('ul'); list.setAttribute('aria-label', 'Running now');
     r.items.forEach((s, at) => {
-      const li = item(`${s.provider} · ${s.project}`, s.collision ? `${s.collision} · Last update ${ago(s.age_ms)}` : `Last update ${ago(s.age_ms)}`, s.collision ? 'Collision' : s.status, s.collision || s.status === 'Waiting on you' ? 'waiting' : s.status === 'Working' ? 'working' : '');
+      const li = item(`${s.provider} · ${s.project}`, s.collision ? `${s.collision} · Last update ${ago(s.age_ms)}` : `Last update ${ago(s.age_ms)}`, s.collision ? 'Collision' : s.status, s.collision || s.bucket === 'needs' ? 'waiting' : s.bucket === 'working' ? 'working' : '');
       const open = button('', () => go('sessions'), `running:${at}`, 'row-link');
       open.setAttribute('aria-label', `${s.provider} in ${s.project}: ${s.status}${s.collision ? `. ${s.collision}` : ''}. Open sessions`);
       open.append(li.firstChild); li.prepend(open); list.append(li);

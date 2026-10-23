@@ -127,8 +127,9 @@
     title.append(node('h3', row.task.status === 'tracked' ? row.task.title : row.label));
     if (row.task.status === 'unknown') title.append(node('p', 'Task not reported', 'muted'));
     else if (row.label !== row.task.title) title.append(node('p', row.label, 'muted'));
-    const fresh = freshness(row), tone = fresh !== 'recent' ? fresh : row.status === 'Waiting on you' ? 'waiting' : row.status === 'Working' ? 'working' : '';
-    heading.append(title, node('span', fresh === 'recent' ? row.status : `${row.status} · ${fresh === 'stale' ? 'Stale' : 'Freshness unknown'}`, `tag ${tone}`));
+    const fresh = freshness(row), bucket = window.PlexiformWorkOrganise.bucketOf(row.bucket || row.status), tone = fresh !== 'recent' ? fresh : bucket === 'needs' ? 'waiting' : bucket === 'working' ? 'working' : '';
+    const status = row.detail ? `${row.status} (${String(row.detail).toLowerCase()})` : row.status;
+    heading.append(title, node('span', fresh === 'recent' ? status : `${status} · ${fresh === 'stale' ? 'Stale' : 'Freshness unknown'}`, `tag ${tone}`));
     el.append(heading);
     if (!child) el.append(node('p', `${parent.provider.label}${parent.provider.kind === 'local' ? ' · local model' : ''} · ${parent.project} · ${parent.device.label}${parent.device.local ? ' (this device)' : ''} · ${parent.board.label}${parent.board.kind === 'unknown' ? ' (board unknown)' : ''}`, 'row-meta'));
     el.append(node('p', `${ageText(ageNow(row))} · ${row.reporting?.source === 'self-reported' ? 'Self-reported activity' : 'Reported activity'}`, 'muted'), actions(row, parent));
@@ -235,7 +236,7 @@
   const validState = s => obj(s) && uuid(s.session) && Number.isSafeInteger(s.generation) && s.generation >= 0 && validProvider(s.provider) && ['plexiform-owned', 'existing-unmanaged'].includes(s.ownership) && (s.ownership === 'plexiform-owned' || obj(s.thread) && text(s.thread.title, 120) && text(s.thread.project, 120)) && text(s.label, 200) && STATUSES.includes(s.status) && turnRef(s.activeTurn) && obj(s.capabilities) && Array.isArray(s.deliveries) && s.deliveries.length <= 20 && s.deliveries.every(validDelivery);
   const validCap = c => obj(c) && providerId(c.provider) && text(c.label, 120) && typeof c.available === 'boolean' && text(c.reason, 600) && obj(c.capabilities);
   const ownedStatus = message => { $('owned-status').textContent = message; };
-  const statusLabel = status => status === 'working' ? 'Working' : status === 'ended' ? 'Ended' : 'Ready';
+  const statusLabel = status => { const W = window.PlexiformWorkOrganise; return status === 'working' ? W.headingOf('working') : status === 'ended' ? `${W.headingOf('idle')} (ended)` : W.headingOf('idle'); };
   const deliveryLabel = (state, label) => DELIVERY[state].replace('%', label);
   const nameOf = entry => entry.state.provider.label;
   // One view per delivery, updated field by field so streaming tokens do not
@@ -399,7 +400,7 @@
     if (result?.ok !== true || !Array.isArray(result.threads)) { $('existing-reason').textContent = `${REFUSAL[result?.status] ?? REFUSAL.unavailable}${text(result?.error, 600) ? `: ${result.error}` : '.'}`; return; }
     const rows = result.threads.filter(t => obj(t) && uuid(t.handle) && text(t.title, 120) && text(t.project, 120) && text(t.status, 20)).map(t => {
       const li = node('li', '', 'provider-option'), name = node('span', `${t.title || 'Untitled session'}${t.project ? ` · ${t.project}` : ''}`, 'provider-name');
-      const tag = node('span', t.status === 'active' ? 'Working' : t.status === 'idle' ? 'Idle' : 'Unknown', 'tag');
+      const tag = node('span', window.PlexiformWorkOrganise.headingOf(t.status === 'active' ? 'working' : 'idle'), 'tag');
       const use = button(t.open ? 'Already open below' : 'Message this session', () => void attachExisting(cap, t.handle, use));
       use.disabled = !!t.open;
       li.append(name, tag, use); return li;

@@ -1,4 +1,5 @@
 'use strict';
+const ORGANISE = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'work-organise.js'), 'utf8'); // views read their state words from it
 // Overview "My sessions" / "Team sessions" through the real preload bridge,
 // the real Overview IPC (overview-main → overview-service → session
 // directory), the real owned-session interaction IPC and hub (with an
@@ -70,7 +71,7 @@ function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed
   const intervals = [];
   dom.window.setInterval = (fn) => intervals.push(fn);
   dom.window.overviewApi = { ...api, onReady: (fn) => { ready = fn; return () => {}; } };
-  dom.window.eval(availScript);
+  dom.window.eval(ORGANISE);dom.window.eval(availScript);
   for (const f of scripts) dom.window.eval(read(f));
   dom.window.eval(dirScript);
   dom.window.eval(script);
@@ -97,7 +98,7 @@ test('My sessions: an owned session and an observed Codex session, each with hon
     const owned = s.row('mine-list', /Started by Plexiform/), observed = s.row('mine-list', /Observed from activity hooks/);
     assert.ok(owned && observed, 'both rows');
     assert.equal(s.rows('mine-list').length, 2);
-    assert.match(owned.querySelector('.tag').textContent, /Ready/);
+    assert.match(owned.querySelector('.tag').textContent, /^Idle$/);
     assert.match(observed.textContent, /Activity hooks cannot send to this Codex session/);
     assert.equal([...observed.querySelectorAll('button')].filter((b) => !b.hidden && /Message/.test(b.textContent)).length, 0, 'no message control without a channel');
     assert.match(observed.querySelector('.caps').textContent, /Activity reports: available/);
@@ -155,7 +156,7 @@ test('Team sessions: explicit shares only, grouped by person, filters, reasons, 
     assert.equal(s.doc.querySelector('img'), null, 'hostile names and titles are text');
     assert.equal(bob.querySelector('.avatar').textContent, 'B<');
     assert.match(bob.textContent, /task title edited by a person/);
-    assert.match(bob.textContent, /Reviewer: Review diff/); assert.match(bob.textContent, /Needs input/);
+    assert.match(bob.textContent, /Reviewer: Review diff/); assert.match(bob.textContent, /Needs Bob/);
     assert.match(bob.textContent, /Handoff from Cara · offered · Take over tests/);
     assert.match(bob.textContent, /Handed to Dan, waiting/, 'a card handed to a person reads as the board shows it');
     assert.match(bob.textContent, /Shared with this team by its owner/);
@@ -169,7 +170,7 @@ test('Team sessions: explicit shares only, grouped by person, filters, reasons, 
     assert.equal([...s.$('team-list').querySelectorAll('.dir-entry')].length, 1);
     assert.match(s.$('team-count').textContent, /1 of 2/);
     s.change('team-platform-filter', ''); s.change('team-group', 'status'); await tick();
-    assert.deepEqual([...s.$('team-list').querySelectorAll('.dir-group > h3')].map((h) => h.textContent), ['Idle', 'Working']);
+    assert.deepEqual([...s.$('team-list').querySelectorAll('.dir-group > h3')].map((h) => h.textContent), ['Idle', 'Working on it']);
     // The reported-work sections belong to My sessions only.
     assert.equal(s.doc.querySelector('.work').classList.contains('view-hidden'), true);
   } finally { s.close(); }
@@ -211,7 +212,7 @@ test('Team sessions: live state change, member removal and revocation take effec
     s.teamHub.update('cara-1', { state: 'input' });
     await wait(400); await tick();
     assert.ok(s.results.length > before, 'push → re-read, no Refresh click or interval');
-    assert.match(s.row('team-list', /Write docs/).querySelector('.tag').textContent, /Needs input/);
+    assert.match(s.row('team-list', /Write docs/).querySelector('.tag').textContent, /Needs Cara/);
     s.teamHub.revoke('bob-1', 't-dev');
     await wait(400); await tick();
     const gone = s.$('team-list').querySelector('.dir-entry.gone');
@@ -410,4 +411,29 @@ test('My sessions: a loose-ends badge "n uncommitted · n unpushed · n stashes"
     for (const r of s.rows('mine-list')) assert.equal(r.querySelector('.loose-ends').hidden, true);
     assert.equal(JSON.stringify(s.results.at(-1)[1]).includes('"looseEnds":{'), false, 'null, never a zero badge');
   } finally { s.close(); }
+});
+
+test('Team sessions: a teammate with an 80-unit name who needs input still renders, with the name cut', async () => {
+  const long = 'Maria Fernanda de los Angeles Gonzalez Rodriguez van der Berg Smith-Jones IIII';
+  const names = [long + 'x'.repeat(80 - long.length), '😀'.repeat(40), `Ana ${'😀'.repeat(38)}`, '𝓜𝓪𝓻𝓲𝓪 '.repeat(8)];
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  for (const name of names) {
+    assert.ok(name.length >= 75, `${name.length}`);
+    const fixture = structuredClone(FIXTURE); fixture.users['u-cara'] = name;
+    const s = stack({ teamHub: createFakeTeamHub(fixture) });
+    try {
+      await s.ready(); await s.team();
+      s.teamHub.update('cara-1', { state: 'input', self_reported: { state: 'input', at: new Date().toISOString() }, children: [{ ref: 'kid', name: 'Kid', state: 'input', source: 'self-reported', observed_ago_ms: 500 }] });
+      await wait(400); await tick();
+      const entries = s.results.flatMap(([ch, r]) => (ch === 'overview:directory' && r?.view === 'team' ? r.entries : []));
+      const cara = entries.filter((e) => e.task?.title === 'Write docs').at(-1);
+      assert.equal(cara.bucket, 'needs');
+      const states = [cara.state, cara.selfReported?.state, cara.children[0]?.state, cara.children[0]?.selfReported?.state];
+      for (const st of states) {
+        assert.ok(typeof st === 'string' && st.length <= 80, `${name}: ${st}`);
+        assert.match(st, /^Needs \S/); assert.doesNotMatch(st, lone, 'no half of a surrogate pair');
+      }
+      assert.match(s.row('team-list', /Write docs/).querySelector('.tag').textContent, /^Needs /, name);
+    } finally { s.close(); }
+  }
 });

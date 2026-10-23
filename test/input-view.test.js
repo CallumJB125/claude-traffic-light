@@ -12,7 +12,7 @@ const perm = (over = {}) => ({ v: 1, id: 'r1', kind: 'permission', source: 'hook
 
 test('a row: project, one-line headline per kind', () => {
   assert.equal(V.project(perm()), 'app');
-  assert.equal(V.project({}), 'session');
+  assert.equal(V.project({}), 'Other work', 'the one fallback from work-organise');
   assert.equal(V.headline(perm()), 'Bash: npm test');
   assert.equal(V.headline({ kind: 'plan', text: '# Plan\n\n1. do it' }), 'Plan: # Plan 1. do it');
   assert.equal(V.headline({ kind: 'question', questions: [{ question: 'Which\nframework?' }] }), 'Which framework?');
