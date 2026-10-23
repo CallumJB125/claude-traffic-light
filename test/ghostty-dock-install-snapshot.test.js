@@ -4,7 +4,9 @@
 // execFile got past. These check behaviour: with a poisoned environment the
 // script is a frozen snapshot, and launch() makes exactly one child_process
 // call, `open -a Terminal <file>`. The checks are also run against the
-// reviewer's two mutations to prove they catch them.
+// reviewer's two mutations to prove they catch them. Env reads are caught by a
+// process.env tripwire; the source regexes are only a lint, since computed keys,
+// descriptors, string eval and ESM reach env without ever spelling it.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -58,6 +60,18 @@ async function check(srcFile) {
     };
   }
   Object.assign(process.env, POISON);
+  // Tripwire: the module needs no environment at all, so any read while it
+  // loads, builds the script and launches fails, whatever syntax reached it
+  // (computed keys, descriptors, Function/vm strings, ESM `import process`).
+  const real = process.env;
+  const reads = new Set();
+  const note = (k) => { reads.add(String(k)); };
+  process.env = new Proxy(real, {
+    get(t, k) { note(k); return Reflect.get(t, k); },
+    has(t, k) { note(k); return Reflect.has(t, k); },
+    ownKeys(t) { note('<ownKeys>'); return Reflect.ownKeys(t); },
+    getOwnPropertyDescriptor(t, k) { note(k); return Reflect.getOwnPropertyDescriptor(t, k); },
+  });
   try {
     delete require.cache[require.resolve(srcFile)];
     const I = require(srcFile);
@@ -66,6 +80,8 @@ async function check(srcFile) {
     if (I.scriptBody(file, path.dirname(file)) !== SNAPSHOT(file, path.dirname(file))) problems.push('scriptBody differs from the snapshot');
     let opened = null;
     const r = await I.launch({ tempDir: root });
+    process.env = real;
+    if (reads.size) problems.push(`read the environment: ${JSON.stringify([...reads])}`);
     if (!r.ok) problems.push(`launch failed: ${r.error}`);
     if (calls.length !== 1) problems.push(`expected one child_process call, got ${JSON.stringify(calls)}`);
     else {
@@ -83,6 +99,7 @@ async function check(srcFile) {
     if (imports.length !== 1 || !src.includes("const { execFile } = require('node:child_process');")) problems.push('child_process import is not exactly { execFile }');
     for (const banned of [/process\.env/, /\benv\b/, /process\s*\[/, /globalThis/, /\bReflect\b/, /\beval\s*\(/, /\bFunction\s*\(/]) if (banned.test(src)) problems.push(`source uses ${banned}`);
   } finally {
+    process.env = real;
     Object.assign(cp, saved);
     for (const k of Object.keys(process.env)) if (!(k in env)) delete process.env[k];
     Object.assign(process.env, env);
@@ -130,6 +147,56 @@ test('the source check also catches env reads that avoid process.env', async () 
     for (const m of ms) {
       const p = await check(m.file);
       assert.ok(p.some((x) => /^source uses .*env/.test(x)), `${m.file}: ${JSON.stringify(p)}`);
+    }
+  } finally { for (const m of ms) fs.rmSync(m.dir, { recursive: true, force: true }); }
+});
+
+const READ = (problems) => problems.find((p) => p.startsWith('read the environment: '));
+// PLX_INSTALL_X is not in POISON and is unset during check(), so the snapshot
+// cannot fail on these: only the tripwire can catch them.
+const X = 'PLX_INSTALL_X';
+const TRIP_FORMS = {
+  computedDestructure: `(() => { const { ['e' + 'nv']: e } = process; return e.${X}; })()`,
+  requireBracket: `require('node:process')['e' + 'nv'].${X}`,
+  descriptor: `Object.getOwnPropertyDescriptor(process, 'e' + 'nv').value.${X}`,
+  functionCtor: `(() => {}).constructor('return proc' + 'ess.e' + 'nv')().${X}`,
+};
+
+// A file in ESM syntax that require() loads (Node 22). The comment spoofs the
+// lint's exact-import check; child_process is reached through the default
+// export at call time, so the stubs apply and nothing real is spawned.
+function esmMutant() {
+  const dir = testTempDir('px-dock-mut-esm-');
+  const file = path.join(dir, 'ghostty-dock-install.mjs');
+  const src = fs.readFileSync(SRC, 'utf8');
+  const out = src
+    .replace("'use strict';\n", '')
+    .replace(
+      "const fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst { execFile } = require('node:child_process');\n",
+      "import fs from 'node:fs';\nimport os from 'node:os';\nimport path from 'node:path';\nimport cp from 'node:child_process';\nimport process from 'node:process';\n// const { execFile } = require('node:child_process');\nconst execFile = (...a) => cp.execFile(...a);\n",
+    )
+    .replace('    INSTALL_COMMAND,\n', `    ((() => { const { ['e' + 'nv']: e } = process; return e.${X}; })()) || INSTALL_COMMAND,\n`)
+    .replace(/^module\.exports = \{ (.*) \};$/m, 'export { $1 };');
+  assert.notEqual(out, src);
+  assert.ok(!/\brequire\(|module\.exports/.test(out.replace(/^\/\/.*$/gm, '')), 'ESM mutant is pure ESM');
+  fs.writeFileSync(file, out);
+  return { file, dir };
+}
+
+test('tripwire: the real module reads nothing from process.env', async () => {
+  for (let i = 0; i < 3; i++) assert.equal(READ(await check(SRC)), undefined);
+});
+
+test('tripwire: env reads the regex cannot see are caught by behaviour', async () => {
+  delete process.env[X];
+  const ms = Object.entries(TRIP_FORMS).map(([name, expr]) => ({ name, ...mutant(name, (s) => s.replace('    INSTALL_COMMAND,\n', `    (${expr}) || INSTALL_COMMAND,\n`)) }));
+  ms.push({ name: 'esmImportProcess', ...esmMutant() });
+  try {
+    for (const m of ms) {
+      const p = await check(m.file);
+      const hit = READ(p);
+      assert.ok(hit && hit.includes(X), `${m.name}: ${JSON.stringify(p)}`);
+      assert.ok(!p.some((x) => /snapshot/.test(x)), `${m.name} should only be caught by the tripwire: ${JSON.stringify(p)}`);
     }
   } finally { for (const m of ms) fs.rmSync(m.dir, { recursive: true, force: true }); }
 });
