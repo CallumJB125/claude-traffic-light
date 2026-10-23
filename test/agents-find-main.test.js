@@ -682,6 +682,21 @@ test('PR4 show-backup and backup-plan: listed ids only; the folder is revealed b
   assertClean(s.responses, bannedFor(s));
 });
 
+test('PR4 backup-plan runs under the write lock: busy while another action is open (review #54 L3)', async () => {
+  const s = setup();
+  withAgents(s);
+  const a = await s.call('agents:adopt', ['frontend-developer.md']);
+  assert.equal(a.ok, true);
+  let release;
+  s.state.answer = () => new Promise((res) => { release = () => res(false); });
+  const pending = s.call('agents:stop-managing');
+  await new Promise((r) => setImmediate(r));
+  assert.equal((await s.call('agents:backup-plan', a.backup)).code, 'busy');
+  release();
+  await pending;
+  assert.equal((await s.call('agents:backup-plan', a.backup)).ok, true);
+});
+
 test('PR4 Health: the fix opens Find agents on Added by me, once; nothing with no key loaded', async () => {
   const s = setup();
   assert.equal((await s.call('agents:list')).show, null);
