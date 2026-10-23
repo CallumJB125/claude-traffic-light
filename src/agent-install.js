@@ -19,8 +19,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
-const { createHomeFiles } = require('./home-files.js');
-const Runtime = require('../adapters/runtime.js');
+const { createHomeFiles, NOFOLLOW } = require('./home-files.js');
 const { TARGETS, UNSUPPORTED } = require('./agent-install/targets/index.js');
 
 const LEDGER_FILE = 'agent-installs.json';
@@ -97,11 +96,27 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
     if (!isObject(l) || l.schema !== 1 || !isObject(l.owned) || !Array.isArray(l.ops)) throw new Error('ledger is damaged');
     return validator.clean(l);
   }
+  // Written to an O_EXCL, no-follow temp file and renamed over the ledger:
+  // rename replaces a link planted there instead of writing through it.
   function writeLedger(l) {
     fsApi.mkdirSync(DATA, { recursive: true, mode: 0o700 });
+    if (fsApi.lstatSync(DATA).isSymbolicLink()) throw new Error('link');
     if (l.ops.length > MAX_OPS) l.ops = l.ops.slice(-MAX_OPS);
-    Runtime.writeTextAtomic(ledgerPath, `${JSON.stringify(l, null, 2)}\n`, fsApi, undefined, { newMode: 0o600 });
-    fsApi.chmodSync(ledgerPath, 0o600);
+    const tmp = path.join(DATA, `.${LEDGER_FILE}.${randomUUID()}.tmp`);
+    let fd;
+    try {
+      fd = fsApi.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NOFOLLOW, 0o600);
+      fsApi.writeFileSync(fd, `${JSON.stringify(l, null, 2)}\n`, 'utf8');
+      fsApi.fsyncSync(fd);
+      fsApi.closeSync(fd); fd = undefined;
+      fsApi.renameSync(tmp, ledgerPath);
+    } catch (e) {
+      if (fd !== undefined) try { fsApi.closeSync(fd); } catch { /* already closed */ }
+      try { fsApi.unlinkSync(tmp); } catch { /* never created */ }
+      throw e;
+    }
+    const st = fsApi.lstatSync(ledgerPath);
+    if (st.isSymbolicLink() || !st.isFile()) throw new Error('ledger is not a regular file');
   }
   const keyOf = keyOfRel;
 

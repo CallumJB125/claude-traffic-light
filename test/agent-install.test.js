@@ -556,3 +556,24 @@ test('security M2: OpenCode denies the shell under both its current key (shell) 
   s2.add(SH.id, ['opencode']);
   assert.doesNotMatch(read(s2.home, '.config/opencode/agents/sh.md'), /(?:shell|bash): deny/);
 });
+
+test('security L1: a link planted as the ledger after it was read is replaced, never written through', () => {
+  const home = tmp(), data = path.join(tmp(), 'data');
+  fs.writeFileSync(path.join(home, '.zshrc'), 'export A=1\n');
+  const ledgerPath = path.join(data, 'agent-installs.json');
+  let planted = false;
+  // A same-user racer: plants the link right after the ledger is found missing.
+  const fsApi = new Proxy(fs, { get(t, k) {
+    if (k === 'lstatSync') return (p, ...a) => { try { return t.lstatSync(p, ...a); } catch (e) { if (p === ledgerPath && !planted) { planted = true; t.mkdirSync(data, { recursive: true }); t.symlinkSync(path.join(home, '.zshrc'), ledgerPath); } throw e; } };
+    return typeof t[k] === 'function' ? t[k].bind(t) : t[k];
+  } });
+  const cat = catalogOf([FE, RO]);
+  const inst = createAgentInstaller({ home, dataRoot: data, catalog: cat, fsApi });
+  const r = inst.add(FE.id, ['claude'], { catalogSha: cat.sha256 });
+  assert.ok(planted);
+  assert.equal(r.ok, true);
+  assert.equal(read(home, '.zshrc'), 'export A=1\n');
+  const st = fs.lstatSync(ledgerPath);
+  assert.ok(st.isFile() && !st.isSymbolicLink());
+  assert.equal(st.mode & 0o777, 0o600);
+});
