@@ -33,6 +33,7 @@ const BACKUP_NAME = /^claude-agents-\d{8}T\d{9}Z-[0-9a-f]{8}$/;
 const sha = (text) => createHash('sha256').update(text).digest('hex');
 const refuse = (status, error, extra = {}) => ({ ok: false, status, error, ...extra });
 const tilde = (rel) => `~/${rel}`;
+const UNDO_KINDS = new Set(['add', 'adopt', 'update', 'remove', 'release']);
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -509,6 +510,9 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     const ledger = readLedger();
     const op = ledger.ops.find((o) => o.id === opId);
     if (!op || op.undone) return refuse('unavailable', 'Nothing to undo for this click.');
+    // A kind with no branch below (a project add has its own undoProject) is
+    // refused before anything is marked undone, so it stays undoable.
+    if (!UNDO_KINDS.has(op.kind)) return refuse('unavailable', 'Nothing to undo for this click.');
     const restored = [], conflicts = [];
     for (const c of op.changes) {
       const k = keyOf(c.platform, c.rel);

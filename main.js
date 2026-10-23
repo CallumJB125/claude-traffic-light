@@ -4846,6 +4846,34 @@ utilityHandle('mcp-set-enabled', (e) => fromUtilityPage(e, 'aitools'), (_e, on) 
 
 const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }) });
 const aiToolsOpen = (destination) => AiTools.open(destination);
+// Find agents (src/agents-find-main.js). The ledger key lives only here: it
+// is made on the first add, peeked (never made) for reads, and Health sees it
+// only once this run has loaded it, so startup never touches the keychain.
+// Dev-only overrides keep tests off the real home and key; a packaged build
+// ignores them. CLAUDE_TRAFFIC_LIGHT_HOME and $HOME can still move a packaged
+// build, which is acceptable: the key stays sealed to this app, so a
+// redirected folder can't make Plexiform sign anything it didn't write.
+const AgentsFind = (() => {
+  const Main = require('./src/agents-find-main.js');
+  const dev = Main.devOverrides({ isPackaged: app.isPackaged, env: process.env, log: (m) => console.warn(m) });
+  const home = dev.home || os.homedir(), dataRoot = dev.data || ROOT_DIR;
+  const AgentCatalog = require('./src/agent-catalog.js');
+  const { createAgentInstaller } = require('./src/agent-install.js');
+  const key = require('./src/agent-install-key.js').createLedgerKeyStore({ file: path.join(dataRoot, 'agent-installs.key'), safeStorage: require('electron').safeStorage });
+  const opts = { home, dataRoot, enableCursorProject: true };
+  let inst = null, plan = null;
+  const installer = (k) => (inst && inst.key === k ? inst.it : (inst = { key: k, it: createAgentInstaller({ ...opts, catalog: AgentCatalog.shipped(), ledgerKey: k }) }).it);
+  // Read-only planning before any key exists: a throwaway key, so a ledger it can't verify reads as empty. It never writes.
+  const planner = () => plan || (plan = createAgentInstaller({ ...opts, catalog: AgentCatalog.shipped(), ledgerKey: require('node:crypto').randomBytes(32) }));
+  Main.register({
+    ipcMain, allowed: (e) => fromUtilityPage(e, 'agents-find'), discoverAllowed: (e) => fromUtilityPage(e, 'discover'), pageContents: () => buddyWin?.pageWebContents('agents-find'),
+    catalog: () => AgentCatalog.shipped(), keyStore: key, installer, planner, tools: () => AiTools.quick(), demo: Demo,
+    pickFolder: (sender) => dialog.showOpenDialog(BrowserWindow.fromWebContents(sender) || undefined, { title: 'Choose the project to add the Cursor rule to', properties: ['openDirectory'] }),
+    home, dataRoot: (() => { try { return fs.realpathSync(dataRoot); } catch { return dataRoot; } })(),
+    openTools: () => aiToolsOpen('aitools'), openFindAgents: () => openBuddy('agents-find'), log: (m) => console.warn(m),
+  });
+  return { cachedKey: () => key.cached() };
+})();
 require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null), resumeCap: () => (costGuardResume ? costGuardResume() : null), demo: Demo, simple: () => loadConfig().simpleMode === true });
 require('./src/guardrails-main.js').install({ ipcMain, dialog, shell, BrowserWindow, rootDir: ROOT_DIR, allowed: (e) => fromUtilityPage(e, 'home'), broadcast: () => broadcastStatus(), log: console.log });
 explainSvc = require('./src/explain-main.js').install({ ipcMain, rootDir: ROOT_DIR, home: os.homedir(), config: loadConfig, inputs: () => aggregateState().inputs || [], sessions: () => aggregateState().sessions || [], inputAllowed: inputSenderOk, homeAllowed: (e) => fromUtilityPage(e, 'home'), clipboard, shell, Notification, openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // explain mode (opt-in, config.explainMode)
@@ -5019,6 +5047,8 @@ function healthReport() {
     burst: BurstIpc.status(),
     burstFacts: BurstIpc.healthFacts(),
     ghosttyDock: IS_MAC ? ghosttyDockHealthRow() : null,
+    // Only a key this run already loaded: Health never makes one or opens the keychain.
+    agentLedgerKey: AgentsFind.cachedKey(),
   });
   // Dev runs share the machine with a real install and never rewrite its hooks.
   report.checks = report.checks.map(({ fix, fixLabel, ...c }) =>

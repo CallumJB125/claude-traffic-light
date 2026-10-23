@@ -32,4 +32,35 @@ let cached = null;
 /** The shipped catalogue, verified once per process. */
 function shipped() { if (!cached?.ok) cached = loadCatalog(); return cached; }
 
-module.exports = { loadCatalog, shipped, FILE };
+const TOOL_WORDS = [
+  [['Read', 'Grep', 'Glob'], 'read files'],
+  [['Write', 'Edit', 'MultiEdit', 'NotebookEdit'], 'edit files'],
+  [['Bash'], 'run terminal commands'],
+  [['WebFetch', 'WebSearch'], 'use the web'],
+];
+/** What an agent's tools let it do, in plain words, for the page. */
+function toolsInWords(tools) {
+  if (!tools || tools.declared === null) return 'Every tool your AI tool has. The author didn\'t limit it.';
+  const declared = tools.declared.filter((t) => typeof t === 'string');
+  const words = TOOL_WORDS.filter(([names]) => names.some((n) => declared.includes(n))).map(([, w]) => w);
+  const known = new Set(TOOL_WORDS.flatMap(([names]) => names));
+  const other = declared.filter((t) => !known.has(t));
+  if (other.length) words.push(`use ${other.length === 1 ? 'one other tool' : `${other.length} other tools`} (${other.join(', ')})`);
+  if (!words.length) return 'No tools.';
+  const s = words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+  return `${s[0].toUpperCase()}${s.slice(1)}.`;
+}
+
+/** The list fields the page gets for every agent: never the prompt itself. */
+function summary(a) {
+  return {
+    id: a.id, name: a.name, slug: a.slug, category: a.category, icon: a.icon, source: a.source, license: a.license,
+    oneLiner: a.oneLiner, bestWhen: a.bestWhen, description: a.description, tags: a.tags,
+    everyTool: a.tools.declared === null, toolsSummary: toolsInWords(a.tools), risk: a.risk.level,
+    // "Every tool" has its own chip, so this counts the other flags only.
+    flagCount: a.risk.flags.filter((f) => f.rule !== 'all-tools').length,
+    primary: a.primary !== false, aliases: a.aliases,
+  };
+}
+
+module.exports = { loadCatalog, shipped, toolsInWords, summary, FILE };
