@@ -3,11 +3,14 @@
 // name), YAML frontmatter with required `description`, `mode: subagent`, and
 // a `permission` map (read, edit, glob, grep, shell, webfetch, websearch,
 // task: allow | ask | deny). A declared Claude Code tools list becomes "deny"
-// for every permission the author did not grant.
+// for every permission the author did not grant. The shell is denied under
+// both `shell` (current OpenCode) and `bash` (its name before the rename;
+// current OpenCode maps both to the same action), so an older OpenCode can't
+// ignore the limit.
 // Docs: https://opencode.ai/docs/agents/ , https://opencode.ai/docs/permissions/
 const { yamlString, body, slugOf, has, EDITS } = require('./common.js');
 
-const PERMS = [['read', ['Read', 'NotebookRead']], ['edit', EDITS], ['glob', ['Glob']], ['grep', ['Grep']], ['shell', ['Bash']], ['webfetch', ['WebFetch']], ['websearch', ['WebSearch']], ['task', ['Task', 'Agent']]];
+const PERMS = [['read', ['Read', 'NotebookRead']], ['edit', EDITS], ['glob', ['Glob']], ['grep', ['Grep']], ['shell', ['Bash']], ['bash', ['Bash']], ['webfetch', ['WebFetch']], ['websearch', ['WebSearch']], ['task', ['Task', 'Agent']]];
 
 module.exports = {
   id: 'opencode',

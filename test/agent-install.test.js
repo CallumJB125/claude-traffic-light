@@ -82,7 +82,7 @@ test('declared tool limits are kept or the platform is skipped, never widened', 
   assert.match(r.results.find((x) => x.platform === 'codex').reason, /read-only/);
   assert.match(read(home, '.gemini/agents/reviewer.md'), /^tools: \[read_file, grep_search, glob\]$/m);
   assert.match(read(home, '.copilot/agents/reviewer.agent.md'), /^tools: \["Read", "Grep", "Glob"\]$/m);
-  assert.match(read(home, '.config/opencode/agents/reviewer.md'), /permission:\n {2}edit: deny\n {2}shell: deny\n {2}webfetch: deny\n {2}websearch: deny\n {2}task: deny\n/);
+  assert.match(read(home, '.config/opencode/agents/reviewer.md'), /permission:\n {2}edit: deny\n {2}shell: deny\n {2}bash: deny\n {2}webfetch: deny\n {2}websearch: deny\n {2}task: deny\n/);
   const shellLess = agentOf('x/writer', { name: 'writer', tools: ['Read', 'Write'] });
   assert.match(Codex.render(shellLess).text, /\[features\]\nshell_tool = false\n$/);
 });
@@ -543,4 +543,16 @@ test('security M1: locate refuses empty, . and .. components', () => {
     assert.throws(() => hf.removeTarget(rel), /outside home/, rel);
   }
   assert.ok(fs.existsSync(path.join(home, 'x.md')));
+});
+
+test('security M2: OpenCode denies the shell under both its current key (shell) and its older one (bash)', () => {
+  const { home, add } = setup();
+  add(RO.id, ['opencode']);
+  const text = read(home, '.config/opencode/agents/reviewer.md');
+  assert.match(text, /^ {2}shell: deny$/m);
+  assert.match(text, /^ {2}bash: deny$/m);
+  const SH = agentOf('o/sh', { name: 'sh', tools: ['Read', 'Bash'] });
+  const s2 = setup({ agents: [SH] });
+  s2.add(SH.id, ['opencode']);
+  assert.doesNotMatch(read(s2.home, '.config/opencode/agents/sh.md'), /(?:shell|bash): deny/);
 });
