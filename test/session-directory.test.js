@@ -241,10 +241,23 @@ test('every state is one of the five bucket headings, with input only where a pe
   const headings = W.BUCKETS.map((b) => b.heading);
   const d = createSessionDirectory({ now: () => T0 });
   const { entries } = d.team({ team: TEAM, viewer: VIEWER, member: true, hubEntries: ['working', 'waiting', 'input', 'idle', 'ended', 'bogus'].map((state, i) => hubEntry({ ref: `r${i}`, state })) });
-  for (const e of entries) assert.ok(headings.includes(e.state), e.state);
+  for (const e of entries) assert.equal(e.state, e.bucket === 'needs' ? 'Needs Bob' : W.headingOf(e.bucket), e.state);
+  assert.ok(entries.every((e) => e.bucket === 'needs' || headings.includes(e.state)));
   assert.deepEqual(entries.map((e) => [e.bucket, e.detail ?? null, e.input]), [
     ['working', null, false], ['needs', null, false], ['needs', null, true], ['idle', null, false], ['idle', 'Ended', false], ['idle', null, false],
   ]);
   const [w] = d.mine({ work: [work({ status: 'Needs you', bucket: 'needs' })] });
   assert.equal(w.state, 'Needs you'); assert.equal(w.input, true);
+});
+
+test('a teammate’s waiting session reads "Needs <name>" (or "Needs them"), keeping the needs bucket', () => {
+  const d = createSessionDirectory({ now: () => T0 });
+  const read = (over) => d.team({ team: TEAM, viewer: VIEWER, member: true, hubEntries: [hubEntry(over)] }).entries[0];
+  let e = read({ state: 'input' });
+  assert.equal(e.state, 'Needs Bob'); assert.equal(e.bucket, 'needs'); assert.equal(e.input, true);
+  e = read({ state: 'input', owner: { id: 'u-bob', name: '' } });
+  assert.equal(e.state, 'Needs them'); assert.equal(e.bucket, 'needs');
+  e = read({ state: 'working', self_reported: { state: 'input', at: new Date(T0 - 1000).toISOString() } });
+  assert.equal(e.selfReported.state, 'Needs Bob');
+  assert.equal(read({ state: 'working' }).state, 'Working on it');
 });

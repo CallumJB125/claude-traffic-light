@@ -227,9 +227,12 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
     const self = x.owner.id === viewer.id;
     if (self && x.kind !== 'board-run') return null;
     const ownerName = str(x.owner.name, 80) || 'Teammate';
+    // A teammate's session waiting on input needs them, not the viewer: display only, the bucket stays.
+    const needsWho = self ? Organise.headingOf('needs') : str(x.owner.name, 80) ? `Needs ${str(x.owner.name, 80)}` : 'Needs them';
+    const whose = (v) => (v.bucket === 'needs' ? { ...v, state: needsWho } : v);
     const t = timing(`team:${team.key}:${x.ref}`, x.observed_at, time);
-    const sr = object(x.self_reported) && TEAM_STATES.includes(x.self_reported.state) && Number.isFinite(stamp(x.self_reported.at)) ? { state: teamState(x.self_reported.state).state, at: stamp(x.self_reported.at) } : null;
-    const st = teamState(x.state);
+    const sr = object(x.self_reported) && TEAM_STATES.includes(x.self_reported.state) && Number.isFinite(stamp(x.self_reported.at)) ? { state: whose(teamState(x.self_reported.state)).state, at: stamp(x.self_reported.at) } : null;
+    const st = whose(teamState(x.state));
     const online = x.online === true && t.freshness === 'recent';
     const canSend = share.scope === 'interact', live = x.state !== 'ended';
     const why = (ok, base) => (!canSend ? `${ownerName} shared this session with your team to watch only.` : !live ? 'This session has ended.' : !online ? `${ownerName}'s computer is offline or this report is stale.` : ok ? '' : base);

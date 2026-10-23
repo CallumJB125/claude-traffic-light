@@ -212,7 +212,7 @@ test('Team sessions: live state change, member removal and revocation take effec
     s.teamHub.update('cara-1', { state: 'input' });
     await wait(400); await tick();
     assert.ok(s.results.length > before, 'push → re-read, no Refresh click or interval');
-    assert.match(s.row('team-list', /Write docs/).querySelector('.tag').textContent, /Needs you/);
+    assert.match(s.row('team-list', /Write docs/).querySelector('.tag').textContent, /Needs Cara/);
     s.teamHub.revoke('bob-1', 't-dev');
     await wait(400); await tick();
     const gone = s.$('team-list').querySelector('.dir-entry.gone');
