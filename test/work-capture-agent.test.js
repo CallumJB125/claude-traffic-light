@@ -251,3 +251,51 @@ test('PR B addAgentCard: a retry after a lost answer resends exactly the first t
   assert.equal((await wc2.addAgentCard(session(), { title: 'x', request_id: 'req-lost-000002' })).reason, 'UNAVAILABLE');
   assert.equal(g.calls.length, 0);
 });
+
+// #55 review M1: an AI's card text bound for a team hub goes through the same scrub as every other team title (#52),
+// before it is saved, so what is stored is what is sent and a lost-answer retry resends it byte for byte.
+const TITLE_LEAKS = [
+  ['ssh 10.0.0.5 failing', '10.0.0.5', '[ip]'],
+  ['mail sam@acme.co.za today', 'sam@acme.co.za', '[email]'],
+  ['fe80::1ff:fe23:4567:890a down', 'fe80::1ff:fe23:4567:890a', '[ip]'],
+  ['bind [fe80::1]:8080 fails', 'fe80::1', '[ip]'],
+  ['db1.internal.example.com slow', 'db1.internal.example.com', '[host]'],
+  ['connect db.corp.acme.internal:5432', 'db.corp.acme.internal', '[host]'],
+  ['call +27 82 555 0199 back', '+27 82 555 0199', '[phone]'],
+  ['call 082 555 0199 back', '082 555 0199', '[phone]'],
+  ['ring +1 (415) 555-0100', '415) 555-0100', '[phone]'],
+  ['ring +44 20 7946 0958', '7946 0958', '[phone]'],
+  ['open https://grafana.corp.acme.internal/d/x', 'grafana.corp.acme.internal', '[host]'],
+];
+test('PR B addAgentCard (#55 review M1): a team card\'s title and every details line are scrubbed like any team title, stored as sent, the suffix kept', async (t) => {
+  const r = rig(t);
+  for (const [input, gone, mark] of TITLE_LEAKS) {
+    const res = await add(r, { title: `Fix ${input}`, details: `first ${input}\nsecond ${input}` });
+    const { kind, body } = r.calls.at(-1);
+    assert.equal(kind, 'team');
+    for (const text of [body.title, body.summary, res.title]) {
+      assert.ok(!text.toLowerCase().includes(gone.toLowerCase()), `${gone} in ${text}`);
+      assert.ok(text.includes(mark), `${mark} missing from ${text}`);
+    }
+    assert.match(body.title, / \u00b7 added by Codex$/);
+    assert.equal(body.summary.split('\n').filter((l) => l.includes(mark)).length, 2, body.summary);
+    const saved = Object.values(JSON.parse(fs.readFileSync(r.setup.file, 'utf8')).tasks).find((e) => e.agent && e.card_id === res.card_id);
+    assert.equal(saved.title, body.title, 'stored title is the sent title');
+    assert.equal(saved.summary, body.summary, 'stored summary is the sent summary');
+  }
+});
+test('PR B addAgentCard (#55 review M1): a lost-answer retry resends the scrubbed text byte for byte; My board keeps the AI\'s words', async (t) => {
+  let fail = true;
+  const r = rig(t, { sendTeam: async (destination, body) => { r.calls.push({ kind: 'team', destination, body }); if (fail) { fail = false; return { ok: false }; } return { ok: true, card: { id: 'team-ok' } }; } });
+  const request_id = rid();
+  const args = { title: 'Fix sam@acme.co.za on 10.0.0.5', details: 'host db1.internal.example.com', request_id };
+  assert.equal((await add(r, args)).reason, 'UNAVAILABLE');
+  assert.equal((await add(r, args)).card_id, 'team-ok');
+  assert.equal(r.calls.length, 2);
+  assert.deepEqual(r.calls[1].body, r.calls[0].body);
+  assert.equal(r.calls[0].body.title, 'Fix [email] on [ip] \u00b7 added by Codex');
+  const local = rig(t, { getRoutes: async () => ({ routes: [], complete: true }) });
+  await add(local, args);
+  assert.equal(local.calls[0].kind, 'local');
+  assert.equal(local.calls[0].body.title, 'Fix sam@acme.co.za on 10.0.0.5 \u00b7 added by Codex');
+});

@@ -362,13 +362,13 @@ test('PRIVACY.md documents the agent awareness roster: metadata only, local only
   assert.match(entry, /for a team board it includes the board's name, cut to a short label and marked as data, so your AI provider receives that name\. It is never the name of any other board\./);
   assert.match(entry, /An AI session can also add a card for its own work \(`bus_card_add`\): Plexiform puts it on the board that session's own cards go to, never one the AI names/);
   assert.match(entry, /awareness\/card-limits\.json` \(readable only by you\)/);
-  assert.match(entry, /On a team board the card's title, and its details when that team shares summaries, are the AI's own words with secrets and your home folder removed, so your teammates see them\./);
+  assert.match(entry, /On a team board the card's title, and its details when that team shares summaries, are the AI's own words with secrets and your home folder removed and, before they leave this computer, email addresses, phone numbers, IP addresses and internal host names replaced by `\[email\]`, `\[phone\]`, `\[ip\]` and `\[host\]`; your teammates see them\./);
   assert.match(entry, /Never a prompt, transcript, title, summary or note/);
   assert.match(entry, /branch name is shown only to sessions in the same repository/);
   assert.match(entry, /Headless runs[^.]*never listed/);
   assert.match(entry, /never shown to other AI sessions/);
   assert.match(entry, /`GET \/status`[^.]*`buddy_sessions`/);
-  assert.match(entry, /Nothing leaves this computer/);
+  assert.match(entry, /Apart from the cards an AI session adds to a team board, nothing here leaves this computer\.$/);
   // Notes (step 4): where the text is kept and for how long, that hooks never carry it, and that logs never do.
   assert.match(entry, /`bus_note`/);
   assert.match(entry, /at most 800 characters/);

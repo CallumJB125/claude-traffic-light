@@ -29,7 +29,14 @@ const BACKFILL_EVERY_MS = 60000;
 const FALLBACK_TITLE = /^(?:Claude(?: Code)?|Codex|Cursor|Gemini|Hermes) · /;
 // Every title bound for a team hub, whatever made it (review L2): clean() only removes
 // secrets, so IPs, emails, host names and phone numbers went to the whole team.
-const hubTitle = (text,hub=null) => {let hubHost=null;try{hubHost=new URL(String(hub)).hostname;}catch{}return scrubTitle(text,{hubHost}).trim().slice(0,200);};
+const hubHostOf = hub => {try{return new URL(String(hub)).hostname;}catch{return null;}};
+const hubTitle = (text,hub=null) => scrubTitle(text,{hubHost:hubHostOf(hub)}).trim().slice(0,200);
+// The one way a body reaches a team hub (#55 review M1): the title through hubTitle and every summary line through
+// scrubTitle, so a new call site cannot skip the scrub. A local (My board) body is never passed through it.
+const teamBody = (destination,body) => {
+  const hubHost=hubHostOf(destination.hub);
+  return {...body,title:hubTitle(body.title,destination.hub),...(typeof body.summary==='string'?{summary:body.summary.split('\n').map(l=>scrubTitle(l,{hubHost})).join('\n')}:{})};
+};
 const clean = (text,max) => redactSecrets(String(text??'').slice(0,max*2),{docExamples:false})
   .replace(/\b(?:bdt|brt|btk|btr|inv|clinv|pfi|pfm|pfr|pfc|pfcode)_[A-Za-z0-9_-]{43}\b/g,'<redacted:token>')
   .replace(/\b(?:brt1|bmr1)\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'<redacted:token>')
@@ -249,7 +256,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       if(fingerprint){e.attempt_fingerprint=fingerprint;e.last_seen=now();}},ACK_RESERVE_BYTES))return;
     if(!live()||!force&&raw&&!fresh(raw))return;
     let result;
-    try {result=entry.destination.kind==='team'?await sendTeam(entry.destination,{...body,title:hubTitle(body.title,entry.destination.hub)}):await sendLocal(body);}
+    try {result=entry.destination.kind==='team'?await sendTeam(entry.destination,teamBody(entry.destination,body)):await sendLocal(body);}
     catch {log('automatic card update deferred');return;}
     if(!result?.ok){log('automatic card update deferred');return;}
     const before=JSON.stringify([state.tasks[key].card_id,state.tasks[key].status,state.tasks[key].title,state.tasks[key].untracked]);
@@ -485,7 +492,9 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       if(Object.keys(state.tasks).length>=2000)return refuse('UNAVAILABLE');
       destination=compactDestination(d);
       summary=agentSummary({provider:o.provider,handle:a.handle,folder:a.folder,afterNote:a.after_note===true,details:a.details});
-      if(!commit(next=>{next.tasks[key]={destination,repo,provider:o.provider,session_id:o.session_id,task_id,title,summary,status:null,card_id:null,agent:true,last_seen:now()};},ACK_RESERVE_BYTES))return refuse('UNAVAILABLE');
+      // Scrubbed for a team board before it is saved, so what is stored is what is sent, and a retry sends it byte for byte.
+      if(destination.kind==='team')({title:cardTitle,summary}=teamBody(destination,{title:cardTitle,summary}));
+      if(!commit(next=>{next.tasks[key]={destination,repo,provider:o.provider,session_id:o.session_id,task_id,title:cardTitle,summary,status:null,card_id:null,agent:true,last_seen:now()};},ACK_RESERVE_BYTES))return refuse('UNAVAILABLE');
       changed();
     }
     // The board's to-do state, never "Needs you": 'idle' is a status no hub moves to its own column, and the sweep and
