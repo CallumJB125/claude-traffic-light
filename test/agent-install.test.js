@@ -8,7 +8,9 @@ const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
-const { createAgentInstaller, ledgerHealth } = require('../src/agent-install.js');
+const { createAgentInstaller, ledgerHealth, signLedger } = require('../src/agent-install.js');
+// The ledger key main keeps in safeStorage; tests inject one.
+const KEY = Buffer.alloc(32, 7);
 const { TARGETS } = require('../src/agent-install/targets/index.js');
 const Codex = require('../src/agent-install/targets/codex.js');
 const health = require('../src/health.js');
@@ -35,7 +37,7 @@ const ALL = ['claude', 'codex', 'gemini', 'copilot', 'opencode'];
 function setup({ agents = [FE, RO], ...opts } = {}) {
   const home = tmp(), data = path.join(tmp(), 'data');
   const cat = catalogOf(agents);
-  const inst = createAgentInstaller({ home, dataRoot: data, catalog: cat, ...opts });
+  const inst = createAgentInstaller({ ledgerKey: KEY, home, dataRoot: data, catalog: cat, ...opts });
   return { home, data, cat, inst, add: (id, p = ALL) => inst.add(id, p, { catalogSha: cat.sha256 }) };
 }
 const read = (home, rel) => fs.readFileSync(path.join(home, rel), 'utf8');
@@ -203,7 +205,7 @@ test('a failure in the second platform rolls back the first, and nothing is reco
 function newerVersion(s, opts = {}) {
   const FE2 = agentOf(FE.id, { name: 'Frontend Developer', description: 'Builds UIs.', body: '# Frontend Developer\n\nVersion 2.\n' });
   const cat2 = catalogOf([FE2, RO], 'e'.repeat(64));
-  return { FE2, inst2: createAgentInstaller({ home: s.home, dataRoot: s.data, catalog: cat2, ...opts }) };
+  return { FE2, inst2: createAgentInstaller({ ledgerKey: KEY, home: s.home, dataRoot: s.data, catalog: cat2, ...opts }) };
 }
 
 test('Undo of an add never removes a file Plexiform no longer manages, even with the same bytes', () => {
@@ -262,7 +264,7 @@ test('a failed remove puts back the files it already removed, and records nothin
   const s = setup();
   s.add(FE.id, ['claude', 'gemini']);
   const ledger = fs.readFileSync(path.join(s.data, 'agent-installs.json'), 'utf8');
-  const inst2 = createAgentInstaller({ home: s.home, dataRoot: s.data, catalog: s.cat, failAfterWrites: 1 });
+  const inst2 = createAgentInstaller({ ledgerKey: KEY, home: s.home, dataRoot: s.data, catalog: s.cat, failAfterWrites: 1 });
   assert.equal(inst2.remove(FE.id).status, 'failed');
   assert.equal(read(s.home, '.claude/agents/frontend-developer.md'), FE.raw);
   assert.ok(exists(s.home, '.gemini/agents/frontend-developer.md'));
@@ -314,7 +316,7 @@ test('refusals: stale catalogue, unknown or per-project platforms, disabled targ
   assert.equal(add(FE.id, ['claude', 'claude']).status, 'invalid');
   const off = TARGETS.map((t) => (t.id === 'gemini' ? { ...t, verified: false, reason: 'not verified in Gemini CLI docs' } : t));
   const home = tmp();
-  const i2 = createAgentInstaller({ home, dataRoot: path.join(tmp(), 'd'), catalog: cat, targets: off });
+  const i2 = createAgentInstaller({ ledgerKey: KEY, home, dataRoot: path.join(tmp(), 'd'), catalog: cat, targets: off });
   assert.equal(i2.add(FE.id, ['gemini'], { catalogSha: cat.sha256 }).status, 'disabled');
   assert.deepEqual(i2.platformsFor([{ id: 'gemini', installed: true, state: 'connected' }]), [{ platform: 'gemini', label: 'Gemini CLI', choice: 'disabled', reason: 'not verified in Gemini CLI docs' }]);
 });
@@ -338,7 +340,7 @@ test('writes stay inside the five agent folders and the data folder', () => {
   for (const fn of ['writeFileSync', 'renameSync', 'linkSync', 'unlinkSync', 'mkdirSync', 'rmSync', 'cpSync', 'chmodSync', 'symlinkSync', 'copyFileSync', 'appendFileSync']) spy[fn] = (p, ...rest) => { if (typeof p === 'string') touched.push(p); if (typeof rest[0] === 'string' && fn !== 'writeFileSync' && fn !== 'appendFileSync') touched.push(rest[0]); return fs[fn](p, ...rest); };
   spy.openSync = (p, flags, ...rest) => { if ((flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT)) !== 0 || /[wa+]/.test(String(flags))) touched.push(p); return fs.openSync(p, flags, ...rest); };
   const fsApi = new Proxy(fs, { get: (t, k) => spy[k] ?? t[k] });
-  const i = createAgentInstaller({ home, dataRoot: data, catalog: catalogOf([FE, RO]), fsApi });
+  const i = createAgentInstaller({ ledgerKey: KEY, home, dataRoot: data, catalog: catalogOf([FE, RO]), fsApi });
   fs.mkdirSync(path.join(home, '.claude/agents'), { recursive: true });
   fs.writeFileSync(path.join(home, '.claude/agents/reviewer.md'), RO.raw);
   const r = i.add(FE.id, ALL, { catalogSha: 'c'.repeat(64) });
@@ -375,7 +377,7 @@ test('adoption: backs up first, adopts exact matches only, undo restores bytes a
   assert.equal(read(home, '.claude/agents/reviewer.md'), `${RO.raw}\nmy tweak\n`);
   assert.deepEqual(inst.adoptable().matches, [], 'already adopted');
   // A newer catalogue version updates the adopted copy; undoing the adoption puts the original back.
-  const i2 = createAgentInstaller({ home, dataRoot: data, catalog: catalogOf([v2, RO], 'e'.repeat(64)) });
+  const i2 = createAgentInstaller({ ledgerKey: KEY, home, dataRoot: data, catalog: catalogOf([v2, RO], 'e'.repeat(64)) });
   assert.equal(i2.status().items[0].state, 'update-available');
   const up = i2.update(v2.id);
   assert.deepEqual(up.results.map((x) => x.outcome), ['updated']);
@@ -417,7 +419,7 @@ test('Cursor "Add to a project…" is off by default; when on it writes one .mdc
   const project = tmp();
   assert.equal(inst.addToProject(FE.id, project, { catalogSha: cat.sha256 }).status, 'disabled');
   const home = tmp();
-  const on = createAgentInstaller({ home, dataRoot: path.join(tmp(), 'd'), catalog: cat, enableCursorProject: true });
+  const on = createAgentInstaller({ ledgerKey: KEY, home, dataRoot: path.join(tmp(), 'd'), catalog: cat, enableCursorProject: true });
   assert.equal(on.addToProject(FE.id, home, { catalogSha: cat.sha256 }).status, 'invalid', 'not the home folder');
   const r = on.addToProject(FE.id, project, { catalogSha: cat.sha256 });
   assert.equal(r.results[0].outcome, 'added');
@@ -429,12 +431,12 @@ test('Cursor "Add to a project…" is off by default; when on it writes one .mdc
 
 test('Health: no row before Find agents is used; ok, then a warning when a file changes', () => {
   const { home, data, add } = setup();
-  assert.equal(ledgerHealth({ home, dataRoot: data }), null);
+  assert.equal(ledgerHealth({ home, dataRoot: data, ledgerKey: KEY }), null);
   add(FE.id, ['claude', 'codex']);
-  assert.deepEqual(ledgerHealth({ home, dataRoot: data }), { status: 'ok', detail: '2 agent files managed by Plexiform across 2 tools.', next: undefined });
+  assert.deepEqual(ledgerHealth({ home, dataRoot: data, ledgerKey: KEY }), { status: 'ok', detail: '2 agent files managed by Plexiform across 2 tools.', next: undefined });
   fs.appendFileSync(path.join(home, '.codex/agents/frontend-developer.toml'), '# mine\n');
   fs.unlinkSync(path.join(home, '.claude/agents/frontend-developer.md'));
-  const w = health.checkAgents({ home, root: data, fs });
+  const w = health.checkAgents({ home, root: data, fs, agentLedgerKey: KEY });
   assert.equal(w.status, 'warn');
   assert.match(w.detail, /1 changed outside Plexiform; 1 missing/);
   assert.equal(w.next, 'Review on Find agents.');
@@ -471,9 +473,12 @@ test('security H1: Claude Code never gets hooks, mcpServers, permissionMode or a
 });
 
 // Security review M1: a forged ledger must never reach outside the agent folders.
-function forge(s, ledger, originals = []) {
+// Signed with the test key by default, so these tests reach the checks after
+// the HMAC; `key: null` writes an unsigned forgery.
+function forge(s, ledger, originals = [], { key = KEY } = {}) {
   fs.mkdirSync(s.data, { recursive: true });
-  fs.writeFileSync(path.join(s.data, 'agent-installs.json'), JSON.stringify({ schema: 1, owned: {}, ops: [], ...ledger }));
+  const l = { schema: 1, owned: {}, ops: [], ...ledger };
+  fs.writeFileSync(path.join(s.data, 'agent-installs.json'), JSON.stringify(key ? signLedger(l, key) : l));
   if (originals.length) fs.mkdirSync(path.join(s.data, 'agent-originals'), { recursive: true });
   for (const t of originals) fs.writeFileSync(path.join(s.data, 'agent-originals', sha(t)), t);
 }
@@ -570,7 +575,7 @@ test('security L1: a link planted as the ledger after it was read is replaced, n
     return typeof t[k] === 'function' ? t[k].bind(t) : t[k];
   } });
   const cat = catalogOf([FE, RO]);
-  const inst = createAgentInstaller({ home, dataRoot: data, catalog: cat, fsApi });
+  const inst = createAgentInstaller({ ledgerKey: KEY, home, dataRoot: data, catalog: cat, fsApi });
   const r = inst.add(FE.id, ['claude'], { catalogSha: cat.sha256 });
   assert.ok(planted);
   assert.equal(r.ok, true);
@@ -715,4 +720,71 @@ test('security R1: a forged adopt op with no adopted record cannot restore non-c
   forge(s, { ops: [{ id: 'f3c', kind: 'adopt', changes: [{ platform: 'claude', rel: '.claude/agents/mine.md', before: sha(planted), after: sha(planted) }] }] }, [planted]);
   s.inst.undo('f3c');
   assert.equal(read(s.home, '.claude/agents/mine.md'), mine);
+});
+
+// Security re-review R1b: the ledger is authenticated with an HMAC under a key
+// main keeps in safeStorage; unsigned or wrongly signed records are ignored.
+test('security R1b (F3b): an unsigned owned entry cannot make Remove delete your own agent', () => {
+  const mine = '---\nname: mine\ndescription: my own\n---\nmine\n';
+  for (const key of [null, Buffer.alloc(32, 9)]) {
+    const s = setup();
+    fs.mkdirSync(path.join(s.home, '.claude/agents'), { recursive: true });
+    fs.writeFileSync(path.join(s.home, '.claude/agents/frontend-developer.md'), mine);
+    forge(s, { owned: { 'claude:.claude/agents/frontend-developer.md': { platform: 'claude', rel: '.claude/agents/frontend-developer.md', agentId: FE.id, how: 'added', sha: sha(mine), fileSha256: FE.fileSha256 } } }, [], { key });
+    assert.deepEqual(s.inst.remove(FE.id).results, []);
+    assert.equal(read(s.home, '.claude/agents/frontend-developer.md'), mine);
+    assert.deepEqual(s.inst.status().owned ?? [], []);
+  }
+});
+
+test('security R1b (F3): an unsigned adopt record cannot put harmless-looking attacker bytes over your own agent', () => {
+  const mine = '---\nname: mine\ndescription: my own\n---\nmine\n', planted = '---\nname: mine\ndescription: looks harmless\n---\nattacker text\n';
+  const s = setup();
+  fs.mkdirSync(path.join(s.home, '.claude/agents'), { recursive: true });
+  fs.writeFileSync(path.join(s.home, '.claude/agents/mine.md'), mine);
+  forge(s, { owned: { 'claude:.claude/agents/mine.md': { platform: 'claude', rel: '.claude/agents/mine.md', agentId: FE.id, how: 'adopted', sha: sha(mine), original: sha(planted), fileSha256: FE.fileSha256 } },
+    ops: [{ id: 'f3', kind: 'adopt', changes: [{ platform: 'claude', rel: '.claude/agents/mine.md', before: sha(planted), after: sha(planted) }] }] }, [planted], { key: null });
+  assert.deepEqual(s.inst.status().ops, []);
+  s.inst.undo('f3');
+  assert.equal(read(s.home, '.claude/agents/mine.md'), mine);
+});
+
+test('security R1b: a signed record with any field changed is ignored; real records carry a MAC and survive a reload', () => {
+  const s = setup();
+  s.add(FE.id, ['claude']);
+  const l = JSON.parse(fs.readFileSync(path.join(s.data, 'agent-installs.json'), 'utf8'));
+  const [k] = Object.keys(l.owned);
+  assert.match(l.owned[k].mac, /^[0-9a-f]{64}$/);
+  assert.match(l.ops[0].mac, /^[0-9a-f]{64}$/);
+  l.owned[k].sha = 'f'.repeat(64);
+  l.ops[0].changes[0].after = 'f'.repeat(64);
+  fs.writeFileSync(path.join(s.data, 'agent-installs.json'), JSON.stringify(l));
+  assert.deepEqual(s.inst.status().ops, []);
+  assert.deepEqual(s.inst.remove(FE.id).results, []);
+  assert.ok(exists(s.home, '.claude/agents/frontend-developer.md'));
+  assert.equal(ledgerHealth({ home: s.home, dataRoot: s.data, ledgerKey: KEY }), null);
+});
+
+test('security R1b: no ledger key, no installer; Health says nothing it cannot verify', () => {
+  const home = tmp(), data = path.join(tmp(), 'data');
+  assert.throws(() => createAgentInstaller({ home, dataRoot: data, catalog: catalogOf([FE]) }), /ledger key/);
+  assert.throws(() => createAgentInstaller({ home, dataRoot: data, catalog: catalogOf([FE]), ledgerKey: Buffer.alloc(8) }), /ledger key/);
+  const s = setup();
+  s.add(FE.id, ['claude']);
+  assert.equal(ledgerHealth({ home: s.home, dataRoot: s.data }), null);
+});
+
+test('security R1b: the ledger key is made once, sealed by safeStorage, and never made again unsealed', () => {
+  const { createLedgerKeyStore } = require('../src/agent-install-key.js');
+  const fakeSafe = (on = true) => ({ isEncryptionAvailable: () => on, encryptString: (s) => Buffer.from(`sealed:${s}`), decryptString: (b) => { const t = b.toString(); if (!t.startsWith('sealed:')) throw new Error('bad'); return t.slice(7); } });
+  const file = path.join(tmp(), 'agent-installs.key');
+  const a = createLedgerKeyStore({ file, safeStorage: fakeSafe() })();
+  assert.equal(a.length, 32);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.doesNotMatch(fs.readFileSync(file, 'utf8'), new RegExp(a.toString('hex')));
+  assert.deepEqual(createLedgerKeyStore({ file, safeStorage: fakeSafe() })(), a);
+  assert.throws(() => createLedgerKeyStore({ file: path.join(tmp(), 'k'), safeStorage: fakeSafe(false) })(), /safeStorage/);
+  fs.writeFileSync(file, JSON.stringify({ v: 1, data: Buffer.from('garbage').toString('base64') }));
+  assert.throws(() => createLedgerKeyStore({ file, safeStorage: fakeSafe() })(), /unreadable/);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).data, Buffer.from('garbage').toString('base64'));
 });

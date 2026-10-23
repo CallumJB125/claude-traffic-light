@@ -128,7 +128,7 @@ function checkHooks(ctx) {
 
 // Agent files Find agents added or adopted: still there, still as written.
 function checkAgents(ctx) {
-  return ledgerHealth({ home: ctx.home, dataRoot: ctx.root, fsApi: ctx.fs });
+  return ledgerHealth({ home: ctx.home, dataRoot: ctx.root, ledgerKey: ctx.agentLedgerKey, fsApi: ctx.fs });
 }
 
 // Found when the Hermes CLI is installed; connecting enables Plexiform's

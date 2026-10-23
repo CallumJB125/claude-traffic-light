@@ -18,7 +18,7 @@
 //   original bytes and never deletes the file.
 const fs = require('node:fs');
 const path = require('node:path');
-const { createHash, randomUUID } = require('node:crypto');
+const { createHash, createHmac, randomUUID, timingSafeEqual } = require('node:crypto');
 const { createHomeFiles, NOFOLLOW } = require('./home-files.js');
 const { TARGETS, UNSUPPORTED } = require('./agent-install/targets/index.js');
 
@@ -75,9 +75,36 @@ function ledgerValidator(targets, home) {
 }
 const keyOfRel = (platform, rel) => `${platform}:${rel}`;
 
-function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.now, targets = TARGETS, enableCursorProject = false, failAfterWrites = null } = {}) {
+// Every owned entry and op carries an HMAC-SHA256 under a per-install key that
+// main keeps sealed by safeStorage (src/agent-install-key.js), so a program
+// that can write the data folder but not read the keychain can't forge one.
+// Kept copies in agent-originals/ are named by SHA-256 and used only through a
+// signed record naming that hash, so they are authenticated through it.
+const canonical = (v) => Array.isArray(v) ? `[${v.map(canonical).join(',')}]`
+  : isObject(v) ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}` : JSON.stringify(v);
+const withoutMac = ({ mac, ...rest }) => rest;
+const macOf = (key, kind, k, rec) => createHmac('sha256', key).update(`plexiform-agent-ledger-v1\0${kind}\0${k}\0${canonical(withoutMac(rec))}`).digest('hex');
+const macOk = (key, kind, k, rec) => {
+  if (!isObject(rec) || typeof rec.mac !== 'string' || !HEX64.test(rec.mac)) return false;
+  return timingSafeEqual(Buffer.from(rec.mac, 'hex'), Buffer.from(macOf(key, kind, k, rec), 'hex'));
+};
+const keyOk = (key) => Buffer.isBuffer(key) && key.length >= 32;
+function signLedger(l, key) {
+  const owned = {};
+  for (const [k, o] of Object.entries(l.owned)) owned[k] = { ...withoutMac(o), mac: macOf(key, 'owned', k, o) };
+  return { ...l, owned, ops: l.ops.map((op) => ({ ...withoutMac(op), mac: macOf(key, 'op', '', op) })) };
+}
+// Drops every record whose MAC is missing or wrong, and strips the MACs.
+function verifiedLedger(l, key) {
+  const owned = {};
+  for (const [k, o] of Object.entries(l.owned)) if (macOk(key, 'owned', k, o)) owned[k] = withoutMac(o);
+  return { ...l, owned, ops: l.ops.filter((op) => macOk(key, 'op', '', op)).map(withoutMac) };
+}
+
+function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, now = Date.now, targets = TARGETS, enableCursorProject = false, failAfterWrites = null } = {}) {
   if (typeof home !== 'string' || !path.isAbsolute(home) || typeof dataRoot !== 'string' || !path.isAbsolute(dataRoot)) throw new Error('agent installs need an absolute home and data folder');
   if (!catalog?.ok) throw new Error('agent installs need a verified catalogue');
+  if (!keyOk(ledgerKey)) throw new Error('agent installs need a ledger key of at least 32 bytes');
   const HOME = path.resolve(home), DATA = path.resolve(dataRoot);
   const files = createHomeFiles({ home: HOME, fsApi, maxBytes: 1024 * 1024 });
   const userTargets = targets.filter((t) => t.id !== 'cursor-project');
@@ -97,7 +124,7 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
     } catch (e) { if (e.code === 'ENOENT') return { schema: 1, owned: {}, ops: [] }; throw e; }
     const l = JSON.parse(text);
     if (!isObject(l) || l.schema !== 1 || !isObject(l.owned) || !Array.isArray(l.ops)) throw new Error('ledger is damaged');
-    return validator.clean(l);
+    return validator.clean(verifiedLedger(l, ledgerKey));
   }
   // Written to an O_EXCL, no-follow temp file and renamed over the ledger:
   // rename replaces a link planted there instead of writing through it.
@@ -109,7 +136,7 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
     let fd;
     try {
       fd = fsApi.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NOFOLLOW, 0o600);
-      fsApi.writeFileSync(fd, `${JSON.stringify(l, null, 2)}\n`, 'utf8');
+      fsApi.writeFileSync(fd, `${JSON.stringify(signLedger(l, ledgerKey), null, 2)}\n`, 'utf8');
       fsApi.fsyncSync(fd);
       fsApi.closeSync(fd); fd = undefined;
       fsApi.renameSync(tmp, ledgerPath);
@@ -581,7 +608,9 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
 
 // For Health: what the ledger says Plexiform manages, checked against disk.
 // Needs no catalogue. null when Find agents was never used.
-function ledgerHealth({ home, dataRoot, fsApi = fs }) {
+// Without the key nothing can be verified, so Health says nothing.
+function ledgerHealth({ home, dataRoot, ledgerKey, fsApi = fs }) {
+  if (!keyOk(ledgerKey)) return null;
   const file = path.join(dataRoot, LEDGER_FILE);
   let ledger;
   try {
@@ -593,7 +622,7 @@ function ledgerHealth({ home, dataRoot, fsApi = fs }) {
     return { status: 'fail', detail: 'Plexiform\'s record of added agents can\'t be read.', next: 'Review on Find agents.' };
   }
   const v = ledgerValidator(TARGETS, home);
-  const owned = Object.entries(isObject(ledger?.owned) ? ledger.owned : {}).filter(([k, o]) => v.ownedOk(k, o)).map(([, o]) => o);
+  const owned = Object.entries(isObject(ledger?.owned) ? ledger.owned : {}).filter(([k, o]) => macOk(ledgerKey, 'owned', k, o) && v.ownedOk(k, withoutMac(o))).map(([, o]) => o);
   if (!owned.length) return null;
   const files = createHomeFiles({ home, fsApi, maxBytes: 1024 * 1024 });
   let modified = 0, missing = 0, broken = 0;
@@ -608,4 +637,4 @@ function ledgerHealth({ home, dataRoot, fsApi = fs }) {
   return { status: broken ? 'fail' : modified || missing ? 'warn' : 'ok', detail: `${parts.join('; ')}.`, next: modified || missing || broken ? 'Review on Find agents.' : undefined };
 }
 
-module.exports = { createAgentInstaller, ledgerHealth, LEDGER_FILE };
+module.exports = { createAgentInstaller, ledgerHealth, signLedger, LEDGER_FILE };
