@@ -72,12 +72,23 @@
   const PATH_CHARS = '[^\\s"\'`()<>\\[\\]{}|,;]*';
   const HOME_RE = new RegExp(`(?:[A-Za-z]:)?[\\\\/]+(?:Users|home)(?:[\\\\/]${PATH_CHARS}|(?![\\w.-]))`, 'g');
   const UNC_RE = new RegExp(`\\\\\\\\${PATH_CHARS}`, 'g');
+  // A home folder named without its leading slash ("see Users/sam", "home/sam/x"), and $HOME.
+  const BARE_HOME_RE = new RegExp(`(?<![\\w.~%$-])(?:Users|home)[\\\\/]+${PATH_CHARS}`, 'g');
+  const HOME_VAR_RE = new RegExp(`\\$(?:\\{HOME\\}|HOME(?![\\w]))${PATH_CHARS}`, 'g');
   const TILDE_RE = new RegExp(`~[\\w.-]*[\\\\/]${PATH_CHARS}|(?<![\\w.~%-])~[A-Za-z_][\\w.-]*`, 'g');
   const PATH_RE = new RegExp(`(?<![\\w.~%-])(?:[A-Za-z]:|\\.{1,2})?[\\\\/]${PATH_CHARS}`, 'g');
   // A pipe glued to a removed path (cfg|/etc/hosts) goes with it.
-  const stripPaths = (t) => t.replace(/\|(?=[~\\/]|[A-Za-z]:[\\/])/g, ' ').replace(HOME_RE, ' ').replace(UNC_RE, ' ').replace(TILDE_RE, ' ').replace(PATH_RE, ' ').replace(REL_PATH, ' ').replace(/[[{(]\s*[\]})]/g, ' ');
+  const stripPaths = (t) => t.replace(/\|(?=[~\\/]|[A-Za-z]:[\\/])/g, ' ').replace(HOME_RE, ' ').replace(HOME_VAR_RE, ' ').replace(BARE_HOME_RE, ' ').replace(UNC_RE, ' ').replace(TILDE_RE, ' ').replace(PATH_RE, ' ').replace(REL_PATH, ' ').replace(/[[{(]\s*[\]})]/g, ' ');
   // Relative paths: a word/word token with a file extension or two separators.
   const REL_PATH = /(?<![\w.-])[\w.-]+(?:[\\/][\w.-]+)*[\\/][\w-]+\.[A-Za-z0-9]{1,8}(?![\w.-])|(?<![\w.-])[\w.-]+(?:[\\/][\w.-]+){2,}[\\/]?(?![\w.-])/g;
+  // Percent-encoding is undone once, for printable ASCII only, so "%2FUsers%2Fsam" is a path the
+  // rules above can see; a separator still encoded after that (double-encoded) takes its token.
+  const decodePercent = (t) => t.replace(/%([2-7][0-9A-Fa-f])/g, (m, h) => {
+    const c = parseInt(h, 16);
+    return c < 0x7f ? String.fromCharCode(c) : m;
+  });
+  const ENCODED_SEPARATOR = /%(?:25)*(?:2[Ff]|5[Cc])/;
+  const dropEncoded = (t) => (t.includes('%') ? t.split(/(\s+)/).map((w) => (ENCODED_SEPARATOR.test(w) ? ' ' : w)).join('') : t);
   const REDACTED = /\[(?:redacted|email|ip|user|host|card|iban|sa-id|ssn|nino|passport)\]|<redacted(?::\w+)?>/i;
   // A redacted value takes the word it was glued to with it ("sk-[redacted]").
   // Token by token, so a long run without spaces is read once, not once per character.
@@ -127,10 +138,10 @@
   }
   // Normalised, scrubbed and stripped, but not yet cut: one scrub serves every use of a prompt.
   function prepare(v, redact) {
-    const t = normalise(v);
+    const t = decodePercent(normalise(v));
     if (!t.trim() || typeof redact !== 'function') return '';
     // Markup goes before the scrubber reads it: a tag inside a token would hide it.
-    return dropRedacted(stripPaths(redact(stripMarkup(t)).replace(URL_RE, ' ')));
+    return dropEncoded(dropRedacted(stripPaths(redact(stripMarkup(t)).replace(URL_RE, ' '))));
   }
   function finish(t, { max = MAX_TITLE, slashes = true } = {}) {
     const out = (slashes ? t : t.replace(/[\\/]+/g, ' ')).replace(/\s+/g, ' ').replace(/^[\s|,;]+|[\s|,;]+$/g, '');

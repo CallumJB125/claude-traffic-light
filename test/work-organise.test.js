@@ -592,3 +592,26 @@ test('work-organise: renderer mode (no scrubber) still strips paths, control and
   assert.equal(W.titleOf({ provider: 'codex', project: '/Users/sam/app' }, none).title, 'Codex session', 'a path is not a project name');
   assert.equal(W.projectOf({ cwd: `/x/a${tagA}pp${bel}` }, none).heading, 'app');
 });
+
+test('work-organise: N3 — percent-encoded, bare and $HOME home folders leave no name behind', () => {
+  const probes = [
+    'check %2FUsers%2Fsam%2Fx', 'check %2Fhome%2Fsam', 'check file%3A%2F%2F%2FUsers%2Fsam', 'check %252FUsers%252Fsam',
+    'see Users/sam', 'see Users\\sam\\x', 'check home/sam', 'check home/sam/notes.txt', 'check x$HOME/sam', 'check ${HOME}/sam/x', 'check $HOME',
+  ];
+  for (const text of probes) {
+    for (const [label, title] of [
+      ['typed', titleOf({ team: false, human: text }).title],
+      ['typed (renderer)', titleOf({ team: false, human: text }, { redact: null }).title],
+      ['prompt', titleOf({ team: false, firstPrompt: text }).title],
+    ]) {
+      assert.doesNotMatch(title, /sam|Users|home|HOME|%2F/i, `${label}: ${JSON.stringify(text)} → ${title}`);
+      assert.match(title, /^(?:check|see)\b/i, `${label}: ${JSON.stringify(text)} keeps its words → ${title}`);
+    }
+  }
+  const keep = (text, want) => assert.equal(titleOf({ team: false, human: text }).title, want, text);
+  keep('fix 100% of CI/CD and/or tests', 'fix 100% of CI/CD and/or tests');
+  keep('go home now', 'go home now');
+  keep('50%2F50 split', '50/50 split');
+  keep('$HOMEBREW_PREFIX check', '$HOMEBREW_PREFIX check');
+  assert.equal(titleOf({ team: false, human: 'ok %0Aevil %E2%80%AE' }).title, 'ok %0Aevil %E2%80%AE', 'only printable ASCII is decoded');
+});
