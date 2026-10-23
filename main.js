@@ -1665,11 +1665,14 @@ if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_COLLISION_HOOK ===
 const ProviderStatus = require('./src/provider-status.js');
 // Agent awareness (src/agent-awareness.js, plan-agent-awareness): the roster file every interactive AI session's hooks
 // read. Async only; rebuilt on session changes (debounced), on exclude changes, and every 2 minutes as a heartbeat.
+// O1b: the Tasks helper's wrapped runs (src/tasks-process.js onRuns), checked by AgentAwareness before any is shown.
+let wrappedRuns = [];
 const AgentAwareness = require('./src/agent-awareness.js').create({ rootDir: ROOT_DIR, host: LOCAL_HOST, home: os.homedir(), codexHome: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), dataDirs: [ROOT_DIR, path.join(app.getPath('userData'), 'tasks')], config: () => loadConfig(), sessions: () => localSessions(aggregateState().sessions || []), halted: () => AgentBusMain.halted(), mcpCaps: () => McpAuto.caps(),
   // The only command lines a bound caller may be running: Plexiform's own server, as it registers it (bus profile and full).
   servers: () => [McpInstall.launch({ ...mcpLaunch(), profile: 'bus' }), McpInstall.launch(mcpLaunch())], log: (m) => console.log(m),
   // Notes (step 4): main's own note ops to the Tasks helper; a background sync never starts it, a note or bus_notes call does.
-  bus: (op, args) => AgentBusMain.relay(op, args, null), busStarted: () => !!tasksSvc, refreshHalt: () => AgentBusMain.refresh() });
+  bus: (op, args) => AgentBusMain.relay(op, args, null), busStarted: () => !!tasksSvc, refreshHalt: () => AgentBusMain.refresh(),
+  wrappedRuns: () => wrappedRuns });
 app.whenReady().then(() => { if (!DEMO) AgentAwareness.start(); });
 onQuit(app, () => AgentAwareness.stop());
 const sessionsSender = e => fromUtilityPage(e, 'sessions');
@@ -2157,6 +2160,8 @@ function getTasks() {
     tasksProcess = require('./src/tasks-process.js').createTasksSupervisor({
       fork: require('electron').utilityProcess.fork,
       entry: path.join(__dirname, 'board', 'tasks-engine', 'utility-entry.js'), dataDir,
+      onRuns: (runs) => { wrappedRuns = runs.slice(0, 50); AgentAwareness.schedule(); },
+      peersForTask: (taskId) => AgentAwareness.peersForTask(taskId),
     });
   }
   tasksSvc = require('./src/tasks-service.js').createTasksService({

@@ -197,6 +197,7 @@ export class TasksEngine extends EventEmitter {
       dispatchInbox: (task, ids) => { for (const id of ids) this.#markMessage(task, id, { deliveredAt: this.now(), source: 'live' }); },
       create: (args, task, fresh) => this.createTask(args, { auth: () => fresh() ? this.#agentPrincipal(task) : null }),
       bus: (task, name, args) => this.agentBus.runTool(task, name, args),
+      peers: typeof this.opts.peersFor === 'function' ? (task) => this.opts.peersFor(task.id) : null,
       deliver: (sender, target, body, fresh) => this.#withLock(target, async () => {
         if (!fresh() || this.tasks.get(target.id) !== target) throw new ApiError('POLICY_DENIED', 'The task run changed.');
         if (!this.#face(target).actions.includes('message')) throw new ApiError('ILLEGAL_TRANSITION', `Messages are unavailable while the task is ${target.state}.`);
@@ -463,6 +464,32 @@ export class TasksEngine extends EventEmitter {
   #save(task) {
     if (this.closed || this.tasks.get(task.id) !== task) return;
     this.store.saveTask(task, this.tasks);
+    this.#publishRuns();
+  }
+
+  // O1b: the live processes of the person's own wrapped tasks (local and cli), for main to attest and show to
+  // other AI sessions. Only what main needs to check a process is really this run (pid + start, the task's own
+  // folder); never task text, and never a bus or spin-off run.
+  #runRows() {
+    const rows = [];
+    for (const t of this.tasks.values()) {
+      const r = t.run;
+      if (!LOCAL_SOURCES.includes(t.source) || !LEASED.has(t.state) || !r || r.kind === 'windows-job' || !Number.isSafeInteger(r.pid) || typeof r.lstart !== 'string' || !r.lstart) continue;
+      if (t.ai?.id !== 'claude' && t.ai?.id !== 'codex') continue;
+      const root = t.repo?.root ?? t.worktree;
+      if (typeof root !== 'string' || typeof t.worktree !== 'string') continue;
+      // No branch: a task branch is named after the task text and id (buddy/<slug>-<id>), which must not reach other sessions.
+      rows.push({ taskId: t.id, ai: t.ai.id, sessionId: String(t.sessionId ?? t.id), root, worktree: t.worktree, branch: null,
+        state: t.state, stateSince: t.stateSince, startedAt: t.createdAt, pid: r.pid, lstart: r.lstart });
+    }
+    return rows.sort((a, b) => (a.taskId < b.taskId ? -1 : 1));
+  }
+  #publishRuns(rows = this.closing ? [] : this.#runRows()) {
+    if (typeof this.opts.onRuns !== 'function') return;
+    const sig = JSON.stringify(rows);
+    if (sig === this.runsSig) return;
+    this.runsSig = sig;
+    try { this.opts.onRuns(rows); } catch { /* main may be gone */ }
   }
 
   #emit(task, type, fields) {
@@ -2165,6 +2192,7 @@ export class TasksEngine extends EventEmitter {
   close({ leaveRuns = false } = {}) {
     if (this.closePromise) return this.closePromise;
     this.closing = true;
+    this.#publishRuns([]);
     clearInterval(this.tick);
     clearInterval(this.detectTimer);
     for (const t of this.timers) clearTimeout(t);

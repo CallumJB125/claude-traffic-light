@@ -14,7 +14,9 @@ function tasksEnv(dataDir, base = process.env) {
   return env;
 }
 
-function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStatus = () => {},
+// onRuns(rows): the helper's wrapped runs (O1b), [] whenever it is not running; peersForTask(taskId): main's answer
+// to a wrapped run's bus_peers.
+function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStatus = () => {}, onRuns = () => {}, peersForTask = async () => null,
   now = Date.now, readyTimeoutMs = 20_000, shutdownGraceMs = 20_000, killPid = process.kill.bind(process),
   timers = { setTimeout, clearTimeout } }) {
   let child = null; let ready = null; let info = null; let disposed = false; let stopping = false; let state = 'stopped';
@@ -39,6 +41,12 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
         c.stderr?.on('data', () => {}); c.stdout?.on('data', () => {});
         c.on('message', (m) => {
           if (m?.type === 'tasks.fatal') fail();
+          if (m?.type === 'tasks.runs' && child === c) { try { onRuns(Array.isArray(m.runs) ? m.runs : []); } catch { /* main's view only */ } return; }
+          if (m?.type === 'awareness.peers' && child === c && Number.isSafeInteger(m.id) && typeof m.taskId === 'string') {
+            Promise.resolve().then(() => peersForTask(m.taskId)).catch(() => null)
+              .then((result) => { if (child === c) { try { c.postMessage({ type: 'awareness.peers.reply', id: m.id, result: result ?? null }); } catch { /* gone */ } } });
+            return;
+          }
           if (m?.type !== 'tasks.listening' || m.socket !== path.join(dataDir, 'tasks.sock') || !/^[0-9a-f-]{36}$/.test(m.epoch ?? '')) return;
           if (disposed || stopping || child !== c) return fail();
           try { c.postMessage({ type: 'tasks.mainKey', key: mainKey }); } catch { return fail(); }
@@ -48,6 +56,7 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
         c.once('exit', () => {
           if (child !== c) return;
           child = null; info = null;
+          try { onRuns([]); } catch { /* main's view only */ }
           if (stopping || disposed) { status('stopped'); return; }
           const wasReady = state === 'ready'; ready = null; restarts.push(now()); status('failed');
           if (!wasReady) fail();

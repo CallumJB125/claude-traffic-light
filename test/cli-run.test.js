@@ -392,6 +392,7 @@ test('R4: "run anyway?" is yes only for y: n, an empty answer and end of input l
     for (const answers of [['n'], [''], [null], ['yes please']]) {
       const r = await plexiform(m, ['run', 'fix it', '--with', 'claude'], { tty: true, answers });
       assert.equal(r.code, 0, JSON.stringify(answers));
+      assert.equal(r.prompts.length, 1, `only "run anyway?" was asked: ${JSON.stringify(answers)}`);
       assert.match(r.out, /Not started\./, JSON.stringify(answers));
       assert.deepEqual(await tasks(m), [], JSON.stringify(answers));
     }
