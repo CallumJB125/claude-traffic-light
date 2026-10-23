@@ -145,7 +145,9 @@ test('AW7: X notes Y; Y\'s real hook prints a notice with no body; Y pulls the f
   assert.ok(row.text.startsWith('Rotate [redacted] now') && !row.text.includes('AKIA') && !row.text.includes('hunter2'), row.text);
 });
 
-test('AW11 notes half: Z\'s bus_notes returns only Z\'s notes, whatever its request names; no read by session id', async (t) => {
+// Through main's /bus only. Straight at the helper's socket with the on-disk tasks.token, the note ops need main's
+// per-helper key and are refused (board/tasks-engine/test/bus-notes.test.js, H1).
+test('AW11 notes half: through /bus, Z\'s bus_notes returns only Z\'s notes, whatever its request names; no read by session id', async (t) => {
   const s = await setup(t);
   const y = s.handleOf('claude|X');
   const sent = await M.busCall('note', { to: y, text: 'for Y only', request_id: 'req-e2e-0002' }, s.as.codex());

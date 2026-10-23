@@ -143,7 +143,7 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
     // One authenticated principal per connection; subscriptions must never
     // retain a stronger token after a caller switches credentials.
     if (st.hello && st.token !== msg.token) { fail('UNAUTHENTICATED', 'connection principal changed'); conn.destroy(); return; }
-    const ctx = { principal, auth: () => authOf(msg.token) };
+    const ctx = { principal, auth: () => authOf(msg.token), mainKey: st.mainKey ?? null };
     const re = validate(SCHEMA, 'Request', msg);
     if (re) {
       if (typeof msg.method === 'string' && !METHODS.includes(msg.method)) return fail('UNKNOWN_METHOD', 'unknown method');
@@ -165,6 +165,7 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
           const r = engine.hello(params);
           st.hello = true;
           st.token = msg.token;
+          st.mainKey = typeof params?.mainKey === 'string' ? params.mainKey : null;
           clearTimeout(st.helloTimer);
           return send(conn, { id, result: r });
         }

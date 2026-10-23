@@ -65,7 +65,7 @@ export async function startEngine({ scenario = { steps: [{ result: 'success' }] 
     dataDir, backends, env: ENV, log: makeLogger(process.stderr, { quiet: !process.env.BOARD_TEST_LOG }),
     interruptWaitMs: 400, stopGraceMs: 600, hbMs: 200, buddyHome: null, ...engineOpts,
   });
-  const client = await connect({ socketPath: eng.socketPath, tokenPath: eng.tokenPath });
+  const client = await connect({ socketPath: eng.socketPath, tokenPath: eng.tokenPath, mainKey: engineOpts.mainKey });
   return {
     eng, client, dir, dataDir, backends,
     async close(opts) { client.close(); await eng.close(opts); },

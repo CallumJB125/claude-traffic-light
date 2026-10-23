@@ -2,6 +2,7 @@
 // auth key, stderr or environment value is sent to a renderer or app log.
 'use strict';
 const path = require('node:path');
+const crypto = require('node:crypto');
 const WINDOW_MS = 10 * 60_000;
 const MAX_RESTARTS = 5;
 const PASS = ['HOME', 'USER', 'LOGNAME', 'PATH', 'TMPDIR', 'LANG', 'TZ', 'CODEX_HOME'];
@@ -25,6 +26,9 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
     status('starting');
     let c;
     let timer;
+    // Main's capability for the main-only bus ops (notes): fresh per helper, sent over parentPort once it listens, never
+    // in env or argv (other same-user processes can read those) and never written to disk or logged.
+    const mainKey = crypto.randomBytes(32).toString('hex');
     const p = new Promise((resolve, reject) => {
       const fail = () => reject(new Error('Tasks helper could not start'));
       try {
@@ -36,7 +40,8 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
           if (m?.type === 'tasks.fatal') fail();
           if (m?.type !== 'tasks.listening' || m.socket !== path.join(dataDir, 'tasks.sock') || !/^[0-9a-f-]{36}$/.test(m.epoch ?? '')) return;
           if (disposed || stopping || child !== c) return fail();
-          info = { socketPath: m.socket, epoch: m.epoch }; status('ready'); resolve(info);
+          try { c.postMessage({ type: 'tasks.mainKey', key: mainKey }); } catch { return fail(); }
+          info = { socketPath: m.socket, epoch: m.epoch, mainKey }; status('ready'); resolve(info);
         });
         c.once('error', fail);
         c.once('exit', () => {

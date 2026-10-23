@@ -4529,6 +4529,11 @@
             "version"
           ],
           "additionalProperties": false
+        },
+        "mainKey": {
+          "type": "string",
+          "maxLength": 64,
+          "minLength": 64
         }
       },
       "required": [

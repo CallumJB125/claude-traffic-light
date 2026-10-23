@@ -4,6 +4,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { connect } from '../../tasks-api/client.js';
 import { openBusLog, RETENTION_MS } from '../bus/local-log.js';
 import { createNotes } from '../bus/notes.js';
 import { NOTE_LIMITS } from '../../shared/bus-schema.js';
@@ -164,7 +166,7 @@ test('only main\'s shapes: identities are required and checked; a note to yourse
 });
 
 test('the real engine: note ops go through the bus method; a note event in bus.db has no text', async () => {
-  const b = await startBus();
+  const b = await startBus(undefined, { engineOpts: { mainKey: crypto.randomBytes(32).toString('hex') } });
   try {
     const r = await b.bus('note', { from: X, to: Y, text: 'Through the engine with AKIA in it', request_id: rid('note') }, null);
     assert.equal(r.state, 'queued');
@@ -176,5 +178,50 @@ test('the real engine: note ops go through the bus method; a note event in bus.d
     assert.ok(events.every((e) => e.body === null && !JSON.stringify(e).includes('Through the engine')));
     // bus_read cannot reach notes.
     assert.equal(((await b.bus('read', { topic: 'note' }).catch((e) => e)).code), 'VALIDATION');
+  } finally { await b.cleanup(); }
+});
+
+test('H1: the note ops need main\'s key: a second client with the file token (or a wrong key) gets POLICY_DENIED for all four', async () => {
+  const mainKey = crypto.randomBytes(32).toString('hex');
+  const b = await startBus(undefined, { engineOpts: { mainKey } });
+  const others = [];
+  try {
+    const sent = await b.bus('note', { from: X, to: Y, text: 'for Y only', request_id: rid('note') }, null);
+    assert.equal(sent.state, 'queued', 'main\'s own client still works');
+    const { socketPath, tokenPath } = b.h.eng;
+    others.push(await connect({ socketPath, tokenPath }));
+    others.push(await connect({ socketPath, tokenPath, mainKey: crypto.randomBytes(32).toString('hex') }));
+    const ops = [
+      ['note', { from: X, to: Y, text: 'forged', request_id: rid('note') }],
+      ['notes', { me: { key: Y.key } }],
+      ['notes_pending', {}],
+      ['notified', { to: { key: Y.key }, note_ids: [sent.note_id] }],
+    ];
+    for (const c of others) {
+      for (const [op, args] of ops) {
+        const e = await c.bus(op, args, null).then(() => null, (err) => err);
+        assert.equal(e?.code, 'POLICY_DENIED', `${op}: ${e?.code}`);
+      }
+      assert.equal((await c.bus('status', {}, null).then(() => 'ok', (err) => err.code)), 'ok', 'the other bus ops are unchanged');
+    }
+    // Nothing was read, marked or queued by them.
+    assert.deepEqual((await b.bus('notes_pending', {}, null)).notes.map((n) => n.note_id), [sent.note_id]);
+    assert.equal((await b.bus('notes', { me: { key: Y.key } }, null)).notes[0].note_id, sent.note_id);
+  } finally { for (const c of others) c.close(); await b.cleanup(); }
+});
+
+test('H1: an engine with no key yet refuses the note ops; the key is set once and a second one is ignored', async () => {
+  const b = await startBus();
+  try {
+    const args = { from: X, to: Y, text: 'early', request_id: rid('note') };
+    assert.equal((await b.bus('note', args, null).catch((e) => e)).code, 'POLICY_DENIED', 'no key: closed');
+    const key = crypto.randomBytes(32).toString('hex');
+    b.engine.setMainKey(key);
+    b.engine.setMainKey(crypto.randomBytes(32).toString('hex'));
+    const main = await connect({ socketPath: b.h.eng.socketPath, tokenPath: b.h.eng.tokenPath, mainKey: key });
+    try {
+      await main.bus('busSetContext', {}, null);
+      assert.equal((await main.bus('note', args, null)).state, 'queued');
+    } finally { main.close(); }
   } finally { await b.cleanup(); }
 });
