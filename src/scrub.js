@@ -343,27 +343,24 @@ function phoneOk(m) {
   return !((s1 === 1 || s1 === 9) && [...d].every((c, i) => i === 0 || step(i) === s1));
 }
 // Private names that need no third label: nas.local, jenkins.corp, api.internal.
-const PRIVATE_SUFFIX = /\.(?:local|lan|internal|corp|intranet|home\.arpa|svc)$/;
+const PRIVATE_SUFFIX = /\.(?:local|lan|internal|corp|intranet|home\.arpa|home|svc|consul|test|localdomain|private|intra|k8s|office|loc|vpn|prod|staging|cluster|docker|example|invalid)$/;
 // A tailnet name is kept only when it is the hub the text is going to; with no hub
 // given (diagnostics) every tailnet name is kept, as before.
 const tailnetKept = (h, hubHost) => /\.ts\.net$/.test(h) && (hubHost === undefined || h === hubHost);
 // File names look like dotted host names (foo.test.js); a last label that is a code or
 // document extension is a file, not a host.
 const FILE_EXTS = new Set(['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'md', 'mdx', 'html', 'htm', 'css', 'scss', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'cs', 'php', 'sh', 'zsh', 'yml', 'yaml', 'toml', 'lock', 'txt', 'log', 'xml', 'svg', 'png', 'jpg', 'gif', 'sql', 'vue', 'svelte', 'map', 'snap', 'plist', 'env', 'ini', 'cfg', 'conf', 'pdf', 'csv', 'zip', 'gz', 'tar', 'wasm', 'dart', 'lua', 'ex', 'exs', 'erl', 'hs', 'ml', 'scala', 'gradle', 'mod', 'sum', 'mts', 'cts', 'mdc']);
-// A bare name (no scheme) is a host only when it ends in a real top-level domain: any
-// two-letter country code, the common generic ones, or a private suffix. "api.v1.core",
-// "com.anthropic.claude" and "Dockerfile.prod.arm64" are not. An unknown or new
-// generic TLD reads as not a host; a country code that is also a file extension
-// (notes.final.pt) reads as a host, the safe direction.
-const GENERIC_TLDS = new Set(('com net org edu gov mil int arpa info biz name pro mobi aero coop museum jobs travel tel asia cat post '
-  + 'io co ai app dev tech cloud xyz site online page blog shop store live news one top club design art wiki work works world zone '
-  + 'agency academy band bar best bio blue cafe cam capital care cash center city codes coffee company computer consulting digital '
-  + 'email energy engineering expert fun games global gmbh group guru host inc institute international link ltd market marketing '
-  + 'media moe network ninja nyc plus press run sale school science services social software solutions space studio systems team '
-  + 'technology today tools town university vip website build systems google amazon microsoft apple').split(' '));
-const realTld = (h) => {
-  const tld = h.slice(h.lastIndexOf('.') + 1);
-  return /^[a-z]{2}$/.test(tld) || GENERIC_TLDS.has(tld) || tld.startsWith('xn--') || PRIVATE_SUFFIX.test(h);
+// Three or more labels read as a host (fail closed: internal names use every suffix,
+// db.service.consul, postgres.prod.acme). Only clear code shapes are not: a reverse-DNS
+// id whose first label is a common TLD (com.anthropic.claude), and a last label that is
+// a version or architecture (Dockerfile.prod.arm64, api.acme.v1, api.v1.core). File
+// names are caught by FILE_EXTS. A private suffix is a host whatever the shape.
+const REVERSE_DNS_FIRST = new Set(['com', 'org', 'net', 'io', 'dev', 'app', 'edu', 'gov', 'co', 'me', 'uk', 'de', 'fr', 'nl', 'ch', 'se', 'za', 'au', 'ca', 'jp', 'cn', 'ru', 'br', 'in']);
+const CODE_LAST = /^(?:v\d+|arm64|aarch64|amd64|x64|x86|i386|i686|armv\d+l?|core)$/;
+const codeShape = (h) => {
+  if (PRIVATE_SUFFIX.test(h)) return false;
+  const labels = h.split('.');
+  return REVERSE_DNS_FIRST.has(labels[0]) || CODE_LAST.test(labels[labels.length - 1]);
 };
 // Public developer sites: the registrable domain and a few well-known service names under
 // it stay. Any other name under it (secret-project.anthropic.com, callum.github.com) can
@@ -382,7 +379,7 @@ const privateHost = (host, port, hubHost = null, { inUrl = false } = {}) => {
   const labels = h.split('.');
   if (labels.length < 3 && !port && !PRIVATE_SUFFIX.test(h)) return false;
   if (!/\.[a-z][a-z0-9-]{1,62}$/.test(h) || FILE_EXTS.has(labels[labels.length - 1])) return false;
-  if (!inUrl && !port && !realTld(h)) return false;
+  if (!inUrl && !port && codeShape(h)) return false;
   return !publicName(h) && h !== hubHost;
 };
 

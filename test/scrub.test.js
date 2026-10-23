@@ -372,3 +372,16 @@ test('scrubTitle: named commit hashes, version numbers and test ids stay; a MAC 
     ['driver 1.2.3.4', 'driver [ip]'], ['call 082 555 0199', 'call [phone]'], ['mac 00:1a:2b:3c:4d:5e', 'mac [mac]'], ['mac 00-1A-2B-3C-4D-5E', 'mac [mac]'],
     ['ping fe80::1ff:fe23:4567:890a', 'ping [ip]'], ['x \u00010\u0002 y', 'x 0 y']]) assert.equal(scrubTitle(input), want, input);
 });
+
+test('scrubTitle: three or more labels stay a host unless clearly code; internal suffixes are private (#59 review)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  for (const h of ['db.service.consul', 'vault.service.dc1.consul', 'postgres.prod.acme', 'build.acme.test', 'db.acme.localdomain', 'api.acme.private',
+    'git.acme.intra', 'redis.cache.k8s', 'srv01.acme.office', 'db01.acme.loc', 'gw.acme.vpn', 'api.acme.prod', 'api.acme.staging', 'grafana.mon.cluster',
+    'notes.final.pt', 'build.acme.foo',
+    'db.consul', 'ci.test', 'nas.localdomain', 'api.private', 'git.intra', 'redis.k8s', 'srv.office', 'db.loc', 'gw.vpn', 'api.prod', 'api.staging',
+    'mon.cluster', 'nas.home', 'web.docker', 'api.example', 'x.invalid']) assert.equal(scrubTitle(`ssh ${h}`), 'ssh [host]', h);
+  // Clear code shapes stay: reverse-DNS ids, file names, a version or architecture last.
+  for (const keep of ['com.anthropic.claude', 'org.foo.bar', 'io.github.acme', 'Dockerfile.prod.arm64', 'build.linux.x64', 'pkg.v2', 'api.acme.v1',
+    'index.d.mts', 'jest.config.cts', 'app.config.prod.json', 'src/app.config.ts', 'api.v1.core', 'docs.python.org']) assert.equal(scrubTitle(keep), keep, keep);
+});
+
