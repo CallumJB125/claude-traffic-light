@@ -74,3 +74,18 @@ test('live: peer pid, parent and stdio peering from lsof and ps', { skip: proces
   // Our own end of the connection is never the answer.
   assert.equal(await P.peerOf(server.address().port), null);
 });
+
+// Re-review N1: an inspector (or any port a process listens on) shows in the same lsof listing; a connection out does not count.
+test('live: a process with an inspector listening is seen as listening; one that only connects out is not', { skip: process.platform !== 'darwin' && 'macOS only' }, async (t) => {
+  const server = http.createServer(() => {});
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const dial = `require('http').request({host:'127.0.0.1',port:${server.address().port},method:'POST'}).write('x');setTimeout(()=>{},20000)`;
+  const plain = spawn(process.execPath, ['-e', dial], { stdio: ['pipe', 'pipe', 'ignore'] });
+  const inspected = spawn(process.execPath, ['--inspect=127.0.0.1:0', '-e', dial], { stdio: ['pipe', 'pipe', 'pipe'] });
+  t.after(() => { plain.kill('SIGKILL'); inspected.kill('SIGKILL'); server.closeAllConnections(); server.close(); });
+  await new Promise((resolve) => inspected.stderr.once('data', resolve));
+  await new Promise((r) => setTimeout(r, 300));
+  const P = PeerPid.create({ run, platform: 'darwin' });
+  assert.equal(PeerPid.listening(PeerPid.parseFds(await P.lsof(inspected.pid))), true);
+  assert.equal(PeerPid.listening(PeerPid.parseFds(await P.lsof(plain.pid))), false);
+});

@@ -60,6 +60,10 @@ function stdioPeered(childFds, parentFds, type = null) {
   return ends.every((e) => held.has(`${e.peer}>${e.addr}`));
 }
 
+// An internet socket with no remote end in parseFds() output: one listening (an inspector, a debug port)
+// or not connected. Plexiform's server only ever connects out, to main.
+const listening = (fds) => Object.values(fds).some((f) => f && /^IPv[46]$/.test(f.type || '') && !String(f.name || '').includes('->'));
+
 // `ps -o ppid=,lstart=` → { ppid, start }.
 function parsePs(text) {
   const m = /^\s*(\d+)\s+(\S.*\S)\s*$/.exec(String(text || '').split('\n')[0] || '');
@@ -147,4 +151,4 @@ function create({ run, platform = process.platform, selfPid = process.pid }) {
   };
 }
 
-module.exports = { create, parsePeer, parseFds, parsePs, stdioPeered, envValue, parseEnv, signedAs, REQUIREMENT, INJECT };
+module.exports = { create, parsePeer, parseFds, parsePs, stdioPeered, listening, envValue, parseEnv, signedAs, REQUIREMENT, INJECT };

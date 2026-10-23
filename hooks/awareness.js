@@ -228,13 +228,16 @@ function viewOf(roster, self) {
   }
   // Same repo first, then the roster's own order (most recent first).
   const ordered = items.map((it, i) => ({ it, i })).sort((a, b) => (b.it.same - a.it.same) || (a.i - b.i)).map((x) => x.it);
-  return { self: mine, items: ordered, tools };
+  // Sessions main could not verify: a number only, never a handle, folder or status (this one left out).
+  const n = Number.isInteger(roster.unverified) && roster.unverified > 0 && roster.unverified <= 999 ? roster.unverified : 0;
+  const unverified = Math.max(0, n - (self && self.interactive === true && self.verified === false ? 1 : 0));
+  return { self: mine, items: ordered, tools, unverified };
 }
 
 // Membership, provider, folder, same-repo branch and group size only: never status or waiting.
 function versionOf(view) {
   const keys = view.items.map((it) => (it.kind === 'group' ? ['g', it.id, it.provider, it.folder, it.same, it.countV] : ['p', it.handle, it.provider, it.folder, it.same, it.branch])).map((k) => JSON.stringify(k)).sort();
-  return sha(JSON.stringify({ self: view.self, keys, ...(view.tools ? { tools: TOOLS } : {}) }));
+  return sha(JSON.stringify({ self: view.self, keys, ...(view.tools ? { tools: TOOLS } : {}), ...(view.unverified ? { unverified: view.unverified } : {}) }));
 }
 
 function lineOf(it) {
@@ -243,11 +246,14 @@ function lineOf(it) {
   return `- ${it.handle}  ${PROVIDERS[it.provider]}  folder ${it.folder}${branch}  ${it.waiting ? WAITING[it.waiting] : STATUS[it.status]}`;
 }
 
+// No handle, folder, branch or status: nothing in it to name, address or hand work to.
+const unverifiedLine = (n, alone) => `- ${alone ? '' : 'and '}${n} ${alone ? '' : 'more '}Claude Code or Codex session${n === 1 ? '' : 's'} Plexiform couldn't verify`;
+
 // ≤ MAX_LINES peer lines and BLOCK_MAX characters, then "and N more". The
 // Tools line names only what this viewer can call (plan §3.4).
 function render(view) {
-  if (!view.items.length) return null;
-  const tail = [[view.self ? `You are ${view.self}.` : '', view.tools ? `Tools: ${TOOLS}.` : ''].filter(Boolean).join(' ')].filter(Boolean);
+  if (!view.items.length && !view.unverified) return null;
+  const tail = [...(view.unverified ? [unverifiedLine(view.unverified, !view.items.length)] : []), [view.self ? `You are ${view.self}.` : '', view.tools ? `Tools: ${TOOLS}.` : ''].filter(Boolean).join(' ')].filter(Boolean);
   const andMore = (n) => `- and ${n} more${view.tools ? ' (bus_peers)' : ''}`;
   const fits = (lines, more) => [HEADER, ...lines, ...(more ? [andMore(more)] : []), ...tail].join('\n').length <= BLOCK_MAX;
   const lines = [];
@@ -257,7 +263,7 @@ function render(view) {
     if (next.length > MAX_LINES || !fits(next, more)) break;
     lines.push(next[next.length - 1]);
   }
-  if (!lines.length) return null;
+  if (!lines.length && view.items.length) return null;
   const more = view.items.length - lines.length;
   return [HEADER, ...lines, ...(more ? [andMore(more)] : []), ...tail].join('\n');
 }

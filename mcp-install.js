@@ -24,12 +24,16 @@ const configPath = (home = os.homedir()) => path.join(home, '.claude.json');
 // copy of the SDK: mcp-server.js and its node_modules live inside app.asar,
 // which only Electron's own node can read, so it runs the app binary as node
 // (the same trick the hook commands use).
+// --disable-sigusr1: main trusts this program to act only on its parent's requests (src/agent-awareness.js
+// bindOnce), and SIGUSR1 would start an inspector any program running as the person could drive; the
+// listener in mcp-server.js comes too late for the first few milliseconds after start.
+const NODE_FLAGS = Object.freeze(['--disable-sigusr1']);
 function launch({ packaged, execPath, appPath, dir, root, profile = null }) {
   const env = { ...(root ? { CLAUDE_TRAFFIC_LIGHT_HOME: root } : {}), ...(profile === 'bus' ? { [MARKER]: markerFor(packaged ? 'packaged' : 'dev') } : {}) };
   const extra = profile === 'bus' ? ['--profile', 'bus'] : [];
   return packaged
-    ? { type: 'stdio', command: execPath, args: [path.join(appPath, SCRIPT), ...extra], env: { ELECTRON_RUN_AS_NODE: '1', ...env } }
-    : { type: 'stdio', command: 'node', args: [path.join(dir, SCRIPT), ...extra], env };
+    ? { type: 'stdio', command: execPath, args: [...NODE_FLAGS, path.join(appPath, SCRIPT), ...extra], env: { ELECTRON_RUN_AS_NODE: '1', ...env } }
+    : { type: 'stdio', command: 'node', args: [...NODE_FLAGS, path.join(dir, SCRIPT), ...extra], env };
 }
 
 // The full server: any entry running our script. The bus profile: only an entry carrying the marker.
@@ -98,4 +102,4 @@ function status({ home, entry, name = NAME }) {
   return { installed: isOurs(cur, name), current: !!entry && JSON.stringify(cur) === JSON.stringify(entry), name, path: configPath(home), entry: cur, error };
 }
 
-module.exports = { NAME, BUS_NAME, MARKER, markerFor, markerOf, configPath, launch, isOurs, install, uninstall, status };
+module.exports = { NAME, BUS_NAME, MARKER, NODE_FLAGS, markerFor, markerOf, configPath, launch, isOurs, install, uninstall, status };

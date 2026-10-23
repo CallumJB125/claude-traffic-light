@@ -269,15 +269,16 @@ test('AW13: a second live claimant for one thread leaves both unbound; when one 
   const w = world(t);
   const aw = w.make();
   assert.equal((await aw.bindCaller({ ...w.call(201), threadId: w.T })).bound, true);
-  // A second genuine MCP child for thread T (an agent's own app-server resuming it, recorded as T's server now).
+  // A second genuine MCP child for thread T (an agent's own app-server resuming it, recorded as T's server now):
+  // the thread stays with server 200 while it lives (re-review N2).
   const rogue = w.proc(210, { exe: w.CODEX, cwd: w.home, signed: 'codex', files: [{ file: w.procs.get(200).files[0].file }] });
   const p2 = w.mcpChild(211, 210, w.repoB);
   w.stdio(p2, rogue, 'PIPE');
   w.state.sessions = [w.claudeSession(), w.codexSession(w.T, { codexServerPid: 210 })];
   const second = await aw.bindCaller({ ...w.call(211), threadId: w.T });
   assert.equal(second.bound, false);
-  assert.equal(second.reason, 'CONTESTED');
-  assert.equal((await aw.bindCaller({ ...w.call(201), threadId: w.T })).bound, false, 'the first claimant is unbound too');
+  assert.equal(second.reason, 'OWNER');
+  assert.equal((await aw.bindCaller({ ...w.call(201), threadId: w.T })).bound, false, 'the first claimant is unbound too (the file names another server)');
   // Two children of the same server claiming one thread: both unbound as well.
   w.state.sessions = [w.claudeSession(), w.codexSession()];
   const twin = w.mcpChild(212, 200, w.repoB);
@@ -758,4 +759,154 @@ test('mcp-server.js turns off the SIGUSR1 inspector, so no other program can run
   await new Promise((r) => setTimeout(r, 700));
   assert.ok(!/Debugger listening/.test(err), 'no inspector started');
   assert.equal(kid.exitCode, null, 'and the server is still running');
+});
+
+// ── Re-review of 03247408 (N1-N5) ────────────────────────────────────────────
+
+test('re-review N1: the server launch Plexiform registers turns SIGUSR1 off, and the exact command line it makes is the one that binds', async (t) => {
+  const McpInstall = require('../mcp-install.js');
+  const appPath = '/Applications/Plexiform.app/Contents/Resources/app.asar';
+  const packaged = { packaged: true, execPath: PLEX, appPath };
+  for (const l of [McpInstall.launch({ ...packaged, profile: 'bus' }), McpInstall.launch(packaged), McpInstall.launch({ packaged: false, dir: '/repo', profile: 'bus' }), McpInstall.launch({ packaged: false, dir: '/repo' })]) {
+    assert.equal(l.args[0], '--disable-sigusr1', 'a node option, before the script');
+    assert.ok(l.args.slice(1).every((a) => a !== '--disable-sigusr1'));
+  }
+  const w = world(t);
+  const launches = [McpInstall.launch({ ...packaged, profile: 'bus' }), McpInstall.launch(packaged)];
+  const aw = w.make({ servers: () => launches });
+  const line = (l) => [l.command, ...l.args].join(' ');
+  w.procs.get(201).args = line(launches[0]);
+  assert.equal((await aw.bindCaller({ ...w.call(201), threadId: w.T })).bound, true, 'ps shows the registered launch: bound');
+  // A child started the old way, without the option (a stale registration or a model's own command), is not ours.
+  w.procs.get(201).args = SERVER_ARGS;
+  assert.equal((await aw.bindCaller({ ...w.call(201), threadId: w.T })).reason, 'NOT_OUR_SERVER');
+});
+
+test('re-review N1: a server child that listens on a TCP port (an inspector) is refused', async (t) => {
+  const w = world(t);
+  const aw = w.make();
+  assert.equal((await aw.bindCaller({ ...w.call(201), threadId: w.T })).bound, true);
+  w.procs.get(201).fds['23'] = { type: 'IPv4', addr: null, peer: null, name: '127.0.0.1:9229' };
+  const r = await aw.bindCaller({ ...w.call(201), threadId: w.T });
+  assert.equal(r.bound, false);
+  assert.equal(r.reason, 'LISTENING');
+  // Its own connection out to main (a remote end) is fine.
+  w.procs.get(201).fds['23'] = { type: 'IPv4', addr: null, peer: null, name: '127.0.0.1:52011->127.0.0.1:47001' };
+  assert.equal((await aw.bindCaller({ ...w.call(201), threadId: w.T })).bound, true);
+  assert.equal(PeerPid.listening({ 9: { type: 'IPv6', name: '[::1]:9229' } }), true);
+  assert.equal(PeerPid.listening({ 9: { type: 'unix', name: '->0x1' } }), false);
+});
+
+test('re-review N1: the packaged app is built with Node\'s inspect options and SIGUSR1 inspector off, and still runs as node', () => {
+  const cfg = require('../electron-builder.config.js');
+  assert.equal(cfg.electronFuses && cfg.electronFuses.enableNodeCliInspectArguments, false);
+  assert.notEqual(cfg.electronFuses.runAsNode, false, 'the hooks and the bus server need ELECTRON_RUN_AS_NODE');
+});
+
+test('re-review N1 (live): started as Plexiform registers it, an early SIGUSR1 never starts an inspector', { skip: process.platform === 'win32' }, async (t) => {
+  const { spawn } = require('node:child_process');
+  const McpInstall = require('../mcp-install.js');
+  const root = fs.realpathSync(testTempDir('pf-usr1-race-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const l = McpInstall.launch({ packaged: false, dir: path.join(__dirname, '..'), profile: 'bus' });
+  let hits = 0;
+  for (const delay of [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 10, 20, 30, 40]) {
+    const kid = spawn(process.execPath, l.args, { stdio: ['pipe', 'ignore', 'pipe'], env: { PATH: process.env.PATH, HOME: root, CLAUDE_TRAFFIC_LIGHT_HOME: root } });
+    let err = '';
+    kid.stderr.on('data', (d) => { err += d; });
+    await new Promise((r) => setTimeout(r, delay));
+    try { kid.kill('SIGUSR1'); } catch {}
+    await new Promise((r) => setTimeout(r, 250));
+    kid.kill('SIGKILL');
+    if (/Debugger listening/.test(err)) hits += 1;
+  }
+  assert.equal(hits, 0, `${hits} inspectors started`);
+});
+
+test('re-review N2: a Codex thread stays with the first server seen running it; a rewritten file naming another live server is refused', async (t) => {
+  const w = world(t);
+  const aw = w.make();
+  // Main has seen thread T on server 200 (its roster build), before T's own MCP child has bound.
+  assert.equal((await aw.build()).self[`codex|${w.T}`].verified, true);
+  // Another signed codex app-server that resumed T (so it holds T's rollout open), and T's file rewritten to name it.
+  const rogue = w.proc(210, { exe: w.CODEX, cwd: w.home, signed: 'codex', args: `${w.CODEX} app-server`, files: [{ file: w.procs.get(200).files[0].file }] });
+  const kid = w.mcpChild(211, 210, w.repoB);
+  w.stdio(kid, rogue, 'PIPE');
+  w.state.sessions = [w.claudeSession(), w.codexSession(w.T, { codexServerPid: 210 })];
+  const r = await aw.bindCaller({ ...w.call(211), threadId: w.T });
+  assert.equal(r.bound, false);
+  assert.equal(r.reason, 'OWNER');
+  const aw2 = w.make();
+  w.state.sessions = [w.claudeSession(), w.codexSession()];
+  await aw2.build();
+  w.state.sessions = [w.claudeSession(), w.codexSession(w.T, { codexServerPid: 210 })];
+  assert.equal((await aw2.build()).self[`codex|${w.T}`].verified, false, 'nor is it listed from the other server');
+  // Once server 200 is gone the thread may move (resumed in a new server).
+  w.procs.delete(200);
+  assert.equal((await aw.bindCaller({ ...w.call(211), threadId: w.T })).bound, true);
+});
+
+test('re-review N3: who runs each session survives a restart of Plexiform (0600 file); a dead process is dropped', async (t) => {
+  const w = world(t);
+  await w.make().build(); // X seen running in claude 100; T on server 200
+  const file = path.join(w.root, 'awareness', 'owners.json');
+  for (let i = 0; i < 100 && !fs.existsSync(file); i += 1) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  const saved = fs.readFileSync(file, 'utf8');
+  assert.ok(!saved.includes(w.repoA) && !saved.includes(w.home), 'ids, pids and start times only: no folder');
+  // Plexiform restarts; before its first roster, X's file is rewritten to name another signed claude in the repository.
+  const other = w.proc(700, { exe: w.CLAUDE, cwd: w.repoA, signed: 'claude', args: 'claude' });
+  const kid = w.mcpChild(701, 700, w.repoA, w.procs.get(101));
+  kid.env = kid.env.replace('CLAUDE_PID=100', 'CLAUDE_PID=700');
+  w.stdio(kid, other, 'unix');
+  w.state.sessions = [w.claudeSession('X', { claudePid: 700 }), w.codexSession()];
+  const restarted = w.make();
+  assert.equal((await restarted.bindCaller(w.call(701))).reason, 'OWNER');
+  assert.equal((await restarted.build()).self['claude|X'].verified, false);
+  // claude 100 exits: the next start drops its pin, and X may move.
+  w.procs.delete(100);
+  const again = w.make();
+  assert.equal((await again.bindCaller(w.call(701))).bound, true);
+  for (let i = 0; i < 100 && fs.readFileSync(file, 'utf8').includes('"claude|X",100,'); i += 1) await new Promise((r) => setTimeout(r, 10));
+  assert.ok(!fs.readFileSync(file, 'utf8').includes('"claude|X",100,'), 'the dead owner is gone from the file');
+  // A file that is not Plexiform's shape is ignored, never trusted.
+  fs.writeFileSync(file, JSON.stringify({ v: 1, owners: [['claude|X', 'nope', 3], ['../x', 5, 'y'], { a: 1 }] }));
+  assert.equal((await w.make().bindCaller(w.call(701))).bound, true);
+});
+
+test('re-review N5: the four-check cap covers the first lsof and ps of every call too', async (t) => {
+  const w = world(t);
+  const kids = [];
+  for (let i = 0; i < 10; i += 1) { const k = w.mcpChild(800 + i, 200, w.repoB); w.stdio(k, w.procs.get(200), 'PIPE'); kids.push(800 + i); }
+  let inFlight = 0;
+  let peak = 0;
+  const slow = (file, args, opts, cb) => {
+    const hit = file === '/usr/sbin/lsof' && args.some((a) => a.startsWith('-iTCP@'));
+    if (hit) { inFlight += 1; peak = Math.max(peak, inFlight); }
+    setTimeout(() => w.exec(file, args, opts, (...r) => { if (hit) inFlight -= 1; cb(...r); }), 10);
+  };
+  const aw = w.make({ execFile: slow });
+  await Promise.all(kids.map((pid) => aw.bindCaller({ ...w.callAs(pid), threadId: w.T })));
+  assert.ok(peak >= 1 && peak <= 4, `peak ${peak} peer lookups at once`);
+});
+
+test('re-review N4: PRIVACY.md says signed parents\' environments are read for the injection check with values discarded, and states the shell limit as it is', () => {
+  const text = fs.readFileSync(path.join(__dirname, '..', 'PRIVACY.md'), 'utf8');
+  assert.match(text, /signed Claude Code or Codex program's environment[^.]*keeping only whether such a variable is set and discarding every value/);
+  assert.ok(!text.includes('acts only on requests its AI program writes to it, so a command an AI runs from its shell is answered as no particular session'));
+  assert.match(text, /SIGUSR1/);
+  assert.match(text, /awareness\/owners\.json/);
+});
+
+test('re-review trade-off: bus_peers counts the sessions Plexiform could not verify, and names none of them', async (t) => {
+  const w = world(t);
+  // Claude Code installed with npm (plain node, unsigned) in repoC: a session file and a live process, never verifiable.
+  w.proc(900, { exe: '/opt/homebrew/bin/node', cwd: w.repoC, args: 'node /opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js' });
+  w.state.sessions.push(w.claudeSession('NPM', { claudePid: 900, cwd: w.repoC }));
+  const aw = w.make();
+  const r = await aw.relay('peers', {}, {}, { ...w.call(201), threadId: w.T }, { forward: async () => ({}) });
+  assert.equal(r.bound, true);
+  assert.equal(r.unverified_sessions, 1);
+  assert.ok(!JSON.stringify(r.peers).includes('docs'), 'its folder is nowhere');
+  assert.match(r.note, /cannot be named or handed work/);
 });
