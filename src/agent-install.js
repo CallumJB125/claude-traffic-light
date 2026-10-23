@@ -484,7 +484,6 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
       if (c.isSymbolicLink() || !c.isDirectory() || a.isSymbolicLink() || !a.isDirectory()) throw new Error('link');
       return `${a.dev}:${a.ino}`;
     };
-    const realDir = (p) => { const st = fsApi.lstatSync(p); return st.isDirectory() && !st.isSymbolicLink(); };
     const pinned = pin();
     // The data folder as a link would put the backup somewhere else (change 8).
     if (fsApi.lstatSync(DATA, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error('link');
@@ -537,6 +536,18 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
         fsApi.lutimesSync(pb, st.atimeMs / 1000, st.mtimeMs / 1000);
       }
     };
+    // cpSync makes every copied folder 755 (Node 22), so each folder in the
+    // backup is set back to its source's mode, deepest first (review #54 M1).
+    // Only folders inside the backup Plexiform just made, opened without
+    // following a link and checked to be the folder lstat saw.
+    const dirModes = (a, b) => {
+      for (const n of fsApi.readdirSync(a).sort()) {
+        const pa = path.join(a, n), pb = path.join(b, n), sa = fsApi.lstatSync(pa);
+        if (!sa.isDirectory() || sa.isSymbolicLink()) continue;
+        dirModes(pa, pb);
+        setDirMode(dest, pb, sa.mode & 0o7777);
+      }
+    };
     try {
       for (const n of fsApi.readdirSync(src).sort()) {
         const from = path.join(src, n), to = path.join(dest, n);
@@ -546,17 +557,46 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
         else fsApi.cpSync(from, to, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true, verbatimSymlinks: true, dereference: false });
       }
       if (pin() !== pinned || !realDir(dest)) throw new Error('moved');
+      dirModes(src, dest);
       walk(src, dest);
       times(src, dest);
       if (pin() !== pinned) throw new Error('moved');
     } catch (err) {
-      if (realDir(dest)) fsApi.rmSync(dest, { recursive: true, force: true });
+      try { removeBackup(dest); } catch { /* left; never listed as reused (fingerprint differs) */ }
       throw err;
     }
-    prune(root, new Set([...keep, path.basename(dest)]));
+    // A backup that can't be pruned is left for next time; the adopt goes on.
+    try { prune(root, new Set([...keep, path.basename(dest)])); } catch { /* kept */ }
     if (!realDir(dest)) throw new Error('backup gone');
     return dest;
   }
+  // chmod without following a link: the path must open as a folder with
+  // O_NOFOLLOW, be the same folder lstat sees, and sit inside `within`.
+  function setDirMode(within, p, mode) {
+    if (!p.startsWith(within + path.sep)) throw new Error('outside the backup');
+    const st = fsApi.lstatSync(p);
+    if (st.isSymbolicLink() || !st.isDirectory()) throw new Error('not a folder');
+    const fd = fsApi.openSync(p, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | NOFOLLOW);
+    try {
+      const f = fsApi.fstatSync(fd);
+      if (!f.isDirectory() || f.dev !== st.dev || f.ino !== st.ino) throw new Error('moved');
+      fsApi.fchmodSync(fd, mode);
+    } finally { fsApi.closeSync(fd); }
+  }
+  // A backup can hold 0555 folders, which block deleting what's in them:
+  // u+w on each real folder inside it first (links never followed).
+  function removeBackup(dir) {
+    if (!realDir(dir)) return;
+    const open = (d) => {
+      for (const n of fsApi.readdirSync(d)) {
+        const p = path.join(d, n), st = fsApi.lstatSync(p);
+        if (st.isDirectory() && !st.isSymbolicLink()) { if (!(st.mode & 0o200)) setDirMode(dir, p, (st.mode & 0o7777) | 0o700); open(p); }
+      }
+    };
+    open(dir);
+    fsApi.rmSync(dir, { recursive: true, force: true });
+  }
+  function realDir(p) { try { const st = fsApi.lstatSync(p); return st.isDirectory() && !st.isSymbolicLink(); } catch { return false; } }
   // Keeps at most MAX_BACKUPS, never deleting the oldest (the folder before
   // Plexiform managed anything), the current one, or any in `keep`.
   function prune(root, keep) {
@@ -566,7 +606,7 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     for (const n of all) {
       if (extra <= 0) break;
       if (keep.has(n)) continue;
-      fsApi.rmSync(path.join(root, n), { recursive: true, force: true });
+      try { removeBackup(path.join(root, n)); } catch { /* left for next time */ }
       extra--;
     }
   }
