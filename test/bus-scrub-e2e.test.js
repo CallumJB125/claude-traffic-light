@@ -8,6 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
+const os = require('node:os');
 const { startAppBus, until } = require('./helpers/agent-bus');
 
 const AWS = 'AKIAZ7Q4M2LXWB3K9RTD';
@@ -56,5 +57,39 @@ test('return: a run\'s bus_result holding the same secrets is redacted in bus.db
       assert.ok(!where.includes('/Users/someone'), 'home paths removed');
     }
     assert.match(w.result.text, /redacted:aws_access_key/);
+  } finally { await a.cleanup(); }
+});
+
+// M1 (PR #35 review): what a model reads is the folded text, so secrets hidden by a zero-width space, a soft hyphen or
+// fullwidth forms must be scrubbed after the fold, not before it.
+const full = (t) => t.replace(/[!-~]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0));
+const OBFUSCATED = [`AKIA\u200bZ7Q4M2LXWB3K9RTD`, `AKIAZ7Q4\u00adM2LXWB3K9RTD`, full(AWS)];
+const seen = (t) => t.normalize('NFKC').replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, '');
+
+test('M1 inbound: a key split by a zero-width space or soft hyphen, or in fullwidth, and a fullwidth home path never reach bus.db or the prompt', async () => {
+  const a = await startAppBus({ text: 'ok' });
+  try {
+    const home = full(os.homedir());
+    const r = await a.tool('bus_handoff', { request_id: 'scrub-m1-0001', to: { provider: 'codex' }, repo: a.b.h.repo.checkout, provider: 'claude',
+      title: `Rotate ${OBFUSCATED[2]}`, brief: `Keys ${OBFUSCATED.join(' ')} live in ${home}${full('/.aws/credentials')}` });
+    assert.equal(r.state, 'offered', JSON.stringify(r));
+    const prompt = (await until(() => a.b.h.log().find((x) => x.kind === 'prompt'))).prompt;
+    for (const where of [rows(a.b.h.dataDir), prompt]) {
+      assert.ok(!seen(where).includes(AWS), `a key came back: ${seen(where).slice(0, 400)}`);
+      assert.ok(!seen(where).includes(os.homedir()), 'the home path came back');
+    }
+  } finally { await a.cleanup(); }
+});
+
+test('M1 return: a run\'s bus_result with the same obfuscated keys is redacted once folded', async () => {
+  const a = await startAppBus({ delayMs: 4000, text: 'ok' });
+  try {
+    const r = await a.tool('bus_handoff', { request_id: 'scrub-m1-0002', to: { provider: 'codex' }, repo: a.b.h.repo.checkout, provider: 'claude', title: 'Report back' });
+    const task = await until(() => a.b.taskOf(r.handoff_id)?.state === 'running' && a.b.taskOf(r.handoff_id));
+    const ipc = await a.b.ipc(task.id);
+    await ipc.request('tool', { name: 'bus_result', args: { request_id: 'scrub-m1-res1', outcome: 'done', summary: `Used ${OBFUSCATED.join(' and ')}` } });
+    const w = await a.tool('bus_wait', { handoff_id: r.handoff_id, timeout_s: 30, provider: 'claude' });
+    assert.equal(w.state, 'done', JSON.stringify(w));
+    for (const where of [rows(a.b.h.dataDir), JSON.stringify(w), w.result.text]) assert.ok(!seen(where).includes(AWS), `a key came back: ${seen(where).slice(0, 400)}`);
   } finally { await a.cleanup(); }
 });

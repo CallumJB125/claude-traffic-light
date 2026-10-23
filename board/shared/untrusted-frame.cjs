@@ -10,19 +10,24 @@ const NAME_MAX = 60;
 // body inside a block delimited by a per-message random nonce. The body cannot
 // close the block (it never contains '<<<' or '>>>') and every square bracket in it,
 // ASCII or lookalike, becomes a parenthesis, so no line can open like a Plexiform
-// header whatever homoglyphs or invisible characters it hides. First the body gets
-// the fold notes get (bus/notes.js): compatibility forms folded (﹇ is [, ﹤ is <),
-// other line breaks made plain ones, invisible, control and direction characters
-// dropped, so what is left is what a model reads. No rewrite makes text longer in
-// chars or bytes (a fold that would, such as ﷺ, keeps the character; none of those
-// folds to a bracket or <>): the hub's session body budget (MESSAGING.md §3) keeps
-// the framed text within the adapter's limit.
+// header whatever homoglyphs or invisible characters it hides. First the body is
+// folded (fold(), below), so what is left is what a model reads. No rewrite makes
+// text longer in chars or bytes: the hub's session body budget (MESSAGING.md §3)
+// keeps the framed text within the adapter's limit.
+//
+// fold(): compatibility forms folded per character (﹇ is [, ﹤ is <, fullwidth A is
+// A; a fold that would grow the text, such as ﷺ, keeps the character, and none of
+// those folds to a bracket or <>), other line breaks made plain ones, invisible,
+// control and direction characters dropped. It is idempotent. Secret scrubbers run
+// on folded text (src/signal-server.js busScrub, bus/dispatcher.js scrubRun, the
+// hub's message bodies, bus/notes.js), so a key split by a zero-width space or
+// written in fullwidth cannot come back whole in a frame after it was scrubbed.
 const fold = (text) => text.replace(/[^\x00-\x7f]/gu, (c) => {
   const f = c.normalize('NFKC');
   return f.length <= c.length && Buffer.byteLength(f) <= Buffer.byteLength(c) ? f : c;
-});
-const neutral = (text) => fold(text).replace(/\r|\u0085|\u2028|\u2029/g, '\n')
-  .replace(/[^\P{Cc}\t\n]|[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, '')
+}).replace(/\r|\u0085|\u2028|\u2029/g, '\n')
+  .replace(/[^\P{Cc}\t\n]|[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, '');
+const neutral = (text) => fold(text)
   .replace(/<<</g, '(((').replace(/>>>/g, ')))')
   .replace(/\[/g, '(').replace(/\]/g, ')')
   .replace(/[［⟦〚【〔⁅﹝❲⦋⦍⦏〖〘]/g, '（').replace(/[］⟧〛】〕⁆﹞❳⦌⦎⦐〗〙]/g, '）');
@@ -50,4 +55,4 @@ function frame(m, nonce = crypto.randomBytes(9).toString('hex')) {
     + `<<<${nonce}\n${neutral(m.body)}\n${nonce}>>>${refs ? `\n${neutral(refs)}` : ''}`;
 }
 
-module.exports = { frame, neutral, label };
+module.exports = { frame, neutral, label, fold };

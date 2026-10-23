@@ -241,3 +241,16 @@ test('the hub scrubs every credential shape the app does, userinfo in any scheme
     assert.ok(!d.body.message.handoff.report.includes('hunter2') && !d.body.message.handoff.report.includes('sk_live_51H'), d.body.message.handoff.report);
   } finally { await r.close(); }
 });
+
+test('M1: the hub folds a body before scrubbing it, so a key split by a zero-width space or soft hyphen, or in fullwidth, is redacted', async () => {
+  const r = await messagingRig();
+  try {
+    const full = (x) => x.replace(/[!-~]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0));
+    const KEY = 'npm_abcdefghijklmnopqrstuvwxyz0123456789';
+    const body = `a npm_abcdefghij\u200bklmnopqrstuvwxyz0123456789 b npm_abcdefghij\u00adklmnopqrstuvwxyz0123456789 c ${full(KEY)}`;
+    const res = await ask(r, r.winA, body);
+    assert.equal(res.status, 200, res.text);
+    const seen = (x) => x.normalize('NFKC').replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, '');
+    assert.ok(!seen(res.body.message.body).includes('npm_abcdefghij'), res.body.message.body);
+  } finally { await r.close(); }
+});

@@ -8,15 +8,13 @@ import crypto from 'node:crypto';
 import { NoteArgs, NotesArgs, NotifiedArgs, NOTE_LIMITS, issue } from '../../shared/bus-schema.js';
 import untrustedFrame from '../../shared/untrusted-frame.cjs';
 
-const { frame } = untrustedFrame;
+const { frame, fold } = untrustedFrame;
 const HOUR_MS = 60 * 60 * 1000;
 const NAMES = Object.freeze({ claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI' });
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
-// Fewer ways to dress a line up as Plexiform's: compatibility forms folded (fullwidth ＜＜＜ is <<<, which frame()
-// then neutralises), other line breaks made plain ones, invisible, control and direction characters dropped.
-const clean = (s) => s.normalize('NFKC').replace(/[\u0085\u2028\u2029]/g, '\n')
-  .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb]/g, '')
-  .slice(0, NOTE_LIMITS.text);
+// Main folded and scrubbed the text (src/signal-server.js busScrub); the same fold again is a no-op for it and keeps any
+// other caller's text to what a model reads: compatibility forms folded, invisible and control characters dropped.
+const clean = (s) => fold(s).slice(0, NOTE_LIMITS.text);
 const HALTED = Object.freeze({ reason: 'HALTED', message: 'The agent bus is stopped on this Mac, so notes are held. Your person can resume it from the tray or Sessions.' });
 
 /** log: openBusLog(); halted(): whether the bus is stopped; record(kind, data): a note.* event without the text. */

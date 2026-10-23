@@ -20,6 +20,7 @@ import { HubError } from './db.js';
 import { limitOrThrow } from './ratelimit.js';
 import { packetRelativePath, cleanPacketText } from '../shared/packet-text.js';
 import { redactSecrets } from '../shared/secret-patterns.mjs';
+import untrustedFrame from '../shared/untrusted-frame.cjs';
 
 export const MESSAGING_LIMITS = Object.freeze({
   // A session receives the body framed (src/session-messaging.js frame()) through an
@@ -92,8 +93,10 @@ export class Messaging {
   }
   // Bodies are scrubbed before they are stored: credentials in any scheme://user:pass@ URL,
   // "password is: X" (as src/scrub.js), the full shared secret list (secret-patterns.mjs, the app's too), then cleanPacketText (home paths, tokens).
+  // Folded first (untrusted-frame.cjs fold, never longer), as the receiving app's frame() folds it: a key split by a
+  // zero-width space or written in fullwidth is scrubbed here, not restored there.
   bodyText(v, max, bytes) {
-    const s = this.text(v, max, bytes).replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1<redacted>@')
+    const s = untrustedFrame.fold(this.text(v, max, bytes)).replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1<redacted>@')
       .replace(/(?<![\w])((?:password|passphrase|pin)\s{1,8}is\s{0,8}:\s{0,8})\S{1,256}/gi, '$1<redacted>');
     return this.text(cleanPacketText(redactSecrets(s, { classes: ['credential', 'likely'], docExamples: false }).slice(0, max), max, null, { anyPath: false }), max, bytes);
   }

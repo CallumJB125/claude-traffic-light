@@ -16,7 +16,7 @@ import { cleanPacketText } from '../../shared/packet-text.js';
 import { normalizeRemoteUrl } from '../../shared/scope.js';
 import untrustedFrame from '../../shared/untrusted-frame.cjs';
 
-const { frame } = untrustedFrame;
+const { frame, fold } = untrustedFrame;
 const HOUR_MS = 60 * 60 * 1000;
 const LEASE_MS = 120_000;
 const RENEW_MS = 30_000;
@@ -33,10 +33,10 @@ export class BusRefusal extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
 
-/** Run-originated text (results, onward handoffs) never passes main's scrubber: it is scrubbed here, then truncated. */
+/** Run-originated text (results, onward handoffs) never passes main's scrubber: it is folded and scrubbed here, then truncated. */
 export function scrubRun(text, max, root = null) {
   if (typeof text !== 'string' || !text) return '';
-  const s = redactSecrets(text.slice(0, max * 2));
+  const s = redactSecrets(fold(text.slice(0, max * 2)));
   return cleanPacketText(s, s.length, root, { anyPath: false }).slice(0, max);
 }
 

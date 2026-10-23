@@ -411,3 +411,21 @@ test('red team: the same 30 bodies, unfolded, framed as a handoff or a message, 
     }
   }
 });
+
+test('M1 notes: a key split by a zero-width space or soft hyphen, or in fullwidth, and a fullwidth home path are scrubbed after the fold', async (t) => {
+  const s = await setup(t);
+  const y = s.handleOf('claude|X');
+  const full = (x) => x.replace(/[!-~]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0));
+  const KEY = 'AKIAZ7Q4M2LXWB3K9RTD';
+  const home = require('node:os').homedir();
+  const text = `a AKIA\u200bZ7Q4M2LXWB3K9RTD b AKIAZ7Q4\u00adM2LXWB3K9RTD c ${full(KEY)} d ${full(home)}`;
+  const sent = await M.busCall('note', { to: y, text, request_id: 'req-e2e-m1-01' }, s.as.codex());
+  assert.equal(sent.state, 'queued', JSON.stringify(sent));
+  const row = s.h.log.noteFor('claude|X', sent.note_id, 0);
+  const got = (await M.busCall('notes', {}, s.as.claude())).notes[0].text;
+  const seen = (x) => x.normalize('NFKC').replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, '');
+  for (const where of [row.text, got]) {
+    assert.ok(!seen(where).includes(KEY), `a key came back: ${seen(where)}`);
+    assert.ok(!seen(where).includes(home), `the home path came back: ${seen(where)}`);
+  }
+});
