@@ -269,13 +269,19 @@
   // "codex/eng-42". Not after a kind ("feat/node-22-upgrade"), nor "release-2-prep" or
   // "work-organise-2026-10-23".
   const BRANCH_TICKET = /^([^\\/]+)[\\/]([a-z][a-z0-9]{1,9})-(\d{1,6})(?=$|[-_./])/;
+  // What a branch says it does is never its ticket key: "codex/fix-12-bugs", "agent/add-3-tests".
+  const BRANCH_VERB = new RegExp(`^(?:${KIND_WORDS}|bug|issue|task|add|update|remove|improve|change)$`, 'i');
+  // Copilot names its branch for the GitHub issue it was given: copilot/fix-1234 is issue #1234.
+  const COPILOT_ISSUE = /^copilot[\\/]fix-(\d{1,6})$/i;
   function branchTicket(branch) {
     if (typeof branch !== 'string') return null;
+    const issue = COPILOT_ISSUE.exec(branch);
+    if (issue) return { id: `#${issue[1]}`, match: issue[0] };
     const upper = ticketIn(branch);
-    if (upper) return upper;
+    if (upper && !BRANCH_VERB.test(upper.id.split('-')[0])) return upper;
     const m = BRANCH_TICKET.exec(branch);
     const key = m && m[2].toUpperCase();
-    if (!m || KIND_WORD.test(m[1]) || NOT_TICKETS.has(key) || RELEASE_WORDS.has(key)) return null;
+    if (!m || KIND_WORD.test(m[1]) || BRANCH_VERB.test(m[2]) || NOT_TICKETS.has(key) || RELEASE_WORDS.has(key)) return null;
     return { id: `${m[2].toUpperCase()}-${m[3]}`, match: `${m[2]}-${m[3]}` };
   }
   // Elsewhere a key must be written in capitals: lower-case "organise-2026" is a word and a year.

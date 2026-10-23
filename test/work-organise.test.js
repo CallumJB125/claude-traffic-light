@@ -721,3 +721,14 @@ test('work-organise: a bare home folder goes from prompts in any form; typed tit
   }
   assert.doesNotMatch(W.titleOf({ team: false, firstPrompt: 'cd home/sam; ls' }).title, /sam/);
 });
+
+test('work-organise: a branch verb after an agent prefix is never a ticket; copilot/fix-<n> is issue #<n>', () => {
+  const t = (branch) => W.titleOf({ team: false, branch }).title;
+  assert.equal(t('copilot/fix-1234'), '#1234');
+  assert.equal(t('codex/fix-12-bugs'), '12 bugs');
+  for (const b of ['codex/fix-12-bugs', 'codex/FIX-12', 'claude/feat-9-login', 'agent/add-3-tests', 'codex/hotfix-7', 'cursor/chore-4-deps', 'bot/bug-5', 'codex/issue-6', 'codex/refactor-2-auth', 'codex/docs-1', 'codex/test-3']) {
+    assert.doesNotMatch(t(b), /^(?:FIX|FEAT|ADD|HOTFIX|CHORE|BUG|ISSUE|REFACTOR|DOCS|TEST)-\d/, b);
+  }
+  assert.equal(t('codex/eng-42'), 'ENG-42');
+  assert.equal(t('sam/abc-123-fix-login'), 'ABC-123 · Fix login');
+});
