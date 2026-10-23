@@ -1676,7 +1676,7 @@ const ProviderStatus = require('./src/provider-status.js');
 // read. Async only; rebuilt on session changes (debounced), on exclude changes, and every 2 minutes as a heartbeat.
 // O1b: the Tasks helper's wrapped runs (src/tasks-process.js onRuns), checked by AgentAwareness before any is shown.
 let wrappedRuns = [];
-const AgentAwareness = require('./src/agent-awareness.js').create({ rootDir: ROOT_DIR, host: LOCAL_HOST, home: os.homedir(), codexHome: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), dataDirs: [ROOT_DIR, path.join(app.getPath('userData'), 'tasks')], config: () => loadConfig(), sessions: () => localSessions(aggregateState().sessions || []), halted: () => AgentBusMain.halted(), mcpCaps: () => McpAuto.caps(),
+const AgentAwareness = require('./src/agent-awareness.js').create({ rootDir: ROOT_DIR, host: LOCAL_HOST, home: os.homedir(), codexHome: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), dataDirs: [ROOT_DIR, path.join(app.getPath('userData'), 'tasks')], config: () => loadConfig(), sessions: () => localSessions(aggregateState().sessions || []), halted: () => AgentBusMain.halted(), mcpCaps: () => McpAuto.caps(), boardFor: (s) => buddyWin?.boardFor?.(s) ?? { kind: 'unknown' },
   // The only command lines a bound caller may be running: Plexiform's own server, as it registers it (bus profile and full).
   servers: () => [McpInstall.launch({ ...mcpLaunch(), profile: 'bus' }), McpInstall.launch(mcpLaunch())], log: (m) => console.log(m),
   // Notes (step 4): main's own note ops to the Tasks helper; a background sync never starts it, a note or bus_notes call does.

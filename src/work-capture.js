@@ -18,6 +18,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const HASH = /^[a-f0-9]{64}$/;
 const MAX_STATE_BYTES = 2 * 1024 * 1024;
 const RETRY_MS = 15000;
+const REPO_TTL_MS = 60000, REPO_CACHE_MAX = 200;
 const ACK_RESERVE_BYTES = 2048;
 const BACKFILL_LIMIT = 25;
 const BACKFILL_BUDGET_MS = 2000;
@@ -171,7 +172,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     // would duplicate existing cards, and capture failure must not close Buddy.
     const notice='Automatic cards are paused because private capture storage is unavailable. Your saved identities have been kept.';
     log('automatic cards unavailable: private storage');
-    return {observe:()=>Promise.resolve(),backfill:async()=>({updated:0,pending:0}),startBackfill:()=>{},captureOnce:async()=>({ok:false,reason:'storage'}),routes:async()=>({routes:[],complete:false}),enabled:()=>false,setEnabled:()=>false,choose:async()=>false,choices:()=>[],snapshot:()=>[],notice:()=>notice,stop:async()=>{},idle:()=>Promise.resolve()};
+    return {observe:()=>Promise.resolve(),boardFor:()=>({kind:'unknown'}),backfill:async()=>({updated:0,pending:0}),startBackfill:()=>{},captureOnce:async()=>({ok:false,reason:'storage'}),routes:async()=>({routes:[],complete:false}),enabled:()=>false,setEnabled:()=>false,choose:async()=>false,choices:()=>[],snapshot:()=>[],notice:()=>notice,stop:async()=>{},idle:()=>Promise.resolve()};
   }
   const STALE_MS=7*24*3600*1000;
   for(const [key,e]of Object.entries(store.state.tasks)){
@@ -268,6 +269,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       if(!entry&&!untag(raw.taskTitle)&&placeless(o.cwd)&&!shows(recordFor(o,raw)))continue;
       if(!entry){if(Object.keys(state.tasks).length>=2000){log('automatic card limit reached');continue;}
         const repo=safeCanonical(await resolveRepo(o.cwd));
+        if(typeof o.cwd==='string')remember(o.cwd,repo);
         if(stopped||state.enabled===false)return;
         if(!fresh(raw))continue;
         if(!o.personal&&!catalog.complete){log('automatic card routing awaits a current team catalog');continue;}
@@ -353,6 +355,45 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       if(r.pending&&!stopped&&backfillFailures<3){backfillTimer=setTimeout(run,everyMs);backfillTimer.unref?.();}};
     backfillTimer=setTimeout(run,delayMs);backfillTimer.unref?.();
   }
+  // Where a session's work goes, for its Plexiform line (hooks/awareness.js) and bus_peers: the destination its
+  // card already has, else the route a first card would take now. Synchronous over what capture already holds:
+  // the repo comes from a per-folder cache filled in the background, and until it is known the answer is 'unknown'.
+  const repoCache=new Map();
+  function remember(cwd,repo){
+    if(!repoCache.has(cwd)&&repoCache.size>=REPO_CACHE_MAX)repoCache.delete(repoCache.keys().next().value);
+    repoCache.set(cwd,{at:now(),known:true,repo,pending:false});
+  }
+  function repoOf(cwd){
+    let hit=repoCache.get(cwd);
+    if(!hit){if(repoCache.size>=REPO_CACHE_MAX)repoCache.delete(repoCache.keys().next().value);hit={at:0,known:false,repo:null,pending:false};repoCache.set(cwd,hit);}
+    if(!hit.pending&&(!hit.known||now()-hit.at>=REPO_TTL_MS)){
+      hit.pending=true;
+      Promise.resolve().then(()=>resolveRepo(cwd)).then(r=>{hit.repo=safeCanonical(r);hit.known=true;},()=>{}).finally(()=>{hit.pending=false;hit.at=now();});
+    }
+    return hit.known?{repo:hit.repo}:null;
+  }
+  function boardFor(raw){
+    const unknown={kind:'unknown'};
+    if(stopped)return unknown;
+    if(state.enabled===false)return {kind:'off'};
+    const o=observation(raw,{ownedRoots,host});if(!o)return unknown;
+    if(o.personal)return {kind:'untracked'};
+    const entry=state.tasks[crypto.createHash('sha256').update(JSON.stringify([o.provider,o.session_id,o.task_id])).digest('hex')];
+    if(entry?.untracked)return {kind:'untracked'};
+    let d=entry?.destination;
+    // A card kept on My board while the repo had no default board stays there once one is picked.
+    if(d&&d.kind==='local'&&d.needs_routing&&!d.reason&&entry.repo&&Object.hasOwn(state.choices,entry.repo))return {kind:'personal'};
+    if(!d||d.kind==='team'){
+      if(!lastCatalogAt||!catalog.complete)return unknown;
+      if(!d){
+        if(typeof o.cwd!=='string'||!path.isAbsolute(o.cwd))return unknown;
+        const r=repoOf(o.cwd);if(!r)return unknown;
+        d=routeFor(r.repo,catalog.routes??[],r.repo?state.choices[r.repo]:null);
+      }
+    }
+    if(d.kind==='team'){const route=(catalog.routes??[]).find(x=>routeKey(x)===routeKey(d));return {kind:'team',name:typeof route?.board_name==='string'?route.board_name.slice(0,200):''};}
+    return {kind:d.reason==='team_read_only'?'readonly':d.needs_routing?'choose':'personal'};
+  }
   async function drain() {while(latest&&!stopped){const next=latest;latest=null;await pass(next);}}
   function kick(){if(stopped||state.enabled===false)return;
     if(!active){active=drain().catch(()=>log('automatic cards unavailable')).finally(()=>{active=null;if(latest&&!stopped)kick();});}return active;}
@@ -388,6 +429,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       return done?.card_id?{ok:true,card_id:done.card_id,destination:{...done.destination}}:{ok:false,reason:done?.untracked?(done.reason||'untracked'):'send_failed'};
     },
     routes:()=>getRoutes(),
+    boardFor,
     // For the team publisher: WorkRecords that may leave this Mac, each with its team destination.
     // Only repos whose current route has share_summaries (files only with share_files), never
     // personal, local, read-only or stopped work; text fully scrubbed (WorkRecord.forShare).

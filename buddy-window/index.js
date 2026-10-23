@@ -1175,6 +1175,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     myDay: () => myDayBroker.snapshot(),
     async overviewWork(){return {sources:await overviewSources(),capture:workCapture.overviewSnapshot?.()??[],partial:false};},
     handoverSessions: () => workCapture.handoverRows(),
+    // Main-only: where a session's cards go, for its Plexiform line and bus_peers (src/agent-awareness.js).
+    boardFor: (session) => (captureEnabled ? workCapture.boardFor(session) : { kind: 'off' }),
     overviewReadContext(){
       const v=localViews.get('overview'),wc=v?.webContents;
       if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='overview'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized())return null;
