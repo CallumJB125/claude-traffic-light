@@ -27,7 +27,7 @@ const BACKFILL_EVERY_MS = 60000;
 const FALLBACK_TITLE = /^(?:Claude(?: Code)?|Codex|Cursor|Gemini|Hermes) · /;
 // Every title bound for a team hub, whatever made it (review L2): clean() only removes
 // secrets, so IPs, emails, host names and phone numbers went to the whole team.
-const hubTitle = (text) => scrubTitle(text).trim().slice(0,200);
+const hubTitle = (text,hub=null) => {let hubHost=null;try{hubHost=new URL(String(hub)).hostname;}catch{}return scrubTitle(text,{hubHost}).trim().slice(0,200);};
 const clean = (text,max) => redactSecrets(String(text??'').slice(0,max*2),{docExamples:false})
   .replace(/\b(?:bdt|brt|btk|btr|inv|clinv|pfi|pfm|pfr|pfc|pfcode)_[A-Za-z0-9_-]{43}\b/g,'<redacted:token>')
   .replace(/\b(?:brt1|bmr1)\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'<redacted:token>')
@@ -212,7 +212,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       if(fingerprint){e.attempt_fingerprint=fingerprint;e.last_seen=now();}},ACK_RESERVE_BYTES))return;
     if(!live()||!force&&raw&&!fresh(raw))return;
     let result;
-    try {result=entry.destination.kind==='team'?await sendTeam(entry.destination,{...body,title:hubTitle(body.title)}):await sendLocal(body);}
+    try {result=entry.destination.kind==='team'?await sendTeam(entry.destination,{...body,title:hubTitle(body.title,entry.destination.hub)}):await sendLocal(body);}
     catch {log('automatic card update deferred');return;}
     if(!result?.ok){log('automatic card update deferred');return;}
     const before=JSON.stringify([state.tasks[key].card_id,state.tasks[key].status,state.tasks[key].title,state.tasks[key].untracked]);

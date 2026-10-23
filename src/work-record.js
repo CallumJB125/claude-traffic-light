@@ -102,9 +102,12 @@ function cardBody(rec) {
 
 // The one shape that may leave the Mac: only for a route with share_summaries,
 // paths only with share_files, every free text through the full scrub.
+// The hub's own host name, so shared text keeps it and no other tailnet name.
+const hostOf = (u) => { try { return new URL(String(u)).hostname.toLowerCase() || null; } catch { return null; } };
 function forShare(rec, route, { salt, home = null, user = null } = {}) {
   if (!rec || route?.share_summaries !== true || typeof salt !== 'string' || !salt) return null;
-  const s = (v, max) => clip(flat(scrub(String(v ?? ''), { home, user, salt })), max);
+  const hubHost = hostOf(route.hub);
+  const s = (v, max) => clip(flat(scrub(String(v ?? ''), { home, user, salt, hubHost })), max);
   const files = route.share_files === true ? { edited: rec.files.edited.slice(0, CAP.files), read: rec.files.read.slice(0, CAP.files) } : { edited: [], read: [] };
   return { ...rec, repo_id: route.repo_id ?? rec.repo_id, folder: s(rec.folder, 120), title: s(rec.title, CAP.title), goal: s(rec.goal, CAP.goal), summary: s(rec.summary, CAP.summary),
     branch: rec.branch ? s(rec.branch, CAP.branch) : null, files };

@@ -198,3 +198,10 @@ test('forShare: phone numbers and internal host names go from shared text too (r
   for (const f of ['title', 'summary', 'goal']) assert.doesNotMatch(shared[f], /555 0199|7946 0958|db1\.internal/, `${f}: ${shared[f]}`);
   assert.match(shared.title, /\[phone\]/);
 });
+
+test('forShare: a tailnet name other than the route hub goes from shared text (#52 review)', () => {
+  const rec = { ...WorkRecord.build({ install_id: INSTALL, o: o(), raw: {}, facts: facts({ lastAssistant: 'x' }), home: HOME }), rev: 1 };
+  const shared = WorkRecord.forShare({ ...rec, summary: 'ssh callums-mac.tail1234.ts.net and plexi.tail1234.ts.net, call 415-555-0100' }, { share_summaries: true, hub: 'https://plexi.tail1234.ts.net' }, { salt: 's' });
+  assert.doesNotMatch(shared.summary, /callums-mac|555-0100/, shared.summary);
+  assert.match(shared.summary, /plexi\.tail1234\.ts\.net/);
+});

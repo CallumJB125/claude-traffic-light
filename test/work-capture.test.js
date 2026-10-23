@@ -311,3 +311,9 @@ test('a local (My board) card keeps its title as reported',async t=>{
  const r=rig(t,{resolveRepo:async()=>null});await r.router.observe([event({taskTitle:PII_TITLE})]);
  assert.equal(r.calls[0].kind,'local');assert.equal(r.calls[0].body.title,PII_TITLE);
 });
+test('a team title keeps only its own hub tailnet name; any other tailnet host goes (#52 review)',async t=>{
+ const TR={...R,hub:'https://plexi.tail1234.ts.net'};
+ const r=rig(t,{getRoutes:async()=>({routes:[TR],complete:true})});
+ await r.router.observe([event({taskTitle:'sync plexi.tail1234.ts.net with callums-mac.tail1234.ts.net'})]);
+ assert.equal(r.calls[0].kind,'team');assert.equal(r.calls[0].body.title,'sync plexi.tail1234.ts.net with [host]');
+});

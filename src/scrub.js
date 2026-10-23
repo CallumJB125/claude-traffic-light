@@ -72,11 +72,14 @@ const PATTERNS = {
   // A host with no scheme: dotted names (corp.globex.internal, db.acme.io:5432).
   BARE_HOST: /(?<![\w.@/:\\-])(?=([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8}))\1(?![\w-]|\.\w)(:\d{1,5}(?!\d))?/gi,
   GIT_SSH: /(?<![\w.-])(?=([\w.-]+))\1@(?=([\w-]+(?:\.[\w-]+)+))\2:(?!\d)(?=([\w.~-]+(?:\/[\w.~-]+)*))\3/g,
-  EMAIL: /(?<![\w.+-])(?=([\w.+-]+))\1@[\w-]+(?:\.[\w-]+)+/g,
+  // The last label starts with a letter: "react@18.3.1" is a package, not an address.
+  EMAIL: /(?<![\w.+-])(?=([\w.+-]+))\1@(?:[\w-]+\.)+[A-Za-z][\w-]*(?![\w-]|\.[\w-])/g,
   IPV4: /(?<![\w.])(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?![\w.]*\d)/g,
-  // A phone number: an international "+27 82 555 0199" or a trunk "082 555 0199",
-  // "+1 (415) 555-0100"; see phoneOk().
-  PHONE: /(?<![\w+#.\/\u0001-])(?:\+\d{1,3}[ .-]?)?\(?0?\d{1,4}\)?(?:[ .-]\d{2,4}){2,4}(?![\w.\/\u0002-]|:\d)/g,
+  // A phone number, then checked by phoneOk(). Three shapes, each with one way to read it
+  // so a long digit run is read once: international "+27 82 555 0199", "+27825550199",
+  // "+49 (0)30 123456"; trunk "082 555 0199", "0825550199"; North American
+  // "(415) 555-0100", "1-800-555-0100", "415.555.0100".
+  PHONE: /(?<![\w+#.\/\u0001-])(?:\+\d{1,3}[ .-]?(?:\(\d{1,4}\)[ .-]?)?\d{1,12}(?:[ .-]\d{1,8}){0,5}|0\d{8,10}|\(?0\d{1,4}\)?(?:[ .-]\d{2,8}){1,4}|(?:1[ .-])?(?:\(\d{3}\) ?|\d{3}[ .-])\d{3}[ .-]\d{4})(?![\w\/\u0002]|[.-]\w|:\d)/g,
   IPV6: /(?<![\w:.])(?=[0-9a-f:]{0,45}::|(?:[0-9a-f]{1,4}:){5})(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![\w:])/gi,
   DASH_HOME: /(?<![\w-])-(?:Users|home)-(?=([\w.-]+))\1/gi,
   REPO_REF: /(?<![\w./#-])(?=([\w.-]+))\1\/(?=([\w.-]+))\2#(\d+)\b/g,
@@ -232,7 +235,9 @@ function cleanJsonError(message) {
 //   salt:     makes the hashes unguessable; pass one per bundle so the same
 //             folder hashes the same everywhere in it
 //   keep:     path segments left readable (default: the app's own)
-function scrub(text, { home = null, user = null, hostname = null, names = [], salt = crypto.randomBytes(8).toString('hex'), keep = defaultKeep() } = {}) {
+//   hubHost:  text bound for this hub keeps only its tailnet name (default: all kept)
+function scrub(text, { home = null, user = null, hostname = null, names = [], salt = crypto.randomBytes(8).toString('hex'), keep = defaultKeep(), hubHost } = {}) {
+  const hub = typeof hubHost === 'string' ? hubHost.toLowerCase() : undefined;
   const P = PATTERNS;
   const hashWord = (w) => (!w.trim() || keep.has(w) || HASHED.test(w) || /^\d+$/.test(w) || w.length === 1 ? w : hashName(w, salt));
   const hashSeg = (seg) => (!seg || keep.has(seg) || HASHED.test(seg) || /^[A-Za-z]:$/.test(seg) ? seg : seg.split(/( +)/).map(hashWord).join(''));
@@ -249,7 +254,7 @@ function scrub(text, { home = null, user = null, hostname = null, names = [], sa
     const hp = at < 0 ? hostport : hostport.slice(at + 1);
     const m = /^(\[[^\]]*\]|[^:]*)(:\d+)?$/.exec(hp) || [hp, hp, ''];
     const h = m[1];
-    const host = !h ? '' : KEEP_IPS.has(h) || KEEP_HOSTS.has(h.toLowerCase()) || /\.ts\.net$/i.test(h) ? h : isIp(h) ? '[ip]' : hashName(h.toLowerCase(), salt);
+    const host = !h ? '' : KEEP_IPS.has(h) || KEEP_HOSTS.has(h.toLowerCase()) || tailnetKept(h.toLowerCase(), hub) ? h : isIp(h) ? '[ip]' : hashName(h.toLowerCase(), salt);
     // Only git@ is generic; anyone else's login is theirs (and a password
     // after it was already redacted by the secret pass).
     const shownWho = !who ? '' : who === 'git@' ? who : '[user]@';
@@ -300,7 +305,7 @@ function scrub(text, { home = null, user = null, hostname = null, names = [], sa
   out = out.replace(P.BARE_HOST, (m, host, port) => {
     const h = host.toLowerCase();
     const dots = h.split('.').length - 1;
-    if ((dots < 2 && !port) || !/\.[a-z][a-z0-9-]{1,62}$/.test(h) || keep.has(host) || KEEP_HOSTS.has(h) || /\.ts\.net$/.test(h)) return m;
+    if ((dots < 2 && !port && !PRIVATE_SUFFIX.test(h)) || !/\.[a-z][a-z0-9-]{1,62}$/.test(h) || keep.has(host) || KEEP_HOSTS.has(h) || tailnetKept(h, hub)) return m;
     return `${hashName(h, salt)}${port || ''}`;
   });
   out = out.replace(P.REPO_REF, (m, org, repo, n) => park(`${hashName(org, salt)}/${hashName(repo, salt)}#${n}`));
@@ -321,36 +326,42 @@ function scrub(text, { home = null, user = null, hostname = null, names = [], sa
   return out.replace(/\u0001(\d+)\u0002/g, (m, i) => parked[Number(i)]);
 }
 
-// phoneOk() keeps only a real-looking number (PATTERNS.PHONE): a leading + or 0,
-// 9-15 digits and at least two separators, so versions, dates, times, ticket keys and
-// counts stay.
+// A number PATTERNS.PHONE found is a phone with 9-15 digits (E.164 allows 15). The shapes
+// already need a leading +, a leading 0 or a 3-3-4 North American grouping, so versions,
+// dates, times, ticket keys and counts never reach here.
 function phoneOk(m) {
   const digits = m.replace(/\D/g, '').length;
-  const seps = m.match(/[ .-]|\)/g) || [];
-  return digits >= 9 && digits <= 15 && /^(?:\+|\(?0)/.test(m) && seps.length >= 2 && !seps.every((c) => c === '.');
+  return digits >= 9 && digits <= 15;
 }
+// Private names that need no third label: nas.local, jenkins.corp, api.internal.
+const PRIVATE_SUFFIX = /\.(?:local|lan|internal|corp|intranet|home\.arpa)$/;
+// A tailnet name is kept only when it is the hub the text is going to; with no hub
+// given (diagnostics) every tailnet name is kept, as before.
+const tailnetKept = (h, hubHost) => /\.ts\.net$/.test(h) && (hubHost === undefined || h === hubHost);
 // File names look like dotted host names (foo.test.js); a last label that is a code or
 // document extension is a file, not a host.
 const FILE_EXTS = new Set(['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'md', 'mdx', 'html', 'htm', 'css', 'scss', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'cs', 'php', 'sh', 'zsh', 'yml', 'yaml', 'toml', 'lock', 'txt', 'log', 'xml', 'svg', 'png', 'jpg', 'gif', 'sql', 'vue', 'svelte', 'map', 'snap', 'plist', 'env', 'ini', 'cfg', 'conf', 'pdf', 'csv', 'zip', 'gz', 'tar', 'wasm', 'dart', 'lua', 'ex', 'exs', 'erl', 'hs', 'ml', 'scala', 'gradle', 'mod', 'sum']);
-const privateHost = (host, port) => {
+const privateHost = (host, port, hubHost = null) => {
   const h = host.toLowerCase();
   const labels = h.split('.');
-  if (labels.length < 3 && !port) return false;
+  if (labels.length < 3 && !port && !PRIVATE_SUFFIX.test(h)) return false;
   if (!/\.[a-z][a-z0-9-]{1,62}$/.test(h) || FILE_EXTS.has(labels[labels.length - 1])) return false;
-  return !KEEP_HOSTS.has(h) && !/\.ts\.net$/.test(h);
+  return !KEEP_HOSTS.has(h) && h !== hubHost;
 };
 
 // A title on its way to a team hub (review L2). Unlike scrub() it labels what it removes
 // ([ip], [host], [phone], [email]) instead of hashing, so the title still reads.
-function scrubTitle(text) {
+//   hubHost: the destination hub's host name, the one tailnet name a title may keep
+function scrubTitle(text, { hubHost = null } = {}) {
+  const hub = typeof hubHost === 'string' && hubHost ? hubHost.toLowerCase() : null;
   let out = redactSecretsPass(String(text ?? ''));
   out = out.replace(PATTERNS.EMAIL, '[email]');
-  out = out.replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8})(:\d{1,5})?/gi, (m, scheme, host, port) => (privateHost(host, port) ? `${scheme}[host]` : m));
+  out = out.replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8})(:\d{1,5})?/gi, (m, scheme, host, port) => (privateHost(host, port, hub) ? `${scheme}[host]` : m));
   // "1.2.3.4-beta" is a version with a prerelease tag, not an address.
   out = out.replace(PATTERNS.IPV4, (m, at, all) => (KEEP_IPS.has(m) || /^-[a-z]/i.test(all.slice(at + m.length)) ? m : '[ip]'));
   // IPv6 needs a digit: "a::b" and "std::vector" are code.
   out = out.replace(PATTERNS.IPV6, (m) => (KEEP_IPS.has(m) || !/\d/.test(m) ? m : '[ip]'));
-  out = out.replace(PATTERNS.BARE_HOST, (m, host, port) => (privateHost(host, port) ? '[host]' : m));
+  out = out.replace(PATTERNS.BARE_HOST, (m, host, port) => (privateHost(host, port, hub) ? '[host]' : m));
   out = out.replace(PATTERNS.PHONE, (m) => (phoneOk(m) ? '[phone]' : m));
   return out.replace(/[ \t]{2,}/g, ' ');
 }

@@ -204,3 +204,51 @@ test('scrub: phone numbers go, with the same guards as scrubTitle', () => {
     if (!OVER.has(g)) assert.equal(out, g, g);
   }
 });
+
+// #52 review: more phone shapes, package@version is no email, two-label private hosts,
+// and a tailnet name other than the hub's own.
+const REVIEW_LEAKS = [
+  ['call (415) 555-0100', '555-0100', '[phone]'],
+  ['call 415-555-0100', '415-555-0100', '[phone]'],
+  ['call 1-800-555-0100', '800-555-0100', '[phone]'],
+  ['call 415.555.0100', '415.555.0100', '[phone]'],
+  ['call +27.82.555.0199', '555.0199', '[phone]'],
+  ['call +27825550199', '27825550199', '[phone]'],
+  ['call 0825550199', '0825550199', '[phone]'],
+  ['call +49 (0)30 123456', '123456', '[phone]'],
+  ['call 082 555 0199.', '0199', '[phone]'],
+  ['mount nas.local', 'nas.local', '[host]'],
+  ['deploy via jenkins.corp', 'jenkins.corp', '[host]'],
+  ['GET api.internal/health', 'api.internal', '[host]'],
+  ['open router.lan', 'router.lan', '[host]'],
+  ['open nas.home.arpa', 'nas.home.arpa', '[host]'],
+  ['open wiki.intranet', 'wiki.intranet', '[host]'],
+  ['ssh callums-mac.tail1234.ts.net', 'callums-mac', '[host]'],
+];
+const REVIEW_GUARDS = [
+  'bump react@18.3.1', 'react-dom@18.3.1', '@types/node@20.1.0', 'npx create-next-app@14.2.3',
+  'due 2026-10-24', 'at 10:30:15', 'v1.2.3', 'issue #4155550100', 'PR 1234', 'ENG-4155',
+  'hub.tail1234.ts.net', 'port 8080 and 3000',
+];
+test('scrubTitle: #52 review leaks go, and the guards stay', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  const hub = { hubHost: 'hub.tail1234.ts.net' };
+  for (const [input, gone, mark] of REVIEW_LEAKS) {
+    const out = scrubTitle(input, hub);
+    assert.ok(!out.includes(gone) && out.includes(mark), `${input} -> ${out}`);
+  }
+  for (const g of [...REVIEW_GUARDS, ...TITLE_GUARDS]) assert.equal(scrubTitle(g, hub), g, g);
+  // A 40-character hash is never a phone. (The secret pass already takes it as a
+  // possible token; that over-redaction is for the follow-up PR, not this one.)
+  for (const h of ['commit 3f2c9a0e4b1d8c7f6e5a4b3c2d1e0f9a8b7c6d5e', 'sha 0825550199abcdef0123456789abcdef01234567']) assert.doesNotMatch(scrubTitle(h, hub), /\[phone\]/, h);
+  assert.equal(scrubTitle('mail sam@acme.co.za', hub), 'mail [email]');
+  assert.equal(scrubTitle('ssh hub.tail1234.ts.net'), 'ssh [host]', 'no hub given: every tailnet name goes');
+});
+test('scrub: the review phone shapes go and package versions are no email', () => {
+  for (const [input, gone] of REVIEW_LEAKS.filter(([, , m]) => m === '[phone]')) {
+    const out = scrub(input, opts);
+    assert.ok(!out.includes(gone) && out.includes('[phone]'), `${input} -> ${out}`);
+  }
+  for (const g of REVIEW_GUARDS) { const out = scrub(g, opts); assert.ok(!/\[phone\]|\[email\]/.test(out), `${g} -> ${out}`); }
+  for (const h of ['nas.local', 'jenkins.corp', 'api.internal']) assert.ok(!scrub(`open ${h}`, opts).includes(h), h);
+});
