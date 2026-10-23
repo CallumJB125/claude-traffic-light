@@ -253,16 +253,246 @@ test('step 10: a linked agents folder, a link to ~/.ssh/id_rsa and a planted bac
   assert.equal(ownedCount(u), 0);
 });
 
-test('step 11: the documented manual restore (ditto, or cp -Rp) recreates the folder exactly', { skip: process.platform === 'win32' }, () => {
+test('step 11: the documented restore (into a new folder, then swap by hand) gets the folder back, and changes nothing until the swap', { skip: process.platform !== 'darwin' }, () => {
   const s = setup();
-  // ditto and cp -Rp keep every file's and folder's time but not a link's own.
+  // The data folder under home, as in the app, so a command is offered.
+  s.it = createAgentInstaller({ home: s.home, dataRoot: path.join(s.home, 'Library', 'Plexiform'), catalog: shipped, ledgerKey: Buffer.alloc(32, 9) });
+  // ditto keeps every file's and folder's time but not a link's own.
   const before = s.fp({ linkTimes: false });
-  s.it.adopt();
-  const [b] = backupsOf(s);
-  fs.rmSync(s.fx.dir, { recursive: true, force: true });
-  if (process.platform === 'darwin') execFileSync('/usr/bin/ditto', [path.join(s.data, 'agent-backups', b), s.fx.dir]);
-  else execFileSync('cp', ['-Rp', path.join(s.data, 'agent-backups', b), s.fx.dir]);
-  fs.chmodSync(s.fx.dir, fs.statSync(path.join(s.home, '.claude')).mode & 0o777);
+  const a = s.it.adopt();
+  // Later the person adds and edits files, then wants the old folder back.
+  fs.writeFileSync(path.join(s.fx.dir, 'added-later.md'), 'new\n');
+  fs.appendFileSync(path.join(s.fx.dir, s.fx.own[0]), 'edit\n');
+  const live = s.fp();
+  const cmd = s.it.restoreCommand(a.backup);
+  assert.match(cmd, /^ditto "\$HOME\/[^"]+" "\$HOME\/\.claude\/agents-restored"$/);
+  execFileSync('/bin/sh', ['-c', cmd], { env: { ...process.env, HOME: s.home } });
+  assert.deepEqual(s.fp(), live, 'restoring into a new folder leaves the live one alone');
+  assert.deepEqual(FP.fingerprint(path.join(s.home, '.claude', 'agents-restored'), { linkTimes: false }), before);
+  // The swap, by hand.
+  fs.renameSync(s.fx.dir, path.join(s.home, '.claude', 'agents-old'));
+  fs.renameSync(path.join(s.home, '.claude', 'agents-restored'), s.fx.dir);
+  fs.utimesSync(s.fx.dir, fs.statSync(path.join(s.home, '.claude', 'agents-old')).atime, fs.statSync(path.join(s.home, '.claude', 'agents-old')).mtime);
   assert.deepEqual(s.fp({ linkTimes: false }), before);
   assert.equal(execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'agents-fingerprint.js'), s.fx.dir, '--restore']).toString().trim(), `digest ${FP.digest(before)} (${before.length} entries)`);
 });
+
+test('step 11b: why Help never says "ditto puts it back": ditto into the live folder merges and keeps files added since', { skip: process.platform !== 'darwin' }, () => {
+  const s = setup();
+  const before = s.fp({ linkTimes: false });
+  const a = s.it.adopt();
+  fs.writeFileSync(path.join(s.fx.dir, 'added-later.md'), 'new\n');
+  execFileSync('/usr/bin/ditto', [s.it.backupPath(a.backup), s.fx.dir]);
+  assert.notDeepEqual(s.fp({ linkTimes: false }), before);
+  assert.ok(fs.existsSync(path.join(s.fx.dir, 'added-later.md')));
+});
+
+test('change 4: no restore command when the data folder is outside home; ids only, checked against the listed backups', () => {
+  const s = setup();
+  const a = s.it.adopt();
+  assert.equal(s.it.restoreCommand(a.backup), null, 'the temp data folder is not under the temp home');
+  assert.deepEqual(s.it.backups().map((b) => b.id), [a.backup]);
+  for (const bad of ['../x', `${a.backup}/..`, a.backup.replace(/-[0-9a-f]{8}$/, '-zzzzzzzz'), 'claude-agents-20261023T000000000Z-00000000', null, 7]) {
+    assert.equal(s.it.backupPath(bad), null, String(bad));
+    assert.equal(s.it.restoreBackupPlan(bad).ok, false);
+  }
+  const home = s.home, data = path.join(home, 'Library', 'Plexiform');
+  const t = createAgentInstaller({ home, dataRoot: data, catalog: shipped, ledgerKey: Buffer.alloc(32, 9) });
+  const b = t.adopt([`.claude/agents/${s.fx.exact[0].name}`]);
+  assert.equal(t.restoreCommand(b.backup), `ditto "$HOME/Library/Plexiform/agent-backups/${b.backup}" "$HOME/.claude/agents-restored"`);
+});
+
+test('change 9: restoreBackupPlan gives names and states only, never bytes, and reads no link', () => {
+  const s = setup();
+  const a = s.it.adopt();
+  fs.writeFileSync(path.join(s.fx.dir, 'added-later.md'), 'new\n');
+  fs.appendFileSync(path.join(s.fx.dir, s.fx.own[0]), 'edit\n');
+  fs.rmSync(path.join(s.fx.dir, s.fx.own[1]));
+  const plan = s.it.restoreBackupPlan(a.backup);
+  const by = new Map(plan.items.map((i) => [i.path.split('/').pop(), i.state]));
+  assert.equal(by.get('added-later.md'), 'added-since');
+  assert.equal(by.get(s.fx.own[0]), 'differs');
+  assert.equal(by.get(s.fx.own[1]), 'gone-now');
+  assert.equal(by.get(s.fx.exact[0].name), 'same');
+  assert.equal(by.get('secret.md'), 'differs', 'a link is never read, so never "same"');
+  assert.ok(plan.items.every((i) => Object.keys(i).join() === 'path,state' && i.path.startsWith('~/.claude/agents/')));
+  assert.ok(!JSON.stringify(plan).includes(s.fx.secret.slice(0, 20)));
+});
+
+// Folders outside ~/.claude/agents that the fixture has: none may change.
+const outside = (s, extra = []) => [path.join(s.home, 'elsewhere'), path.join(s.home, '.ssh'), ...extra].map((d) => `${(fs.statSync(d).mode & 0o7777).toString(8)} ${FP.fingerprint(d).join('|')}`).concat([s.home, path.join(s.home, '.claude')].map((d) => (fs.lstatSync(d).mode & 0o7777).toString(8)));
+const throwingLedger = (armed) => new Proxy(fs, { get: (t, k) => (k === 'renameSync' ? (from, to) => { if (armed.on && String(to).endsWith('agent-installs.json')) throw new Error('simulated ledger failure'); return t.renameSync(from, to); } : t[k]) });
+
+test('change 8: hostile folders and files: swaps, links, planted backups, a linked data folder, hard links, a FIFO and oversize', { skip: process.platform === 'win32' }, () => {
+  // agents swapped for a link between adoptable() and the copy (P2).
+  {
+    const s = setup();
+    const victim = tmp('af-adopt-victim-');
+    fs.writeFileSync(path.join(victim, 'x.md'), 'x');
+    fs.chmodSync(victim, 0o755);
+    const was = outside(s, [victim]);
+    let swapped = false;
+    const fsApi = new Proxy(fs, { get: (t, k) => (k === 'cpSync' ? (...a) => { if (!swapped) { swapped = true; t.renameSync(s.fx.dir, `${s.fx.dir}.real`); t.symlinkSync(victim, s.fx.dir); } return t.cpSync(...a); } : t[k]) });
+    const r = s.inst(shipped, { fsApi }).adopt();
+    assert.equal(r.status, 'backup');
+    assert.deepEqual(outside(s, [victim]), was, 'no outside folder changed, modes included');
+    assert.deepEqual(backupsOf(s), []);
+    assert.equal(ownedCount(s), 0);
+  }
+  // ~/.claude itself a link.
+  {
+    const s = setup();
+    const real = path.join(s.home, 'real-claude');
+    fs.renameSync(path.join(s.home, '.claude'), real);
+    fs.symlinkSync(real, path.join(s.home, '.claude'));
+    const was = FP.fingerprint(real);
+    assert.equal(s.it.adopt().opId, null);
+    assert.deepEqual(FP.fingerprint(real), was);
+    assert.deepEqual(backupsOf(s), []);
+  }
+  // A planted, newer, real backup folder with a valid name is not relied on.
+  {
+    const s = setup();
+    const root = path.join(s.data, 'agent-backups');
+    fs.mkdirSync(root, { recursive: true });
+    const planted = 'claude-agents-20000101T000000000Z-deadbeef';
+    fs.mkdirSync(path.join(root, planted));
+    fs.writeFileSync(path.join(root, planted, s.fx.exact[0].name), 'not it');
+    const r = s.it.adopt();
+    assert.equal(r.ok, true);
+    assert.notEqual(r.backup, planted);
+    assert.deepEqual(FP.fingerprint(s.it.backupPath(r.backup)), s.fp());
+  }
+  // The data folder as a link.
+  {
+    const s = setup();
+    const target = tmp('af-adopt-datalink-');
+    fs.rmSync(s.data, { recursive: true });
+    fs.symlinkSync(target, s.data);
+    const r = s.it.adopt();
+    assert.equal(r.ok, false);
+    assert.deepEqual(fs.readdirSync(target), [], 'nothing written through the link');
+  }
+  // A hard link to a file outside, a FIFO, and oversize.
+  {
+    const s = setup();
+    const out = path.join(s.home, 'elsewhere', 'outside.md');
+    fs.writeFileSync(out, shipped.get(s.fx.exact[0].agentId).raw);
+    fs.linkSync(out, path.join(s.fx.dir, 'hardlinked.md'));
+    const was = outside(s);
+    assert.ok(!s.it.adoptable().matches.some((m) => m.rel.endsWith('/hardlinked.md')), 'nlink 2 is never adopted');
+    const r = s.it.adopt();
+    assert.equal(r.ok, true);
+    assert.deepEqual(outside(s), was);
+    assert.equal(fs.lstatSync(path.join(s.it.backupPath(r.backup), 'hardlinked.md')).nlink, 1, 'copied as bytes into the 0700 backup');
+  }
+  {
+    const s = setup();
+    execFileSync('mkfifo', [path.join(s.fx.dir, 'pipe.md')]);
+    const before = s.fp();
+    const r = s.it.adopt();
+    assert.equal(r.status, 'backup');
+    assert.match(r.error, /isn't a file, folder or link/);
+    assert.deepEqual(s.fp(), before);
+    assert.equal(ownedCount(s), 0);
+  }
+  {
+    const s = setup();
+    const big = path.join(s.fx.dir, 'huge.bin');
+    fs.closeSync(fs.openSync(big, 'w'));
+    fs.truncateSync(big, 65 * 1024 * 1024);
+    const r = s.it.adopt();
+    assert.equal(r.status, 'backup');
+    assert.match(r.error, /64 MB/);
+    assert.deepEqual(backupsOf(s), []);
+  }
+  {
+    const s = setup();
+    fs.mkdirSync(path.join(s.fx.dir, 'many'));
+    for (let i = 0; i < 5000; i++) fs.writeFileSync(path.join(s.fx.dir, 'many', `f${i}`), '');
+    const r = s.it.adopt();
+    assert.equal(r.status, 'backup');
+    assert.match(r.error, /more than 5000 entries/);
+  }
+});
+
+test('change 3: a file whose backup copy is not its exact bytes is not adopted', () => {
+  const s = setup();
+  const name = s.fx.exact[0].name;
+  let reads = 0;
+  const fsApi = new Proxy(fs, { get: (t, k) => (k === 'readFileSync' ? (p, ...a) => { const out = t.readFileSync(p, ...a); if (String(p).includes('agent-backups') && String(p).endsWith(`/${name}`) && ++reads === 2) return Buffer.from('tampered'); return out; } : t[k]) });
+  const r = s.inst(shipped, { fsApi }).adopt();
+  assert.equal(r.ok, true);
+  assert.ok(!r.adopted.some((p) => p.endsWith(`/${name}`)));
+  assert.equal(r.adopted.length, s.fx.adoptable.length - 1);
+});
+
+test('change 5: a file matching a catalogue agent only once decoded (invalid UTF-8) is yours, not adoptable', () => {
+  const s = setup();
+  const a = shipped.get('voltagent/embedded-systems');
+  const at = Buffer.from(a.raw.slice(0, a.raw.indexOf('�')), 'utf8').length;
+  const good = Buffer.from(a.raw, 'utf8');
+  const bad = Buffer.concat([good.subarray(0, at), Buffer.from([0xff]), good.subarray(at + 3)]);
+  assert.equal(bad.toString('utf8'), a.raw, 'decodes to the catalogue text');
+  fs.writeFileSync(path.join(s.fx.dir, 'embedded-lookalike.md'), bad);
+  fs.writeFileSync(path.join(s.fx.dir, 'embedded-systems-real.md'), good);
+  const m = s.it.adoptable().matches.map((x) => x.rel.split('/').pop());
+  assert.ok(!m.includes('embedded-lookalike.md'));
+  assert.ok(m.includes('embedded-systems-real.md'), 'the real bytes, U+FFFD and all, still match');
+});
+
+test('change 6: a failed ledger save during undo (each kind) or stop managing puts the files back', () => {
+  for (const kind of ['add', 'adopt', 'update', 'remove', 'release']) {
+    const s = setup();
+    const e = s.fx.exact[0];
+    const armed = { on: false };
+    const cat = newer(shipped, [e.agentId]);
+    let opId;
+    const it = s.inst(cat, { fsApi: throwingLedger(armed) });
+    if (kind === 'adopt') { s.it.adopt(); it.update(e.agentId); opId = JSON.parse(fs.readFileSync(s.it.ledgerPath, 'utf8')).ops[0].id; }
+    else if (kind === 'update') { s.it.adopt(); opId = it.update(e.agentId).opId; }
+    else if (kind === 'release') { s.it.adopt(); opId = it.stopManaging().opId; }
+    else {
+      const fresh = s.fx.own[0].replace('.md', '');
+      const extra = shipped.catalog.agents.find((a) => !s.fx.adoptable.includes(`${a.slug}.md`) && !fs.existsSync(path.join(s.fx.dir, `${a.slug}.md`)) && a.id !== fresh);
+      opId = it.add(extra.id, ['claude'], { catalogSha: cat.sha256 }).installId;
+      if (kind === 'remove') opId = it.remove(extra.id).opId;
+    }
+    assert.ok(opId, kind);
+    const before = s.fp({ mtime: false });
+    const ledger = fs.readFileSync(s.it.ledgerPath, 'utf8');
+    armed.on = true;
+    const r = it.undo(opId);
+    assert.equal(r.ok, false, kind);
+    assert.equal(r.status, 'ledger', kind);
+    assert.deepEqual(s.fp({ mtime: false }), before, `${kind}: files put back`);
+    assert.equal(fs.readFileSync(s.it.ledgerPath, 'utf8'), ledger, `${kind}: ledger unchanged`);
+    armed.on = false;
+    assert.equal(it.undo(opId).ok, true, `${kind}: still undoable`);
+  }
+  const s = setup();
+  s.it.adopt();
+  const armed = { on: true };
+  const before = s.fp();
+  const ledger = fs.readFileSync(s.it.ledgerPath, 'utf8');
+  assert.throws(() => s.inst(shipped, { fsApi: throwingLedger(armed) }).stopManaging());
+  assert.deepEqual(s.fp(), before);
+  assert.equal(fs.readFileSync(s.it.ledgerPath, 'utf8'), ledger);
+});
+
+test('change 6: after a hard kill (file written, ledger not), the file shows as yours and nothing touches it', () => {
+  const s = setup();
+  const e = s.fx.exact[0];
+  const a = s.it.adopt();
+  const cat = newer(shipped, [e.agentId]);
+  const f = path.join(s.fx.dir, e.name);
+  fs.writeFileSync(f, cat.get(e.agentId).raw);
+  const killed = s.fp();
+  const it = s.inst(cat);
+  assert.equal(it.status().items.find((i) => i.path.endsWith(`/${e.name}`)).state, 'modified');
+  assert.equal(it.update(e.agentId).results[0].outcome, 'skipped');
+  assert.equal(it.remove(e.agentId).results[0].outcome, 'skipped');
+  it.undo(a.opId);
+  assert.deepEqual(s.fp(), killed);
+});
+

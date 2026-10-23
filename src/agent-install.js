@@ -29,10 +29,19 @@ const BACKUPS_DIR = 'agent-backups';
 const MAX_OPS = 500;
 const MAX_ADOPT_SCAN = 2000;
 const MAX_BACKUPS = 5;
+// A backup larger than this is refused rather than half made (review PR 4 change 3).
+const MAX_BACKUP_ENTRIES = 5000;
+const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
 const BACKUP_NAME = /^claude-agents-\d{8}T\d{9}Z-[0-9a-f]{8}$/;
 const sha = (text) => createHash('sha256').update(text).digest('hex');
 const refuse = (status, error, extra = {}) => ({ ok: false, status, error, ...extra });
 const tilde = (rel) => `~/${rel}`;
+const BACKUP_REFUSED = Object.freeze({
+  'too-many': `~/.claude/agents has more than ${MAX_BACKUP_ENTRIES} entries, so Plexiform won't back it up or adopt from it.`,
+  'too-big': 'The files in ~/.claude/agents add up to more than 64 MB, so Plexiform won\'t back it up or adopt from it.',
+  special: '~/.claude/agents holds something that isn\'t a file, folder or link (such as a pipe), so Plexiform won\'t back it up or adopt from it.',
+  default: 'Could not back up ~/.claude/agents first, so nothing was adopted.',
+});
 const UNDO_KINDS = new Set(['add', 'adopt', 'update', 'remove', 'release']);
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
@@ -190,7 +199,7 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
   }
 
   function current(rel) {
-    try { const r = files.readTarget(rel); return { ok: true, text: r.text, sha: r.text == null ? null : sha(r.text) }; } catch (e) { return { ok: false, reason: e.message === 'link' ? 'The folder or file is a link, so Plexiform leaves it alone.' : 'Not a regular file Plexiform can change safely.' }; }
+    try { const r = files.readTarget(rel); return { ok: true, text: r.text, sha: r.text == null ? null : sha(r.text), bytesSha: r.bytesSha256 ?? null, utf8: r.utf8 !== false }; } catch (e) { return { ok: false, reason: e.message === 'link' ? 'The folder or file is a link, so Plexiform leaves it alone.' : 'Not a regular file Plexiform can change safely.' }; }
   }
   function write(rel, text, opts) {
     if (failAfterWrites !== null && writesDone >= failAfterWrites) throw new Error('simulated write failure');
@@ -321,6 +330,20 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     }
   }
 
+  // Puts back what undo() changed, newest first, only where the file is still
+  // exactly what undo left (null: undo removed it, so it must still be gone).
+  function undoSwaps(done) {
+    for (const d of [...done].reverse()) {
+      const cur = current(d.rel);
+      if (!cur.ok) continue;
+      try {
+        if (d.after === null ? cur.text != null : cur.sha !== d.after) continue;
+        if (d.before === null) files.removeTarget(d.rel);
+        else files.writeTarget(d.rel, original(d.before, d.platform), 0o644);
+      } catch { /* left as it is; the file shows as modified */ }
+    }
+  }
+
   // ── update an owned copy to the current catalogue version ─────────────────
   function update(agentId) {
     const agent = catalog.get(agentId);
@@ -415,7 +438,9 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
       if (ledger.owned[keyOf('claude', rel)]) continue;
       const cur = current(rel);
       if (!cur.ok || cur.text == null) continue;
-      const a = byHash.get(cur.sha);
+      // Matched on the file's bytes, and only if they are valid UTF-8, so
+      // the kept original and an undo put back exactly those bytes (change 5).
+      const a = cur.utf8 && cur.bytesSha === cur.sha ? byHash.get(cur.bytesSha) : null;
       if (a) matches.push({ rel, path: tilde(rel), agentId: a.id, name: a.name, sha: cur.sha });
       else userOwned++;
     }
@@ -461,10 +486,28 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     };
     const realDir = (p) => { const st = fsApi.lstatSync(p); return st.isDirectory() && !st.isSymbolicLink(); };
     const pinned = pin();
+    // The data folder as a link would put the backup somewhere else (change 8).
+    if (fsApi.lstatSync(DATA, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error('link');
     fsApi.mkdirSync(root, { recursive: true, mode: 0o700 });
     if (!realDir(root)) throw new Error('link');
     const newest = backupsIn(root).at(-1);
     if (newest && fingerprint(path.join(root, newest)) === fingerprint(src) && pin() === pinned) return path.join(root, newest);
+    // Counted before anything is copied: too many entries, too many bytes, or
+    // anything but files, folders and links (a FIFO, a socket) is refused.
+    // A hard-linked file is copied as its bytes into the 0700 backup, which
+    // is fine: the backup is a snapshot, never written back by Plexiform.
+    let entries = 0, bytes = 0;
+    const scan = (d) => {
+      for (const n of fsApi.readdirSync(d)) {
+        const st = fsApi.lstatSync(path.join(d, n));
+        if (++entries > MAX_BACKUP_ENTRIES) throw Object.assign(new Error('too many'), { code: 'too-many' });
+        if (st.isSymbolicLink()) continue;
+        if (st.isDirectory()) scan(path.join(d, n));
+        else if (st.isFile()) { if ((bytes += st.size) > MAX_BACKUP_BYTES) throw Object.assign(new Error('too big'), { code: 'too-big' }); }
+        else throw Object.assign(new Error('special'), { code: 'special' });
+      }
+    };
+    scan(src);
     const ms = String(new Date(now()).getUTCMilliseconds()).padStart(3, '0');
     const dest = path.join(root, `claude-agents-${stamp(now()).replace(/Z$/, `${ms}Z`)}-${randomUUID().slice(0, 8)}`);
     // Plexiform makes the folder itself (0700, so nothing needs a chmod that
@@ -539,12 +582,15 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     const ledger = readLedger();
     const inUse = new Set(ledger.ops.filter((o) => o.kind === 'adopt' && !o.undone && typeof o.backup === 'string').map((o) => path.basename(o.backup)));
     let backup;
-    try { backup = backupClaudeAgents(inUse); } catch { return refuse('backup', 'Could not back up ~/.claude/agents first, so nothing was adopted.'); }
+    try { backup = backupClaudeAgents(inUse); } catch (e) { return refuse('backup', BACKUP_REFUSED[e.code] ?? BACKUP_REFUSED.default); }
     const at = new Date(now()).toISOString();
     const changes = [];
     for (const m of chosen) {
       const cur = current(m.rel);
-      if (!cur.ok || cur.sha !== m.sha) continue;
+      if (!cur.ok || cur.sha !== m.sha || cur.bytesSha !== m.sha || !cur.utf8) continue;
+      // "Backed up first" is literal: the backup's copy of this file has
+      // exactly the bytes being adopted, or the file is skipped (change 3).
+      if (!backedUp(backup, m.rel, m.sha)) continue;
       const agent = catalog.get(m.agentId);
       keepOriginal(cur.text);
       ledger.owned[keyOf('claude', m.rel)] = { platform: 'claude', rel: m.rel, agentId: m.agentId, how: 'adopted', sha: m.sha, original: m.sha, fileSha256: agent.fileSha256, since: at };
@@ -555,7 +601,73 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     const op = { id: randomUUID(), kind: 'adopt', at, backup: path.relative(DATA, backup), changes };
     ledger.ops.push(op);
     writeLedger(ledger);
-    return { ok: true, opId: op.id, adopted: changes.map((c) => tilde(c.rel)), backup };
+    return { ok: true, opId: op.id, adopted: changes.map((c) => tilde(c.rel)), backup: path.basename(backup) };
+  }
+  function backedUp(backup, rel, want) {
+    try {
+      const p = path.join(backup, path.basename(rel)), st = fsApi.lstatSync(p);
+      return st.isFile() && !st.isSymbolicLink() && sha(fsApi.readFileSync(p)) === want;
+    } catch { return false; }
+  }
+
+  // ── backups, for main only ────────────────────────────────────────────────
+  /** The backups Plexiform made: id (the folder name), when, how many entries. */
+  function backups() {
+    const root = path.join(DATA, BACKUPS_DIR);
+    try { if (!fsApi.lstatSync(root).isDirectory() || fsApi.lstatSync(root).isSymbolicLink()) return []; } catch { return []; }
+    return backupsIn(root).map((id) => {
+      const m = /^claude-agents-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})Z/.exec(id);
+      let files = 0; try { files = fsApi.readdirSync(path.join(root, id)).length; } catch { /* counted as 0 */ }
+      return { id, at: m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}.${m[7]}Z` : null, files };
+    });
+  }
+  /** The absolute folder of a listed backup, or null: a real folder under a real backup root. */
+  function backupPath(id) {
+    if (typeof id !== 'string' || !BACKUP_NAME.test(id)) return null;
+    const root = path.join(DATA, BACKUPS_DIR);
+    try {
+      const r = fsApi.lstatSync(root), d = fsApi.lstatSync(path.join(root, id));
+      if (r.isSymbolicLink() || !r.isDirectory() || d.isSymbolicLink() || !d.isDirectory()) return null;
+    } catch { return null; }
+    return backupsIn(root).includes(id) ? path.join(root, id) : null;
+  }
+  /**
+   * The manual restore, in ~ form, or null when the data folder isn't under
+   * home (then only "Show backup" is offered). It restores into a new
+   * folder: ditto into the live one would merge, keeping files added since,
+   * and write through a link if agents became one (change 4).
+   */
+  function restoreCommand(id) {
+    const dir = backupPath(id);
+    if (!dir || !dir.startsWith(HOME + path.sep)) return null;
+    const rel = path.relative(HOME, dir).split(path.sep).join('/');
+    if (!/^[A-Za-z0-9._/ -]+$/.test(rel)) return null;
+    return `ditto "$HOME/${rel}" "$HOME/.claude/agents-restored"`;
+  }
+  /**
+   * What restoring a backup by hand would change in ~/.claude/agents, per
+   * top-level name: 'same', 'differs', 'gone-now' (in the backup only) or
+   * 'added-since' (only in the folder now). Names and states only, never
+   * bytes; the folder is read only through readTarget (no links, nlink 1).
+   */
+  function restoreBackupPlan(id) {
+    const dir = backupPath(id);
+    if (!dir) return refuse('unavailable', 'That backup is gone.');
+    const inBackup = new Map();
+    for (const n of fsApi.readdirSync(dir).sort()) {
+      const st = fsApi.lstatSync(path.join(dir, n));
+      inBackup.set(n, st.isFile() && !st.isSymbolicLink() ? sha(fsApi.readFileSync(path.join(dir, n))) : null);
+    }
+    let here = [];
+    try { files.locate(`${CLAUDE_DIR}/x`); here = fsApi.readdirSync(path.join(HOME, CLAUDE_DIR)).sort(); } catch { here = []; }
+    const out = [];
+    for (const [n, h] of inBackup) {
+      if (!here.includes(n)) { out.push({ path: tilde(`${CLAUDE_DIR}/${n}`), state: 'gone-now' }); continue; }
+      let cur; try { cur = files.readTarget(`${CLAUDE_DIR}/${n}`); } catch { cur = null; }
+      out.push({ path: tilde(`${CLAUDE_DIR}/${n}`), state: h !== null && cur?.text != null && cur.bytesSha256 === h ? 'same' : 'differs' });
+    }
+    for (const n of here) if (!inBackup.has(n)) out.push({ path: tilde(`${CLAUDE_DIR}/${n}`), state: 'added-since' });
+    return { ok: true, items: out };
   }
 
   /** Releases every adopted file: the files stay exactly as they are. */
@@ -580,6 +692,10 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     // refused before anything is marked undone, so it stays undoable.
     if (!UNDO_KINDS.has(op.kind)) return refuse('unavailable', 'Nothing to undo for this click.');
     const restored = [], conflicts = [];
+    // Every file this undo changes, so a failed ledger save can put them back
+    // (review PR 4 change 6): prev is the kept copy of what was there.
+    const done = [];
+    const swap = (c, next, fn) => { const cur = current(c.rel); const prev = cur.text == null ? null : keepOriginal(cur.text); fn(); done.push({ platform: c.platform, rel: c.rel, before: prev, after: next }); };
     for (const c of op.changes) {
       const k = keyOf(c.platform, c.rel);
       const cur = current(c.rel);
@@ -593,7 +709,7 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
           if (cur.text == null) { if (ours) delete ledger.owned[k]; restored.push(label); continue; }
           if (!ours) { conflicts.push({ path: label, reason: 'Plexiform no longer manages this file, so it is kept.' }); continue; }
           if (cur.sha !== c.after) { conflicts.push({ path: label, reason: 'Changed since it was added, so it is kept.' }); continue; }
-          files.removeTarget(c.rel);
+          swap(c, null, () => files.removeTarget(c.rel));
           delete ledger.owned[k];
         } else if (op.kind === 'adopt') {
           // Never deletes: puts the original bytes back if Plexiform changed them.
@@ -603,18 +719,18 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
             // Only bytes that were a catalogue agent can have been adopted: this
             // catalogue's, or the original the adoption itself recorded (signed, R1b).
             if (!catalogHashes.has(c.before) && !(o?.how === 'adopted' && o.original === c.before)) { conflicts.push({ path: label, reason: 'The kept copy is not a catalogue agent, so it is not put back.' }); delete ledger.owned[k]; continue; }
-            write(c.rel, original(c.before, c.platform));
+            swap(c, c.before, () => write(c.rel, original(c.before, c.platform)));
           }
           delete ledger.owned[k];
         } else if (op.kind === 'update') {
           if (!o || o.sha !== c.after) { conflicts.push({ path: label, reason: 'Plexiform no longer manages this file as updated, so it is kept.' }); continue; }
           if (cur.sha !== c.after) { conflicts.push({ path: label, reason: 'Changed since the update, so it is kept.' }); continue; }
-          write(c.rel, original(c.before, c.platform));
+          swap(c, c.before, () => write(c.rel, original(c.before, c.platform)));
           Object.assign(o, { sha: c.before, fileSha256: c.prevFileSha256 });
         } else if (op.kind === 'remove' || op.kind === 'release') {
           if (c.after === null && c.before !== null) {
             if (cur.text != null) { conflicts.push({ path: label, reason: 'A file is there again, so it is kept.' }); continue; }
-            write(c.rel, original(c.before, c.platform), { exclusive: true });
+            swap(c, c.before, () => write(c.rel, original(c.before, c.platform), { exclusive: true }));
           } else if (c.before !== null && cur.sha !== c.before) { conflicts.push({ path: label, reason: 'Changed since, so Plexiform does not manage it again.' }); continue; }
           if (c.owned && (c.before !== null || c.after !== null)) ledger.owned[k] = c.owned;
         }
@@ -622,7 +738,10 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
       } catch { conflicts.push({ path: label, reason: 'Could not be changed safely.' }); }
     }
     op.undone = new Date(now()).toISOString();
-    writeLedger(ledger);
+    try { writeLedger(ledger); } catch {
+      undoSwaps(done);
+      return refuse('ledger', 'Couldn\'t save Plexiform\'s record of added agents, so the undo was put back.');
+    }
     return { ok: true, restored, conflicts };
   }
 
@@ -686,7 +805,7 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     return { ok: true, restored: [path.join(op.project, c.rel)], conflicts: [] };
   }
 
-  return { platformsFor, preview, add, update, remove, adoptable, adopt, stopManaging, undo, status, addToProject, undoProject, ledgerPath };
+  return { platformsFor, preview, add, update, remove, adoptable, adopt, stopManaging, undo, status, addToProject, undoProject, backups, backupPath, restoreBackupPlan, restoreCommand, ledgerPath };
 }
 
 /**

@@ -369,10 +369,12 @@ test('adoption: backs up first, adopts exact matches only, undo restores bytes a
   assert.equal(found.userOwned, 2);
   const a = inst.adopt();
   assert.deepEqual(a.adopted, ['~/.claude/agents/frontend-dev-old-name.md']);
-  assert.ok(a.backup.startsWith(path.join(data, 'agent-backups', 'claude-agents-')));
-  assert.deepEqual(fs.readdirSync(a.backup).sort(), ['frontend-dev-old-name.md', 'link.md', 'reviewer.md', 'unrelated.md']);
-  assert.ok(fs.lstatSync(path.join(a.backup, 'link.md')).isSymbolicLink(), 'links are backed up as links');
-  assert.equal(fs.readFileSync(path.join(a.backup, 'reviewer.md'), 'utf8'), `${RO.raw}\nmy tweak\n`);
+  assert.match(a.backup, /^claude-agents-\d{8}T\d{9}Z-[0-9a-f]{8}$/, 'an id, never a path (PR 4 change 4)');
+  const bdir = inst.backupPath(a.backup);
+  assert.equal(bdir, path.join(data, 'agent-backups', a.backup));
+  assert.deepEqual(fs.readdirSync(bdir).sort(), ['frontend-dev-old-name.md', 'link.md', 'reviewer.md', 'unrelated.md']);
+  assert.ok(fs.lstatSync(path.join(bdir, 'link.md')).isSymbolicLink(), 'links are backed up as links');
+  assert.equal(fs.readFileSync(path.join(bdir, 'reviewer.md'), 'utf8'), `${RO.raw}\nmy tweak\n`);
   assert.equal(read(home, '.claude/agents/frontend-dev-old-name.md'), FE.raw, 'adoption changes no bytes');
   assert.equal(read(home, '.claude/agents/reviewer.md'), `${RO.raw}\nmy tweak\n`);
   assert.deepEqual(inst.adoptable().matches, [], 'already adopted');
@@ -731,16 +733,16 @@ test('security L3: backups are reused when nothing changed and capped at the new
     inst.undo(prev.opId);
     fs.writeFileSync(path.join(dir, `mine-${i}.md`), `mine ${i}\n`);
     const a = inst.adopt();
-    assert.deepEqual(fs.readdirSync(a.backup).sort(), ['frontend-developer.md', ...Array.from({ length: i + 1 }, (_, j) => `mine-${j}.md`)].sort());
+    assert.deepEqual(fs.readdirSync(inst.backupPath(a.backup)).sort(), ['frontend-developer.md', ...Array.from({ length: i + 1 }, (_, j) => `mine-${j}.md`)].sort());
     prev = a;
   }
   assert.equal(backups().length, 5);
   assert.ok(fs.existsSync(path.join(data, 'agent-backups', backups().at(-1), 'mine-6.md')), 'the newest is kept');
-  assert.equal(path.join(data, 'agent-backups', backups()[0]), first.backup, 'the oldest is kept');
+  assert.equal(backups()[0], first.backup, 'the oldest is kept');
   // An adopt that stands keeps its backup however many come after.
   inst.stopManaging();
   for (let i = 7; i < 14; i++) { fs.writeFileSync(path.join(dir, `mine-${i}.md`), 'x'); inst.stopManaging(); inst.adopt(); }
-  assert.ok(backups().includes(path.basename(prev.backup)), 'still adopted, so kept');
+  assert.ok(backups().includes(prev.backup), 'still adopted, so kept');
 });
 
 test('security L3: PRIVACY.md lists the local files Find agents keeps and the folders it writes', () => {
