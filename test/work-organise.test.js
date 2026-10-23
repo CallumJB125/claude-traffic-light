@@ -603,7 +603,7 @@ test('work-organise: renderer mode (no scrubber) still strips paths, control and
 test('work-organise: N3 — percent-encoded, bare and $HOME home folders leave no name behind', () => {
   const probes = [
     'check %2FUsers%2Fsam%2Fx', 'check %2Fhome%2Fsam', 'check file%3A%2F%2F%2FUsers%2Fsam', 'check %252FUsers%252Fsam',
-    'see Users/sam', 'see Users\\sam\\x', 'check home/sam', 'check home/sam/notes.txt', 'check x$HOME/sam', 'check ${HOME}/sam/x', 'check $HOME',
+    'see Users/sam', 'see Users\\sam\\x', 'check home/sam/x', 'check home/sam/notes.txt', 'check x$HOME/sam', 'check ${HOME}/sam/x', 'check $HOME',
   ];
   for (const text of probes) {
     for (const [label, title] of [
@@ -672,7 +672,7 @@ test('work-organise: R2 — lower-case Linear keys count after an agent prefix, 
 });
 
 test('work-organise: a bare home folder goes whatever its case', () => {
-  for (const text of ['see users/sam/x', 'see USERS/sam', 'see Home/sam', 'see HOME\\sam\\notes']) {
+  for (const text of ['see users/sam/x', 'see USERS/sam/notes', 'see Home/sam/x', 'see HOME\\sam\\notes']) {
     for (const opts of [{}, { redact: null }]) {
       assert.equal(W.titleOf({ team: false, human: text }, opts).title, 'see', `${JSON.stringify(text)}${opts.redact === null ? ' (renderer)' : ''}`);
     }
@@ -701,4 +701,17 @@ test('work-organise: views name a project with projectOf — the folder-leaf cop
     assert.match(src, /projectOf\(/, `${f} names projects with projectOf`);
     assert.doesNotMatch(src, /'(?:Local project|Unknown project|a project|your project|A session|a session)'/, `${f} keeps no fallback of its own`);
   }
+});
+
+test('work-organise: a bare home folder goes only where it looks like a real one, not an ordinary route', () => {
+  for (const opts of [{}, { redact: null }]) {
+    const typed = (human) => W.titleOf({ team: false, human }, opts).title;
+    assert.equal(typed('Fix home/about page'), 'Fix home/about page');
+    assert.equal(typed('Update users/settings tab'), 'Update users/settings tab');
+    assert.equal(typed('see users/sam/notes'), 'see');
+    assert.equal(typed('open Home/sam/projects/app now'), 'open now');
+    assert.equal(typed('see Users/sam'), 'see', 'macOS Users/<name> on its own still goes');
+  }
+  assert.equal(W.titleOf({ team: false, firstPrompt: 'Fix home/about page' }).title, 'Fix home about page', 'a prompt title only spaces the slash');
+  assert.equal(W.titleOf({ team: false, firstPrompt: 'read users/sam/notes' }).title, 'Read');
 });
