@@ -7,7 +7,7 @@
 const { DESTRUCTIVE_CMDS } = require('./auto-rules.js');
 const { findSecrets } = require('./secret-patterns.js');
 
-const RULES_VERSION = 2;
+const RULES_VERSION = 3;
 const MAX_FLAGS = 20;
 const EXCERPT = 160;
 
@@ -17,10 +17,13 @@ const URL_ALLOW = /^(?:[a-z0-9-]+\.)*(?:github\.com|githubusercontent\.com|gitla
 const FETCH = String.raw`(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)`;
 const RUNNER = String.raw`(?:(?:ba|z|da|k)?sh|python[23]?|node|perl|ruby|php|iex|pwsh|powershell|invoke-expression)`;
 const HIGH = [
-  { rule: 'pipe-to-shell', re: new RegExp(String.raw`\b${FETCH}\b[^\n|]*\|\s*(?:sudo\s+(?:-\S+\s+)*)?${RUNNER}\b`, 'i'), why: 'Downloads a script and runs it in a shell.' },
+  { rule: 'pipe-to-shell', re: new RegExp(String.raw`\b${FETCH}\b[^\n]*\|\s*(?:sudo\s+(?:-\S+\s+)*)?${RUNNER}\b`, 'i'), why: 'Downloads a script and runs it in a shell.' },
   { rule: 'download-and-run', re: new RegExp(String.raw`\$\(\s*(?:curl|wget)\b|\beval\b[^\n]{0,40}\b(?:curl|wget)\b|\b${FETCH}\b[^\n]*(?:&&|;|\|\|)\s*(?:sudo\s+)?(?:${RUNNER}\s|chmod\s+\+x\b|\.\/)`, 'i'), why: 'Downloads a script and runs it.' },
-  { rule: 'pipe-to-shell', re: /\b(?:ba|z)?sh\s+<\(\s*(?:curl|wget)\b/i, why: 'Downloads a script and runs it in a shell.' },
-  { rule: 'permission-bypass', re: /--dangerously-skip-permissions|--dangerously-bypass-approvals-and-sandbox|\bbypassPermissions\b|--yolo\b|approval_policy\s*=\s*["']?never/i, why: 'Turns off the AI tool\'s permission prompts.' },
+  { rule: 'pipe-to-shell', re: /(?:\bsource|(?:^|[\s;&|])\.|\b(?:ba|z|da|k)?sh)\s+<\(\s*(?:curl|wget)\b/i, why: 'Downloads a script and runs it in a shell.' },
+  // Cheap extra shapes; the scan is advisory and can never be complete.
+  { rule: 'download-and-run', re: /(?:\b(?:ba|z|da|k)?sh\s+-c|\beval|=)\s*["']?\x60\s*(?:curl|wget)\b|\b(?:curl|wget)\b[^\n]*\.(?:sh|py)\b[^\n]*\n(?:[^\n]*\n){0,2}?[^\n]*\b(?:(?:ba|z|da|k)?sh|python[23]?|source)\s+\S*\.(?:sh|py)\b|\b(?:exec|eval)\s*\([^\n]{0,80}\b(?:urlopen|urllib|requests\.get)\b|\bnpx\s+(?:-\S+\s+)*https?:\/\//i, why: 'Downloads code and runs it.' },
+  { rule: 'exfiltration', re: /\|\s*(?:nc|ncat|netcat|socat)\s+\S|\bwget\b[^\n]*--(?:post|body)-(?:file|data)\b|\b(?:http|https|xh)\s+(?:POST|PUT|PATCH)\b[^\n]*<\s*\S/i, why: 'Sends local data to another machine.' },
+  { rule: 'permission-bypass', re: /dangerously[_-]skip[_-]permissions|--dangerously-skip-permissions|--dangerously-bypass-approvals-and-sandbox|\bbypassPermissions\b|--yolo\b|approval_policy\s*=\s*["']?never/i, why: 'Turns off the AI tool\'s permission prompts.' },
   { rule: 'sensitive-config', re: /\b(?:write|edit|modify|append|add|update|overwrite|change|replace|insert)\b[^\n]{0,80}(?:~\/\.ssh\b|authorized_keys|\.bashrc\b|\.zshrc\b|\.bash_profile\b|\.zprofile\b|(?:~|\$HOME)\/\.profile\b|\.claude\/settings(?:\.local)?\.json|\.mcp\.json|mcpServers|\.codex\/config\.toml)/i, why: 'Tells the AI to change shell start-up files, SSH keys, hooks or MCP config.' },
   { rule: 'sensitive-config', re: />>?\s*(?:~|\$HOME)\/\.(?:ssh\/|bashrc|zshrc|bash_profile|zprofile|profile)\b/i, why: 'Writes into SSH or shell start-up files.' },
   { rule: 'base64-blob', re: /[A-Za-z0-9+/]{200,}={0,2}/, why: 'A long encoded blob that cannot be read before adding.' },
