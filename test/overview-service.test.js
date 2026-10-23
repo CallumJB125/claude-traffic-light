@@ -44,3 +44,20 @@ test('Overview actor/principal changes retire bound reported and managed row ide
   assert.equal((await x.svc.message({handle:before.handle,text:'Old actor draft'})).ok,false);assert(!JSON.stringify(after).includes('replacement-principal'));assert(!JSON.stringify(after).includes('replacement-member'));
  }
 });
+
+test('Overview board and managed rows name their bucket; the directory files them without guessing from labels',async()=>{
+ const {createSessionDirectory}=require('../src/session-directory');
+ const filed=row=>createSessionDirectory({now:()=>time}).mine({work:[row]})[0];
+ const x=fixture({sessions:()=>[]});
+ const board=async(state,decision=false)=>{x.row.card.run_state=state;x.data.decisions=decision?[{card_id:'card',board_id:'board',member_id:'member',kind:'question'}]:[];return (await x.svc.snapshot()).sessions[0];};
+ for(const [state,status,bucket,detail] of [['running','Working','working',undefined],['claimed','Starting','working','Starting'],['handing_over','Moving to another AI','working','Moving to another AI'],['unresponsive','No recent signal','idle','No recent signal'],['failed','Stopped','stuck','Stopped'],['in_review','In review','check','In review'],['blocked','Blocked','stuck','Blocked']]){
+  const r=await board(state);assert.equal(r.status,status,state);assert.equal(r.bucket,bucket,state);assert.equal(r.detail,detail,state);
+ }
+ let r=await board('blocked');const e=filed(r);assert.equal(e.state,'Stuck or failed');assert.equal(e.input,false,'a Blocked card with no decision for this person is not waiting on them');
+ r=await board('blocked',true);assert.equal(r.bucket,'needs');assert.equal(filed(r).input,true);
+ r=await board('unresponsive');assert.equal(filed(r).state,'Idle');assert.equal(filed(r).detail,'No recent signal');
+ const managed=(state,label)=>createOverviewService({now:()=>time,managed:()=>({conn:{status:'connected'},tasks:[{id:'t1',title:'Managed task',ai:{id:'codex'},state,label,green:false,actions:[]}]})}).snapshot().then(s=>s.sessions[0]);
+ for(const [state,label,bucket] of [['in_review','Ready to review','check'],['failed','Stopped at cap','stuck'],['claimed','Starting','working'],['handing_over','Moving to another AI','working'],['unresponsive','No signal','idle']]){
+  const m=await managed(state,label);assert.equal(m.status,label);assert.equal(m.bucket,bucket,label);assert.equal(m.detail,label);assert.equal(filed(m).state,{check:'Finished — check it',stuck:'Stuck or failed',working:'Working on it',idle:'Idle'}[bucket],label);
+ }
+});
