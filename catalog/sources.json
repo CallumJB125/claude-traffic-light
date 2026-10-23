@@ -1,0 +1,92 @@
+{
+  "schema": 1,
+  "note": "Pinned upstream agent collections for the Find agents catalogue. Re-pinning a sha is a release-PR change: run `node scripts/build-agent-catalog.js --relock`, review the printed diff and catalog/agents/build-report.json, then commit. dedupeKey: \"name\" groups agents by their slugified name; \"stem\" by file name, for a source that copies one agent into several plugin folders under prefixed names.",
+  "sources": [
+    {
+      "id": "agency",
+      "name": "The Agency (agency-agents)",
+      "repo": "msitarzewski/agency-agents",
+      "sha": "4e3ac3ca6604c75113f52c695dbddcc7af928b46",
+      "license": "MIT",
+      "licensePath": "LICENSE",
+      "stars": 163407,
+      "dedupeKey": "name",
+      "enabled": true,
+      "include": [
+        "academic/**/*.md",
+        "design/**/*.md",
+        "engineering/**/*.md",
+        "finance/**/*.md",
+        "game-development/**/*.md",
+        "gis/**/*.md",
+        "healthcare/**/*.md",
+        "marketing/**/*.md",
+        "paid-media/**/*.md",
+        "product/**/*.md",
+        "project-management/**/*.md",
+        "research/**/*.md",
+        "sales/**/*.md",
+        "security/**/*.md",
+        "spatial-computing/**/*.md",
+        "specialized/**/*.md",
+        "strategy/**/*.md",
+        "support/**/*.md",
+        "testing/**/*.md"
+      ],
+      "exclude": [
+        "**/README.md"
+      ]
+    },
+    {
+      "id": "voltagent",
+      "name": "VoltAgent awesome-claude-code-subagents",
+      "repo": "VoltAgent/awesome-claude-code-subagents",
+      "sha": "408d3c9eee2d0c75c12a3abb5de29e53c2ca6b9e",
+      "license": "MIT",
+      "licensePath": "LICENSE",
+      "stars": 25966,
+      "dedupeKey": "name",
+      "enabled": true,
+      "include": [
+        "categories/*/*.md"
+      ],
+      "exclude": [
+        "**/README.md"
+      ]
+    },
+    {
+      "id": "wshobson",
+      "name": "wshobson/agents",
+      "repo": "wshobson/agents",
+      "sha": "0874a27b17a22e2b7c2e2bcd725768e0803cad06",
+      "license": "MIT",
+      "licensePath": "LICENSE",
+      "stars": 41592,
+      "dedupeKey": "stem",
+      "enabled": true,
+      "include": [
+        "plugins/*/agents/*.md"
+      ],
+      "exclude": [
+        "**/README.md"
+      ]
+    },
+    {
+      "id": "0xfurai",
+      "name": "0xfurai claude-code-subagents",
+      "repo": "0xfurai/claude-code-subagents",
+      "sha": "9236d10702cdbba37eaa34515f1e1dbff8452506",
+      "license": "MIT",
+      "licensePath": "LICENSE",
+      "stars": 1019,
+      "dedupeKey": "name",
+      "enabled": true,
+      "include": [
+        "agents/*.md"
+      ],
+      "exclude": [
+        "**/README.md"
+      ]
+    }
+  ]
+}

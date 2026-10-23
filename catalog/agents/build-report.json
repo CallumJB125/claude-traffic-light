@@ -1,0 +1,845 @@
+{
+  "skipped": [
+    {
+      "source": "0xfurai",
+      "path": "agents/sqs-expert.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "engineering/engineering-mobile-app-builder.md",
+      "reason": "frontmatter: control characters"
+    },
+    {
+      "source": "agency",
+      "path": "marketing/marketing-app-store-optimizer.md",
+      "reason": "frontmatter: control characters"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/EXECUTIVE-BRIEF.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/QUICKSTART.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/coordination/agent-activation-prompts.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/coordination/handoff-templates.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/nexus-strategy.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/playbooks/phase-0-discovery.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/playbooks/phase-1-strategy.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/playbooks/phase-2-foundation.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/playbooks/phase-3-build.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/playbooks/phase-4-hardening.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/playbooks/phase-5-launch.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/playbooks/phase-6-operate.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/runbooks/scenario-enterprise-feature.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/runbooks/scenario-incident-response.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/runbooks/scenario-marketing-campaign.md",
+      "reason": "no frontmatter (not an agent file)"
+    },
+    {
+      "source": "agency",
+      "path": "strategy/runbooks/scenario-startup-mvp.md",
+      "reason": "no frontmatter (not an agent file)"
+    }
+  ],
+  "excludedHighRisk": [
+    {
+      "id": "agency/secrets-credential-hygiene-engineer",
+      "path": "security/security-secrets-credential-engineer.md",
+      "flags": [
+        {
+          "rule": "secret",
+          "line": 87,
+          "excerpt": "# DATABASE_URL=postgres://app:sup3rs3cret@db.internal:5432/app   # never rotated, everywhere"
+        }
+      ]
+    },
+    {
+      "id": "agency/senior-secops-engineer",
+      "path": "security/security-senior-secops.md",
+      "flags": [
+        {
+          "rule": "secret",
+          "line": 39,
+          "excerpt": "-----BEGIN RSA PRIVATE KEY-----"
+        }
+      ]
+    },
+    {
+      "id": "agency/threat-detection-engineer",
+      "path": "security/security-threat-detection-engineer.md",
+      "flags": [
+        {
+          "rule": "exfiltration",
+          "line": 343,
+          "excerpt": "curl -k -u \"${{ secrets.SPLUNK_USER }}:${{ secrets.SPLUNK_PASS }}\" \\"
+        }
+      ]
+    },
+    {
+      "id": "voltagent/healthcare-admin",
+      "path": "categories/07-specialized-domains/healthcare-admin.md",
+      "flags": [
+        {
+          "rule": "pipe-to-shell",
+          "line": 191,
+          "excerpt": "- **Install:** `curl -fsSL https://raw.githubusercontent.com/ajhcs/healthcare-agents/main/install.sh | bash`"
+        }
+      ]
+    }
+  ],
+  "sameNameInSource": [
+    {
+      "source": "wshobson",
+      "key": "context-manager",
+      "kept": "plugins/agent-orchestration/agents/context-manager.md",
+      "dropped": [
+        "plugins/context-management/agents/context-manager.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "backend-architect",
+      "kept": "plugins/api-scaffolding/agents/backend-architect.md",
+      "dropped": [
+        "plugins/backend-api-security/agents/backend-architect.md",
+        "plugins/backend-development/agents/backend-architect.md",
+        "plugins/data-engineering/agents/backend-architect.md",
+        "plugins/database-cloud-optimization/agents/backend-architect.md",
+        "plugins/multi-platform-apps/agents/backend-architect.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "django-pro",
+      "kept": "plugins/api-scaffolding/agents/django-pro.md",
+      "dropped": [
+        "plugins/python-development/agents/django-pro.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "fastapi-pro",
+      "kept": "plugins/api-scaffolding/agents/fastapi-pro.md",
+      "dropped": [
+        "plugins/python-development/agents/fastapi-pro.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "graphql-architect",
+      "kept": "plugins/api-scaffolding/agents/graphql-architect.md",
+      "dropped": [
+        "plugins/backend-development/agents/graphql-architect.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "api-documenter",
+      "kept": "plugins/api-testing-observability/agents/api-documenter.md",
+      "dropped": [
+        "plugins/documentation-generation/agents/api-documenter.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "frontend-developer",
+      "kept": "plugins/application-performance/agents/frontend-developer.md",
+      "dropped": [
+        "plugins/frontend-mobile-development/agents/frontend-developer.md",
+        "plugins/frontend-mobile-security/agents/frontend-developer.md",
+        "plugins/multi-platform-apps/agents/frontend-developer.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "observability-engineer",
+      "kept": "plugins/application-performance/agents/observability-engineer.md",
+      "dropped": [
+        "plugins/observability-monitoring/agents/observability-engineer.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "performance-engineer",
+      "kept": "plugins/application-performance/agents/performance-engineer.md",
+      "dropped": [
+        "plugins/backend-development/agents/performance-engineer.md",
+        "plugins/full-stack-orchestration/agents/performance-engineer.md",
+        "plugins/observability-monitoring/agents/performance-engineer.md",
+        "plugins/performance-testing-review/agents/performance-engineer.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "backend-security-coder",
+      "kept": "plugins/backend-api-security/agents/backend-security-coder.md",
+      "dropped": [
+        "plugins/data-validation-suite/agents/backend-security-coder.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "security-auditor",
+      "kept": "plugins/comprehensive-review/agents/security-auditor.md",
+      "dropped": [
+        "plugins/backend-development/agents/security-auditor.md",
+        "plugins/full-stack-orchestration/agents/security-auditor.md",
+        "plugins/security-compliance/agents/security-auditor.md",
+        "plugins/security-scanning/agents/security-auditor.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "tdd-orchestrator",
+      "kept": "plugins/backend-development/agents/tdd-orchestrator.md",
+      "dropped": [
+        "plugins/tdd-workflows/agents/tdd-orchestrator.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "test-automator",
+      "kept": "plugins/codebase-cleanup/agents/test-automator.md",
+      "dropped": [
+        "plugins/backend-development/agents/test-automator.md",
+        "plugins/full-stack-orchestration/agents/test-automator.md",
+        "plugins/incident-response/agents/test-automator.md",
+        "plugins/performance-testing-review/agents/test-automator.md",
+        "plugins/unit-testing/agents/test-automator.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "cloud-architect",
+      "kept": "plugins/cicd-automation/agents/cloud-architect.md",
+      "dropped": [
+        "plugins/cloud-infrastructure/agents/cloud-architect.md",
+        "plugins/database-cloud-optimization/agents/cloud-architect.md",
+        "plugins/deployment-validation/agents/cloud-architect.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "deployment-engineer",
+      "kept": "plugins/cicd-automation/agents/deployment-engineer.md",
+      "dropped": [
+        "plugins/cloud-infrastructure/agents/deployment-engineer.md",
+        "plugins/deployment-strategies/agents/deployment-engineer.md",
+        "plugins/full-stack-orchestration/agents/deployment-engineer.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "devops-troubleshooter",
+      "kept": "plugins/cicd-automation/agents/devops-troubleshooter.md",
+      "dropped": [
+        "plugins/distributed-debugging/agents/devops-troubleshooter.md",
+        "plugins/incident-response/agents/devops-troubleshooter.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "kubernetes-architect",
+      "kept": "plugins/cicd-automation/agents/kubernetes-architect.md",
+      "dropped": [
+        "plugins/cloud-infrastructure/agents/kubernetes-architect.md",
+        "plugins/kubernetes-operations/agents/kubernetes-architect.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "terraform-specialist",
+      "kept": "plugins/cicd-automation/agents/terraform-specialist.md",
+      "dropped": [
+        "plugins/cloud-infrastructure/agents/terraform-specialist.md",
+        "plugins/deployment-strategies/agents/terraform-specialist.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "network-engineer",
+      "kept": "plugins/cloud-infrastructure/agents/network-engineer.md",
+      "dropped": [
+        "plugins/observability-monitoring/agents/network-engineer.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "code-reviewer",
+      "kept": "plugins/code-documentation/agents/code-reviewer.md",
+      "dropped": [
+        "plugins/code-refactoring/agents/code-reviewer.md",
+        "plugins/codebase-cleanup/agents/code-reviewer.md",
+        "plugins/comprehensive-review/agents/code-reviewer.md",
+        "plugins/git-pr-workflows/agents/code-reviewer.md",
+        "plugins/incident-response/agents/code-reviewer.md",
+        "plugins/tdd-workflows/agents/code-reviewer.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "docs-architect",
+      "kept": "plugins/code-documentation/agents/docs-architect.md",
+      "dropped": [
+        "plugins/documentation-generation/agents/docs-architect.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "tutorial-engineer",
+      "kept": "plugins/code-documentation/agents/tutorial-engineer.md",
+      "dropped": [
+        "plugins/documentation-generation/agents/tutorial-engineer.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "legacy-modernizer",
+      "kept": "plugins/code-refactoring/agents/legacy-modernizer.md",
+      "dropped": [
+        "plugins/dependency-management/agents/legacy-modernizer.md",
+        "plugins/framework-migration/agents/legacy-modernizer.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "architect-review",
+      "kept": "plugins/comprehensive-review/agents/architect-review.md",
+      "dropped": [
+        "plugins/framework-migration/agents/architect-review.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "database-architect",
+      "kept": "plugins/database-cloud-optimization/agents/database-architect.md",
+      "dropped": [
+        "plugins/database-design/agents/database-architect.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "database-optimizer",
+      "kept": "plugins/database-cloud-optimization/agents/database-optimizer.md",
+      "dropped": [
+        "plugins/database-migrations/agents/database-optimizer.md",
+        "plugins/observability-monitoring/agents/database-optimizer.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "debugger",
+      "kept": "plugins/debugging-toolkit/agents/debugger.md",
+      "dropped": [
+        "plugins/error-debugging/agents/debugger.md",
+        "plugins/error-diagnostics/agents/debugger.md",
+        "plugins/incident-response/agents/debugger.md",
+        "plugins/unit-testing/agents/debugger.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "dx-optimizer",
+      "kept": "plugins/debugging-toolkit/agents/dx-optimizer.md",
+      "dropped": [
+        "plugins/team-collaboration/agents/dx-optimizer.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "error-detective",
+      "kept": "plugins/distributed-debugging/agents/error-detective.md",
+      "dropped": [
+        "plugins/error-debugging/agents/error-detective.md",
+        "plugins/error-diagnostics/agents/error-detective.md",
+        "plugins/incident-response/agents/error-detective.md"
+      ]
+    },
+    {
+      "source": "wshobson",
+      "key": "mobile-developer",
+      "kept": "plugins/frontend-mobile-development/agents/mobile-developer.md",
+      "dropped": [
+        "plugins/multi-platform-apps/agents/mobile-developer.md"
+      ]
+    }
+  ],
+  "duplicates": [
+    {
+      "key": "ui-designer",
+      "primary": "voltagent/ui-designer",
+      "also": [
+        "agency/ui-designer",
+        "wshobson/ui-designer"
+      ]
+    },
+    {
+      "key": "ux-researcher",
+      "primary": "voltagent/ux-researcher",
+      "also": [
+        "agency/ux-researcher"
+      ]
+    },
+    {
+      "key": "ai-engineer",
+      "primary": "voltagent/ai-engineer",
+      "also": [
+        "agency/ai-engineer",
+        "wshobson/ai-engineer"
+      ]
+    },
+    {
+      "key": "backend-architect",
+      "primary": "agency/backend-architect",
+      "also": [
+        "wshobson/backend-architect"
+      ]
+    },
+    {
+      "key": "code-reviewer",
+      "primary": "voltagent/code-reviewer",
+      "also": [
+        "agency/code-reviewer",
+        "wshobson/code-reviewer"
+      ]
+    },
+    {
+      "key": "data-engineer",
+      "primary": "voltagent/data-engineer",
+      "also": [
+        "agency/data-engineer",
+        "wshobson/data-engineer"
+      ]
+    },
+    {
+      "key": "database-optimizer",
+      "primary": "voltagent/database-optimizer",
+      "also": [
+        "agency/database-optimizer",
+        "wshobson/database-optimizer"
+      ]
+    },
+    {
+      "key": "frontend-developer",
+      "primary": "voltagent/frontend-developer",
+      "also": [
+        "agency/frontend-developer",
+        "wshobson/frontend-developer"
+      ]
+    },
+    {
+      "key": "network-engineer",
+      "primary": "voltagent/network-engineer",
+      "also": [
+        "agency/network-engineer",
+        "wshobson/network-engineer"
+      ]
+    },
+    {
+      "key": "platform-engineer",
+      "primary": "voltagent/platform-engineer",
+      "also": [
+        "agency/platform-engineer"
+      ]
+    },
+    {
+      "key": "prompt-engineer",
+      "primary": "voltagent/prompt-engineer",
+      "also": [
+        "agency/prompt-engineer",
+        "wshobson/prompt-engineer"
+      ]
+    },
+    {
+      "key": "technical-writer",
+      "primary": "voltagent/technical-writer",
+      "also": [
+        "agency/technical-writer"
+      ]
+    },
+    {
+      "key": "seo-specialist",
+      "primary": "agency/seo-specialist",
+      "also": [
+        "voltagent/seo-specialist"
+      ]
+    },
+    {
+      "key": "product-manager",
+      "primary": "agency/product-manager",
+      "also": [
+        "voltagent/product-manager"
+      ]
+    },
+    {
+      "key": "sales-engineer",
+      "primary": "voltagent/sales-engineer",
+      "also": [
+        "agency/sales-engineer"
+      ]
+    },
+    {
+      "key": "compliance-auditor",
+      "primary": "voltagent/compliance-auditor",
+      "also": [
+        "agency/compliance-auditor"
+      ]
+    },
+    {
+      "key": "incident-responder",
+      "primary": "voltagent/incident-responder",
+      "also": [
+        "agency/incident-responder",
+        "wshobson/incident-responder"
+      ]
+    },
+    {
+      "key": "penetration-tester",
+      "primary": "voltagent/penetration-tester",
+      "also": [
+        "agency/penetration-tester"
+      ]
+    },
+    {
+      "key": "customer-success-manager",
+      "primary": "voltagent/customer-success-manager",
+      "also": [
+        "agency/customer-success-manager"
+      ]
+    },
+    {
+      "key": "graphql-architect",
+      "primary": "voltagent/graphql-architect",
+      "also": [
+        "wshobson/graphql-architect"
+      ]
+    },
+    {
+      "key": "mobile-developer",
+      "primary": "voltagent/mobile-developer",
+      "also": [
+        "wshobson/mobile-developer"
+      ]
+    },
+    {
+      "key": "cpp-pro",
+      "primary": "voltagent/cpp-pro",
+      "also": [
+        "wshobson/cpp-pro"
+      ]
+    },
+    {
+      "key": "elixir-expert",
+      "primary": "voltagent/elixir-expert",
+      "also": [
+        "0xfurai/elixir-expert"
+      ]
+    },
+    {
+      "key": "flutter-expert",
+      "primary": "voltagent/flutter-expert",
+      "also": [
+        "wshobson/flutter-expert",
+        "0xfurai/flutter-expert"
+      ]
+    },
+    {
+      "key": "golang-pro",
+      "primary": "voltagent/golang-pro",
+      "also": [
+        "wshobson/golang-pro"
+      ]
+    },
+    {
+      "key": "javascript-pro",
+      "primary": "voltagent/javascript-pro",
+      "also": [
+        "wshobson/javascript-pro"
+      ]
+    },
+    {
+      "key": "php-pro",
+      "primary": "voltagent/php-pro",
+      "also": [
+        "wshobson/php-pro"
+      ]
+    },
+    {
+      "key": "python-pro",
+      "primary": "voltagent/python-pro",
+      "also": [
+        "wshobson/python-pro"
+      ]
+    },
+    {
+      "key": "rails-expert",
+      "primary": "voltagent/rails-expert",
+      "also": [
+        "0xfurai/rails-expert"
+      ]
+    },
+    {
+      "key": "sql-pro",
+      "primary": "voltagent/sql-pro",
+      "also": [
+        "wshobson/sql-pro"
+      ]
+    },
+    {
+      "key": "swift-expert",
+      "primary": "voltagent/swift-expert",
+      "also": [
+        "0xfurai/swift-expert"
+      ]
+    },
+    {
+      "key": "typescript-pro",
+      "primary": "voltagent/typescript-pro",
+      "also": [
+        "wshobson/typescript-pro"
+      ]
+    },
+    {
+      "key": "vue-expert",
+      "primary": "voltagent/vue-expert",
+      "also": [
+        "0xfurai/vue-expert"
+      ]
+    },
+    {
+      "key": "cloud-architect",
+      "primary": "voltagent/cloud-architect",
+      "also": [
+        "wshobson/cloud-architect"
+      ]
+    },
+    {
+      "key": "deployment-engineer",
+      "primary": "voltagent/deployment-engineer",
+      "also": [
+        "wshobson/deployment-engineer"
+      ]
+    },
+    {
+      "key": "docker-expert",
+      "primary": "voltagent/docker-expert",
+      "also": [
+        "0xfurai/docker-expert"
+      ]
+    },
+    {
+      "key": "debugger",
+      "primary": "voltagent/debugger",
+      "also": [
+        "wshobson/debugger"
+      ]
+    },
+    {
+      "key": "error-detective",
+      "primary": "voltagent/error-detective",
+      "also": [
+        "wshobson/error-detective"
+      ]
+    },
+    {
+      "key": "performance-engineer",
+      "primary": "voltagent/performance-engineer",
+      "also": [
+        "wshobson/performance-engineer"
+      ]
+    },
+    {
+      "key": "security-auditor",
+      "primary": "voltagent/security-auditor",
+      "also": [
+        "wshobson/security-auditor"
+      ]
+    },
+    {
+      "key": "test-automator",
+      "primary": "voltagent/test-automator",
+      "also": [
+        "wshobson/test-automator"
+      ]
+    },
+    {
+      "key": "data-scientist",
+      "primary": "voltagent/data-scientist",
+      "also": [
+        "wshobson/data-scientist"
+      ]
+    },
+    {
+      "key": "ml-engineer",
+      "primary": "voltagent/ml-engineer",
+      "also": [
+        "wshobson/ml-engineer"
+      ]
+    },
+    {
+      "key": "mlops-engineer",
+      "primary": "voltagent/mlops-engineer",
+      "also": [
+        "wshobson/mlops-engineer"
+      ]
+    },
+    {
+      "key": "dx-optimizer",
+      "primary": "voltagent/dx-optimizer",
+      "also": [
+        "wshobson/dx-optimizer"
+      ]
+    },
+    {
+      "key": "legacy-modernizer",
+      "primary": "voltagent/legacy-modernizer",
+      "also": [
+        "wshobson/legacy-modernizer"
+      ]
+    },
+    {
+      "key": "api-documenter",
+      "primary": "voltagent/api-documenter",
+      "also": [
+        "wshobson/api-documenter"
+      ]
+    },
+    {
+      "key": "blockchain-developer",
+      "primary": "voltagent/blockchain-developer",
+      "also": [
+        "wshobson/blockchain-developer"
+      ]
+    },
+    {
+      "key": "payment-integration",
+      "primary": "voltagent/payment-integration",
+      "also": [
+        "wshobson/payment-integration"
+      ]
+    },
+    {
+      "key": "quant-analyst",
+      "primary": "voltagent/quant-analyst",
+      "also": [
+        "wshobson/quant-analyst"
+      ]
+    },
+    {
+      "key": "risk-manager",
+      "primary": "voltagent/risk-manager",
+      "also": [
+        "wshobson/risk-manager"
+      ]
+    },
+    {
+      "key": "business-analyst",
+      "primary": "voltagent/business-analyst",
+      "also": [
+        "wshobson/business-analyst"
+      ]
+    },
+    {
+      "key": "content-marketer",
+      "primary": "voltagent/content-marketer",
+      "also": [
+        "wshobson/content-marketer"
+      ]
+    },
+    {
+      "key": "legal-advisor",
+      "primary": "voltagent/legal-advisor",
+      "also": [
+        "wshobson/legal-advisor"
+      ]
+    },
+    {
+      "key": "context-manager",
+      "primary": "voltagent/context-manager",
+      "also": [
+        "wshobson/context-manager"
+      ]
+    },
+    {
+      "key": "search-specialist",
+      "primary": "voltagent/search-specialist",
+      "also": [
+        "wshobson/search-specialist"
+      ]
+    }
+  ],
+  "overridden": [],
+  "counts": {
+    "total": 713,
+    "unique": 647,
+    "bySource": {
+      "agency": 277,
+      "voltagent": 162,
+      "wshobson": 137,
+      "0xfurai": 137
+    },
+    "primaryBySource": {
+      "agency": 261,
+      "voltagent": 160,
+      "wshobson": 95,
+      "0xfurai": 131
+    },
+    "fallbackIcons": 0,
+    "review": 658
+  }
+}
