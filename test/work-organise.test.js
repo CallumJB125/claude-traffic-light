@@ -478,7 +478,6 @@ test('work-organise: L3/N2 — lower-case Linear-style tickets count only after 
   assert.deepEqual(t('feat/node-22-upgrade'), { title: 'Node 22 upgrade', source: 'branch' }, 'a runtime version is no ticket');
   assert.equal(t('release-2-prep').source, 'branch', 'a release number is no ticket');
   assert.equal(t('abc-123-fix-login').source, 'branch', 'no person segment');
-  assert.equal(t('claude/eng-42').source, 'branch', 'an agent prefix is not a person');
   assert.equal(t('sam/node-22-upgrade').source, 'branch');
   assert.equal(t('sam/python-3-12').source, 'branch');
   assert.equal(t('sam/ios-17-fix').source, 'branch');
@@ -650,4 +649,15 @@ test('work-organise: R1 — runtime and release words are skipped only as lower-
   assert.equal(t({ branch: 'sam/node-22-upgrade' }).source, 'branch', 'lower case it is still a version');
   assert.equal(t({ branch: 'sam/ios-17-fix' }).source, 'branch');
   assert.equal(t({ branch: 'feat/UTF-8-paths' }).source, 'branch', 'standards stay excluded in capitals');
+});
+
+test('work-organise: R2 — lower-case Linear keys count after an agent prefix, not after a kind', () => {
+  const t = (branch) => W.titleOf({ team: false, branch });
+  assert.deepEqual(t('claude/eng-42'), { title: 'ENG-42', source: 'ticket' });
+  assert.deepEqual(t('codex/abc-123-fix-login'), { title: 'ABC-123 · Fix login', source: 'ticket' });
+  assert.deepEqual(t('Cursor/eng-7-tidy'), { title: 'ENG-7 · Tidy', source: 'ticket' });
+  assert.equal(t('feat/eng-42').source, 'branch', 'a kind prefix still is not a person');
+  assert.equal(t('fix/abc-123-login').source, 'branch');
+  assert.equal(t('codex/node-22-upgrade').source, 'branch', 'release words still skipped');
+  assert.deepEqual(t('codex/work-organise-2026-10-23'), { title: 'Work organise', source: 'branch' });
 });
