@@ -471,3 +471,7 @@ test('work-organise: L3 — lower-case Linear-style tickets count in branches, n
   assert.equal(t('fix/issue-42-crash').source, 'branch');
   assert.equal(W.titleOf({ team: false, firstPrompt: 'abc-123 fix login' }).source, 'prompt', 'prompts still need capitals');
 });
+
+test('work-organise: L4 — the board column in_progress is Working on it', () => {
+  for (const s of ['in_progress', 'In progress', 'in-progress']) assert.equal(W.bucketOf(s), 'working', s);
+});

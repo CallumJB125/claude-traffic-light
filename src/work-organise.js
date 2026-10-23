@@ -34,7 +34,7 @@
       'waiting on you', 'needs input', 'need input', 'needs you', 'limit reached', 'waiting for your input'],
     working: ['session-start-working', 'prompt-submit', 'tool-use', 'tool-done', 'tool-failed', 'permission-denied', 'compact',
       'compacting', 'subagent-start', 'subagent-done', 'running', 'claimed', 'queued', 'quiet', 'working', 'reconnecting',
-      'handing_over', 'handed_over', 'dispatched'],
+      'handing_over', 'handed_over', 'dispatched', 'in_progress', 'in-progress', 'in progress'],
     check: ['stop', 'review', 'in_review', 'in-review', 'turn stopped', 'ready for review', 'in review', 'check it'],
     stuck: ['stuck', 'stuck?', 'turn-failed', 'turn failed', 'failed', 'stalled', 'orphaned', 'unresponsive', 'error'],
     idle: ['idle', 'idle-nudge', 'ready', 'session-start', 'ended', 'session-end', 'stale', 'status unknown', 'todo', 'parked',
