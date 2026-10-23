@@ -6,7 +6,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createWorkCapture, observation } = require('../src/work-capture');
+const WorkCapture = require('../src/work-capture');
+const { createWorkCapture, observation } = WorkCapture;
 const { recordsFor, wrappedRecords, SIGNAL } = require('../src/wrapped-work');
 const { testTempDir } = require('./helpers/tmp');
 
@@ -196,4 +197,15 @@ test('main\'s records: wrappedRecords applies scopeFor, so a personal folder\'s 
   await r.router.observe([], { wrapped: recs });
   const byTask = Object.fromEntries(r.calls.map((c) => [c.body.session_id, c.kind]));
   assert.deepEqual(byTask, { tsk_mine: 'local', tsk_team: 'team' });
+});
+
+test('a wrapped task\'s title is scrubbed by hubTitle on the team send, exactly as a session\'s (#52)', async (t) => {
+  const title = 'Fix login for dana@corp.example on 10.1.2.3';
+  const r = rig(t);
+  await r.router.observe([native({ sessionId: 'n1', taskTitle: title, cwd: '/working/other' })], { wrapped: wrapped([row({ title })]) });
+  const team = r.calls.filter((c) => c.kind === 'team');
+  assert.equal(team.length, 2);
+  assert.equal(team[0].body.title, team[1].body.title, 'the same scrubbed title for both');
+  assert.ok(!/dana@|10\.1\.2\.3/.test(JSON.stringify(team)), 'no email or IP reaches the hub');
+  assert.equal(team[1].body.title, WorkCapture.hubTitle(title, R.hub));
 });
