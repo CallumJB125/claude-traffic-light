@@ -428,3 +428,18 @@ test('the widget shows a mic badge while listening and moves the mouth while tal
   assert.match(html, /prefers-reduced-motion: reduce\) \{ body\.listening #mic \{ animation: none/);
   assert.match(html, /if \(longPressOn\) pressTimer = setTimeout/, 'no long-press where voice cannot work');
 });
+
+test('voice helper path: a packaged app ignores PLEXIFORM_VOICE_HELPER_PATH; a dev run takes only an absolute one', () => {
+  const VH = require('../src/voice-helper.js');
+  const path = require('path');
+  const env = { [VH.HELPER_PATH_ENV]: '/tmp/elsewhere/buddy-listen' };
+  assert.equal(VH.helperPathFor({ packaged: true, env, resourcesPath: '/App/Resources', appDir: '/src' }), path.join('/App/Resources', 'voice', 'buddy-listen'));
+  assert.equal(VH.helperPathFor({ packaged: false, env, resourcesPath: '/App/Resources', appDir: '/src' }), '/tmp/elsewhere/buddy-listen');
+  for (const bad of ['relative/buddy-listen', '../x', '', 'C:relative', '/tmp/a\0b']) {
+    assert.equal(VH.helperPathFor({ packaged: false, env: { [VH.HELPER_PATH_ENV]: bad }, appDir: '/src' }), path.join('/src', 'native', 'voice', 'build', 'buddy-listen'), JSON.stringify(bad));
+  }
+  assert.equal(VH.helperPathFor({ packaged: false, env: {}, appDir: '/src' }), path.join('/src', 'native', 'voice', 'build', 'buddy-listen'));
+  assert.equal(VH.helperPathFor({ packaged: 'yes', env, appDir: '/src' }), '/tmp/elsewhere/buddy-listen', 'only a real true means packaged');
+  const main = require('fs').readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(main, /const VOICE_HELPER = VoiceHelper\.helperPathFor\(\{ packaged: app\.isPackaged, env: process\.env,/);
+});

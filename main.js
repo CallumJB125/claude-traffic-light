@@ -4356,10 +4356,10 @@ ipcMain.handle('gesture', async (e, gesture) => {
 // out loud and his mouth moves while he talks. Questions only: nothing here
 // changes any state. The mic is only open while the key or the press is held,
 // and the widget shows a mic badge the whole time.
-const VOICE_HELPER = app.isPackaged ? path.join(process.resourcesPath, 'voice', 'buddy-listen') : path.join(__dirname, 'native', 'voice', 'build', 'buddy-listen');
+const VoiceHelper = require('./src/voice-helper.js');
+const VOICE_HELPER = VoiceHelper.helperPathFor({ packaged: app.isPackaged, env: process.env, resourcesPath: process.resourcesPath, appDir: __dirname });
 const McpServer = require('./mcp-server.js');
 const sendVoice = (st) => win?.webContents.send('voice-state', st);
-const VoiceHelper = require('./src/voice-helper.js');
 const { spawn } = require('child_process');
 const flow = VoiceHelper.createFlow({ reply: voiceReply, speak, send: sendVoice, speakable: Voice.speakable });
 const listener = VoiceHelper.createListener({
