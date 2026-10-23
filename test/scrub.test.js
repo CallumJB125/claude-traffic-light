@@ -344,3 +344,10 @@ test('scrubText and scrub: a cut drops whole lines, so nothing straddling it lea
   // A cut with no newline before it leaves only the marker.
   assert.match(scrubText('⑽'.repeat(20000)), /^\[cut: [^\]]+\]$/);
 });
+
+test('scrubTitle: Cyrillic and Greek lookalikes in a mixed word cannot hide a name; all-Cyrillic text stays (#52 follow-up)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  for (const [input, want] of [['mount nas.locаl', 'mount [host]'], ['mount nаs.local', 'mount [host]'], ['mail sаm@acme.com', 'mail [email]'],
+    ['ssh db1.cоrp.acme.internаl', 'ssh [host]'], ['ping jеnkins.corp', 'ping [host]'], ['ssh οps.lan', 'ssh [host]']]) assert.equal(scrubTitle(input), want, input);
+  for (const keep of ['сервер работает', 'Привет, мир', 'αβγ δοκιμή', 'Ошибка в модуле auth', 'test σ value']) assert.equal(scrubTitle(keep), keep, keep);
+});

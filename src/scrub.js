@@ -383,6 +383,16 @@ const afterAscii = (m, at, all) => (ASCII.test(all[at - 1] ?? '') ? '' : m);
 const NFKC_BOMB = /[\u3307\u3315-\u3317\u3319\u331a\u3320\u332b\u332e\u3332\u3334\u3336\u3347\u334a\u3356\u33ae\u33af\ufdfa\ufdfb\u{1d160}-\u{1d164}\u{1d1bd}-\u{1d1c0}]/u;
 const NFKC_SAFE_RUN = new RegExp(`[^${NFKC_BOMB.source.slice(1, -1)}]+`, 'gu');
 const nfkc = (t) => (NFKC_BOMB.test(t) ? t.replace(NFKC_SAFE_RUN, (r) => r.normalize('NFKC')) : t.normalize('NFKC'));
+// Cyrillic and Greek letters that look Latin ("n\u0430s.local" with a Cyrillic a) are
+// folded to Latin inside a word that mixes the scripts, so the name is seen. A word
+// that is all Cyrillic or all Greek is left alone.
+const LOOKALIKE = { 'а': 'a', 'в': 'b', 'е': 'e', 'ё': 'e', 'к': 'k', 'м': 'm', 'н': 'h', 'о': 'o', 'р': 'p', 'с': 'c', 'т': 't', 'у': 'y', 'х': 'x',
+  'і': 'i', 'ї': 'i', 'ј': 'j', 'ѕ': 's', 'ԁ': 'd', 'ӏ': 'l', 'ԛ': 'q', 'ԝ': 'w', 'һ': 'h', 'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H',
+  'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'Х': 'X', 'І': 'I', 'Ј': 'J', 'Ѕ': 'S', 'α': 'a', 'ο': 'o', 'ν': 'v', 'ρ': 'p', 'τ': 't', 'υ': 'u', 'ι': 'i',
+  'κ': 'k', 'χ': 'x', 'ε': 'e', 'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Ζ': 'Z', 'Η': 'H', 'Ι': 'I', 'Κ': 'K', 'Μ': 'M', 'Ν': 'N', 'Ο': 'O', 'Ρ': 'P', 'Τ': 'T',
+  'Υ': 'Y', 'Χ': 'X' };
+const LOOKALIKE_ANY = new RegExp(`[${Object.keys(LOOKALIKE).join('')}]`, 'g');
+const foldMixed = (word) => (/[A-Za-z0-9]/.test(word) && /[\u0370-\u03ff\u0400-\u052f]/.test(word) ? word.replace(LOOKALIKE_ANY, (c) => LOOKALIKE[c]) : word);
 //   max: the cap before and after NFKC (Infinity for scrub(), which takes whole files and
 //        cuts long lines first)
 // A cut drops whole lines, as the long-line cut does: cutting inside a line could leave
@@ -400,7 +410,7 @@ function plainText(text, { max = TEXT_MAX } = {}) {
   const input = strip(cutLines(text, max, TOO_LONG));
   const grown = Math.min(max, Math.max(TEXT_MAX, 2 * input.length));
   const folded = cutLines(nfkc(input), grown, GREW_CUT);
-  return strip(folded).replace(MARK_RUN, afterAscii);
+  return strip(folded).replace(MARK_RUN, afterAscii).replace(/\S+/g, foldMixed);
 }
 // A line longer than MAX_LINE is omitted. Split, not a regex: a regex over one line of
 // millions of characters overflows the stack.
