@@ -460,6 +460,46 @@ test('PR4 P1: future-dated backup names never cost the new backup, and an adopt\
   assert.ok(left.includes(path.basename(newest)), 'the backup just made is kept');
 });
 
+// Security review PR 4 P2 (poc8): the agents folder swapped for a link during
+// the copy made the "backup" a link, passed the verify, and chmod changed the
+// mode of the folder the link pointed at.
+test('PR4 P2: an agents folder swapped for a link during the backup is refused, and no outside folder changes', () => {
+  const { home, data } = setup();
+  const dir = path.join(home, '.claude/agents');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'frontend-developer.md'), FE.raw);
+  const victim = tmp();
+  fs.writeFileSync(path.join(victim, 'secret'), 'S');
+  fs.writeFileSync(path.join(victim, 'frontend-developer.md'), FE.raw);
+  fs.chmodSync(victim, 0o755);
+  let swapped = false;
+  const fsApi = { ...fs, cpSync: (src, dest, o) => { if (!swapped) { swapped = true; fs.renameSync(dir, `${dir}.real`); fs.symlinkSync(victim, dir); } return fs.cpSync(src, dest, o); } };
+  const inst = createAgentInstaller({ ledgerKey: KEY, home, dataRoot: data, catalog: catalogOf([FE, RO]), fsApi });
+  const r = inst.adopt();
+  assert.equal(swapped, true);
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 'backup');
+  assert.equal((fs.statSync(victim).mode & 0o777).toString(8), '755', 'the other folder\'s mode is unchanged');
+  assert.deepEqual(fs.readdirSync(victim).sort(), ['frontend-developer.md', 'secret']);
+  const root = path.join(data, 'agent-backups');
+  for (const n of fs.existsSync(root) ? fs.readdirSync(root) : []) assert.ok(!fs.lstatSync(path.join(root, n)).isSymbolicLink(), 'no backup is a link');
+  assert.equal(fs.existsSync(inst.ledgerPath), false, 'nothing recorded, not even an empty op');
+});
+
+test('PR4 P2: ~/.claude itself as a link is refused before any copy', () => {
+  const { home, data } = setup();
+  const real = tmp();
+  fs.mkdirSync(path.join(real, 'agents'));
+  fs.writeFileSync(path.join(real, 'agents', 'frontend-developer.md'), FE.raw);
+  fs.chmodSync(real, 0o755);
+  fs.symlinkSync(real, path.join(home, '.claude'));
+  const inst = createAgentInstaller({ ledgerKey: KEY, home, dataRoot: data, catalog: catalogOf([FE, RO]) });
+  assert.deepEqual(inst.adoptable().matches, []);
+  assert.equal(inst.adopt().opId, null);
+  assert.ok(!fs.existsSync(path.join(data, 'agent-backups')));
+  assert.equal((fs.statSync(real).mode & 0o777).toString(8), '755');
+});
+
 test('Cursor "Add to a project…" is off by default; when on it writes one .mdc and undoes', () => {
   const { inst, cat } = setup();
   const project = tmp();

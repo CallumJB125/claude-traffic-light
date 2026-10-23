@@ -447,26 +447,45 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
   function backupClaudeAgents(keep = new Set()) {
     const src = path.join(HOME, CLAUDE_DIR);
     const root = path.join(DATA, BACKUPS_DIR);
+    // ~/.claude and ~/.claude/agents must be real folders, and the same folder
+    // after the copy as before it: one swapped for a link mid-copy would make
+    // the "backup" a copy of somewhere else (review PR 4 P2).
+    const pin = () => {
+      const c = fsApi.lstatSync(path.join(HOME, '.claude')), a = fsApi.lstatSync(src);
+      if (c.isSymbolicLink() || !c.isDirectory() || a.isSymbolicLink() || !a.isDirectory()) throw new Error('link');
+      return `${a.dev}:${a.ino}`;
+    };
+    const realDir = (p) => { const st = fsApi.lstatSync(p); return st.isDirectory() && !st.isSymbolicLink(); };
+    const pinned = pin();
     fsApi.mkdirSync(root, { recursive: true, mode: 0o700 });
-    if (fsApi.lstatSync(root).isSymbolicLink()) throw new Error('link');
+    if (!realDir(root)) throw new Error('link');
     const newest = backupsIn(root).at(-1);
-    if (newest && fingerprint(path.join(root, newest)) === fingerprint(src)) return path.join(root, newest);
+    if (newest && fingerprint(path.join(root, newest)) === fingerprint(src) && pin() === pinned) return path.join(root, newest);
     const ms = String(new Date(now()).getUTCMilliseconds()).padStart(3, '0');
     const dest = path.join(root, `claude-agents-${stamp(now()).replace(/Z$/, `${ms}Z`)}-${randomUUID().slice(0, 8)}`);
-    fsApi.cpSync(src, dest, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true, verbatimSymlinks: true, dereference: false });
+    // Plexiform makes the folder itself (0700, so nothing needs a chmod that
+    // could follow a link) and copies the entries into it.
+    fsApi.mkdirSync(dest, { mode: 0o700 });
     const walk = (a, b) => {
       for (const e of fsApi.readdirSync(a, { withFileTypes: true })) {
         const pa = path.join(a, e.name), pb = path.join(b, e.name);
         const sa = fsApi.lstatSync(pa), sb = fsApi.lstatSync(pb);
         if (sa.isSymbolicLink()) { if (!sb.isSymbolicLink() || fsApi.readlinkSync(pa) !== fsApi.readlinkSync(pb)) throw new Error('backup mismatch'); }
-        else if (sa.isDirectory()) walk(pa, pb);
-        else if (sa.isFile() && sha(fsApi.readFileSync(pa)) !== sha(fsApi.readFileSync(pb))) throw new Error('backup mismatch');
+        else if (sa.isDirectory()) { if (sb.isSymbolicLink() || !sb.isDirectory()) throw new Error('backup mismatch'); walk(pa, pb); }
+        else if (sa.isFile()) { if (sb.isSymbolicLink() || !sb.isFile() || sha(fsApi.readFileSync(pa)) !== sha(fsApi.readFileSync(pb))) throw new Error('backup mismatch'); }
       }
     };
-    walk(src, dest);
-    fsApi.chmodSync(dest, 0o700);
+    try {
+      for (const n of fsApi.readdirSync(src).sort()) fsApi.cpSync(path.join(src, n), path.join(dest, n), { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true, verbatimSymlinks: true, dereference: false });
+      if (pin() !== pinned || !realDir(dest)) throw new Error('moved');
+      walk(src, dest);
+      if (pin() !== pinned) throw new Error('moved');
+    } catch (err) {
+      if (realDir(dest)) fsApi.rmSync(dest, { recursive: true, force: true });
+      throw err;
+    }
     prune(root, new Set([...keep, path.basename(dest)]));
-    if (!fsApi.lstatSync(dest).isDirectory()) throw new Error('backup gone');
+    if (!realDir(dest)) throw new Error('backup gone');
     return dest;
   }
   // Keeps at most MAX_BACKUPS, never deleting the oldest (the folder before
@@ -505,6 +524,8 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
       ledger.owned[keyOf('claude', m.rel)] = { platform: 'claude', rel: m.rel, agentId: m.agentId, how: 'adopted', sha: m.sha, original: m.sha, fileSha256: agent.fileSha256, since: at };
       changes.push({ platform: 'claude', rel: m.rel, before: m.sha, after: m.sha });
     }
+    // Every file changed since it was listed: nothing adopted, so no op.
+    if (!changes.length) return { ok: true, opId: null, adopted: [], backup: null };
     const op = { id: randomUUID(), kind: 'adopt', at, backup: path.relative(DATA, backup), changes };
     ledger.ops.push(op);
     writeLedger(ledger);
