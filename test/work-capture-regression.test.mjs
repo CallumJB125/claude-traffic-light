@@ -57,7 +57,7 @@ test('independent actual HTTP: a lost-response retry after the source expires ca
 test('independent: failed missing-session idle reports must respect a retry budget', async (t) => {
   const dir = tmp(t); let time = 100_000, idleAttempts = 0;
   const route = { hub: 'https://fixture.test', user_id: 'user', team_id: 'team', board_id: 'board', repo_id: 'repo', role: 'member', canonical_url: 'github.com/org/app' };
-  const router = createWorkCapture({ file: path.join(dir, 'state.json'), host: 'fixture', now: () => time,
+  const router = createWorkCapture({ startEnabled: true, file: path.join(dir, 'state.json'), host: 'fixture', now: () => time,
     resolveRepo: async () => route.canonical_url, getRoutes: async () => ({ routes: [route], complete: true }),
     sendLocal: async () => ({ ok: false }), sendTeam: async (_, body) => body.status === 'idle' ? (++idleAttempts, { ok: false }) : ({ ok: true, card: { id: 'card' } }) });
   t.after(() => router.stop()); await router.observe([event(time)]); time += 31_000;
@@ -71,7 +71,7 @@ test('independent actual Git: query/fragment credentials cannot enter private ro
   execFileSync('git', ['init', '-q', repo]);
   execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', 'https://user:synthetic-userinfo@github.com/org/app.git?access_token=synthetic-query-secret#synthetic-fragment-secret']);
   const normalized = await repoFor(repo); t.diagnostic(`Git lookup returns query=${normalized?.includes('?')}, fragment=${normalized?.includes('#')}`);
-  const router = createWorkCapture({ file: path.join(dir, 'capture.json'), host: 'fixture', now: () => 100_000,
+  const router = createWorkCapture({ startEnabled: true, file: path.join(dir, 'capture.json'), host: 'fixture', now: () => 100_000,
     getRoutes: async () => ({ routes: [], complete: true }), sendLocal: async () => ({ ok: true, card: { id: 'personal' } }), sendTeam: async () => ({ ok: false }) });
   t.after(() => router.stop()); await router.observe([event(100_000, { cwd: repo })]);
   const projected = JSON.stringify(router.snapshot()), stored = fs.readFileSync(path.join(dir, 'capture.json'), 'utf8');
@@ -84,11 +84,13 @@ test('independent actual Git: query/fragment credentials cannot enter private ro
 test('independent: valid retained task state cannot grow beyond its own restart read ceiling', async (t) => {
   const dir = tmp(t), file = path.join(dir, 'capture.json');
   const route = { hub: 'https://fixture.test', user_id: crypto.randomUUID(), team_id: crypto.randomUUID(), board_id: crypto.randomUUID(), repo_id: crypto.randomUUID(),
-    role: 'member', canonical_url: 'github.com/org/app', team_name: 'T'.repeat(60), board_name: 'B'.repeat(60) };
+    role: 'member', canonical_url: 'github.com/org/app', team_name: 'T'.repeat(60), board_name: 'N'.repeat(60) }; // not 'B': a run of hex letters is redacted as a secret, which would shrink the state on load
   const state = { v: 1, install_id: crypto.randomUUID(), tasks: {}, choices: {} };
-  const entry = { destination: { kind: 'team', ...route }, repo: route.canonical_url, provider: 'codex', session_id: 's'.repeat(120), task_id: 't'.repeat(120),
-    title: 'Title'.repeat(40), status: 'working', card_id: crypto.randomUUID(), last_seen: 100_000, attempt_fingerprint: 'a'.repeat(64), attempt_at: 100_000,
-    fingerprint: 'b'.repeat(64), sent_at: 100_000, untracked: true, reason: 'stopped' };
+  const { role, canonical_url, ...stored } = route;
+  const entry = { destination: { kind: 'team', ...stored }, repo: route.canonical_url, provider: 'codex', session_id: 's'.repeat(120), task_id: 't'.repeat(120),
+    // Only fields a loaded untracked entry keeps (no role, canonical_url or attempt fields), so the retained bytes
+    // survive the restart read and 50 new cards really meet the ceiling.
+    title: 'Title'.repeat(40), status: 'working', card_id: crypto.randomUUID(), untracked: true, reason: 'stopped' };
   let index = 0;
   while (JSON.stringify(state).length < 2 * 1024 * 1024 - 25_000) {
     const retained = { ...entry, card_id: crypto.randomUUID(), session_id: 's'.repeat(114) + String(index++).padStart(4, '0') };
@@ -97,10 +99,10 @@ test('independent: valid retained task state cannot grow beyond its own restart 
     assert.ok(index < 1900);
   }
   fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
-  const setup = { file, host: 'fixture', now: () => 100_000, getRoutes: async () => ({ routes: [route], complete: true }), resolveRepo: async () => route.canonical_url,
+  const setup = { startEnabled: true, file, host: 'fixture', now: () => 100_000, getRoutes: async () => ({ routes: [route], complete: true }), resolveRepo: async () => route.canonical_url,
     sendTeam: async () => ({ ok: true, card: { id: crypto.randomUUID() } }), sendLocal: async () => ({ ok: false }) };
   const router = createWorkCapture(setup); t.after(() => router.stop());
-  await router.observe(Array.from({ length: 50 }, (_, i) => event(100_000, { sessionId: `new${i}`, taskTitle: 'Title'.repeat(40) })));
+  await router.observe(Array.from({ length: 50 }, (_, i) => event(100_000, { sessionId: `new${i}`, cwd: `/synthetic/app-${i}`, taskTitle: `${'Title'.repeat(38)} ${i}` })));
   const size = fs.statSync(file).size; t.diagnostic(`retained=${index}, final=${router.snapshot().length}, saved bytes=${size}, restart ceiling=${2 * 1024 * 1024}`);
   await router.stop(); let restarted, restartError = null;
   try { restarted = createWorkCapture(setup); t.after(() => restarted.stop()); } catch (e) { restartError = e.message; }
