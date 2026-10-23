@@ -88,6 +88,7 @@ push      {push:'event', sub, event}
 | `act` | `ActParams {id, action, payload, requestId}` | `ActResult {ok:true, task:TaskView, messageId?, takeover?, pr?}` | §5.3 |
 | `listMessages` | `ListMessagesParams {id, afterSeq?}` | `ListMessagesResult [Message]` | `NOT_FOUND` |
 | `detectAIs` | — | `DetectAIsResult [AiInfo]` | — |
+| `route` | `RouteParams {spec:TaskSpec}` | `RouteResult {decision:'run'\|'ask', ai\|null, rule, confidence, reason, alternatives:[{ai, reason, usable}]}` | `VALIDATION`, `POLICY_DENIED` (bypass, or a relay token), `AI_UNAVAILABLE`, `CAPABILITY_MISSING`, `BUDGET_EXCEEDED`. Read-only: what `createTask` would pick for this spec and why (§11). Starts nothing |
 | `getLimits` | — | `Limits` | — |
 | `setLimits` | `SetLimitsParams {maxParallel?, perAi?}` | `Limits` | `VALIDATION` |
 | `getClaims` | `GetClaimsParams {repo}` | `GetClaimsResult {repo, claims:[Claim]}` | — |
@@ -104,6 +105,7 @@ Unknown method → `UNKNOWN_METHOD`. Params failing their schema → `VALIDATION
 | `cwd` | string | required | Project folder. The supervisor resolves the git toplevel; `repo` is informational (canonical remote) |
 | `title` | string ≤ 120 | first line of `text` | |
 | `ai` | `claude\|codex\|gemini\|auto` | composer choice → project default → user default → `auto` | `auto` picks per §11 and records the reason (`ai.reason`), never silently |
+| `expectAi` | `claude\|codex\|gemini` | — | With `ai:'auto'`: the AI the person saw (a `route` result) and confirmed. If routing now picks another → `CONFLICT` (`details.ai`); on a tie it is the person's pick of the two choices |
 | `model` | string | the AI's default | Only when the AI has `modelSelect` |
 | `surface` | `background\|tmux\|tab` | user/project default, else `background` | `tmux` needs tmux (macOS/Linux) |
 | `permissionLevel` | `plan\|ask\|auto-edits\|auto\|bypass` | `auto-edits` | `bypass` only with the per-project opt-in (`policy.json repos[..].allow_bypass: true`) **and** a local source; else `POLICY_DENIED`. Mapping per AI: §10 |
@@ -397,7 +399,8 @@ Every task keeps `audit`: who created it, from where, the permission level (and 
 
 - `detectAIs()` → `[AiInfo {id, installed, bin, version, loggedIn, models, capabilities, notes, health}]`, refreshed on supervisor start and daily. `loggedIn` comes from each CLI's own status command (`null` when it has none); credential files are **never** read. The list is data-driven (plan §3.1).
 - `capabilities` = `background, resume, hooks, mcp, permissionRouting, modelSelect, costReport, sandbox` (plan §3.2 matrix, filled from verified docs). Missing `hooks` → the task face says "limited status" and green needs stream evidence; missing `resume` → take over seeds a new session; missing `permissionRouting` → `ask` is refused in background (`CAPABILITY_MISSING` with `details.capability`).
-- `ai:'auto'`: the composer choice → project default → user default rules ("Codex for `*.py` refactors"), filtered by required capabilities, availability (installed, logged in, not rate-limited) and cost preference. The pick and its reason are in `ai.reason` and the audit ("Codex: Claude is rate-limited until 17:40"). Never silent.
+- Routing belongs to the wrapper (the composer and `plexiform run`, sources `local`/`cli`). Tasks from every other source (`bus`, `board`, `phone`, `slack`, `voice`, `mcp`) keep the plain pick they always had (the configured default AI, else the first usable one; no spend, usage, repo or rule gates), so people who only coordinate their native sessions see no change. For `local`/`cli`, `ai:'auto'` is the task router (`src/route-rules.js`, a pure function; profiles in `src/tool-profiles.json`). Hard filters first: installed, signed in and startable; the capability the task needs (`ask` → `permissionRouting`, a `budgetUsd` → `budget`); not held by the app's enforced spend cap (`spend-gate.json`); not at a usage limit (a run's `rate_limit` rejection or a task parked on `limit`, until its reset; `afterReset` tasks skip this). Gemini is never auto-routed, only chosen. Then, first match wins: (1) an explicit `ai`; (2) the repo's preferred AI, `policy.json repos[<realpath or canonical remote>].preferred_ai`; (3) the person's rules, `policy.json route_rules: [{ai, keywords?, globs?, name?}]` (any keyword as whole words and any glob against a path in the text; first matching rule); (4) the configured default AI, unless its usage window is at least 80% used; (5) usage-window headroom (from `rate_limit` reports), when one AI has clearly more left. Nothing decides → a tie: `route` returns `decision:'ask'` with the top two, and `createTask` from `local`/`cli` refuses with `CONFIRM_REQUIRED` (`details.choices`) until the person picks one (`expectAi`). An explicit `ai` that fails a filter is refused with the filter's code, never moved.
+- Every pick has a one-line reason (≤ 90 characters) naming the rule that fired, e.g. "Codex: you set Codex for this repo", "Claude: the only one that can run it; Codex can't ask you for approvals in the background", "Claude: Codex is 82% through its usage window". It is stored in `ai.reason` and the audit. Task text only meets rule keywords and globs: it never sets a permission level, and naming an AI in it does nothing.
 - Never switch mid-run: a limit or auth failure saves a checkpoint and stops the old process before `parked{limit|auth}`. Resume stays with the existing provider. Choosing another supported AI opens a source/context review, then requires native confirmation; standing rules do not bypass this review.
 
 ## 12. Board cards on the same Task object
@@ -434,16 +437,16 @@ Offline hub → hub-routed acts fail with `HUB_UNREACHABLE`; the task keeps runn
 
 ### 14.1 `buddy` CLI
 
-`buddy <subcommand>` with a registry `{name → {summary, usage, run(argv, ctx)}}` in `bin/buddy.js`; every subcommand uses `client.js`. Subcommands: `run` (now); `give`, `status`, `ask` (later).
+`buddy <subcommand>` with a registry `{name → {summary, usage, run(argv, ctx)}}` in `bin/buddy.js`; every subcommand uses `client.js`. Subcommands: `run` (now); `give`, `status`, `ask` (later). Shipped as `plexiform run` (`src/cli-run.js`, `bin/plexiform.js`).
 
 ```
-buddy run "<text>" | -            (- reads the text from stdin)
+plexiform run "<text>" | -        (- reads the text from stdin)
     [--in DIR] [--with claude|codex|gemini|auto] [--mode background|tmux|tab]
     [--perm plan|ask|auto-edits|auto] [--plan-first] [--budget USD] [--base BRANCH]
-    [--in-place] [--title T] [--request-id ID] [--follow] [--json]
+    [--in-place] [--title T] [--request-id ID] [--follow] [--json] [--yes]
 ```
 
-`source:'cli'`, `cwd` = `--in` or the current directory, `requestId` = `--request-id` or a fresh uuid (printed with `--json` so scripts can retry safely). Prints the task id and reason; `--follow` streams state/transcript until `in_review`/`done`/`failed`/`parked`. Exit codes: 0 created (with `--follow`: ended in `in_review` or `done`), 2 usage, 3 supervisor unreachable, 4 refused (`VALIDATION`/`POLICY_DENIED`/`AI_UNAVAILABLE`/`CAPABILITY_MISSING`), 5 with `--follow`: ended `failed` or `parked`.
+`source:'cli'`, `cwd` = `--in` or the current directory, `requestId` = `--request-id` or a fresh uuid (printed with `--json` so scripts can retry safely). It first calls `route` and shows the pick and its reason, then waits: Enter runs it, the AI's letter (`c` Claude, `x` Codex, `g` Gemini) runs another one instead, `q` leaves it unstarted. A tie lists both choices and waits for a letter. It never starts on its own: without a terminal (or with `--json`, or text from stdin) it never prompts, and starts only with `--yes`; a tie without `--with` is then refused. The confirmed pick is sent as `expectAi`. The permission level is `--perm` or the engine's default; `bypass` is not offered here. Prints the task id and reason; `--follow` streams state/transcript/tool/diff/approval/ask events (NDJSON with `--json`) until `in_review`/`done`/`failed`/`parked`. An approval is answered only by the person at the prompt (`a` approve once, `d` deny, Enter leaves it for Plexiform); without a terminal it is never answered. Ctrl-C stops following; the task keeps running. Exit codes: 0 created (with `--follow`: ended in `in_review` or `done`; also: left unstarted at the prompt), 2 usage (or not started: no terminal and no `--yes`), 3 supervisor unreachable, 4 refused (`VALIDATION`/`POLICY_DENIED`/`AI_UNAVAILABLE`/`CAPABILITY_MISSING`/`BUDGET_EXCEEDED`/`CONFLICT`/`CONFIRM_REQUIRED`…), 5 with `--follow`: ended `failed` or `parked`, 130 interrupted.
 
 ### 14.2 `buddy_spin_off` MCP tool
 

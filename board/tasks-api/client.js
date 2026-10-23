@@ -228,6 +228,8 @@ export class TasksClient extends EventEmitter {
   saveCheckpoint(id, expectedVersion, data, { requestId = newRequestId() } = {}) { return this.call('saveCheckpoint', { id, expectedVersion, data, requestId }); }
   listMessages(id, { afterSeq } = {}) { return this.call('listMessages', afterSeq == null ? { id } : { id, afterSeq }); }
   detectAIs() { return this.call('detectAIs'); }
+  /** What createTask would pick for this spec and why ({decision:'run'|'ask', ai, reason, alternatives}). Starts nothing. */
+  route(spec) { return this.call('route', { spec }); }
   getLimits() { return this.call('getLimits'); }
   setLimits(p) { return this.call('setLimits', p); }
   getClaims(repo) { return this.call('getClaims', { repo }); }

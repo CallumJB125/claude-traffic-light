@@ -25,6 +25,7 @@ import { performance } from 'node:perf_hooks';
 import { formatAge } from '../shared/liveness.js';
 import { taskFace, AI_LABEL } from './face.js';
 import { validate } from './validate.js';
+import Route from '../../src/route-rules.js';
 import {
   parseAddress, formatAddress, resolve as resolveAddress, flagsFor, cleanBody, wrapPeerMessage, RateLimiter,
   LoopDetector, MessageStore, messageId, MSG_BUDGET_PER_TASK,
@@ -40,7 +41,7 @@ export const SCHEMA = JSON.parse(fs.readFileSync(path.join(here, 'schema.json'),
 const PARAMS_DEF = {
   hello: 'HelloParams', createTask: 'CreateTaskParams', listTasks: 'ListTasksParams', getTask: 'GetTaskParams',
   subscribe: 'SubscribeParams', unsubscribe: 'UnsubscribeParams', act: 'ActParams', setLimits: 'SetLimitsParams',
-  getClaims: 'GetClaimsParams', listMessages: 'ListMessagesParams', bus: 'BusParams',
+  getClaims: 'GetClaimsParams', listMessages: 'ListMessagesParams', bus: 'BusParams', route: 'RouteParams',
 };
 // States with a (possibly dead) agent process behind them: they get a LeaseView.
 const LEASED = new Set(['claimed', 'running', 'quiet', 'blocked', 'handing_over', 'suspended', 'unresponsive', 'orphaned']);
@@ -685,7 +686,7 @@ export async function startMockServer(opts = {}) {
   }
 
   // ── create ─────────────────────────────────────────────────────────────────
-  function newTask(spec, { script = 'work' } = {}) {
+  function newTask(spec, { script = 'work', routed = null } = {}) {
     const id = `tsk_${crypto.randomBytes(6).toString('hex')}`;
     const slug = spec.text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'task';
     const root = spec.cwd;
@@ -695,7 +696,7 @@ export async function startMockServer(opts = {}) {
     let permissionLevel = spec.permissionLevel ?? 'auto-edits';
     let aiId = spec.ai ?? 'auto';
     let aiReason = null;
-    if (aiId === 'auto') { aiId = 'claude'; aiReason = 'Auto: Claude is logged in, supports background runs and routes approvals to Buddy'; }
+    if (aiId === 'auto') { aiId = routed?.ai ?? 'claude'; aiReason = routed?.reason ?? 'Auto: Claude is logged in, supports background runs and routes approvals to Buddy'; }
     const task = {
       id, title: spec.title ?? spec.text.split('\n')[0].slice(0, 80), text: spec.text, spec,
       state: 'queued', blockedKind: null, failKind: null, failReason: null, parkReason: null, outcome: null, queueReason: null,
@@ -975,6 +976,14 @@ export async function startMockServer(opts = {}) {
     };
   }
 
+  // The real router over the mock's AIs. opts.defaultAi (default 'claude'), opts.routeUsage and opts.routeRules feed it.
+  const routeOf = (spec) => Route.route({
+    want: spec.ai ?? 'auto', level: spec.permissionLevel ?? 'auto-edits', now: Date.now(), ais: MOCK_AIS,
+    defaultAi: opts.defaultAi === undefined ? 'claude' : opts.defaultAi, needsBudget: spec.budgetUsd != null, waitForReset: spec.afterReset === true,
+    text: spec.text, usage: opts.routeUsage ?? {}, rules: opts.routeRules ?? [],
+  });
+  const refuse = (r, want) => new ApiError(r.code, r.reason, { ai: want, ...(r.capability ? { capability: r.capability } : {}) });
+
   // ── methods ────────────────────────────────────────────────────────────────
   const methods = {
     hello: (p) => {
@@ -997,7 +1006,19 @@ export async function startMockServer(opts = {}) {
           throw new ApiError('CAPABILITY_MISSING', `${want} can't route approvals to Buddy in background mode; pick 'auto-edits', or run it in a terminal`, { capability: 'permissionRouting' });
         }
       }
-      const task = newTask(spec);
+      let routed = null;
+      // Only the wrapper (local/cli) routes; other sources keep the plain pick, as in the engine.
+      if (want === 'auto' && ['local', 'cli'].includes(spec.source ?? 'local')) {
+        routed = routeOf(spec);
+        if (routed.decision === 'ask') {
+          const picked = spec.expectAi ? Route.pickFromTie(routed, spec.expectAi) : null;
+          if (!picked) throw new ApiError('CONFIRM_REQUIRED', routed.reason, { choices: routed.alternatives.slice(0, 2) });
+          routed = picked;
+        }
+        if (routed.decision === 'refuse') throw refuse(routed, want);
+        if (spec.expectAi && routed.ai !== spec.expectAi) throw new ApiError('CONFLICT', `Routing changed since you confirmed it. ${routed.reason}`, { ai: routed.ai });
+      }
+      const task = newTask(spec, { routed });
       createCache.set(requestId, { id: task.id, hash, at: now() });
       return { id: task.id, duplicate: false };
     },
@@ -1012,6 +1033,12 @@ export async function startMockServer(opts = {}) {
       return detail(t);
     },
     detectAIs: () => MOCK_AIS,
+    route: ({ spec }) => {
+      if (spec.permissionLevel === 'bypass') throw new ApiError('POLICY_DENIED', 'bypass needs the per-project opt-in (none in the mock)');
+      const r = routeOf(spec);
+      if (r.decision === 'refuse') throw refuse(r, spec.ai ?? 'auto');
+      return { decision: r.decision, ai: r.ai, rule: r.rule, confidence: r.confidence, reason: r.reason, alternatives: r.alternatives };
+    },
     getLimits: () => ({ ...limits, perAi: { ...limits.perAi }, ramGb, running: [...tasks.values()].filter((t) => SLOT.has(t.state)).length, queued: [...tasks.values()].filter((t) => t.state === 'queued').length }),
     setLimits: (p) => {
       if (p.maxParallel != null) limits.maxParallel = p.maxParallel;

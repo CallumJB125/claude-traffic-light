@@ -33,6 +33,13 @@
             "auto"
           ]
         },
+        "expectAi": {
+          "enum": [
+            "claude",
+            "codex",
+            "gemini"
+          ]
+        },
         "model": {
           "type": "string",
           "maxLength": 256
@@ -4241,7 +4248,8 @@
             "getClaims",
             "listMessages",
             "saveCheckpoint",
-            "bus"
+            "bus",
+            "route"
           ]
         },
         "params": {
@@ -4932,6 +4940,102 @@
       "required": [
         "repo",
         "claims"
+      ],
+      "additionalProperties": false
+    },
+    "RouteParams": {
+      "type": "object",
+      "properties": {
+        "spec": {
+          "$ref": "#/$defs/TaskSpec"
+        }
+      },
+      "required": [
+        "spec"
+      ],
+      "additionalProperties": false
+    },
+    "RouteResult": {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "enum": [
+            "run",
+            "ask"
+          ]
+        },
+        "ai": {
+          "anyOf": [
+            {
+              "enum": [
+                "claude",
+                "codex",
+                "gemini"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rule": {
+          "enum": [
+            "override",
+            "repo",
+            "user-rule",
+            "only",
+            "default",
+            "headroom",
+            "tie"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "rule",
+            "default",
+            "tie"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "alternatives": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ai": {
+                "enum": [
+                  "claude",
+                  "codex",
+                  "gemini"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "usable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "ai",
+              "reason",
+              "usable"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "decision",
+        "ai",
+        "rule",
+        "confidence",
+        "reason",
+        "alternatives"
       ],
       "additionalProperties": false
     },

@@ -10,7 +10,7 @@ import { STATES, BLOCKED_KINDS, FAIL_KINDS } from '../../shared/states.js';
 import { PARTY_KINDS, MSG_MAX_BYTES } from '../mesh.js';
 import {
   TASKS_PROTOCOL_VERSION, METHODS, ACTIONS, EVENT_TYPES, AIS, AI_CHOICES, SURFACES, PERMISSION_LEVELS,
-  SOURCES, BUS_OPS, PARK_REASONS, OUTCOMES, CAPABILITIES, ERRORS, MAX_TRANSCRIPT_CHUNK, MAX_PATCH_BYTES,
+  SOURCES, BUS_OPS, PARK_REASONS, OUTCOMES, CAPABILITIES, ERRORS, MAX_TRANSCRIPT_CHUNK, MAX_PATCH_BYTES, ROUTE_RULES,
 } from '../protocol.js';
 
 const ref = (n) => ({ $ref: `#/$defs/${n}` });
@@ -79,6 +79,8 @@ const taskSpec = optional({
   cwd: str({ minLength: 1, ...PATH }),
   repo: str(PATH),
   ai: en(AI_CHOICES),
+  // With ai 'auto': the AI the person saw and confirmed (a `route` result). If routing now picks another, CONFLICT.
+  expectAi: en(AIS),
   model: str(),
   surface: en(SURFACES),
   permissionLevel: en(PERMISSION_LEVELS),
@@ -309,6 +311,12 @@ const schema = {
     SetLimitsParams: optional({ maxParallel: int({ minimum: 1, maximum: 8 }), perAi: optional(Object.fromEntries(AIS.map((a) => [a, int({ maximum: 8 })])), []) }, []),
     GetClaimsParams: obj({ repo: str({ minLength: 1, ...PATH }) }),
     GetClaimsResult: obj({ repo: str(PATH), claims: arr(ref('Claim')) }),
+    // The task router, read-only: what createTask would pick for this spec, and why (TASKS-CONTRACT.md §11).
+    RouteParams: obj({ spec: ref('TaskSpec') }),
+    RouteResult: obj({
+      decision: en(['run', 'ask']), ai: nullable(en(AIS)), rule: en(ROUTE_RULES), confidence: en(['rule', 'default', 'tie']),
+      reason: str({ maxLength: 120 }), alternatives: arr(obj({ ai: en(AIS), reason: str({ maxLength: 120 }), usable: bool })),
+    }),
     // The agent bus (board/AGENT-BUS.md). args are checked per op by the bus itself (board/shared/bus-schema.js).
     BusParams: optional({ op: en(BUS_OPS), args: { type: 'object' }, caller: { type: 'object' } }, ['op']),
     // thin clients

@@ -5,7 +5,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const WINDOW_MS = 10 * 60_000;
 const MAX_RESTARTS = 5;
-const PASS = ['HOME', 'USER', 'LOGNAME', 'PATH', 'TMPDIR', 'LANG', 'TZ', 'CODEX_HOME'];
+// CLAUDE_TRAFFIC_LIGHT_HOME: main's data folder when overridden, where the engine reads spend-gate.json (the router's spend gate).
+const PASS = ['HOME', 'USER', 'LOGNAME', 'PATH', 'TMPDIR', 'LANG', 'TZ', 'CODEX_HOME', 'CLAUDE_TRAFFIC_LIGHT_HOME'];
 function tasksEnv(dataDir, base = process.env) {
   const env = {};
   for (const k of PASS) if (typeof base[k] === 'string') env[k] = base[k];
