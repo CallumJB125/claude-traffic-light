@@ -19,7 +19,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, createHmac, randomUUID, timingSafeEqual } = require('node:crypto');
-const { createHomeFiles, NOFOLLOW } = require('./home-files.js');
+const { createHomeFiles, NOFOLLOW, NONBLOCK } = require('./home-files.js');
 const { TARGETS, UNSUPPORTED } = require('./agent-install/targets/index.js');
 const { parseFrontmatter, ALLOWED_KEYS } = require('./agent-frontmatter.js');
 
@@ -33,6 +33,9 @@ const MAX_BACKUPS = 5;
 const MAX_BACKUP_ENTRIES = 5000;
 const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
 const BACKUP_NAME = /^claude-agents-\d{8}T\d{9}Z-[0-9a-f]{8}$/;
+// A backup being built (review #54 M4): never listed, and cleared next time.
+const STAGING = '.tmp-';
+const STAGED_NAME = /^\.tmp-claude-agents-\d{8}T\d{9}Z-[0-9a-f]{8}$/;
 const sha = (text) => createHash('sha256').update(text).digest('hex');
 const refuse = (status, error, extra = {}) => ({ ok: false, status, error, ...extra });
 const tilde = (rel) => `~/${rel}`;
@@ -502,6 +505,9 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     if (fsApi.lstatSync(DATA, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error('link');
     fsApi.mkdirSync(root, { recursive: true, mode: 0o700 });
     if (!realDir(root)) throw new Error('link');
+    for (const n of fsApi.readdirSync(root)) {
+      if (STAGED_NAME.test(n)) { try { removeBackup(path.join(root, n)); } catch { /* next time */ } }
+    }
     const newest = backupsIn(root).at(-1);
     if (newest && fingerprint(path.join(root, newest)) === fingerprint(src) && pin() === pinned) return path.join(root, newest);
     // Counted before anything is copied: too many entries, too many bytes, or
@@ -521,7 +527,11 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     };
     scan(src);
     const ms = String(new Date(now()).getUTCMilliseconds()).padStart(3, '0');
-    const dest = path.join(root, `claude-agents-${stamp(now()).replace(/Z$/, `${ms}Z`)}-${randomUUID().slice(0, 8)}`);
+    const name = `claude-agents-${stamp(now()).replace(/Z$/, `${ms}Z`)}-${randomUUID().slice(0, 8)}`;
+    // Built under a staging name BACKUP_NAME rejects, and renamed to its own
+    // name only once it's verified: a crash part way leaves a folder that is
+    // never listed, reused or offered, and the next backup clears it (M4).
+    const dest = path.join(root, `${STAGING}${name}`), final = path.join(root, name);
     // Plexiform makes the folder itself (0700, so nothing needs a chmod that
     // could follow a link) and copies the entries into it.
     fsApi.mkdirSync(dest, { mode: 0o700 });
@@ -537,8 +547,8 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
         else if (sa.isFile()) { if (sb.isSymbolicLink() || !sb.isFile() || sha(fsApi.readFileSync(pa)) !== sha(fsApi.readFileSync(pb))) throw new Error('backup mismatch'); }
       }
     };
-    // cpSync rounds a file's times, skips a link's, and a folder's change as
-    // its copy fills; set every entry's from the source, deepest first, so the
+    // The copy has new times on everything (and a folder's change as it
+    // fills); set every entry's from the source, deepest first, so the
     // copy is the folder exactly (scripts/agents-fingerprint.js). Like
     // dirModes, this walks the backup's own side and enters only entries
     // lstat shows are real folders there, so lutimes never reaches through a
@@ -553,8 +563,8 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
         fsApi.lutimesSync(pb, sa.atimeMs / 1000, sa.mtimeMs / 1000);
       }
     };
-    // cpSync makes every copied folder 755 (Node 22), so each folder in the
-    // backup is set back to its source's mode, deepest first (review #54 M1).
+    // The copy makes every folder 0700, so each folder in the backup is set
+    // to its source's mode, deepest first (review #54 M1).
     // The walk goes down the backup's side: it enters only folders lstat
     // shows are real folders in the backup, so every part of each path is a
     // folder Plexiform made inside its 0700 backup, never a copied link
@@ -571,14 +581,46 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
         setDirMode(dest, pb, sa.mode & 0o7777);
       }
     };
-    try {
-      for (const n of fsApi.readdirSync(src).sort()) {
-        const from = path.join(src, n), to = path.join(dest, n);
-        // cpSync stats a top-level entry through a link (a dangling one throws);
-        // a link is copied as a link, never followed.
-        if (fsApi.lstatSync(from).isSymbolicLink()) fsApi.symlinkSync(fsApi.readlinkSync(from), to);
-        else fsApi.cpSync(from, to, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true, verbatimSymlinks: true, dereference: false });
+    // Plexiform's own copy, not cpSync: Node's native cpSync aborts the
+    // process when a folder vanishes mid-copy (M4). Every entry is lstat'd;
+    // each new entry is made by Plexiform inside the backup, never over one
+    // that exists: folders 0700 (dirModes sets them later), links as links,
+    // files read with O_NOFOLLOW|O_NONBLOCK (only a regular file, within the
+    // size cap) and written with O_EXCL|O_NOFOLLOW. Anything else, or any
+    // change under it, is an ordinary error and the backup is refused.
+    let copied = 0;
+    const copyFile = (a, b) => {
+      const fi = fsApi.openSync(a, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+      try {
+        const st = fsApi.fstatSync(fi);
+        if (!st.isFile()) throw Object.assign(new Error('special'), { code: 'special' });
+        if ((copied += st.size) > MAX_BACKUP_BYTES) throw Object.assign(new Error('too big'), { code: 'too-big' });
+        const fo = fsApi.openSync(b, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NOFOLLOW, 0o600);
+        try {
+          const buf = Buffer.alloc(Math.min(st.size, 1 << 20) || 1);
+          let at = 0;
+          while (at < st.size) {
+            const n = fsApi.readSync(fi, buf, 0, Math.min(buf.length, st.size - at), at);
+            if (n < 1) break;
+            let w = 0;
+            while (w < n) w += fsApi.writeSync(fo, buf, w, n - w, at + w);
+            at += n;
+          }
+          fsApi.fchmodSync(fo, st.mode & 0o7777);
+        } finally { fsApi.closeSync(fo); }
+      } finally { fsApi.closeSync(fi); }
+    };
+    const copyTree = (a, b) => {
+      for (const n of fsApi.readdirSync(a).sort()) {
+        const pa = path.join(a, n), pb = path.join(b, n), st = fsApi.lstatSync(pa);
+        if (st.isSymbolicLink()) fsApi.symlinkSync(fsApi.readlinkSync(pa), pb);
+        else if (st.isDirectory()) { fsApi.mkdirSync(pb, { mode: 0o700 }); copyTree(pa, pb); }
+        else if (st.isFile()) copyFile(pa, pb);
+        else throw Object.assign(new Error('special'), { code: 'special' });
       }
+    };
+    try {
+      copyTree(src, dest);
       if (pin() !== pinned || !realDir(dest)) throw new Error('moved');
       dirModes(src, dest);
       walk(src, dest);
@@ -587,14 +629,16 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
       // refused rather than recorded as a backup of the folder (M3).
       walk(src, dest);
       if (pin() !== pinned) throw new Error('moved');
+      if (fsApi.lstatSync(final, { throwIfNoEntry: false })) throw new Error('name taken');
+      fsApi.renameSync(dest, final);
     } catch (err) {
       try { removeBackup(dest); } catch { /* left; never listed as reused (fingerprint differs) */ }
       throw err;
     }
     // A backup that can't be pruned is left for next time; the adopt goes on.
-    try { prune(root, new Set([...keep, path.basename(dest)])); } catch { /* kept */ }
-    if (!realDir(dest)) throw new Error('backup gone');
-    return dest;
+    try { prune(root, new Set([...keep, name])); } catch { /* kept */ }
+    if (!realDir(final)) throw new Error('backup gone');
+    return final;
   }
   // chmod without following a link: the path must open as a folder with
   // O_NOFOLLOW, be the same folder lstat sees, and sit inside `within`.
