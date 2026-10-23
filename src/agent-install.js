@@ -27,6 +27,8 @@ const ORIGINALS_DIR = 'agent-originals';
 const BACKUPS_DIR = 'agent-backups';
 const MAX_OPS = 500;
 const MAX_ADOPT_SCAN = 2000;
+const MAX_BACKUPS = 5;
+const BACKUP_NAME = /^claude-agents-\d{8}T\d{9}Z-[0-9a-f]{8}$/;
 const sha = (text) => createHash('sha256').update(text).digest('hex');
 const refuse = (status, error, extra = {}) => ({ ok: false, status, error, ...extra });
 const tilde = (rel) => `~/${rel}`;
@@ -369,14 +371,37 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
     return { ok: true, matches, userOwned };
   }
 
+  // What a folder holds: every entry's path, kind and bytes (or link target).
+  function fingerprint(dir) {
+    const out = [];
+    const walk = (d, rel) => {
+      for (const e of fsApi.readdirSync(d, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+        const p = path.join(d, e.name), r = rel ? `${rel}/${e.name}` : e.name, st = fsApi.lstatSync(p);
+        if (st.isSymbolicLink()) out.push(`L ${r} ${fsApi.readlinkSync(p)}`);
+        else if (st.isDirectory()) { out.push(`D ${r}`); walk(p, r); }
+        else if (st.isFile()) out.push(`F ${r} ${sha(fsApi.readFileSync(p))}`);
+        else out.push(`O ${r}`);
+      }
+    };
+    walk(dir, '');
+    return out.join('\n');
+  }
+  function backupsIn(root) {
+    return fsApi.readdirSync(root).filter((n) => BACKUP_NAME.test(n) && fsApi.lstatSync(path.join(root, n)).isDirectory()).sort();
+  }
+
   // Copies ~/.claude/agents to a dated folder in the data folder, keeping links
-  // as links, and checks every regular file's bytes in the copy.
+  // as links, and checks every regular file's bytes in the copy. An unchanged
+  // folder reuses its newest backup, and only the newest MAX_BACKUPS are kept.
   function backupClaudeAgents() {
     const src = path.join(HOME, CLAUDE_DIR);
     const root = path.join(DATA, BACKUPS_DIR);
     fsApi.mkdirSync(root, { recursive: true, mode: 0o700 });
     if (fsApi.lstatSync(root).isSymbolicLink()) throw new Error('link');
-    const dest = path.join(root, `claude-agents-${stamp(now())}-${randomUUID().slice(0, 8)}`);
+    const newest = backupsIn(root).at(-1);
+    if (newest && fingerprint(path.join(root, newest)) === fingerprint(src)) return path.join(root, newest);
+    const ms = String(new Date(now()).getUTCMilliseconds()).padStart(3, '0');
+    const dest = path.join(root, `claude-agents-${stamp(now()).replace(/Z$/, `${ms}Z`)}-${randomUUID().slice(0, 8)}`);
     fsApi.cpSync(src, dest, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true, verbatimSymlinks: true, dereference: false });
     const walk = (a, b) => {
       for (const e of fsApi.readdirSync(a, { withFileTypes: true })) {
@@ -389,6 +414,7 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
     };
     walk(src, dest);
     fsApi.chmodSync(dest, 0o700);
+    for (const old of backupsIn(root).slice(0, -MAX_BACKUPS)) fsApi.rmSync(path.join(root, old), { recursive: true, force: true });
     return dest;
   }
 

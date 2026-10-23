@@ -396,7 +396,9 @@ test('adoption: backs up first, adopts exact matches only, undo restores bytes a
   assert.deepEqual(stop.released, ['~/.claude/agents/frontend-dev-old-name.md']);
   assert.equal(read(home, '.claude/agents/frontend-dev-old-name.md'), FE.raw);
   assert.equal(inst.status().items.length, 0);
-  assert.ok(fs.readdirSync(path.join(data, 'agent-backups')).length >= 3, 'a backup before every adoption');
+  // The folder never changed, so every adoption points at the one verified backup.
+  assert.deepEqual(fs.readdirSync(path.join(data, 'agent-backups')), [path.basename(a.backup)]);
+  assert.equal(again.backup, a.backup);
 });
 
 test('adoption refuses a linked agents folder and never backs one up', () => {
@@ -617,4 +619,26 @@ test('security L2: a folder replaced by another real folder after the check is c
   assert.throws(() => createHomeFiles({ home, fsApi }).writeTarget('.claude/agents/x.md', 'x', 0o644, { exclusive: true }), /folder changed/);
   assert.ok(swapped);
   assert.deepEqual(fs.readdirSync(dir), []);
+});
+
+test('security L3: backups are reused when nothing changed and capped at the newest five', () => {
+  let t = Date.parse('2026-10-23T10:00:00Z');
+  const { home, data, inst } = setup({ now: () => (t += 60_000) });
+  const dir = path.join(home, '.claude/agents');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'frontend-developer.md'), FE.raw);
+  const first = inst.adopt();
+  inst.stopManaging();
+  const again = inst.adopt();
+  assert.equal(again.backup, first.backup, 'an unchanged folder reuses its last backup');
+  const backups = () => fs.readdirSync(path.join(data, 'agent-backups')).sort();
+  assert.equal(backups().length, 1);
+  for (let i = 0; i < 7; i++) {
+    inst.stopManaging();
+    fs.writeFileSync(path.join(dir, `mine-${i}.md`), `mine ${i}\n`);
+    const a = inst.adopt();
+    assert.deepEqual(fs.readdirSync(a.backup).sort(), ['frontend-developer.md', ...Array.from({ length: i + 1 }, (_, j) => `mine-${j}.md`)].sort());
+  }
+  assert.equal(backups().length, 5);
+  assert.ok(fs.existsSync(path.join(data, 'agent-backups', backups().at(-1), 'mine-6.md')), 'the newest is kept');
 });
