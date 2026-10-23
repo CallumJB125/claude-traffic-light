@@ -1,4 +1,5 @@
 'use strict';
+const ORGANISE = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'work-organise.js'), 'utf8'); // views read their state words from it
 // Renderer acceptance for the selected shared-session flow. Provider calls and
 // tokens here are synthetic; the real main/client authority tests own routing.
 const test = require('node:test'), assert = require('node:assert/strict');
@@ -32,7 +33,7 @@ function harness({ inspect = inspection(), legacy = false } = {}) {
     ...(!legacy ? { teamInspect: async () => { inspectCalls++; return pending ? pending : structuredClone(current); }, teamAction: async r => { actions.push(structuredClone(r)); return actionResult; } } : {}),
     teamMessage: async r => { messages.push(structuredClone(r)); return { ok: true, status: 'queued' }; },
   };
-  dom.window.eval(read('overview-directory.js'));
+  dom.window.eval(ORGANISE);dom.window.eval(read('overview-directory.js'));
   dom.window.OverviewDirectory.start({ focusOwned() {}, composeWork() {} });
   const refresh = async () => { await dom.window.OverviewDirectory.refresh(); await tick(); };
   const button = label => [...doc.querySelectorAll('button')].find(b => b.textContent === label && !b.hidden);

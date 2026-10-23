@@ -7,24 +7,25 @@ const CHILD_LIMIT = 64;
 const Machine = require('../hooks/session-machine');
 const RECENT_MS = 90_000;
 const PROVIDERS = Object.freeze({ codex: 'Codex', claude: 'Claude Code', 'claude-code': 'Claude Code', cursor: 'Cursor', gemini: 'Gemini', hermes: 'Hermes', opencode: 'OpenCode', copilot: 'Copilot' });
-const STATUSES = Object.freeze({
-  'session-start': 'Ready', 'prompt-submit': 'Working', 'tool-use': 'Working', 'tool-done': 'Working',
-  'tool-failed': 'Working', 'permission-denied': 'Working', compact: 'Compacting',
-  'permission-ask': 'Waiting on you', 'user-question': 'Waiting on you', 'question-ask': 'Waiting on you',
-  'subagent-start': 'Working', 'subagent-done': 'Working', 'stop': 'Turn stopped', 'idle': 'Idle',
-  'idle-nudge': 'Idle', 'turn-failed': 'Turn failed', 'limit-hit': 'Limit reached', 'session-end': 'Ended',
-});
-const CHILD_STATUSES = Object.freeze({ working: 'Working', waiting: 'Waiting on you', done: 'Stopped', stopped: 'Stopped', stale: 'Status unknown' });
+const Organise = require('./work-organise');
+// Status words come from the five buckets (work-organise.js). A detail is kept
+// only where it says more than the bucket: it reads "Idle (ended)".
+const DETAILS = Object.freeze({ compact: 'Compacting', 'limit-hit': 'Limit reached', 'turn-failed': 'Turn failed', 'session-end': 'Ended' });
+const CHILD_SIGNALS = Object.freeze({ working: 'working', waiting: 'needs', done: 'idle', stopped: 'idle', stale: 'idle' });
+const bucketed = (id, detail = null) => ({ bucket: id, status: Organise.BUCKETS.find((b) => b.id === id).heading, ...(detail ? { detail } : {}) });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 function elapsed(value, now) {
   const stamp = typeof value === 'string' ? Date.parse(value) : NaN;
   return Number.isFinite(stamp) && stamp >= 0 && stamp <= now ? now - stamp : null;
 }
-function projectLeaf(value) {
-  if (typeof value !== 'string') return 'Local project';
-  const parts = value.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, '').split(/[\\/]/).filter(Boolean);
-  const leaf = parts.at(-1);
-  return leaf && leaf !== '.' && leaf !== '..' ? leaf.slice(0, 100) : 'Local project';
+// The folder's name, or the one fallback ("Other work"); never a path.
+const projectName = (dir) => Organise.projectOf({ cwd: typeof dir === 'string' ? dir : null }).heading;
+function sessionStatus(row, presented, stuck, time) {
+  if (row.source === 'codex' && row.codexLifecycle === 1 && row.codexClosedTurn === true) return bucketed('check');
+  if (Machine.claudeInputPending(row) || Machine.codexInputPending(row, time)) return bucketed('needs');
+  if (stuck) return bucketed('stuck', 'Stuck');
+  const signal = typeof presented === 'string' ? presented : '';
+  return bucketed(Organise.bucketOf(signal), Object.hasOwn(DETAILS, signal) ? DETAILS[signal] : null);
 }
 function isLocal(row) {
   return object(row) && !row.remote && !row.device && !(typeof row.sessionId === 'string' && row.sessionId.startsWith('remote:'));
@@ -65,7 +66,7 @@ function sharedOf(fn, rows) {
   try {
     const list = fn ? fn(rows) : [];
     return (Array.isArray(list) ? list : []).filter(t => object(t) && Array.isArray(t.sessions) && t.sessions.length > 1).slice(0, 20).map(t => ({
-      project: projectLeaf(t.toplevel), sessions: t.sessions.length, dirty: Number.isSafeInteger(t.dirty) && t.dirty > 0 ? t.dirty : 0, ids: new Set(t.sessions),
+      project: projectName(t.toplevel), sessions: t.sessions.length, dirty: Number.isSafeInteger(t.dirty) && t.dirty > 0 ? t.dirty : 0, ids: new Set(t.sessions),
     }));
   } catch { return []; }
 }
@@ -94,8 +95,8 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
     if (rows.length >= LIMIT) { omitted++; continue; }
     const rawChildren = lifecycle ? row.codexAgents : Machine.withFreshAgents(row, time).agents;
     const presented = Machine.effectiveSignal({ ...row, agents: lifecycle ? row.agents : rawChildren, signal: row.signal }).signal;
-    const children = Array.isArray(rawChildren) ? rawChildren.filter(child => object(child) && typeof child.status === 'string' && Object.hasOwn(CHILD_STATUSES, child.status)).slice(0, CHILD_LIMIT).map((child, index) => ({
-      label: `${lifecycle ? 'Codex subagent' : 'Agent'} ${index + 1}`, status: lifecycle && row.codexClosedTurn === false && child.status !== 'done' && Machine.codexInputPending({ source: 'codex', codexLifecycle: 1, codexTurnId: child.turnId, codexClosedTurn: false, codexInputRequests: child.codexInputRequests }, time) ? 'Waiting on you' : CHILD_STATUSES[child.status],
+    const children = Array.isArray(rawChildren) ? rawChildren.filter(child => object(child) && typeof child.status === 'string' && Object.hasOwn(CHILD_SIGNALS, child.status)).slice(0, CHILD_LIMIT).map((child, index) => ({
+      label: `${lifecycle ? 'Codex subagent' : 'Agent'} ${index + 1}`, status: lifecycle && row.codexClosedTurn === false && child.status !== 'done' && Machine.codexInputPending({ source: 'codex', codexLifecycle: 1, codexTurnId: child.turnId, codexClosedTurn: false, codexInputRequests: child.codexInputRequests }, time) ? bucketed('needs').status : bucketed(CHILD_SIGNALS[child.status]).status,
     })) : [];
     const stuck = object(row.stuck) && Number.isFinite(row.stuck.sinceMs) ? row.stuck : null;
     const more = extras(enrich, row);
@@ -103,8 +104,8 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
     rows.push({
       // Claude Code's own hook (set-status.js) writes no source field.
       provider: row.source == null ? PROVIDERS.claude : typeof row.source === 'string' && Object.hasOwn(PROVIDERS, row.source) ? PROVIDERS[row.source] : 'Local AI',
-      project: projectLeaf(row.cwd),
-      status: lifecycle && row.codexClosedTurn === true ? 'Turn stopped' : Machine.claudeInputPending(row) || Machine.codexInputPending(row, time) ? 'Waiting on you' : stuck ? 'Stuck?' : typeof presented === 'string' && Object.hasOwn(STATUSES, presented) ? STATUSES[presented] : 'Unknown',
+      project: projectName(row.cwd),
+      ...sessionStatus(row, presented, stuck, time),
       ...(stuck ? { stuck: { tool: stuck.tool || null, since_ms: stuck.sinceMs } } : {}),
       freshness: available === false || age === null ? 'unknown' : age <= RECENT_MS ? 'recent' : 'stale', age_ms: age, lifecycle, children,
       ...more,

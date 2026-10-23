@@ -11,7 +11,7 @@ const { createOverviewMain } = require('../src/overview-main');
 const { createFakeTeamHub } = require('../src/team-hub-fake');
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const html = read('overview.html'), bridge = read('overview-preload.js');
-const SCRIPTS = ['src/session-pulse.js', 'src/session-pins.js', 'src/session-follow.js', 'src/request-templates.js', 'src/session-presence.js', 'src/command-palette.js', 'overview-directory.js', 'overview.js', 'palette.js'].map(read);
+const SCRIPTS = ['src/work-organise.js', 'src/session-pulse.js', 'src/session-pins.js', 'src/session-follow.js', 'src/request-templates.js', 'src/session-presence.js', 'src/command-palette.js', 'overview-directory.js', 'overview.js', 'palette.js'].map(read);
 const tick = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
 
 const FIXTURE = {

@@ -1,8 +1,10 @@
 
 'use strict';
 const Overview = require('./session-overview');
-const STATES = Object.freeze({ 'Working': 'working', 'Compacting': 'compacting', 'Waiting on you': 'needs input', 'Ready': 'ready', 'Turn stopped': 'turn stopped', 'Idle': 'idle', 'Turn failed': 'turn failed', 'Limit reached': 'limit reached', 'Ended': 'ended', 'Unknown': 'unknown' });
-const PRIORITY = ['needs input', 'limit reached', 'turn failed', 'working', 'compacting', 'ready', 'turn stopped', 'idle', 'ended', 'unknown', 'stale'];
+const Organise = require('./work-organise');
+// A provider's state is the most urgent bucket among its sessions, named with the bucket
+// heading; a stale or unreported session counts as Idle (work-organise.js).
+const PRIORITY = Organise.BUCKETS.map(b => b.id);
 // Only trusted app-owned local metadata enters this pure projection. Fixed
 // labels and aggregate counts leave it; no raw source, IDs, paths or chat text.
 function snapshot({ sessions = [], online = true, available = true, now = Date.now() } = {}) {
@@ -11,12 +13,12 @@ function snapshot({ sessions = [], online = true, available = true, now = Date.n
   const by = new Map();
   for (const row of observed.sessions) {
     const provider = row.provider === 'Claude Code' ? 'Claude' : row.provider;
-    const state = row.freshness === 'stale' ? 'stale' : row.freshness === 'unknown' ? 'unknown' : STATES[row.status];
+    const bucket = row.freshness === 'recent' ? row.bucket : 'idle';
     let entry = by.get(provider);
-    if (!entry) { entry = { provider, state, sessions: 0, recent: 0, stale: 0, unknown: 0, working_agents: 0 }; by.set(provider, entry); }
+    if (!entry) { entry = { provider, bucket, state: Organise.headingOf(bucket), sessions: 0, recent: 0, stale: 0, unknown: 0, working_agents: 0 }; by.set(provider, entry); }
     entry.sessions++; entry[row.freshness]++;
-    if (row.freshness === 'recent' && row.lifecycle && row.status === 'Working') entry.working_agents += row.children.filter(child => child.status === 'Working').length;
-    if (PRIORITY.indexOf(state) < PRIORITY.indexOf(entry.state)) entry.state = state;
+    if (row.freshness === 'recent' && row.lifecycle && row.bucket === 'working') entry.working_agents += row.children.filter(child => Organise.bucketOf(child.status) === 'working').length;
+    if (PRIORITY.indexOf(bucket) < PRIORITY.indexOf(entry.bucket)) Object.assign(entry, { bucket, state: Organise.headingOf(bucket) });
   }
   const providers = [...by.values()].sort((a, b) => a.provider.localeCompare(b.provider));
   let headline = providers.length ? providers.map(p => `${p.provider}: ${p.state}`).join(' · ') : 'No local AI activity reported';

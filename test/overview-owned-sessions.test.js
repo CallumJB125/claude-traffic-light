@@ -1,4 +1,5 @@
 'use strict';
+const ORGANISE = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'work-organise.js'), 'utf8'); // views read their state words from it
 // Overview owned-session UI driven through the real preload bridge, the real
 // interaction IPC (interaction-main) and the real hub, with an in-memory
 // provider adapter standing in for Codex.
@@ -52,7 +53,7 @@ function stack({ snapshot = { schema: 1, status: 'complete', observed_at: Date.n
   const intervals = [];
   dom.window.setInterval = (fn) => intervals.push(fn);
   dom.window.overviewApi = { ...api, onReady: (fn) => { ready = fn; return () => {}; } };
-  if (router) dom.window.eval(routerScript);
+  dom.window.eval(ORGANISE);if (router) dom.window.eval(routerScript);
   dom.window.eval(script);
   const doc = dom.window.document;
   const card = (n = 0) => doc.querySelectorAll('.owned-session')[n] ?? null;
@@ -132,7 +133,7 @@ test('Owned UI: focus changes keep the session; a stale board refusal is shown w
     assert.equal(s.btn('Send').disabled, true, 'a poll does not silently re-enable Send');
     s.setBoard('local');
     s.btn('Check again').click(); await tick();
-    assert.match(s.card().querySelector('.tag').textContent, /Ready/);
+    assert.match(s.card().querySelector('.tag').textContent, /Idle/);
     assert.equal(s.btn('Check again').hidden, true);
     s.btn('Send').click(); await tick();
     assert.equal(s.adapter.calls.length, 2);

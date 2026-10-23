@@ -3,7 +3,9 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const { availability, LEVELS, FRESH_MS, STALE_MS } = require('../src/availability.js');
 
 const NOW = 1_700_000_000_000;
-const entry = (state, ageMs, extra = {}) => ({ state, ageMs, freshness: 'recent', children: [], ...extra });
+// Directory entries carry the bucket heading, its id and, for an ended session, a detail.
+const SHAPES = { Working: { state: 'Working on it', bucket: 'working' }, Idle: { state: 'Idle', bucket: 'idle' }, Ended: { state: 'Idle', bucket: 'idle', detail: 'Ended' } };
+const entry = (state, ageMs, extra = {}) => ({ ...(SHAPES[state] || { state }), ageMs, freshness: 'recent', children: [], ...extra });
 
 test('exports the four levels in order and the pulse thresholds', () => {
   assert.deepEqual([...LEVELS], ['active', 'idle', 'away', 'offline']);

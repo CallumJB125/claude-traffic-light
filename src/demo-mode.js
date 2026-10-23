@@ -27,9 +27,9 @@ function fixtures(now) {
     running: {
       quiet: 1,
       items: [
-        { provider: 'Claude Code', project: 'acme-web', status: 'Waiting on you', age_ms: 2 * MIN },
-        { provider: 'Codex', project: 'billing-service', status: 'Working', age_ms: 20_000 },
-        { provider: 'Gemini CLI', project: 'docs-site', status: 'Working', age_ms: 45_000 },
+        { provider: 'Claude Code', project: 'acme-web', status: 'Needs you', bucket: 'needs', age_ms: 2 * MIN },
+        { provider: 'Codex', project: 'billing-service', status: 'Working on it', bucket: 'working', age_ms: 20_000 },
+        { provider: 'Gemini CLI', project: 'docs-site', status: 'Working on it', bucket: 'working', age_ms: 45_000 },
       ],
     },
     today: { spend: { spent: 6.42, budget: 10, level: null, unpriced: 0, equivalent: false }, longestWaitMs: 2 * MIN },

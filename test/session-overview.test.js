@@ -11,8 +11,8 @@ test('projection carries only fixed metadata, never IDs, paths, tools, task titl
   const row = codex({ sessionId: secret, host: secret, tool: secret, taskTitle: secret, prompt: secret, provider: secret,
     codexAgents: [{ id: secret, name: secret, turnId: secret, status: 'working', prompt: secret }] });
   const result = Overview.snapshot({ sessions: [row], activity: { configured: true, private: secret }, now });
-  assert.deepEqual(result.sessions, [{ provider: 'Codex', project: 'project', status: 'Working', freshness: 'recent', age_ms: 1000, lifecycle: true,
-    children: [{ label: 'Codex subagent 1', status: 'Working' }] }]);
+  assert.deepEqual(result.sessions, [{ provider: 'Codex', project: 'project', bucket: 'working', status: 'Working on it', freshness: 'recent', age_ms: 1000, lifecycle: true,
+    children: [{ label: 'Codex subagent 1', status: 'Working on it' }] }]);
   assert.equal(JSON.stringify(result).includes(secret), false);
   assert.equal(JSON.stringify(result).includes('/private'), false);
   assert.deepEqual(result.activity, { configured: true, observed: true, latest_age_ms: 1000 });
@@ -44,14 +44,14 @@ test('configured hooks and legacy notify reports do not prove lifecycle delivery
 });
 test('closed turns cannot be labeled working by later child activity', () => {
   const result = Overview.snapshot({ sessions: [codex({ codexClosedTurn: true, signal: 'subagent-start', codexAgents: [{ status: 'working' }, { status: 'done' }] })], now });
-  assert.equal(result.sessions[0].status, 'Turn stopped');
-  assert.deepEqual(result.sessions[0].children.map(child => child.status), ['Working', 'Stopped']);
+  assert.equal(result.sessions[0].status, 'Finished — check it');
+  assert.deepEqual(result.sessions[0].children.map(child => child.status), ['Working on it', 'Idle']);
 });
 test('Windows and POSIX paths expose a bounded leaf without controls or bidi overrides', () => {
   const result = Overview.snapshot({ sessions: [codex({ cwd: 'C:\\private\\project\u202e\n\\' }), codex({ cwd: '/private/' + 'x'.repeat(200) }), codex({ cwd: '..' })], now });
   assert.equal(result.sessions[0].project, 'project');
-  assert.equal(result.sessions[1].project.length, 100);
-  assert.equal(result.sessions[2].project, 'Local project');
+  assert.equal(result.sessions[1].project.length, 60);
+  assert.equal(result.sessions[2].project, 'Other work');
 });
 test('display caps are explicit, child states closed and source projection does not mutate inputs', () => {
   const row = codex({ codexAgents: [...Array.from({ length: 70 }, () => ({ status: 'working' })), { status: 'secret' }] });
@@ -62,7 +62,7 @@ test('display caps are explicit, child states closed and source projection does 
 });
 test('malformed provider/signal values cannot be forwarded or prevent the rest of the projection', () => {
   const result = Overview.snapshot({ sessions: [null, [], codex({ source: { toString: null }, signal: { toString: null }, agents: [{ status: 'secret' }] })], now });
-  assert.equal(result.sessions.length, 1); assert.equal(result.sessions[0].provider, 'Local AI'); assert.equal(result.sessions[0].status, 'Unknown');
+  assert.equal(result.sessions.length, 1); assert.equal(result.sessions[0].provider, 'Local AI'); assert.equal(result.sessions[0].status, 'Idle');
 });
 test('unavailable local activity and unreadable hook configuration remain distinct', () => {
   const result = Overview.snapshot({ sessions: [], available: false, activity: { available: false }, now });
@@ -71,14 +71,15 @@ test('unavailable local activity and unreadable hook configuration remain distin
 test('malformed child statuses cannot make the current valid local session unavailable', () => {
   const result = Overview.snapshot({ sessions: [codex({ codexAgents: [{ status: { toString: null } }, { status: { toString: [] } }, { status: Object.create(null) }, { status: 'working' }] })], now });
   assert.equal(result.status, 'complete');
-  assert.deepEqual(result.sessions[0].children, [{ label: 'Codex subagent 1', status: 'Working' }]);
+  assert.deepEqual(result.sessions[0].children, [{ label: 'Codex subagent 1', status: 'Working on it' }]);
 });
 
 test('Claude overview preserves working turn, compaction and honest child uncertainty', () => {
   const row = extra => ({ signal: 'tool-use', updatedAt: at(1000), ...extra });
   const result = Overview.snapshot({ sessions: [row({ signal: 'subagent-done' }), row({ signal: 'compact' }), row({ signal: 'stop', agents: [{ source: 'hook', status: 'working' }, { status: 'stopped' }] })], now });
-  assert.deepEqual(result.sessions.map(r => r.status), ['Working', 'Compacting', 'Turn stopped']);
-  assert.deepEqual(result.sessions[2].children.map(c => c.status), ['Status unknown', 'Stopped']);
+  assert.deepEqual(result.sessions.map(r => r.status), ['Working on it', 'Working on it', 'Finished — check it']);
+  assert.deepEqual(result.sessions.map(r => r.detail), [undefined, 'Compacting', undefined]);
+  assert.deepEqual(result.sessions[2].children.map(c => c.status), ['Idle', 'Idle']);
   const offline = Overview.snapshot({ sessions: [row({})], available: false, now });
   assert.equal(offline.sessions[0].freshness, 'unknown');
 });
@@ -118,4 +119,19 @@ test('shared working trees: a banner entry by project leaf, and the rows that sh
   assert.equal(JSON.stringify(result).includes('/w/'), false);
   assert.equal(Overview.snapshot({ sessions: rows, now, sharedTrees: () => { throw new Error('git'); } }).shared, undefined);
   assert.equal(Overview.snapshot({ sessions: rows, now }).shared, undefined);
+});
+
+test('status words are the five bucket headings; a detail says more only where it helps', () => {
+  const W = require('../src/work-organise');
+  const row = (extra) => ({ updatedAt: at(1000), cwd: '/private/work/app', ...extra });
+  const result = Overview.snapshot({ sessions: [
+    row({ signal: 'permission-ask' }), row({ signal: 'limit-hit' }), row({ signal: 'turn-failed' }), row({ signal: 'session-end' }),
+    row({ signal: 'session-start' }), row({ signal: 'tool-use', stuck: { sinceMs: 60_000, tool: 'Bash' } }), row({ signal: 'no-such-signal' }),
+  ], now });
+  const headings = W.BUCKETS.map(b => b.heading);
+  for (const r of result.sessions) assert.ok(headings.includes(r.status), r.status);
+  assert.deepEqual(result.sessions.map(r => [r.bucket, r.detail ?? null]), [
+    ['needs', null], ['needs', 'Limit reached'], ['stuck', 'Turn failed'], ['idle', 'Ended'], ['idle', null], ['stuck', 'Stuck'], ['idle', null],
+  ]);
+  assert.equal(Overview.snapshot({ sessions: [row({ cwd: null, signal: 'idle' })], now }).sessions[0].project, W.FALLBACK);
 });

@@ -60,9 +60,9 @@ function needs(inputs, now, paused = null) {
 // Live = reported in the last 90 s and not ended; the rest are only counted.
 function running(sessions, now, collisions = null) {
   const snap = SessionOverview.snapshot({ sessions, now, collisions });
-  const open = snap.sessions.filter((s) => s.status !== 'Ended');
+  const open = snap.sessions.filter((s) => s.detail !== 'Ended');
   const live = open.filter((s) => s.freshness === 'recent');
-  return { quiet: open.length - live.length, items: live.slice(0, LIST_MAX).map((s) => ({ provider: s.provider, project: s.project, status: s.status, age_ms: s.age_ms, ...(s.collisions ? { collision: s.collisions[0].text } : {}) })) };
+  return { quiet: open.length - live.length, items: live.slice(0, LIST_MAX).map((s) => ({ provider: s.provider, project: s.project, status: s.status, bucket: s.bucket, age_ms: s.age_ms, ...(s.collisions ? { collision: s.collisions[0].text } : {}) })) };
 }
 
 function today(spend, inputs, now) {

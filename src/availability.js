@@ -1,7 +1,7 @@
 'use strict';
 // One availability badge per person on the Team sessions overview: active, idle,
 // away or offline, folded from that person's directory entries. Pure; reads only
-// what the page already holds (the entries' state, age and freshness). Nothing is
+// what the page already holds (the entries' bucket, detail, age and freshness). Nothing is
 // sent anywhere, and no provider transcript is read.
 (function (root) {
   const FRESH_MS = 90_000;
@@ -17,10 +17,10 @@
     let working = 0, fresh = 0, idle = 0, known = 0, latest = null;
     for (const e of list) {
       const age = Number.isFinite(e.ageMs) && e.ageMs >= 0 ? e.ageMs + drift : null;
-      if (e.state === 'Ended' || age === null || e.freshness === 'unknown') continue;
+      if (e.detail === 'Ended' || age === null || e.freshness === 'unknown') continue;
       known++;
       if (latest === null || age < latest) latest = age;
-      if (age <= FRESH_MS) { fresh++; if (e.state === 'Working') working++; }
+      if (age <= FRESH_MS) { fresh++; if (e.bucket === 'working') working++; }
       else if (age < STALE_MS) idle++;
     }
     const level = working ? 'active' : fresh || idle ? 'idle' : known ? 'away' : 'offline';

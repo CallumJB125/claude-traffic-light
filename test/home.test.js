@@ -60,7 +60,7 @@ test('needs, running and today read only what other pages already show', () => {
     { sessionId: 'quiet', cwd: '/w/old', signal: 'stop', updatedAt: iso(10 * 60_000) },
     { sessionId: 'done', cwd: '/w/done', signal: 'session-end', updatedAt: iso(1000) },
   ], NOW);
-  assert.deepEqual(r.items.map((s) => [s.provider, s.project, s.status]), [['Claude Code', 'plexiform', 'Working']]);
+  assert.deepEqual(r.items.map((s) => [s.provider, s.project, s.status]), [['Claude Code', 'plexiform', 'Working on it']]);
   assert.equal(r.quiet, 1);
   assert.ok(!('sessionId' in r.items[0]), 'no session ids reach the page');
   const t = Home.today({ mode: 'subscription', budget: { day: { spent: 3.5, budget: 10, level: null, unpriced: 0 } } }, inputs, NOW);
@@ -125,7 +125,7 @@ test('a brand-new user sees one empty message per section, each with a button', 
 });
 
 test('a live session appears on Home within one refresh tick', async () => {
-  const live = { ...fresh, banner: null, running: { quiet: 0, items: [{ provider: 'Codex', project: '<img src=x>', status: 'Working', age_ms: 2000 }] } };
+  const live = { ...fresh, banner: null, running: { quiet: 0, items: [{ provider: 'Codex', project: '<img src=x>', status: 'Working on it', bucket: 'working', age_ms: 2000 }] } };
   const f = setup([{ ...fresh, banner: null }, live]);
   try {
     await tick();
@@ -166,7 +166,7 @@ test('"Waiting on you" is a list in one place only: the old My day block and Ove
   assert.doesNotMatch(overview, /'Reported sessions'/);
   assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'overview.html'), 'utf8'), /id="summary"/);
   const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
-  assert.doesNotMatch(read('overview-directory.js'), /'Waiting on you'/, 'Overview tile says Need you');
+  assert.doesNotMatch(read('overview-directory.js'), /'Waiting on you'/, 'Overview tile says Needs you');
   assert.doesNotMatch(read('lights.html'), />Waiting on you</, 'Stats shows time waiting, not a second list label');
   assert.doesNotMatch(read('board/web/js/render-dashboard.js'), /'Waiting on'\)/);
   assert.match(read('overview.html'), /<details class="reason"><summary>How to add a local model endpoint<\/summary>/, 'the local-models.json how-to is folded away');

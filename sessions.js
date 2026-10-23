@@ -412,7 +412,7 @@ function render(snapshot) {
     heading.append(node('span', item.freshness === 'recent' ? 'Recent' : item.freshness === 'stale' ? 'Stale' : 'Freshness unknown', 'freshness'));
     if (item.policy?.name) heading.append(node('span', `Policy: ${item.policy.name}`, 'freshness policy'));
     const confidence = item.freshness === 'recent' && snapshot.status !== 'unavailable' ? 'Reported' : 'Last reported';
-    section.append(heading, node('p', `${confidence}: ${item.status}${item.stuck ? ` (${item.stuck.tool ? `last tool ${item.stuck.tool}, ` : ''}since ${Math.max(1, Math.round(item.stuck.since_ms / 60000))}m)` : ''} · Last seen ${age(item.age_ms).toLowerCase()} · Reported by ${item.provider}`, 'muted'));
+    section.append(heading, node('p', `${confidence}: ${item.status}${item.detail && !item.stuck ? ` (${String(item.detail).toLowerCase()})` : ''}${item.stuck ? ` (${item.stuck.tool ? `last tool ${item.stuck.tool}, ` : ''}since ${Math.max(1, Math.round(item.stuck.since_ms / 60000))}m)` : ''} · Last seen ${age(item.age_ms).toLowerCase()} · Reported by ${item.provider}`, 'muted'));
     if (item.children?.length) {
       const list = node('ul'); list.setAttribute('aria-label', 'Reported agents');
       for (const child of item.children) list.append(node('li', `${child.label} · ${confidence}: ${child.status}`));

@@ -1,4 +1,5 @@
 'use strict';
+const ORGANISE = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'work-organise.js'), 'utf8'); // views read their state words from it
 // Overview "Share…" on an owned-session card, driven through the real
 // preload bridge, the real interaction IPC (interaction-main) and hub, with
 // an in-memory provider adapter and a stand-in remote host (the hub side is
@@ -54,7 +55,7 @@ function stack({ host = fakeHost(), extra = {} } = {}) {
   const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true });
   dom.window.setInterval = () => 0;
   dom.window.overviewApi = { ...api, onReady: (fn) => { ready = fn; return () => {}; } };
-  dom.window.eval(routerScript);
+  dom.window.eval(ORGANISE);dom.window.eval(routerScript);
   dom.window.eval(shareScript);
   dom.window.eval(script);
   const doc = dom.window.document;
