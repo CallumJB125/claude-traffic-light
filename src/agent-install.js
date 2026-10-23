@@ -581,9 +581,11 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     if (!t.verified) return refuse('disabled', `Cursor: ${t.reason}`);
     if (!frontmatterAllowed(agent.raw)) return refuse('unmappable', NOT_ALLOWED);
     if (typeof projectDir !== 'string' || !path.isAbsolute(projectDir)) return refuse('invalid', 'Choose a project folder.');
-    const root = path.resolve(projectDir);
-    let st; try { st = fsApi.lstatSync(root); } catch { return refuse('invalid', 'That folder is gone.'); }
-    if (st.isSymbolicLink() || !st.isDirectory() || root === HOME || root === path.parse(root).root) return refuse('invalid', 'Choose a project folder (not a link, your home folder or the disk).');
+    // The real path is recorded, so Undo can insist the folder still has no
+    // link anywhere above it (a forged or later-swapped ancestor link is refused).
+    const given = path.resolve(projectDir);
+    let st, root; try { st = fsApi.lstatSync(given); root = fsApi.realpathSync(given); } catch { return refuse('invalid', 'That folder is gone.'); }
+    if (st.isSymbolicLink() || !st.isDirectory() || root === HOME || given === HOME || root === path.parse(root).root) return refuse('invalid', 'Choose a project folder (not a link, your home folder or the disk).');
     const proj = createHomeFiles({ home: root, fsApi, maxBytes: 1024 * 1024 });
     const r = t.render(agent, {});
     if (!r.ok) return refuse('unmappable', r.reason);
@@ -602,8 +604,8 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     const ledger = readLedger();
     const op = ledger.ops.find((o) => o.id === opId && o.kind === 'add-project');
     if (!op || op.undone) return refuse('unavailable', 'Nothing to undo for this click.');
-    let st; try { st = fsApi.lstatSync(op.project); } catch { return refuse('unavailable', 'That project folder is gone.'); }
-    if (st.isSymbolicLink() || !st.isDirectory()) return refuse('refused', 'The project folder is now a link or not a folder, so Plexiform leaves it alone.');
+    let st, real; try { st = fsApi.lstatSync(op.project); real = fsApi.realpathSync(op.project); } catch { return refuse('unavailable', 'That project folder is gone.'); }
+    if (st.isSymbolicLink() || !st.isDirectory() || real !== op.project) return refuse('refused', 'The project folder is now a link or not a folder, so Plexiform leaves it alone.');
     const proj = createHomeFiles({ home: op.project, fsApi, maxBytes: 1024 * 1024 });
     const c = op.changes[0];
     let cur; try { cur = proj.readTarget(c.rel); } catch { return { ok: true, restored: [], conflicts: [{ path: path.join(op.project, c.rel), reason: 'Not a regular file Plexiform can change safely.' }] }; }

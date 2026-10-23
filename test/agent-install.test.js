@@ -810,3 +810,24 @@ test('security R2: an agent with hooks, permissionMode or disallowedTools is ref
     assert.ok(!fs.existsSync(path.join(project, '.cursor')), a.id);
   }
 });
+
+// Security re-review R3: a project path is compared by its real path.
+test('security R3 (F5): undoProject will not follow a symlinked ancestor of the project; addToProject records the real path', () => {
+  const s = setup({ enableCursorProject: true });
+  const real = fs.realpathSync(tmp()), via = path.join(fs.realpathSync(tmp()), 'via');
+  fs.symlinkSync(real, via);
+  const text = '---\ndescription: "x"\nalwaysApply: false\n---\nbody\n';
+  fs.mkdirSync(path.join(real, 'proj/.cursor/rules'), { recursive: true });
+  fs.writeFileSync(path.join(real, 'proj/.cursor/rules/foo.mdc'), text);
+  forge(s, { ops: [{ id: 'f5', kind: 'add-project', agentId: FE.id, project: path.join(via, 'proj'), changes: [{ platform: 'cursor', rel: '.cursor/rules/foo.mdc', before: null, after: sha(text) }] }] });
+  assert.equal(s.inst.undoProject('f5').ok, false);
+  assert.ok(fs.existsSync(path.join(real, 'proj/.cursor/rules/foo.mdc')));
+
+  fs.mkdirSync(path.join(real, 'p2'));
+  const r = s.inst.addToProject(FE.id, path.join(via, 'p2'), { catalogSha: s.cat.sha256 });
+  assert.equal(r.ok, true);
+  const op = JSON.parse(fs.readFileSync(path.join(s.data, 'agent-installs.json'), 'utf8')).ops.find((o) => o.id === r.opId);
+  assert.equal(op.project, path.join(real, 'p2'));
+  assert.equal(s.inst.undoProject(r.opId).ok, true);
+  assert.ok(!fs.existsSync(path.join(real, 'p2/.cursor/rules/frontend-developer.mdc')));
+});
