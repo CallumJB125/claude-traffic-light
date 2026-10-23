@@ -267,26 +267,20 @@ test('work-organise: group by project, then bucket, with counts', () => {
   assert.equal(group([{ project: projectOf({ toplevel: '/a', branch: 'feat/x' }) }])[0].sub, 'x');
 });
 
-test('work-organise: git resolver — one call per cwd, cached, worktree folding, newline guard', async () => {
+test('work-organise: git resolver — one lookup per cwd, cached, worktree folding, newline guard', async () => {
   let t = 1000;
-  const calls = [];
-  const answers = {
-    '/w/awareness-p4': '/w/awareness-p4\n/d/claude-traffic-light/.git\ncodex/views\n',
-    '/d/claude-traffic-light': '/d/claude-traffic-light\n.git\nmain\n',
-    '/d/claude-traffic-light/src': '/d/claude-traffic-light\n../.git\nHEAD\n',
-    '/d/bad\nname': '/d/bad\nname\n/d/bad\nname/.git\nmain\n',
-  };
-  const git = async (dir, args) => {
-    calls.push([dir, args]);
-    if (!Object.hasOwn(answers, dir)) { const e = new Error('not a repo'); e.code = 128; throw e; }
-    return answers[dir];
-  };
+  const { git, calls } = fakeGit({
+    '/w/awareness-p4': { top: '/w/awareness-p4', common: '/d/claude-traffic-light/.git', branch: 'codex/views' },
+    '/d/claude-traffic-light': { top: '/d/claude-traffic-light', common: '.git', branch: 'main' },
+    '/d/claude-traffic-light/src': { top: '/d/claude-traffic-light', common: '../.git' },
+    '/d/bad\nname': { top: '/d/bad\nname', common: '/d/bad\nname/.git', branch: 'main' },
+  });
   const repoFor = async (cwd) => (cwd.startsWith('/d/claude') || cwd.startsWith('/w/') ? 'github.com/acme/claude-traffic-light' : null);
   const r = createGitInfoResolver({ git, repoFor, now: () => t, ttlMs: 60_000 });
 
   const wt = await r.resolve('/w/awareness-p4');
   assert.deepEqual(wt, { repoName: 'github.com/acme/claude-traffic-light', toplevel: '/w/awareness-p4', commonDir: '/d/claude-traffic-light/.git', branch: 'codex/views' });
-  assert.deepEqual(calls[0][1], ['rev-parse', '--show-toplevel', '--git-common-dir', '--abbrev-ref', 'HEAD']);
+  assert.deepEqual(calls.slice(0, 2).sort(), ['rev-parse --show-toplevel --git-common-dir', 'symbolic-ref --short -q HEAD']);
   const main = await r.resolve('/d/claude-traffic-light');
   assert.equal(main.commonDir, '/d/claude-traffic-light/.git', 'relative common dir resolved against cwd');
   const sub = await r.resolve('/d/claude-traffic-light/src');
@@ -305,27 +299,28 @@ test('work-organise: git resolver — one call per cwd, cached, worktree folding
   assert.equal(calls.length, n, 'cached, failures included');
   t += 60_001;
   await r.resolve('/w/awareness-p4');
-  assert.equal(calls.length, n + 1, 'expires after the TTL');
+  assert.equal(calls.length, n + 2, 'expires after the TTL');
 });
 
 test('work-organise: git resolver — in-flight calls share one lookup; bad input never reaches git; bounded cache', async () => {
   let release;
   const gate = new Promise((res) => { release = res; });
   let count = 0;
-  const git = async (dir) => { count++; await gate; return `${dir}\n${dir}/.git\nmain\n`; };
+  const inner = fakeGit({ '/x/a': { top: '/x/a', common: '/x/a/.git', branch: 'main' } }).git;
+  const git = async (dir, args) => { count++; await gate; return inner(dir, args); };
   const r = createGitInfoResolver({ git, max: 3 });
   const a = r.resolve('/x/a');
   const b = r.resolve('/x/a');
   release();
   assert.deepEqual(await a, await b);
-  assert.equal(count, 1);
+  assert.equal(count, 2, 'one rev-parse and one symbolic-ref');
 
   for (const cwd of [undefined, '', 'relative/dir', 'a\0b', '/' + 'x'.repeat(3000), 7]) {
     assert.deepEqual(await r.resolve(cwd), { repoName: null, commonDir: null, toplevel: null, branch: null });
   }
-  assert.equal(count, 1);
+  assert.equal(count, 2);
 
-  const sync = createGitInfoResolver({ git: (d) => `${d}\n.git\nmain`, repoFor: () => 'not a canonical url', max: 3 });
+  const sync = createGitInfoResolver({ git: (d, args) => (args[0] === 'rev-parse' ? `${d}\n.git` : 'main'), repoFor: () => 'not a canonical url', max: 3 });
   for (const d of ['/1', '/2', '/3', '/4', '/5']) await sync.resolve(d);
   assert.equal(sync.size(), 3);
   assert.equal((await sync.resolve('/5')).repoName, null, 'an origin that is not canonical is dropped');
@@ -474,4 +469,72 @@ test('work-organise: L3 — lower-case Linear-style tickets count in branches, n
 
 test('work-organise: L4 — the board column in_progress is Working on it', () => {
   for (const s of ['in_progress', 'In progress', 'in-progress']) assert.equal(W.bucketOf(s), 'working', s);
+});
+
+// A fake git that answers like the real one: rev-parse fails with 128 on --abbrev-ref HEAD in a repo with no commits.
+function fakeGit(repos) {
+  const calls = [];
+  const fail = (code) => { const e = new Error(`git exited ${code}`); e.code = code; throw e; };
+  const git = async (dir, args) => {
+    calls.push(args.join(' '));
+    const r = repos[dir];
+    if (!r) fail(128);
+    if (args[0] === 'rev-parse') {
+      if (args.includes('--abbrev-ref') && r.unborn) fail(128);
+      return [args.includes('--show-toplevel') ? r.top : null, args.includes('--git-common-dir') ? r.common : null, args.includes('--abbrev-ref') ? (r.branch ?? 'HEAD') : null].filter((x) => x !== null).join('\n') + '\n';
+    }
+    if (args[0] === 'symbolic-ref') return r.branch ? `${r.branch}\n` : fail(1);
+    return fail(129);
+  };
+  return { git, calls };
+}
+
+test('work-organise: L5 — a repo with no commits still resolves; the cwd and its dirs are realpath-ed', async () => {
+  const { git } = fakeGit({
+    '/real/new': { top: '/real/new', common: '.git', branch: 'main', unborn: true },
+    '/real/app': { top: '/real/app', common: '/real/app/.git', branch: 'main' },
+  });
+  const links = { '/link/new': '/real/new', '/tmp/app': '/real/app' };
+  const realpath = async (p) => { if (Object.hasOwn(links, p)) return links[p]; return p; };
+  const r = W.createGitInfoResolver({ git, realpath });
+  assert.deepEqual(await r.resolve('/real/new'), { repoName: null, toplevel: '/real/new', commonDir: '/real/new/.git', branch: 'main' });
+  const viaLink = await r.resolve('/tmp/app');
+  assert.equal(viaLink.commonDir, '/real/app/.git', 'a symlinked cwd folds with the real path');
+  assert.equal(W.projectOf(viaLink).key, W.projectOf(await r.resolve('/real/app')).key);
+  assert.equal((await r.resolve('/link/new')).toplevel, '/real/new');
+});
+
+test('work-organise: L5 — real git in a temp dir: unborn repo, worktree and symlink all fold to one project', async (t) => {
+  const os = require('node:os');
+  const { execFile } = require('node:child_process');
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' };
+  const git = (dir, args) => new Promise((res, rej) => execFile('git', ['-C', dir, ...args], { env, timeout: 10_000, encoding: 'utf8' }, (e, out) => (e ? rej(e) : res(out))));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'work-organise-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const repo = path.join(root, 'proj');
+  fs.mkdirSync(repo);
+  await git(repo, ['init', '-q', '-b', 'main']);
+  const resolver = () => W.createGitInfoResolver({ git, realpath: (p) => fs.promises.realpath(p) });
+
+  const unborn = await resolver().resolve(repo);
+  assert.equal(unborn.branch, 'main', 'no commits yet: still a repo on main');
+  assert.equal(unborn.commonDir, path.join(fs.realpathSync(repo), '.git'));
+  assert.equal(W.projectOf(unborn).heading, 'proj');
+
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'a');
+  await git(repo, ['add', 'a.txt']);
+  await git(repo, ['commit', '-q', '-m', 'a']);
+  const wt = path.join(root, 'proj-wt');
+  await git(repo, ['worktree', 'add', '-q', '-b', 'feat/views', wt]);
+  const link = path.join(root, 'link');
+  fs.symlinkSync(repo, link);
+  fs.mkdirSync(path.join(repo, 'sub'));
+
+  const r = resolver();
+  const [main, tree, viaLink, sub] = await Promise.all([repo, wt, link, path.join(repo, 'sub')].map((d) => r.resolve(d)));
+  assert.equal(tree.branch, 'feat/views');
+  assert.equal(W.projectOf(tree).sub, 'views');
+  for (const x of [tree, viaLink, sub]) assert.equal(W.projectOf(x).key, W.projectOf(main).key);
+  await git(wt, ['checkout', '-q', '--detach']);
+  assert.equal((await resolver().resolve(wt)).branch, null, 'detached HEAD: no branch');
 });

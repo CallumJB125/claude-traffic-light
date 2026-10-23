@@ -365,7 +365,8 @@
 
   // ---- git info (main only; injected runner, cached) ----
   // git(dir, args) → Promise<stdout>, the shape agent-awareness.js uses;
-  // repoFor(cwd) → Promise<canonical origin | null>, work-capture.js's.
+  // repoFor(cwd) → Promise<canonical origin | null>, work-capture.js's;
+  // realpath(p) → Promise<string>, so a symlinked cwd folds with its worktrees.
   const isAbs = (p) => /^(?:\/|[A-Za-z]:[\\/])/.test(p);
   function resolveFrom(base, rel) {
     if (isAbs(rel)) return rel;
@@ -377,21 +378,31 @@
     return parts.join('/') || '/';
   }
 
-  function createGitInfoResolver({ git, repoFor = async () => null, now = () => Date.now(), ttlMs = 60_000, max = 500 } = {}) {
+  function createGitInfoResolver({ git, repoFor = async () => null, realpath = async (p) => p, now = () => Date.now(), ttlMs = 60_000, max = 500 } = {}) {
     if (typeof git !== 'function') throw new TypeError('git runner required');
     const cache = new Map(); // cwd → { at, value: Promise }
     const empty = Object.freeze({ repoName: null, commonDir: null, toplevel: null, branch: null });
+    const call = (fn) => Promise.resolve().then(fn).catch(() => null);
+    const real = async (p) => { const v = await call(() => realpath(p)); return typeof v === 'string' && isAbs(v) && !v.includes('\0') ? v : p; };
     async function look(cwd) {
-      const out = await Promise.resolve().then(() => git(cwd, ['rev-parse', '--show-toplevel', '--git-common-dir', '--abbrev-ref', 'HEAD'])).catch(() => null);
+      const dir = await real(cwd);
+      // The branch is asked for on its own: rev-parse --abbrev-ref HEAD fails (128) in a repo
+      // with no commits yet, and that must not make the whole repo unresolved.
+      const [out, ref, repoName] = await Promise.all([
+        call(() => git(dir, ['rev-parse', '--show-toplevel', '--git-common-dir'])),
+        call(() => git(dir, ['symbolic-ref', '--short', '-q', 'HEAD'])),
+        call(() => repoFor(dir)),
+      ]);
       const lines = typeof out === 'string' ? out.replace(/\n$/, '').split('\n') : null;
-      // A path with a newline in it shifts every line after it: anything but three answers is unresolved.
-      const ok = lines && lines.length === 3 && lines.every((l) => l && !l.includes('\0'));
-      const repoName = await Promise.resolve().then(() => repoFor(cwd)).catch(() => null);
+      // A path with a newline in it shifts every line after it: anything but two answers is unresolved.
+      const ok = lines && lines.length === 2 && lines.every((l) => l && !l.includes('\0'));
+      const head = typeof ref === 'string' ? ref.replace(/\n$/, '') : '';
+      const [toplevel, commonDir] = ok ? await Promise.all([real(lines[0]), real(resolveFrom(dir, lines[1]))]) : [null, null];
       return Object.freeze({
         repoName: canonical(repoName) ? repoName : null,
-        toplevel: ok ? lines[0] : null,
-        commonDir: ok ? resolveFrom(cwd, lines[1]) : null,
-        branch: ok && lines[2] !== 'HEAD' ? lines[2].slice(0, 200) : null,
+        toplevel,
+        commonDir,
+        branch: ok && head && !head.includes('\n') && !head.includes('\0') ? head.slice(0, 200) : null,
       });
     }
     function resolve(cwd) {
