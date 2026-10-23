@@ -538,3 +538,18 @@ test('work-organise: L5 — real git in a temp dir: unborn repo, worktree and sy
   await git(wt, ['checkout', '-q', '--detach']);
   assert.equal((await resolver().resolve(wt)).branch, null, 'detached HEAD: no branch');
 });
+
+test('work-organise: L6 — markup is stripped before redaction, so a tag cannot split a secret past the scrubber', () => {
+  const sk = 'sk-abcdefghijklmnopqrstuvwx';
+  const ghp = 'ghp_' + 'a1B2'.repeat(9);
+  for (const tag of ['<i/>', '<x>', '</b>', '<span class="a">']) {
+    for (const token of [sk, ghp]) {
+      const split = token.slice(0, 6) + tag + token.slice(6);
+      for (const input of [{ team: false, firstPrompt: `deploy with ${split} today` }, { human: `rotate ${split} now` }, { card: `rotate ${split}` }]) {
+        const { title } = W.titleOf(input);
+        assert.ok(!title.includes(token.slice(6, 14)), `${JSON.stringify(input)} → ${title}`);
+      }
+    }
+  }
+  assert.equal(W.titleOf({ team: false, firstPrompt: 'Fix the lo<wbr>gin loop' }).title, 'Fix the login loop', 'a lone tag inside a word joins it');
+});

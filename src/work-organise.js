@@ -108,7 +108,8 @@
     let out = t.replace(/```[\s\S]*?(?:```|$)/g, ' ').replace(/`[^`\n]*`/g, ' ');
     if (out.includes('<')) {
       for (let prev; prev !== out;) { prev = out; out = out.replace(BLOCK, ' '); }
-      out = out.replace(TAG, ' ');
+      // A lone tag is dropped without a space, so a token it split is whole again.
+      out = out.replace(TAG, '');
     }
     return out;
   }
@@ -123,7 +124,8 @@
   function prepare(v, redact) {
     const t = normalise(v);
     if (!t.trim() || typeof redact !== 'function') return '';
-    return dropRedacted(stripPaths(stripMarkup(redact(t)).replace(URL_RE, ' ')));
+    // Markup goes before the scrubber reads it: a tag inside a token would hide it.
+    return dropRedacted(stripPaths(redact(stripMarkup(t)).replace(URL_RE, ' ')));
   }
   function finish(t, { max = MAX_TITLE, slashes = true } = {}) {
     const out = (slashes ? t : t.replace(/[\\/]+/g, ' ')).replace(/\s+/g, ' ').replace(/^[\s|,;]+|[\s|,;]+$/g, '');
