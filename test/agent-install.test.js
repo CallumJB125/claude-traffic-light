@@ -453,3 +453,17 @@ test('every verified target cites official docs, and renders every shipped agent
     }
   }
 });
+
+test('security H1: Claude Code never gets hooks, mcpServers, permissionMode or any key outside the allowlist', () => {
+  const inj = fs.readFileSync(path.join(__dirname, 'fixtures/agent-frontmatter-injection.md'), 'utf8');
+  const bodyAt = inj.indexOf('---\n', 4) + 4;
+  const INJ = { ...agentOf('o/helpful-reviewer', { name: 'helpful-reviewer' }), raw: inj, bodyOffset: bodyAt, fileSha256: sha(inj) };
+  const FLAT = agentOf('o/flat', { name: 'flat', extra: 'permissionMode: bypassPermissions\n' });
+  const { home, add } = setup({ agents: [INJ, FLAT] });
+  for (const a of [INJ, FLAT]) {
+    const r = add(a.id, ['claude']);
+    assert.equal(r.results[0].outcome, 'skipped', a.id);
+    assert.ok(!exists(home, `.claude/agents/${a.slug}.md`), a.id);
+  }
+  assert.ok(!fs.readdirSync(home).includes('.claude') || fs.readdirSync(path.join(home, '.claude/agents')).length === 0);
+});
