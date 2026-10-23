@@ -74,6 +74,9 @@ const PATTERNS = {
   GIT_SSH: /(?<![\w.-])(?=([\w.-]+))\1@(?=([\w-]+(?:\.[\w-]+)+))\2:(?!\d)(?=([\w.~-]+(?:\/[\w.~-]+)*))\3/g,
   EMAIL: /(?<![\w.+-])(?=([\w.+-]+))\1@[\w-]+(?:\.[\w-]+)+/g,
   IPV4: /(?<![\w.])(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?![\w.]*\d)/g,
+  // A phone number: an international "+27 82 555 0199" or a trunk "082 555 0199",
+  // "+1 (415) 555-0100"; see phoneOk().
+  PHONE: /(?<![\w+#.\/\u0001-])(?:\+\d{1,3}[ .-]?)?\(?0?\d{1,4}\)?(?:[ .-]\d{2,4}){2,4}(?![\w.\/\u0002-]|:\d)/g,
   IPV6: /(?<![\w:.])(?=[0-9a-f:]{0,45}::|(?:[0-9a-f]{1,4}:){5})(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![\w:])/gi,
   DASH_HOME: /(?<![\w-])-(?:Users|home)-(?=([\w.-]+))\1/gi,
   REPO_REF: /(?<![\w./#-])(?=([\w.-]+))\1\/(?=([\w.-]+))\2#(\d+)\b/g,
@@ -293,6 +296,7 @@ function scrub(text, { home = null, user = null, hostname = null, names = [], sa
   out = out.replace(P.EMAIL, '[email]');
   out = out.replace(P.IPV4, (m) => (KEEP_IPS.has(m) ? m : '[ip]'));
   out = out.replace(P.IPV6, (m) => (KEEP_IPS.has(m) || !/[0-9a-f]/i.test(m) ? m : '[ip]'));
+  out = out.replace(P.PHONE, (m) => (phoneOk(m) ? '[phone]' : m));
   out = out.replace(P.BARE_HOST, (m, host, port) => {
     const h = host.toLowerCase();
     const dots = h.split('.').length - 1;
@@ -317,4 +321,38 @@ function scrub(text, { home = null, user = null, hostname = null, names = [], sa
   return out.replace(/\u0001(\d+)\u0002/g, (m, i) => parked[Number(i)]);
 }
 
-module.exports = { scrub, redactSecretsPass, maskPii, hashName, cleanJsonError, PATTERNS, MAX_LINE };
+// phoneOk() keeps only a real-looking number (PATTERNS.PHONE): a leading + or 0,
+// 9-15 digits and at least two separators, so versions, dates, times, ticket keys and
+// counts stay.
+function phoneOk(m) {
+  const digits = m.replace(/\D/g, '').length;
+  const seps = m.match(/[ .-]|\)/g) || [];
+  return digits >= 9 && digits <= 15 && /^(?:\+|\(?0)/.test(m) && seps.length >= 2 && !seps.every((c) => c === '.');
+}
+// File names look like dotted host names (foo.test.js); a last label that is a code or
+// document extension is a file, not a host.
+const FILE_EXTS = new Set(['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'md', 'mdx', 'html', 'htm', 'css', 'scss', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'cs', 'php', 'sh', 'zsh', 'yml', 'yaml', 'toml', 'lock', 'txt', 'log', 'xml', 'svg', 'png', 'jpg', 'gif', 'sql', 'vue', 'svelte', 'map', 'snap', 'plist', 'env', 'ini', 'cfg', 'conf', 'pdf', 'csv', 'zip', 'gz', 'tar', 'wasm', 'dart', 'lua', 'ex', 'exs', 'erl', 'hs', 'ml', 'scala', 'gradle', 'mod', 'sum']);
+const privateHost = (host, port) => {
+  const h = host.toLowerCase();
+  const labels = h.split('.');
+  if (labels.length < 3 && !port) return false;
+  if (!/\.[a-z][a-z0-9-]{1,62}$/.test(h) || FILE_EXTS.has(labels[labels.length - 1])) return false;
+  return !KEEP_HOSTS.has(h) && !/\.ts\.net$/.test(h);
+};
+
+// A title on its way to a team hub (review L2). Unlike scrub() it labels what it removes
+// ([ip], [host], [phone], [email]) instead of hashing, so the title still reads.
+function scrubTitle(text) {
+  let out = redactSecretsPass(String(text ?? ''));
+  out = out.replace(PATTERNS.EMAIL, '[email]');
+  out = out.replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8})(:\d{1,5})?/gi, (m, scheme, host, port) => (privateHost(host, port) ? `${scheme}[host]` : m));
+  // "1.2.3.4-beta" is a version with a prerelease tag, not an address.
+  out = out.replace(PATTERNS.IPV4, (m, at, all) => (KEEP_IPS.has(m) || /^-[a-z]/i.test(all.slice(at + m.length)) ? m : '[ip]'));
+  // IPv6 needs a digit: "a::b" and "std::vector" are code.
+  out = out.replace(PATTERNS.IPV6, (m) => (KEEP_IPS.has(m) || !/\d/.test(m) ? m : '[ip]'));
+  out = out.replace(PATTERNS.BARE_HOST, (m, host, port) => (privateHost(host, port) ? '[host]' : m));
+  out = out.replace(PATTERNS.PHONE, (m) => (phoneOk(m) ? '[phone]' : m));
+  return out.replace(/[ \t]{2,}/g, ' ');
+}
+
+module.exports = { scrub, scrubTitle, redactSecretsPass, maskPii, hashName, cleanJsonError, PATTERNS, MAX_LINE };

@@ -145,3 +145,62 @@ test('redactSecretsPass: "password is: X" loses X even though the shared key=val
     assert.ok(!out.includes('hunter2'), out);
   }
 });
+
+// Review L2: anything that names a person, a machine or a private network is gone
+// from a title before it can leave for a team hub.
+const TITLE_LEAKS = [
+  ['ssh 10.0.0.5 failing', '10.0.0.5', '[ip]'],
+  ['mail sam@acme.co.za today', 'sam@acme.co.za', '[email]'],
+  ['fe80::1ff:fe23:4567:890a down', 'fe80::1ff:fe23:4567:890a', '[ip]'],
+  ['bind [fe80::1]:8080 fails', 'fe80::1', '[ip]'],
+  ['db1.internal.example.com slow', 'db1.internal.example.com', '[host]'],
+  ['connect db.corp.acme.internal:5432', 'db.corp.acme.internal', '[host]'],
+  ['call +27 82 555 0199 back', '+27 82 555 0199', '[phone]'],
+  ['call 082 555 0199 back', '082 555 0199', '[phone]'],
+  ['ring +1 (415) 555-0100', '415) 555-0100', '[phone]'],
+  ['ring +44 20 7946 0958', '7946 0958', '[phone]'],
+  ['open https://grafana.corp.acme.internal/d/x', 'grafana.corp.acme.internal', '[host]'],
+];
+test('scrubTitle: IPs, emails, IPv6, internal host names and phone numbers never survive', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  for (const [input, gone, mark] of TITLE_LEAKS) {
+    const out = scrubTitle(input);
+    assert.ok(!out.toLowerCase().includes(gone.toLowerCase()), `${input} -> ${out}`);
+    assert.ok(out.includes(mark), `${input} -> ${out}`);
+    assert.doesNotMatch(out, /\+\d[\d ().-]{7,}|\.internal/, `${input} -> ${out}`);
+  }
+  assert.equal(scrubTitle('token ghp_' + 'a'.repeat(36)).includes('a'.repeat(36)), false, 'secrets still go');
+});
+
+// Titles are mostly code talk: none of these may be touched.
+const TITLE_GUARDS = [
+  'v1.2.3', 'bump to 1.2.3', 'node 22.4.1', 'release 0.12.30', '1.2.3.4-beta',
+  'at 10:30', 'at 10:30:15', '2026-10-24T10:30Z', 'due 2026-10-24', 'due 24/10/2026', 'tag 2026.10.24',
+  'ENG-42', 'fix KEY-1234', 'PR #1234', 'owner/repo#12',
+  'port :5432', '3000 users', '12 345 rows', 'issue 2026 10 24',
+  'index.html', 'foo.test.js', 'README.md', 'src/app.config.ts', 'a.b.c.json',
+  'github.com', 'api.github.com', 'claude.ai', 'localhost:3000', '127.0.0.1', '::1',
+  'std::vector', 'a::b', 'acme.io',
+];
+test('scrubTitle: versions, times, dates, ticket keys, counts, file names, public hosts and code survive', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  for (const g of TITLE_GUARDS) assert.equal(scrubTitle(g), g, g);
+  assert.equal(scrubTitle('Fix login on 10.0.0.5 for ENG-42 (v1.2.3) at 10:30'), 'Fix login on [ip] for ENG-42 (v1.2.3) at 10:30');
+});
+
+// The share_summaries path (WorkRecord.forShare) goes through scrub(), which let phone
+// numbers through (review L2).
+test('scrub: phone numbers go, with the same guards as scrubTitle', () => {
+  for (const [input, gone] of [['call +27 82 555 0199 back', '+27 82 555 0199'], ['call 082 555 0199', '082 555 0199'], ['ring +1 (415) 555-0100', '415) 555-0100'], ['ring +44 20 7946 0958', '7946 0958']]) {
+    const out = scrub(input, opts);
+    assert.ok(!out.includes(gone) && out.includes('[phone]'), `${input} -> ${out}`);
+  }
+  // scrub() fails closed on some of these (it hashes file names and paths, and reads
+  // "a::b" as an address); those are left as they were. None may become a phone.
+  const OVER = new Set(['1.2.3.4-beta', 'owner/repo#12', 'foo.test.js', 'src/app.config.ts', 'a.b.c.json', 'a::b']);
+  for (const g of TITLE_GUARDS) {
+    const out = scrub(g, opts);
+    assert.ok(!out.includes('[phone]'), `${g} -> ${out}`);
+    if (!OVER.has(g)) assert.equal(out, g, g);
+  }
+});
