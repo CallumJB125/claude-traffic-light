@@ -632,3 +632,59 @@ test('L2: a dangling link where a restore folder would go counts as there, so no
   assert.equal(fs.existsSync(elsewhere), false);
   assert.deepEqual(s.fp(), live, 'the live folder is where it was');
 });
+
+// Review #54 M3 (poc11): a link to a folder, copied as a link, swapped for a
+// real folder after the verify. Setting times from the source side went
+// into backup/<link> and set a time on a file outside the backup, and the
+// adopt then recorded a backup that wasn't the folder.
+test('M3: a link swapped for a folder while times are set never touches a time outside the backup, and nothing is adopted', () => {
+  const s = setup();
+  const victim = path.join(s.home, 'victim-dir');
+  fs.mkdirSync(victim);
+  fs.writeFileSync(path.join(victim, 'f'), 'secret');
+  fs.utimesSync(path.join(victim, 'f'), 1700000000, 1700000000);
+  const X = path.join(s.fx.dir, 'zz-link');
+  fs.symlinkSync(victim, X);
+  const before = fs.lstatSync(path.join(victim, 'f')).mtimeMs;
+  let swapped = false;
+  const fsApi = new Proxy(fs, { get: (tg, k) => (k === 'lutimesSync' ? (p, a, m) => {
+    if (!swapped) { swapped = true; tg.unlinkSync(X); tg.mkdirSync(X); tg.writeFileSync(path.join(X, 'f'), 'y'); tg.utimesSync(path.join(X, 'f'), 1000000000, 1000000000); }
+    return tg.lutimesSync(p, a, m);
+  } : tg[k]) });
+  const r = s.inst(shipped, { fsApi }).adopt();
+  assert.ok(swapped, 'the race ran');
+  assert.equal(fs.lstatSync(path.join(victim, 'f')).mtimeMs, before, 'victim/f time unchanged');
+  assert.equal(r.ok, false, 'a backup that is not the folder is never recorded');
+  assert.deepEqual(backupsOf(s), []);
+  assert.equal(ownedCount(s), 0);
+  assert.deepEqual(s.it.status().ops ?? [], []);
+});
+
+test('M3: a file changed while the backup sets times is refused, not recorded', () => {
+  const s = setup();
+  const own = path.join(s.fx.dir, s.fx.own[0]);
+  let changed = false;
+  const fsApi = new Proxy(fs, { get: (tg, k) => (k === 'lutimesSync' ? (p, a, m) => { if (!changed) { changed = true; tg.appendFileSync(own, 'edit\n'); } return tg.lutimesSync(p, a, m); } : tg[k]) });
+  const r = s.inst(shipped, { fsApi }).adopt();
+  assert.ok(changed);
+  assert.equal(r.ok, false);
+  assert.deepEqual(backupsOf(s), []);
+  assert.equal(ownedCount(s), 0);
+});
+
+// Review #54 side note: the folder was checked through '.claude/agents/x',
+// so your own entry named x (a folder or a link) blocked every adopt.
+test('an entry of yours named x (a folder or a link) does not block adopting or the restore plan', () => {
+  for (const make of [(p) => fs.mkdirSync(p), (p, s) => fs.symlinkSync(path.join(s.home, 'elsewhere'), p)]) {
+    const s = setup();
+    make(path.join(s.fx.dir, 'x'), s);
+    const found = s.it.adoptable();
+    assert.equal(found.reason ?? null, null);
+    assert.deepEqual(found.matches.map((m) => m.rel.split('/').pop()).sort(), s.fx.adoptable);
+    const a = s.it.adopt([`.claude/agents/${s.fx.exact[0].name}`]);
+    assert.equal(a.ok, true, a.error);
+    const plan = s.it.restoreBackupPlan(a.backup);
+    assert.equal(plan.ok, true);
+    assert.ok(plan.items.length > 0 && plan.items.every((i) => i.state !== 'gone-now'), JSON.stringify(plan.items.filter((i) => i.state === 'gone-now').slice(0, 3)));
+  }
+});
