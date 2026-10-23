@@ -106,3 +106,20 @@ test('collections: never change pins or filters', () => {
   const t = P.togglePin(P.addToCollection(P.empty(), 'R', a), a);
   assert.deepEqual(t.collections, [{ name: 'R', keys: [P.keyOf(a)] }], 'pin changes leave collections alone');
 });
+
+test('pins: status filters saved under the old state words migrate once to bucket ids', () => {
+  const old = JSON.stringify({ pins: [], collections: [], filters: [
+    { name: 'Waiting on me', values: { status: 'Needs input', person: 'Ana' } }, { name: 'Busy', values: { status: 'Working' } },
+    { name: 'Gone', values: { status: 'Ended' } }, { name: 'Ask', values: { status: 'Needs you' } }, { name: 'Broken', values: { status: 'Failed' } },
+    { name: 'Plain', values: { person: 'Ben' } },
+  ] });
+  const s = P.parse(old);
+  assert.equal(s.upgraded, true, 'the page writes the migrated filters back once');
+  assert.deepEqual(s.filters.map((f) => f.values.status ?? null), ['needs', 'working', 'idle', 'needs', 'stuck', null]);
+  assert.equal(s.filters[0].values.person, 'Ana');
+  const { upgraded, ...saved } = s;
+  const again = P.parse(P.serialize(saved));
+  assert.equal(again.upgraded, undefined, 'a second load has nothing left to migrate');
+  assert.deepEqual(again, saved);
+  for (const id of P.BUCKET_IDS) assert.equal(P.parse(JSON.stringify({ filters: [{ name: 'x', values: { status: id } }] })).filters[0].values.status, id);
+});

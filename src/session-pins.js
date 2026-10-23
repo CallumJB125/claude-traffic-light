@@ -7,6 +7,12 @@
 (function (root) {
   const MAX_PINS = 30, MAX_FILTERS = 12, MAX_COLLECTIONS = 12, MAX_COLLECTION_KEYS = 30, FILTER_KEYS = ['person', 'project', 'task', 'platform', 'device', 'status', 'search', 'focus', 'group'];
   const str = (v, max) => typeof v === 'string' && v.length <= max ? v : '';
+  const Organise = root.PlexiformWorkOrganise || (typeof module === 'object' && module.exports ? require('./work-organise.js') : null);
+  const BUCKET_IDS = ['needs', 'working', 'check', 'stuck', 'idle'];
+  // A status filter is a bucket id. Ones saved before that hold the old state words
+  // ("Needs input", "Working", "Ended"); they map once to the bucket those words now
+  // fall in, and a bucket id maps to itself, so loading again changes nothing.
+  const statusId = v => BUCKET_IDS.includes(v) ? v : Organise ? Organise.bucketOf(v) : v;
   const keyOf = e => e && typeof e === 'object' ? [str(e.owner?.name, 200), str(e.provider?.id, 120), str(e.board?.label, 200), str(e.task?.title, 400)].join('\u001f') : '';
   const empty = () => ({ pins: [], filters: [], collections: [] });
   const validKey = k => typeof k === 'string' && k.length <= 1000 && k.split('\u001f').length === 4 && k !== '\u001f\u001f\u001f';
@@ -31,9 +37,14 @@
       if (!v || typeof v !== 'object') return empty();
       const pins = Array.isArray(v.pins) ? v.pins.filter(k => typeof k === 'string' && k.length <= 1000 && k.split('\u001f').length === 4).slice(0, MAX_PINS) : [];
       const collections = parseCollections(v.collections);
+      let upgraded = false;
       const filters = Array.isArray(v.filters) ? v.filters.filter(f => f && typeof f === 'object' && str(f.name, 60) && f.values && typeof f.values === 'object').slice(0, MAX_FILTERS)
-        .map(f => ({ name: f.name, values: Object.fromEntries(FILTER_KEYS.filter(k => str(f.values[k], 400)).map(k => [k, f.values[k]])) })) : [];
-      return { pins: [...new Set(pins)], filters, collections };
+        .map(f => ({ name: f.name, values: Object.fromEntries(FILTER_KEYS.filter(k => str(f.values[k], 400)).map(k => {
+          if (k !== 'status') return [k, f.values[k]];
+          const id = statusId(f.values[k]); if (id !== f.values[k]) upgraded = true;
+          return [k, id];
+        })) })) : [];
+      return { pins: [...new Set(pins)], filters, collections, ...(upgraded ? { upgraded } : {}) };
     } catch { return empty(); }
   }
   const serialize = state => JSON.stringify({ pins: state.pins.slice(0, MAX_PINS), filters: state.filters.slice(0, MAX_FILTERS), collections: (state.collections ?? []).slice(0, MAX_COLLECTIONS).map(c => ({ name: c.name, keys: c.keys.slice(0, MAX_COLLECTION_KEYS) })) });
@@ -72,7 +83,7 @@
   const removeCollection = (state, name) => ({ ...state, collections: state.collections.filter(c => !sameName(c.name, collName(name))) });
   const collectionsOf = (state, e) => { const k = keyOf(e); return state.collections.filter(c => c.keys.includes(k)).map(c => c.name); };
   const inCollection = (state, name, e) => { const c = findCollection(state, collName(name)); return !!c && c.keys.includes(keyOf(e)); };
-  const api = { keyOf, parse, serialize, pinned, togglePin, order, saveFilter, removeFilter, addToCollection, removeFromCollection, removeCollection, collectionsOf, inCollection, empty, MAX_PINS, MAX_FILTERS, MAX_COLLECTIONS, MAX_COLLECTION_KEYS, FILTER_KEYS };
+  const api = { BUCKET_IDS, keyOf, parse, serialize, pinned, togglePin, order, saveFilter, removeFilter, addToCollection, removeFromCollection, removeCollection, collectionsOf, inCollection, empty, MAX_PINS, MAX_FILTERS, MAX_COLLECTIONS, MAX_COLLECTION_KEYS, FILTER_KEYS };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformPins = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

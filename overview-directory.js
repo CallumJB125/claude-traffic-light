@@ -55,7 +55,7 @@
   let hooks = null, view = 'mine', team = null, read = 0, received = 0, selected = null, teamFocus = 'all';
   const lists = { mine: { rows: new Map(), data: null }, team: { rows: new Map(), data: null } };
   const TEAM_FILTERS = ['person', 'project', 'task', 'platform', 'device', 'status'];
-  const keyOf = (e, f) => f === 'person' ? e.owner.name : f === 'project' ? e.board.label || W.FALLBACK : f === 'task' ? e.task.title : f === 'platform' ? e.provider.label : f === 'device' ? e.device.label : e.state;
+  const keyOf = (e, f) => f === 'person' ? e.owner.name : f === 'project' ? e.board.label || W.FALLBACK : f === 'task' ? e.task.title : f === 'platform' ? e.provider.label : f === 'device' ? e.device.label : e.bucket || W.bucketOf(e.state);
   const freshNow = (e, data) => {
     if (e.freshness !== 'recent' || e.ageMs === null) return { freshness: e.freshness, ageMs: e.ageMs };
     const a = e.ageMs + Math.max(0, Date.now() - data.observed_at);
@@ -69,6 +69,8 @@
   const store = { read(k, parse) { try { return parse(localStorage.getItem(k)); } catch { return parse(null); } }, write(k, v) { try { localStorage.setItem(k, v); } catch { /* unavailable */ } } };
   let pins = Pins ? store.read('plexiform.pins', Pins.parse) : null, follows = Follow ? store.read('plexiform.follows', Follow.parse) : null;
   const savePins = () => { if (Pins) store.write('plexiform.pins', Pins.serialize(pins)); };
+  // Saved status filters from before bucket ids are rewritten once, on the first load after the change.
+  if (pins?.upgraded) { delete pins.upgraded; savePins(); }
   const saveFollows = () => { if (Follow) store.write('plexiform.follows', Follow.serialize(follows)); };
   const RECEIPT_TEXT = { sending: 'Drafted · review and send', sent: 'Sent', acknowledged: 'Acknowledged', answered: 'Answered', expired: 'Expired, no reply' };
 
@@ -514,9 +516,11 @@
   }
   function teamFilters(data) {
     for (const f of TEAM_FILTERS) {
-      const s = $(`team-${f}-filter`), prev = s.value, values = [...new Set(data.entries.map(e => keyOf(e, f)))].sort((a, b) => a.localeCompare(b));
-      s.replaceChildren(Object.assign(el('option', `All`), { value: '' }), ...values.map(x => Object.assign(el('option', x), { value: x })));
-      if (prev && !values.includes(prev)) s.append(Object.assign(el('option', `${prev} · none now`), { value: prev }));
+      const s = $(`team-${f}-filter`), prev = s.value, seen = new Set(data.entries.map(e => keyOf(e, f)));
+      // Status options are buckets, in bucket order, shown by heading.
+      const values = f === 'status' ? W.BUCKETS.map(b => b.id).filter(id => seen.has(id)) : [...seen].sort((a, b) => a.localeCompare(b)), text = x => f === 'status' ? W.headingOf(x) : x;
+      s.replaceChildren(Object.assign(el('option', `All`), { value: '' }), ...values.map(x => Object.assign(el('option', text(x)), { value: x })));
+      if (prev && !values.includes(prev)) s.append(Object.assign(el('option', `${text(prev)} · none now`), { value: prev }));
       s.value = prev;
     }
   }
@@ -563,7 +567,7 @@
     for (const b of document.querySelectorAll('[data-team-focus]')) { const key = b.dataset.teamFocus; b.setAttribute('aria-pressed', String(key === teamFocus)); set(b, `${labels[key]} · ${counts[key]}`); }
 
     const group = $('team-group').value || 'person', groups = new Map();
-    for (const v of all) { if (!v.gone && !matches(v.entry, data)) continue; const k = v.gone ? 'No longer listed' : keyOf(v.entry, group); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(v); }
+    for (const v of all) { if (!v.gone && !matches(v.entry, data)) continue; const k = v.gone ? 'No longer listed' : group === 'status' ? W.headingOf(keyOf(v.entry, group)) : keyOf(v.entry, group); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(v); }
     if (!l.groups) l.groups = new Map();
     const pinnedGroup = k => Pins && groups.get(k).some(v => !v.gone && Pins.pinned(pins, v.entry));
     const blocks = [...groups.keys()].sort((a, b) => a === 'No longer listed' ? 1 : b === 'No longer listed' ? -1 : Number(pinnedGroup(b)) - Number(pinnedGroup(a)) || a.localeCompare(b)).map(k => {
