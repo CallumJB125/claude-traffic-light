@@ -527,9 +527,9 @@
   // merge, keeping files added since. Restore beside it, then swap by hand.
   function restoreHelp(cmd) {
     return el('details', { class: 'af-restore' }, el('summary', { text: 'Restore a backup by hand' }),
-      el('p', { text: 'Plexiform never restores a whole folder for you, since that would overwrite anything you changed since. To go back to a backup, copy it next to your agents folder, check it, then swap the two folders yourself:' }),
-      cmd ? el('pre', { class: 'af-code' }, el('code', { text: `${cmd}\nmv ~/.claude/agents ~/.claude/agents-old\nmv ~/.claude/agents-restored ~/.claude/agents` }))
-        : el('p', { class: 'af-muted', text: 'Use Show backup to find the folder, copy it next to ~/.claude/agents as agents-restored, then swap the folders.' }),
+      el('p', { text: 'Plexiform never restores a whole folder for you, since that would overwrite anything you changed since. To go back to a backup, run the first line to copy it next to your agents folder, check the copy, then run the second line to swap the two folders. Each line stops without changing anything if its folder is already there.' }),
+      cmd ? el('pre', { class: 'af-code' }, el('code', { text: cmd }))
+        : el('p', { class: 'af-muted', text: 'Use Show backup to find the folder, copy it next to ~/.claude/agents under a new name, check it, then swap the folders.' }),
       el('p', { class: 'af-muted', text: 'Undo is the safer way back for one click: it restores only files that are still as Plexiform left them.' }));
   }
 

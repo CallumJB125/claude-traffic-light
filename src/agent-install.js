@@ -124,7 +124,7 @@ function verifiedLedger(l, key) {
   return { ...l, owned, ops: l.ops.filter((op) => macOk(key, 'op', '', op)).map(withoutMac) };
 }
 
-function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, now = Date.now, targets = TARGETS, enableCursorProject = false, failAfterWrites = null } = {}) {
+function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, now = Date.now, targets = TARGETS, enableCursorProject = false, failAfterWrites = null, platform = process.platform } = {}) {
   if (typeof home !== 'string' || !path.isAbsolute(home) || typeof dataRoot !== 'string' || !path.isAbsolute(dataRoot)) throw new Error('agent installs need an absolute home and data folder');
   if (!catalog?.ok) throw new Error('agent installs need a verified catalogue');
   if (!keyOk(ledgerKey)) throw new Error('agent installs need a ledger key of at least 32 bytes');
@@ -672,17 +672,27 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     return backupsIn(root).includes(id) ? path.join(root, id) : null;
   }
   /**
-   * The manual restore, in ~ form, or null when the data folder isn't under
-   * home (then only "Show backup" is offered). It restores into a new
-   * folder: ditto into the live one would merge, keeping files added since,
-   * and write through a link if agents became one (change 4).
+   * The manual restore, in $HOME form, or null when the data folder isn't
+   * under home or there's no copy tool we know (then only "Show backup" is
+   * offered). Two lines: copy the backup into a new folder, then (after you
+   * check it) swap. Copying into the live folder would merge, keeping files
+   * added since, and write through a link if agents became one (change 4).
+   * Both names carry the backup's stamp, and each line stops, changing
+   * nothing, if its folder is already there (review #54 L2).
    */
   function restoreCommand(id) {
     const dir = backupPath(id);
     if (!dir || !dir.startsWith(HOME + path.sep)) return null;
     const rel = path.relative(HOME, dir).split(path.sep).join('/');
     if (!/^[A-Za-z0-9._/ -]+$/.test(rel)) return null;
-    return `ditto "$HOME/${rel}" "$HOME/.claude/agents-restored"`;
+    const copy = platform === 'darwin' ? 'ditto' : platform === 'linux' ? 'cp -Rp' : null;
+    if (!copy) return null;
+    const tag = id.replace(/^claude-agents-/, '');
+    const R = `.claude/agents-restored-${tag}`, O = `.claude/agents-old-${tag}`;
+    return [
+      `if [ -e "$HOME/${R}" ]; then echo "~/${R} already exists, so nothing was copied."; else ${copy} "$HOME/${rel}" "$HOME/${R}"; fi`,
+      `if [ -e "$HOME/${O}" ] || [ ! -d "$HOME/${R}" ]; then echo "~/${O} already exists or there's nothing to swap in, so nothing was moved."; else mv "$HOME/.claude/agents" "$HOME/${O}" && mv "$HOME/${R}" "$HOME/.claude/agents"; fi`,
+    ].join('\n');
   }
   /**
    * What restoring a backup by hand would change in ~/.claude/agents, per
