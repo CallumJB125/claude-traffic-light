@@ -84,8 +84,12 @@ test('PR B card_add refusals reach no board: awareness off, unbound, excluded, u
   assert.equal(npm.adds.length, 0);
 });
 
+// The limits test moves the clock about 50 minutes on, so it starts at least two hours before UTC midnight: run near
+// midnight, the day's counts would reset partway through.
+const beforeMidnight = () => Math.min(Date.now(), Date.parse(new Date().toISOString().slice(0, 10) + 'T22:00:00Z'));
+
 test('PR B card_add limits: 3 in 10 minutes and 10 a day per session, 30 a day per Mac; refused attempts count; persisted 0600 across a restart', async (t) => {
-  const w = world(t);
+  const w = world(t, { at: beforeMidnight() });
   let fail = true;
   const r = rig(t, { w, add: async () => (fail ? { reason: 'UNAVAILABLE', message: 'hub away' } : { card_id: 'c', title: 't', board: { kind: 'personal' } }) });
   for (let i = 0; i < 3; i += 1) assert.equal((await r.call({ title: 'Fix', request_id: rid() })).reason, 'UNAVAILABLE');
@@ -110,7 +114,7 @@ test('PR B card_add limits: 3 in 10 minutes and 10 a day per session, 30 a day p
   r.clock.t += A.CARD_LIMITS.burstMs + 1;
   assert.match((await r.call({ title: 'Fix', request_id: rid() })).message, /10 cards a day from one session/);
   // The Mac's day: a file already at 30 refuses every session.
-  const w2 = world(t);
+  const w2 = world(t, { at: beforeMidnight() });
   fs.mkdirSync(path.join(w2.root, 'awareness'), { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(w2.root, 'awareness', 'card-limits.json'), JSON.stringify({ v: 1, day: w2.iso.slice(0, 10), mac: 30, sessions: {} }), { mode: 0o600 });
   const full = rig(t, { w: w2 });
