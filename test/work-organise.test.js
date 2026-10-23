@@ -685,3 +685,10 @@ test('work-organise: a "." or ".." folder is no project name', () => {
   for (const cwd of ['..', '.', '/a/b/..', 'C:\\x\\.', '../']) assert.equal(W.projectOf({ cwd }).heading, 'Other work', cwd);
   assert.equal(W.projectOf({ cwd: '/a/.config' }).heading, '.config');
 });
+
+test('work-organise: bucketOf reads its own headings and labels back', () => {
+  for (const b of W.BUCKETS) {
+    assert.equal(W.bucketOf(b.heading), b.id, b.heading);
+    assert.equal(W.bucketOf(b.label.toUpperCase()), b.id, b.label);
+  }
+});

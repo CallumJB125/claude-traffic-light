@@ -41,7 +41,11 @@
     idle: ['idle', 'idle-nudge', 'ready', 'session-start', 'ended', 'session-end', 'stale', 'status unknown', 'todo', 'parked',
       'suspended', 'done', 'merged', 'approved_done', 'last reported: needs input', 'unknown'],
   });
-  const BUCKET_OF = Object.freeze(Object.fromEntries(Object.entries(SIGNALS).flatMap(([id, keys]) => keys.map((k) => [k, id]))));
+  // A view's own words map back too: "working on it", "check it".
+  const BUCKET_OF = Object.freeze(Object.fromEntries([
+    ...Object.entries(SIGNALS).flatMap(([id, keys]) => keys.map((k) => [k, id])),
+    ...BUCKETS.flatMap((b) => [[b.heading.toLowerCase(), b.id], [b.label.toLowerCase(), b.id]]),
+  ]));
 
   // signal | state | {signal|state|status, fail_kind, changes} → bucket id.
   // A failure that is a limit or budget needs the person, not a retry; a turn
