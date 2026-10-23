@@ -279,3 +279,19 @@ test('scrubText: zero-width, full-width and other compatibility forms cannot hid
     assert.ok(out.length <= 64 * 1024 && performance.now() - t < 500, `${out.length} chars in ${Math.round(performance.now() - t)} ms`);
   }
 });
+
+test('scrubText: variation selectors, combining marks, fillers and doubled spaces cannot hide a match (#58 review)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  const cases = [['call +27️82 555 0199', 'call [phone]'], ['ping 10.0️.0.5', 'ping [ip]'], ['mail bob︀@acme.com', 'mail [email]'],
+    ['ping 10.0́.0.5', 'ping [ip]'], ['mail bob́@acme.com', 'mail [email]'], ['ping 10.0᠋.0.5', 'ping [ip]'], ['ping 10.0᠏.0.5', 'ping [ip]'],
+    ['ping 10.0឴.0.5', 'ping [ip]'], ['ping 10.0឵.0.5', 'ping [ip]'], ['ping 10.0⠀.0.5', 'ping [ip]'], ['ping 10.0\u{E0100}.0.5', 'ping [ip]'],
+    ['ping 10.0\u{E01EF}.0.5', 'ping [ip]'], ['call +27 82 ​ 555 0199', 'call [phone]'], ['call +27 82  555 0199', 'call [phone]'], ['call +27 82\t\t555 0199', 'call [phone]']];
+  for (const [input, want] of cases) assert.equal(scrubTitle(input), want, JSON.stringify(input));
+  // A variation selector or mark on a letter that is not ASCII is part of it.
+  for (const keep of ['❤️ done', 'ok \u{1F44D}️', '\u{1F469}‍\u{1F4BB} done', 'café', 'café au lait', 'tiếng Việt', 'नमस्ते']) {
+    assert.equal(scrubTitle(keep), keep.normalize('NFKC'), JSON.stringify(keep));
+  }
+  // A report keeps its indentation; only runs of spaces inside a line fold.
+  const { scrubText } = require('../src/scrub.js');
+  assert.equal(scrubText('Done:\n    call +27 82  555 0199\n    ok'), 'Done:\n    call [phone]\n    ok');
+});

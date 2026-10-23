@@ -213,3 +213,18 @@ test('forShare: with no valid route.hub every tailnet name goes (fails closed)',
     assert.doesNotMatch(shared.summary, /callums-mac/, `${hub}: ${shared.summary}`);
   }
 });
+
+test('forShare: invisible and full-width characters cannot hide a number, host or address from the team (#58 review)', () => {
+  const rec = { ...WorkRecord.build({ install_id: INSTALL, o: o(), raw: {}, facts: facts({ lastAssistant: 'x' }), home: HOME }), rev: 1 };
+  const leaks = ['+27 ８‍2 555 0199', '＋２７‍８２ ５５５ ０１９９', 'call 415‍-555-0100', 'ssh jenkins‮.corp',
+    'ssh db.prod‮‬.acme.com', '+27 82 ​ 555 0199', '+27 82  555 0199', '+27️82 555 0199', 'ping 10.0️.0.5', 'bob︀@acme.com', 'ping 10.0́.0.5',
+    'bob́@acme.com', 'ping 10.0᠋.0.5', 'ping 10.0឴.0.5', 'ping 10.0⠀.0.5', 'ping 10.0\u{E0100}.0.5', 'ping 10.0­.0.5', 'bob⁠@acme.com',
+    'bobㅤ@acme.com', 'bob​＠acme.com', 'bob＠​ａｃｍｅ.com'];
+  for (const s of leaks) {
+    const out = WorkRecord.forShare({ ...rec, summary: s }, { share_summaries: true, hub: 'https://plexi.tail1.ts.net' }, { salt: 's' }).summary;
+    assert.doesNotMatch(out, /555|0199|jenkins|db\.prod|10\.0|bob|acme|ａｃｍｅ/, `${JSON.stringify(s)} -> ${JSON.stringify(out)}`);
+  }
+  for (const keep of ['\u{1F469}‍\u{1F4BB} done', 'می‌خواهم', '❤️ done']) {
+    assert.equal(WorkRecord.forShare({ ...rec, summary: keep }, { share_summaries: true, hub: 'https://plexi.tail1.ts.net' }, { salt: 's' }).summary, keep, keep);
+  }
+});

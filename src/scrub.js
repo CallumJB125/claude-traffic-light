@@ -237,7 +237,8 @@ function cleanJsonError(message) {
 //             folder hashes the same everywhere in it
 //   keep:     path segments left readable (default: the app's own)
 //   hubHost:  text bound for this hub keeps only its tailnet name (default: all kept)
-function scrub(text, { home = null, user = null, hostname = null, names = [], salt = crypto.randomBytes(8).toString('hex'), keep = defaultKeep(), hubHost } = {}) {
+//   fold:     fold runs of spaces inside a line first (text that leaves as one line)
+function scrub(text, { home = null, user = null, hostname = null, names = [], salt = crypto.randomBytes(8).toString('hex'), keep = defaultKeep(), hubHost, fold = false } = {}) {
   const hub = typeof hubHost === 'string' ? hubHost.toLowerCase() : undefined;
   const P = PATTERNS;
   const hashWord = (w) => (!w.trim() || keep.has(w) || HASHED.test(w) || /^\d+$/.test(w) || w.length === 1 ? w : hashName(w, salt));
@@ -268,7 +269,9 @@ function scrub(text, { home = null, user = null, hostname = null, names = [], sa
     return `${scheme}://${hashHost(host)}${p}${tail}`;
   };
 
-  let out = String(text == null ? '' : text);
+  // Invisible and compatibility characters go first, as in scrubText (#58 review).
+  let out = plainText(String(text == null ? '' : text), { max: Infinity });
+  if (fold) out = foldSpaces(out);
   out = out.replace(/\\\\/g, '\\').replace(/\\\//g, '/');
   out = out.replace(P.LONG_LINE, (m) => `[long line omitted: ${m.length} chars]`);
   out = cleanJsonError(out);
@@ -357,16 +360,27 @@ const privateHost = (host, port, hubHost = null) => {
 // between other letters, where they mean something (an emoji ZWJ sequence, Persian ZWNJ).
 // NFKC then folds full-width and other compatibility forms. NFKC can grow text up to 18
 // times, so the input is capped before it and the output after.
+// Mongolian free variation selectors, the Khmer inherent vowels and the braille blank
+// show nothing either, so they go too. After NFKC (which has already composed "e" and
+// U+0301 into "é"), a mark or variation selector left on an ASCII character hides it
+// ("10.0\u0301.0.5", "+27\ufe0f82"); on any other character (an emoji's U+FE0F, a
+// Devanagari vowel sign) it is part of the letter and stays. A space counts as ASCII.
 const TEXT_MAX = 64 * 1024;
-const ALWAYS_INVISIBLE = /[\u{E0000}-\u{E007F}\u034F\u115F\u1160\u3164\uFFA0]/gu;
+const ALWAYS_INVISIBLE = /[\u{E0000}-\u{E007F}\u034F\u115F\u1160\u3164\uFFA0\u180B-\u180D\u180F\u17B4\u17B5\u2800]/gu;
 // One pass over each run (a lookahead after \p{Cf}+ would backtrack through a long run).
 const FORMAT_RUN = /\p{Cf}+/gu;
-const PRINTABLE_ASCII = /[\x21-\x7e]/;
-const nearAscii = (m, at, all) => (PRINTABLE_ASCII.test(all[at - 1] ?? '') || PRINTABLE_ASCII.test(all[at + m.length] ?? '') ? '' : m);
-function plainText(text) {
+const MARK_RUN = /\p{M}+/gu;
+const ASCII = /[\x20-\x7e]/;
+const nearAscii = (m, at, all) => (ASCII.test(all[at - 1] ?? '') || ASCII.test(all[at + m.length] ?? '') ? '' : m);
+const afterAscii = (m, at, all) => (ASCII.test(all[at - 1] ?? '') ? '' : m);
+//   max: the cap before and after NFKC (Infinity for scrub(), which takes whole files)
+function plainText(text, { max = TEXT_MAX } = {}) {
   const strip = (t) => t.replace(ALWAYS_INVISIBLE, '').replace(FORMAT_RUN, nearAscii);
-  return strip(strip(text.slice(0, TEXT_MAX)).normalize('NFKC').slice(0, TEXT_MAX));
+  return strip(strip(text.slice(0, max)).normalize('NFKC').slice(0, max)).replace(MARK_RUN, afterAscii);
 }
+// Runs of spaces inside a line fold before the patterns run ("+27 82  555 0199");
+// indentation at the start of a line stays.
+const foldSpaces = (t) => t.replace(/(?<=\S)[ \t]{2,}/g, ' ');
 
 // Text on its way to a team hub or a teammate (review L2): a title, a task's report.
 // Unlike scrub() it labels what it removes ([ip], [host], [phone], [email]) instead of
@@ -374,7 +388,7 @@ function plainText(text) {
 //   hubHost: the destination hub's host name, the one tailnet name the text may keep
 function scrubText(text, { hubHost = null } = {}) {
   const hub = typeof hubHost === 'string' && hubHost ? hubHost.toLowerCase() : null;
-  let out = redactSecretsPass(plainText(String(text ?? '')));
+  let out = redactSecretsPass(foldSpaces(plainText(String(text ?? ''))));
   out = out.replace(PATTERNS.EMAIL, '[email]');
   out = out.replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8})(:\d{1,5})?/gi, (m, scheme, host, port) => (privateHost(host, port, hub) ? `${scheme}[host]` : m));
   // "1.2.3.4-beta" is a version with a prerelease tag, not an address.
