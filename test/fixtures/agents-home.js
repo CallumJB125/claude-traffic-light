@@ -62,6 +62,14 @@ function buildAgentsHome(home, catalog) {
   const [sub, ro, aged, linked] = rest.slice(20, 24);
   fs.mkdirSync(path.join(dir, 'team'));
   fs.writeFileSync(path.join(dir, 'team', `${sub.slug}.md`), sub.raw);
+  // Subfolders whose mode isn't 755: Node's cpSync copies folders as 755, so
+  // the backup must set them back (review #54 M1).
+  fs.mkdirSync(path.join(dir, 'private'));
+  fs.writeFileSync(path.join(dir, 'private', 'notes.md'), 'private notes\n');
+  fs.chmodSync(path.join(dir, 'private'), 0o700);
+  fs.mkdirSync(path.join(dir, 'locked'));
+  fs.writeFileSync(path.join(dir, 'locked', 'pinned.md'), 'read only folder\n');
+  fs.chmodSync(path.join(dir, 'locked'), 0o555);
   fs.writeFileSync(path.join(dir, '.DS_Store'), Buffer.from([0, 0, 0, 1, 66, 117, 100, 49]));
   fs.writeFileSync(path.join(dir, 'README.txt'), 'My agents.\n');
   put('empty.md', '');
@@ -83,7 +91,7 @@ function buildAgentsHome(home, catalog) {
     // What adoptable() must find: every exact top-level regular file.
     adoptable: [...exact.map((e) => e.name), `${ro.slug}.md`, `${aged.slug}.md`].sort(),
     exact, nearMiss, own,
-    readOnly: `${ro.slug}.md`, aged: `${aged.slug}.md`, linked: `${linked.slug}.md`, nested: `team/${sub.slug}.md`,
+    readOnly: `${ro.slug}.md`, aged: `${aged.slug}.md`, linked: `${linked.slug}.md`, nested: `team/${sub.slug}.md`, modeDirs: { private: 0o700, locked: 0o555 },
     secret: SECRET,
   };
 }

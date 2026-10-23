@@ -76,7 +76,7 @@ test('the fixture is shaped like a real folder and its fingerprint sees every ki
   assert.ok(lines.some((l) => l.startsWith(`F ${s.fx.readOnly} 0444 `)));
   assert.ok(lines.some((l) => l.startsWith(`F ${s.fx.aged} `) && l.includes(` ${Date.parse('2001-02-03T04:05:06Z')} `)));
   assert.ok(!lines.join('\n').includes(sha(s.fx.secret)), 'the link to the key is listed as a link, never read');
-  assert.deepEqual(FP.catalogueMatches(s.fx.dir), { md: 174, exact: 122, notMatching: 52, other: 6 });
+  assert.deepEqual(FP.catalogueMatches(s.fx.dir), { md: 174, exact: 122, notMatching: 52, other: 8 });
 });
 
 test('the fingerprint changes for a byte, a mode, an mtime and a link target', () => {
@@ -282,8 +282,10 @@ test('step 11b: why Help never says "ditto puts it back": ditto into the live fo
   const before = s.fp({ linkTimes: false });
   const a = s.it.adopt();
   fs.writeFileSync(path.join(s.fx.dir, 'added-later.md'), 'new\n');
-  execFileSync('/usr/bin/ditto', [s.it.backupPath(a.backup), s.fx.dir]);
-  assert.notDeepEqual(s.fp({ linkTimes: false }), before);
+  // It merges, and over a 0555 folder it fails part way: neither is a restore.
+  let failed = false;
+  try { execFileSync('/usr/bin/ditto', [s.it.backupPath(a.backup), s.fx.dir], { stdio: 'ignore' }); } catch { failed = true; }
+  assert.ok(failed || JSON.stringify(s.fp({ linkTimes: false })) !== JSON.stringify(before));
   assert.ok(fs.existsSync(path.join(s.fx.dir, 'added-later.md')));
 });
 
@@ -496,3 +498,56 @@ test('change 6: after a hard kill (file written, ledger not), the file shows as 
   assert.deepEqual(s.fp(), killed);
 });
 
+
+// Review #54 M1: Node 22's cpSync makes every copied folder 755, so the mode
+// check refused any folder with a 700, 750, 555 or 500 subfolder.
+test('M1: subfolders that are 0700 and 0555 are backed up with their modes, and adopt succeeds', () => {
+  const s = setup();
+  const before = s.fp();
+  const r = s.it.adopt();
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.adopted.length, s.fx.adoptable.length);
+  const b = s.it.backupPath(r.backup);
+  for (const [d, mode] of Object.entries(s.fx.modeDirs)) assert.equal((fs.lstatSync(path.join(b, d)).mode & 0o7777).toString(8), mode.toString(8), d);
+  assert.equal((fs.lstatSync(b).mode & 0o777).toString(8), '700', 'the backup folder itself stays 0700');
+  assert.deepEqual(FP.fingerprint(b), before, 'the backup is the folder exactly, modes included');
+  assert.deepEqual(s.fp(), before, 'the agents folder is untouched');
+  for (const [d, mode] of Object.entries(s.fx.modeDirs)) assert.equal(fs.lstatSync(path.join(s.fx.dir, d)).mode & 0o7777, mode, `${d} in ~/.claude/agents unchanged`);
+});
+
+test('M1: a backup holding a 0555 folder can still be pruned, and a prune that fails never fails the adopt', () => {
+  let t = Date.parse('2026-01-01T08:00:00Z');
+  const s = setup();
+  const it = s.inst(shipped, { now: () => (t += 60_000) });
+  const first = it.adopt([`.claude/agents/${s.fx.exact[0].name}`]);
+  assert.equal(first.ok, true, first.error);
+  // Seven more backups of a changing folder, each adopt undone, so the old ones can go.
+  let prev = it.adopt([`.claude/agents/${s.fx.exact[1].name}`]);
+  for (let i = 0; i < 7; i++) {
+    it.undo(prev.opId);
+    fs.writeFileSync(path.join(s.fx.dir, `extra-${i}.md`), `x${i}`);
+    prev = it.adopt([`.claude/agents/${s.fx.exact[1].name}`]);
+    assert.equal(prev.ok, true, prev.error);
+  }
+  assert.ok(backupsOf(s).length <= 5, `${backupsOf(s).length} kept`);
+  for (const b of backupsOf(s)) assert.equal(fs.lstatSync(path.join(s.data, 'agent-backups', b, 'locked')).mode & 0o7777, 0o555);
+  // rmSync throwing during prune: the adopt still succeeds with its backup.
+  it.undo(prev.opId);
+  fs.writeFileSync(path.join(s.fx.dir, 'extra-last.md'), 'y');
+  const fsApi = new Proxy(fs, { get: (tg, k) => (k === 'rmSync' ? () => { throw new Error('EPERM'); } : tg[k]) });
+  const r = s.inst(shipped, { fsApi, now: () => (t += 60_000) }).adopt([`.claude/agents/${s.fx.exact[1].name}`]);
+  assert.equal(r.ok, true, r.error);
+  assert.ok(fs.existsSync(s.it.backupPath(r.backup)));
+});
+
+test('M1: restoring folder modes never follows a link and never touches anything outside the backup', () => {
+  const s = setup();
+  const victim = path.join(s.home, 'elsewhere');
+  fs.chmodSync(victim, 0o755);
+  // Swap a copied folder for a link as soon as cpSync puts it in the backup.
+  const fsApi = new Proxy(fs, { get: (tg, k) => (k === 'cpSync' ? (from, to, o) => { const out = tg.cpSync(from, to, o); if (String(to).endsWith('/private')) { tg.rmSync(to, { recursive: true }); tg.symlinkSync(victim, to); } return out; } : tg[k]) });
+  const r = s.inst(shipped, { fsApi }).adopt();
+  assert.equal(r.ok, false);
+  assert.equal(fs.statSync(victim).mode & 0o7777, 0o755, 'the link target\'s mode is unchanged');
+  assert.deepEqual(backupsOf(s), []);
+});
