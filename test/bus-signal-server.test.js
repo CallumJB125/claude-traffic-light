@@ -29,7 +29,7 @@ test('/bus: token required, browser origins refused, only agent ops forwarded, c
   try {
     assert.equal((await s.post({ op: 'hello', args: {} }, {})).status, 401);
     assert.equal((await s.post({ op: 'hello', args: {} }, { origin: 'https://evil.example', 'x-buddy-token': 'x' })).status, 403);
-    for (const op of ['halt', 'resume', 'busSetContext', 'list']) assert.equal((await (await s.post({ op })).json()).reason, 'VALIDATION', `${op} is not an agent op`);
+    for (const op of ['halt', 'resume', 'busSetContext', 'list', 'notes_pending', 'notified']) assert.equal((await (await s.post({ op })).json()).reason, 'VALIDATION', `${op} is not an agent op`);
     const r = await (await s.post({ op: 'handoff', args: { cwd: '/repo/here', provider: 'claude', title: 'Use AKIAZ7Q4M2LXWB3K9RTD', brief: 'x'.repeat(5000) } })).json();
     assert.deepEqual(r, { ok: true, op: 'handoff' });
     assert.deepEqual(seen.map((x) => x.op), ['handoff']);
@@ -37,6 +37,11 @@ test('/bus: token required, browser origins refused, only agent ops forwarded, c
     assert.ok(!('cwd' in seen[0].args));
     assert.ok(!seen[0].args.title.includes('AKIA'));
     assert.equal(seen[0].args.brief.length, 3200, 'cut to the limit after scrubbing');
+    // A note's text is scrubbed the same way (home as ~, secrets out) and cut to 800.
+    await s.post({ op: 'note', args: { to: 'claude-app-a1e0', text: `see ${require('node:os').homedir()}/x AKIAZ7Q4M2LXWB3K9RTD ${'y'.repeat(2000)}`, request_id: 'req-00000001' } });
+    const note = seen.find((x) => x.op === 'note');
+    assert.ok(note.args.text.startsWith('see ~/x ') && !note.args.text.includes('AKIA'), note.args.text.slice(0, 40));
+    assert.equal(note.args.text.length, 800);
     // The MCP side: busCall goes to /bus with a timeout above bus_wait's 120 s.
     const M = require('../mcp-server.js');
     assert.ok(M.BUS_TIMEOUT_MS >= 130_000);

@@ -13,14 +13,19 @@ const Inbox = require('../src/attention-inbox.js');
 const peer = (i, extra = {}) => ({ handle: `codex-site${i}-${(0x1000 + i).toString(16)}`, provider: 'codex', folder: `site${i}`, repo_key: null, branch: null, status: 'working', waiting_on: null, ...extra });
 const self = (caps) => ({ handle: 'claude-app-a1e0', allowed: true, interactive: true, caps, repo_key: null });
 
-test('the Tools line appears only when this viewer\'s provider has the bus tools, and never bus_note before notes ship', () => {
+test('the Tools line appears only when this viewer\'s provider has the bus tools, and names bus_note only when it can use notes', () => {
   const roster = { peers: [peer(1)], groups: [] };
   const off = Hook.render(Hook.viewOf(roster, self({ mcp: false, notes: false })));
   assert.ok(!/Tools:/.test(off));
   assert.match(off, /You are claude-app-a1e0\.$/);
-  const on = Hook.render(Hook.viewOf(roster, self({ mcp: true, notes: true })));
+  const on = Hook.render(Hook.viewOf(roster, self({ mcp: true, notes: false })));
   assert.match(on, /\nYou are claude-app-a1e0\. Tools: bus_peers, bus_handoff\.$/);
   assert.ok(!/bus_note/.test(on));
+  // Step 4: notes on for this viewer (bound, notes on, the bus running).
+  assert.match(Hook.render(Hook.viewOf(roster, self({ mcp: true, notes: true }))), /\nYou are claude-app-a1e0\. Tools: bus_peers, bus_handoff, bus_note\.$/);
+  assert.ok(!/bus_note/.test(Hook.render(Hook.viewOf(roster, self({ mcp: false, notes: true })))), 'no tools, no bus_note');
+  assert.ok(!/bus_note/.test(Hook.render(Hook.viewOf(roster, self({ mcp: true, notes: 'yes' })))));
+  assert.notEqual(Hook.versionOf(Hook.viewOf(roster, self({ mcp: true, notes: true }))), Hook.versionOf(Hook.viewOf(roster, self({ mcp: true, notes: false }))), 'told once when notes come on');
   // No handle (a miss in self) still names the tools; a forged caps value that is not `true` does not.
   assert.match(Hook.render(Hook.viewOf(roster, { caps: { mcp: true } })), /\nTools: bus_peers, bus_handoff\.$/);
   assert.ok(!/Tools:/.test(Hook.render(Hook.viewOf(roster, self({ mcp: 'yes' })))));

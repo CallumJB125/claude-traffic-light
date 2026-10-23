@@ -1666,14 +1666,16 @@ const ProviderStatus = require('./src/provider-status.js');
 // read. Async only; rebuilt on session changes (debounced), on exclude changes, and every 2 minutes as a heartbeat.
 const AgentAwareness = require('./src/agent-awareness.js').create({ rootDir: ROOT_DIR, host: LOCAL_HOST, home: os.homedir(), codexHome: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), dataDirs: [ROOT_DIR, path.join(app.getPath('userData'), 'tasks')], config: () => loadConfig(), sessions: () => localSessions(aggregateState().sessions || []), halted: () => AgentBusMain.halted(), mcpCaps: () => McpAuto.caps(),
   // The only command lines a bound caller may be running: Plexiform's own server, as it registers it (bus profile and full).
-  servers: () => [McpInstall.launch({ ...mcpLaunch(), profile: 'bus' }), McpInstall.launch(mcpLaunch())], log: (m) => console.log(m) });
+  servers: () => [McpInstall.launch({ ...mcpLaunch(), profile: 'bus' }), McpInstall.launch(mcpLaunch())], log: (m) => console.log(m),
+  // Notes (step 4): main's own note ops to the Tasks helper; a background sync never starts it, a note or bus_notes call does.
+  bus: (op, args) => AgentBusMain.relay(op, args, null), busStarted: () => !!tasksSvc, refreshHalt: () => AgentBusMain.refresh() });
 app.whenReady().then(() => { if (!DEMO) AgentAwareness.start(); });
 onQuit(app, () => AgentAwareness.stop());
 const sessionsSender = e => fromUtilityPage(e, 'sessions');
 // Bus folders: task folders and the Claude and Codex sessions main sees, never a task run's worktree (*-buddy-<id>).
 // Claude Code's own hook (hooks/set-status.js) writes no source, so no source means Claude here as everywhere else;
 // every other adapter (Gemini, Cursor, ...) names itself.
-const AgentBusMain = require('./src/agent-bus-main.js').register({ ipcMain, sessionsAllowed: sessionsSender, tasks: () => { const t = getTasks(); t.start(); return t; }, started: () => !!tasksSvc, config: () => loadConfig(), folders: () => [...(tasksSvc?.folderPaths() || []), ...localSessions(aggregateState().sessions || []).filter((x) => ['claude', 'codex'].includes(x.source || 'claude') && !x.taskId && typeof x.cwd === 'string' && x.cwd).map((x) => x.cwd)].filter((f) => !/-buddy-[0-9a-f]{12}(?:[\\/]|$)/.test(f)), onChange: () => refreshTrayMenu() });
+const AgentBusMain = require('./src/agent-bus-main.js').register({ ipcMain, sessionsAllowed: sessionsSender, tasks: () => { const t = getTasks(); t.start(); return t; }, started: () => !!tasksSvc, config: () => loadConfig(), folders: () => [...(tasksSvc?.folderPaths() || []), ...localSessions(aggregateState().sessions || []).filter((x) => ['claude', 'codex'].includes(x.source || 'claude') && !x.taskId && typeof x.cwd === 'string' && x.cwd).map((x) => x.cwd)].filter((f) => !/-buddy-[0-9a-f]{12}(?:[\\/]|$)/.test(f)), onChange: () => { refreshTrayMenu(); AgentAwareness.schedule(); } });
 const WorktreeShare = require('./src/worktree-share.js').createWorktreeShare({ log: console.log });
 ipcMain.handle('sessions:state', e => (sessionsSender(e) ? sessionsState() : null));
 async function sessionsState() {
@@ -2163,7 +2165,7 @@ function getTasks() {
     detectedTools: () => AiTools.quick(),
     startGuard: (cwd) => (taskStartGuard ? taskStartGuard(cwd) : null),
     busContext: () => AgentBusMain.context(),
-    onBusReady: () => { AgentBusMain.refresh(); },
+    onBusReady: () => { AgentBusMain.refresh().then(() => AgentAwareness.syncNotes()).catch(() => {}); },
     copy: (text) => clipboard.writeText(text),
     // Ghostty Dock when it is on and trusted; the native confirmation names whichever app it is.
     ...(IS_MAC ? { terminalApp: () => (GhosttyDock.modeOf(loadConfig()) !== 'off' && GhosttyDock.detect().canOpen ? GhosttyDock.APP : 'Terminal') } : {}),

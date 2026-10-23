@@ -364,4 +364,11 @@ test('PRIVACY.md documents the agent awareness roster: metadata only, local only
   assert.match(entry, /never shown to other AI sessions/);
   assert.match(entry, /`GET \/status`[^.]*`buddy_sessions`/);
   assert.match(entry, /Nothing leaves this computer/);
+  // Notes (step 4): where the text is kept and for how long, that hooks never carry it, and that logs never do.
+  assert.match(entry, /`bus_note`/);
+  assert.match(entry, /at most 800 characters/);
+  assert.match(entry, /kept in `bus\.db`[^.]*for a day, and expires unread after 2 hours/);
+  assert.match(entry, /hook is told only that a note is waiting[^;]*never its text/);
+  assert.match(entry, /only when it calls `bus_notes` itself/);
+  assert.match(entry, /log records counts and states, never the text/);
 });

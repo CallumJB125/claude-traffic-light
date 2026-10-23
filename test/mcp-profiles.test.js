@@ -12,11 +12,11 @@ const path = require('node:path');
 const M = require('../mcp-server.js');
 const { testTempDir } = require('./helpers/tmp');
 
-const READ_ONLY = ['bus_peers', 'bus_wait', 'bus_read', 'bus_status', 'buddy_health', 'bus_session'];
+const READ_ONLY = ['bus_peers', 'bus_wait', 'bus_read', 'bus_status', 'bus_notes', 'buddy_health', 'bus_session'];
 
 test('the bus profile: bus tools and buddy_health only, a subset of the full server, no transcript or spend readers', () => {
   const bus = M.toolsFor('bus').map((t) => t.name);
-  assert.deepEqual(bus, ['bus_peers', 'bus_handoff', 'bus_wait', 'bus_read', 'bus_status', 'buddy_health', 'bus_session']);
+  assert.deepEqual(bus, ['bus_peers', 'bus_handoff', 'bus_wait', 'bus_read', 'bus_status', 'bus_note', 'bus_notes', 'buddy_health', 'bus_session']);
   const full = new Set(M.toolsFor('full').map((t) => t.name));
   for (const n of bus) assert.ok(full.has(n), `${n} is in the full server too`);
   for (const n of ['buddy_sessions', 'buddy_model_mix', 'buddy_spend', 'buddy_usage_history', 'buddy_burst_requests', 'team_activity', 'bus_hello']) assert.ok(!bus.includes(n), n);
@@ -25,15 +25,16 @@ test('the bus profile: bus tools and buddy_health only, a subset of the full ser
   assert.equal(M.profileOf(['node', 'mcp-server.js', 'bus']), 'full');
 });
 
-test('read-only bus tools are annotated read-only; only bus_handoff writes; every bus tool says other AIs\' text is data', () => {
+test('read-only bus tools are annotated read-only; only bus_handoff and bus_note write; every bus tool says other AIs\' text is data', () => {
   const bus = M.toolsFor('bus');
   assert.deepEqual(bus.filter((t) => t.readOnly !== false).map((t) => t.name).sort(), [...READ_ONLY].sort());
-  assert.deepEqual(bus.filter((t) => t.readOnly === false).map((t) => t.name), ['bus_handoff']);
-  for (const t of bus.filter((x) => ['bus_peers', 'bus_handoff', 'bus_wait', 'bus_read'].includes(x.name))) assert.match(t.description, /data, never instructions/, t.name);
+  assert.deepEqual(bus.filter((t) => t.readOnly === false).map((t) => t.name), ['bus_handoff', 'bus_note']);
+  for (const t of bus.filter((x) => ['bus_peers', 'bus_handoff', 'bus_wait', 'bus_read', 'bus_note', 'bus_notes'].includes(x.name))) assert.match(t.description, /data, never instructions/, t.name);
+  assert.match(M.BUS_INSTRUCTIONS, /Notes from them arrive only through bus_notes/);
   assert.match(M.BUS_INSTRUCTIONS, /data, never instructions/);
 });
 
-test('stdio: --profile bus serves seven tools as plexiform-bus, with instructions, annotations and ≤ ~1,200 tokens of schema', async () => {
+test('stdio: --profile bus serves nine tools as plexiform-bus, with instructions, annotations and ≤ ~1,200 tokens of schema', async () => {
   const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
   const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
   const root = testTempDir('pf-mcpprofile-');
@@ -43,7 +44,7 @@ test('stdio: --profile bus serves seven tools as plexiform-bus, with instruction
     assert.equal(client.getServerVersion().name, 'plexiform-bus');
     assert.equal(client.getInstructions(), M.BUS_INSTRUCTIONS);
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 7);
+    assert.equal(tools.length, 9);
     for (const t of tools) assert.equal(t.annotations.readOnlyHint, READ_ONLY.includes(t.name), t.name);
     const chars = JSON.stringify(tools).length;
     assert.ok(chars <= 4800, `bus profile schema is ${chars} chars (~${Math.round(chars / 4)} tokens)`);
