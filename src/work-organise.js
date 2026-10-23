@@ -271,8 +271,9 @@
   // "codex/eng-42". Not after a kind ("feat/node-22-upgrade"), nor "release-2-prep" or
   // "work-organise-2026-10-23".
   const BRANCH_TICKET = /^([^\\/]+)[\\/]([a-z][a-z0-9]{1,9})-(\d{1,6})(?=$|[-_./])/;
-  // What a branch says it does is never its ticket key: "codex/fix-12-bugs", "agent/add-3-tests".
-  const BRANCH_VERB = new RegExp(`^(?:${KIND_WORDS}|bug|issue|task|add|update|remove|improve|change)$`, 'i');
+  // What a branch says it does, or what made it, is never its ticket key: "codex/fix-12-bugs",
+  // "agent/add-3-tests", "claude/session-2026-10-23", "bot/deps-2".
+  const BRANCH_VERB = new RegExp(`^(?:${KIND_WORDS}|bug|issue|task|add|update|remove|improve|change|session|sessions|agent|agents|deps|dep|deps-dev|tmp|temp|draft|experiment|try|attempt|run|job)$`, 'i');
   // Copilot names its branch for the GitHub issue it was given: copilot/fix-1234 is issue #1234.
   const COPILOT_ISSUE = /^copilot[\\/]fix-(\d{1,6})$/i;
   function branchTicket(branch) {

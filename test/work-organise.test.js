@@ -733,3 +733,11 @@ test('work-organise: a branch verb after an agent prefix is never a ticket; copi
   assert.equal(t('codex/eng-42'), 'ENG-42');
   assert.equal(t('sam/abc-123-fix-login'), 'ABC-123 · Fix login');
 });
+
+test('work-organise: session, agent, deps and other non-work words after an agent prefix are not tickets', () => {
+  const t = (branch) => W.titleOf({ team: false, branch }).title;
+  for (const b of ['claude/session-2026-10-23', 'claude/agent-3', 'bot/deps-2', 'codex/wip-4', 'codex/tmp-5', 'codex/ci-6', 'codex/release-7', 'codex/SESSION-9']) {
+    assert.doesNotMatch(t(b), /^[A-Z]+-\d/, b);
+  }
+  assert.equal(t('codex/eng-42'), 'ENG-42');
+});
