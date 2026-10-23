@@ -642,3 +642,8 @@ test('security L3: backups are reused when nothing changed and capped at the new
   assert.equal(backups().length, 5);
   assert.ok(fs.existsSync(path.join(data, 'agent-backups', backups().at(-1), 'mine-6.md')), 'the newest is kept');
 });
+
+test('security L3: PRIVACY.md lists the local files Find agents keeps and the folders it writes', () => {
+  const privacy = fs.readFileSync(path.join(__dirname, '..', 'PRIVACY.md'), 'utf8');
+  for (const s of ['agent-installs.json', 'agent-originals', 'agent-backups', '~/.claude/agents', '~/.codex/agents', '~/.gemini/agents', '~/.copilot/agents', '~/.config/opencode/agents']) assert.ok(privacy.includes(s), s);
+});
