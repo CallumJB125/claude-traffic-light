@@ -10,12 +10,22 @@ const NAME_MAX = 60;
 // body inside a block delimited by a per-message random nonce. The body cannot
 // close the block (it never contains '<<<' or '>>>') and every square bracket in it,
 // ASCII or lookalike, becomes a parenthesis, so no line can open like a Plexiform
-// header whatever homoglyphs or invisible characters it hides. Every rewrite keeps
-// length in chars and bytes: the hub's session body budget (MESSAGING.md §3) keeps
+// header whatever homoglyphs or invisible characters it hides. First the body gets
+// the fold notes get (bus/notes.js): compatibility forms folded (﹇ is [, ﹤ is <),
+// other line breaks made plain ones, invisible, control and direction characters
+// dropped, so what is left is what a model reads. No rewrite makes text longer in
+// chars or bytes (a fold that would, such as ﷺ, keeps the character; none of those
+// folds to a bracket or <>): the hub's session body budget (MESSAGING.md §3) keeps
 // the framed text within the adapter's limit.
-const neutral = (text) => text.replace(/\r/g, '\n').replace(/<<</g, '(((').replace(/>>>/g, ')))')
+const fold = (text) => text.replace(/[^\x00-\x7f]/gu, (c) => {
+  const f = c.normalize('NFKC');
+  return f.length <= c.length && Buffer.byteLength(f) <= Buffer.byteLength(c) ? f : c;
+});
+const neutral = (text) => fold(text).replace(/\r|\u0085|\u2028|\u2029/g, '\n')
+  .replace(/[^\P{Cc}\t\n]|[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, '')
+  .replace(/<<</g, '(((').replace(/>>>/g, ')))')
   .replace(/\[/g, '(').replace(/\]/g, ')')
-  .replace(/[［⟦〚【〔⁅﹝]/g, '（').replace(/[］⟧〛】〕⁆﹞]/g, '）');
+  .replace(/[［⟦〚【〔⁅﹝❲⦋⦍⦏〖〘]/g, '（').replace(/[］⟧〛】〕⁆﹞❳⦌⦎⦐〗〙]/g, '）');
 const label = (v, fallback) => {
   const s = typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f\u2028\u2029[\]<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, NAME_MAX) : '';
   return s || fallback;
