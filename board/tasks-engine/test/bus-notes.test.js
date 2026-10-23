@@ -4,7 +4,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { connect } from '../../tasks-api/client.js';
 import { openBusLog, RETENTION_MS } from '../bus/local-log.js';
 import { createNotes } from '../bus/notes.js';
@@ -27,7 +26,12 @@ function world() {
   const notes = createNotes({ log, now, halted: () => halted, record: (kind, data) => events.push({ kind, data }) });
   let n = 0;
   const send = (text, { from = X, to = Y, request_id = `req-${String(++n).padStart(8, '0')}`, ...more } = {}) => notes.op('note', { from, to: { key: to.key, handle: to.handle }, text, request_id, ...more });
-  const read = (me = Y, more = {}) => notes.op('notes', { me: { key: me.key }, ...more });
+  // As main reads: the bodies, then notes_ack for them (two-phase, PR B review point 4).
+  const read = (me = Y, more = {}) => {
+    const r = notes.op('notes', { me: { key: me.key }, ...more });
+    if (!more.status && r && Array.isArray(r.notes) && r.notes.length) notes.op('notes_ack', { me: { key: me.key }, note_ids: r.notes.map((x) => x.note_id) });
+    return r;
+  };
   return { dir, clock, log, notes, events, send, read, halt: (v) => { halted = v; }, close: () => { log.close(); rm(dir); } };
 }
 
@@ -165,14 +169,22 @@ test('only main\'s shapes: identities are required and checked; a note to yourse
   } finally { w.close(); }
 });
 
-test('the real engine: note ops go through the bus method; a note event in bus.db has no text', async () => {
-  const b = await startBus(undefined, { engineOpts: { mainKey: crypto.randomBytes(32).toString('hex') } });
+test('the real engine: note ops reach the bus only over parentPort; a note event in bus.db has no text; a read is two-phase', async () => {
+  const b = await startBus();
   try {
     const r = await b.bus('note', { from: X, to: Y, text: 'Through the engine with AKIA in it', request_id: rid('note') }, null);
     assert.equal(r.state, 'queued');
     assert.deepEqual((await b.bus('notes_pending', {}, null)).notes.map((n) => [n.note_id, n.to_key]), [[r.note_id, Y.key]]);
+    // Phase one: the bodies, still unread, so an answer lost on the way to main loses nothing.
     const got = await b.bus('notes', { me: { key: Y.key } }, null);
     assert.equal(got.notes[0].note_id, r.note_id);
+    assert.equal((await b.bus('notes', { me: { key: Y.key } }, null)).notes[0].note_id, r.note_id, 'offered again until acked');
+    assert.deepEqual((await b.bus('notes_pending', {}, null)).notes.map((n) => n.note_id), [r.note_id]);
+    // Phase two: main has them; now they are read. Only the recipient's own key can ack them.
+    assert.deepEqual((await b.bus('notes_ack', { me: { key: Z.key }, note_ids: [r.note_id] }, null)).read, []);
+    assert.deepEqual((await b.bus('notes_ack', { me: { key: Y.key }, note_ids: [r.note_id] }, null)).read, [r.note_id]);
+    assert.deepEqual((await b.bus('notes', { me: { key: Y.key } }, null)).notes, []);
+    assert.deepEqual((await b.bus('notes_ack', { me: { key: Y.key }, note_ids: [r.note_id] }, null)).read, [], 'idempotent');
     const events = b.engine.agentBus.log.recent(20).filter((e) => e.topic === 'note');
     assert.deepEqual(events.map((e) => e.kind).sort(), ['note.queued', 'note.read']);
     assert.ok(events.every((e) => e.body === null && !JSON.stringify(e).includes('Through the engine')));
@@ -181,26 +193,31 @@ test('the real engine: note ops go through the bus method; a note event in bus.d
   } finally { await b.cleanup(); }
 });
 
-test('H1: the note ops need main\'s key: a second client with the file token (or a wrong key) gets POLICY_DENIED for all four', async () => {
-  const mainKey = crypto.randomBytes(32).toString('hex');
-  const b = await startBus(undefined, { engineOpts: { mainKey } });
+const NOTE_OPS = (sent) => [
+  ['note', { from: X, to: Y, text: 'forged', request_id: rid('note') }],
+  ['notes', { me: { key: Y.key } }],
+  ['notes_ack', { me: { key: Y.key }, note_ids: [sent.note_id] }],
+  ['notes_pending', {}],
+  ['notified', { to: { key: Y.key }, note_ids: [sent.note_id] }],
+];
+
+test('R1 closed (PR B): no socket client can use the note ops, main\'s own included, whatever its frame, params or hello carry', async () => {
+  const b = await startBus();
   const others = [];
   try {
     const sent = await b.bus('note', { from: X, to: Y, text: 'for Y only', request_id: rid('note') }, null);
-    assert.equal(sent.state, 'queued', 'main\'s own client still works');
+    assert.equal(sent.state, 'queued', 'main\'s parentPort path works');
     const { socketPath, tokenPath } = b.h.eng;
     others.push(await connect({ socketPath, tokenPath }));
-    others.push(await connect({ socketPath, tokenPath, mainKey: crypto.randomBytes(32).toString('hex') }));
-    const ops = [
-      ['note', { from: X, to: Y, text: 'forged', request_id: rid('note') }],
-      ['notes', { me: { key: Y.key } }],
-      ['notes_pending', {}],
-      ['notified', { to: { key: Y.key }, note_ids: [sent.note_id] }],
-    ];
-    for (const c of others) {
-      for (const [op, args] of ops) {
-        const e = await c.bus(op, args, null).then(() => null, (err) => err);
-        assert.equal(e?.code, 'POLICY_DENIED', `${op}: ${e?.code}`);
+    const forge = [{}, { viaParent: true }, { ctx: { viaParent: true } }, JSON.parse('{"__proto__":{"viaParent":true}}'), { mainKey: 'f'.repeat(64) }];
+    for (const c of [b.h.client, ...others]) {
+      for (const [op, args] of NOTE_OPS(sent)) {
+        for (const extra of forge) {
+          const params = { op, args, ...extra };
+          const e = await c.call('bus', params).then(() => null, (err) => err);
+          assert.ok(['POLICY_DENIED', 'VALIDATION'].includes(e?.code), `${op} ${JSON.stringify(extra)}: ${e?.code}`);
+          if (!Object.keys(extra).length) assert.equal(e.code, 'POLICY_DENIED', `${op}: the socket never serves it`);
+        }
       }
       assert.equal((await c.bus('status', {}, null).then(() => 'ok', (err) => err.code)), 'ok', 'the other bus ops are unchanged');
     }
@@ -210,19 +227,76 @@ test('H1: the note ops need main\'s key: a second client with the file token (or
   } finally { for (const c of others) c.close(); await b.cleanup(); }
 });
 
-test('H1: an engine with no key yet refuses the note ops; the key is set once and a second one is ignored', async () => {
+test('R1 closed (PR B): a hello carrying mainKey, first or later, is refused and the connection closed; plain hellos still work', async () => {
+  const b = await startBus();
+  const opened = [];
+  const hello = (c, extra = {}) => c.call('hello', { protocol: 1, client: { name: 'r1', version: '1' }, ...extra }).then(() => 'ok', (e) => e.code);
+  try {
+    const { socketPath, tokenPath } = b.h.eng;
+    const late = await connect({ socketPath, tokenPath });
+    opened.push(late);
+    assert.equal(await hello(late), 'ok', 'a plain later hello');
+    assert.equal(await hello(late, { mainKey: 'a'.repeat(64) }), 'POLICY_DENIED');
+    assert.notEqual(await late.bus('status', {}, null).then(() => 'ok', (e) => e.code), 'ok', 'closed after the refused hello');
+    // A first hello with one: the raw socket, before any other frame.
+    const net = await import('node:net');
+    const fs = await import('node:fs');
+    const token = fs.readFileSync(tokenPath, 'utf8').trim();
+    const reply = await new Promise((resolve, reject) => {
+      const s = net.createConnection(socketPath);
+      let buf = '';
+      s.on('data', (d) => { buf += d; });
+      s.on('close', () => resolve(buf));
+      s.on('error', reject);
+      s.write(`${JSON.stringify({ id: 'h1', token, method: 'hello', params: { protocol: 1, client: { name: 'r1', version: '1' }, mainKey: 'b'.repeat(64) } })}\n`);
+    });
+    assert.equal(JSON.parse(reply.trim().split('\n')[0]).error.code, 'POLICY_DENIED');
+    // A fresh plain connection still works, and still cannot reach the note ops.
+    const fresh = await connect({ socketPath, tokenPath });
+    opened.push(fresh);
+    assert.equal(await fresh.bus('notes_pending', {}, null).then(() => 'ok', (e) => e.code), 'POLICY_DENIED');
+  } finally { for (const c of opened) c.close(); await b.cleanup(); }
+});
+
+test('parentPort handler: only a tasks.bus with a short id and a note op reaches the engine; errors come back as a fixed code, never a message', async () => {
+  const { parentBus } = await import('../parent-bus.js');
+  const { ApiError } = await import('../engine.js');
+  const calls = [];
+  const engine = { bus: async (p, ctx) => { calls.push([p, ctx]); if (p.args.boom === 'api') throw new ApiError('RATE', 'SQLITE_BUSY: database is locked at /Users/x/bus.db'); if (p.args.boom) throw new Error('SQLITE_CORRUPT /Users/x/bus.db'); return { ok: 1 }; } };
+  assert.equal(await parentBus(engine, null), null);
+  assert.equal(await parentBus(engine, { type: 'tasks.shutdown', id: 'a' }), null);
+  for (const id of [undefined, 7, '', 'x'.repeat(65), 'a b', '../x']) assert.equal(await parentBus(engine, { type: 'tasks.bus', id, op: 'notes', args: {} }), null, String(id));
+  for (const op of ['status', 'handoff', 'busSetContext', 'halt', '__proto__', undefined]) assert.deepEqual(await parentBus(engine, { type: 'tasks.bus', id: 'a1', op, args: {} }), { type: 'tasks.busResult', id: 'a1', ok: false, code: 'VALIDATION' });
+  for (const args of [[], 'x', null]) assert.equal((await parentBus(engine, { type: 'tasks.bus', id: 'a2', op: 'notes', args })).code, 'VALIDATION');
+  assert.equal(calls.length, 0, 'none of those reached the engine');
+  assert.deepEqual(await parentBus(engine, { type: 'tasks.bus', id: 'ok_1', op: 'notes_pending' }), { type: 'tasks.busResult', id: 'ok_1', ok: true, result: { ok: 1 } });
+  assert.deepEqual(calls[0], [{ op: 'notes_pending', args: {}, caller: null }, { viaParent: true }]);
+  const api = await parentBus(engine, { type: 'tasks.bus', id: 'e1', op: 'note', args: { boom: 'api' } });
+  assert.deepEqual(api, { type: 'tasks.busResult', id: 'e1', ok: false, code: 'RATE' });
+  const raw = await parentBus(engine, { type: 'tasks.bus', id: 'e2', op: 'note', args: { boom: 1 } });
+  assert.deepEqual(raw, { type: 'tasks.busResult', id: 'e2', ok: false, code: 'INTERNAL' });
+  assert.ok(!JSON.stringify([api, raw]).includes('SQLITE'), 'no error text crosses');
+  assert.equal((await parentBus(null, { type: 'tasks.bus', id: 'n1', op: 'notes', args: {} })).code, 'INTERNAL', 'before the engine starts');
+});
+
+test('viaParent: only parent-bus.js sets it, and the engine counts only an own, exactly-true value', async () => {
+  const fs = await import('node:fs');
+  const url = await import('node:url');
+  const dir = path.dirname(url.fileURLToPath(import.meta.url));
+  const root = path.join(dir, '..', '..');
+  const files = [];
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.name === 'node_modules' || e.name === 'test' || e.name.startsWith('.')) continue; const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (/\.(c|m)?js$/.test(e.name)) files.push(p); } };
+  walk(root);
+  walk(path.join(root, '..', 'src'));
+  const setters = files.filter((f) => /viaParent\s*:/.test(fs.readFileSync(f, 'utf8'))).map((f) => path.relative(root, f));
+  assert.deepEqual(setters, ['tasks-engine/parent-bus.js']);
   const b = await startBus();
   try {
-    const args = { from: X, to: Y, text: 'early', request_id: rid('note') };
-    assert.equal((await b.bus('note', args, null).catch((e) => e)).code, 'POLICY_DENIED', 'no key: closed');
-    const key = crypto.randomBytes(32).toString('hex');
-    b.engine.setMainKey(key);
-    b.engine.setMainKey(crypto.randomBytes(32).toString('hex'));
-    const main = await connect({ socketPath: b.h.eng.socketPath, tokenPath: b.h.eng.tokenPath, mainKey: key });
-    try {
-      await main.bus('busSetContext', {}, null);
-      assert.equal((await main.bus('note', args, null)).state, 'queued');
-    } finally { main.close(); }
+    const args = { me: { key: Y.key } };
+    for (const ctx of [{}, { viaParent: 1 }, { viaParent: 'true' }, Object.create({ viaParent: true }), { principal: { kind: 'full' } }]) {
+      assert.equal((await b.engine.bus({ op: 'notes', args }, ctx).catch((e) => e)).code, 'POLICY_DENIED', JSON.stringify(ctx));
+    }
+    assert.deepEqual((await b.engine.bus({ op: 'notes', args }, { viaParent: true })).notes, []);
   } finally { await b.cleanup(); }
 });
 
@@ -244,30 +318,4 @@ test('L3 (PR #35 review): a handoff main marks after_note records it on the offe
     assert.equal(ev.data.after_note, undefined);
     assert.doesNotMatch((await b.bus('read', { topic: 'handoff' })).events.find((e) => e.handoff_id === plain.handoff_id).text, /read a note/);
   } finally { await b.cleanup(); }
-});
-
-test('R1 (PR #35 re-review): mainKey is taken on the first hello only; a later hello carrying one is refused and the connection closed', async () => {
-  const mainKey = crypto.randomBytes(32).toString('hex');
-  const b = await startBus(undefined, { engineOpts: { mainKey } });
-  const opened = [];
-  const hello = (c, extra = {}) => c.call('hello', { protocol: 1, client: { name: 'r1', version: '1' }, ...extra }).then(() => 'ok', (e) => e.code);
-  try {
-    const { socketPath, tokenPath } = b.h.eng;
-    // A same-user process that said hello without the key, then learnt the key: it cannot upgrade that connection.
-    const late = await connect({ socketPath, tokenPath });
-    opened.push(late);
-    assert.equal(await hello(late, { mainKey }), 'POLICY_DENIED');
-    assert.notEqual(await late.bus('notes_pending', {}, null).then(() => 'ok', (e) => e.code), 'ok', 'still no note ops on it');
-    // Main's own connection: a second hello with a key is refused too, and one without a key never drops it.
-    const main = await connect({ socketPath, tokenPath, mainKey });
-    opened.push(main);
-    assert.equal(await hello(main), 'ok');
-    assert.equal((await main.bus('notes_pending', {}, null)).notes.length, 0, 'the first hello\'s key still holds');
-    assert.equal(await hello(main, { mainKey }), 'POLICY_DENIED');
-    assert.notEqual(await main.bus('notes_pending', {}, null).then(() => 'ok', (e) => e.code), 'ok', 'closed after the refused hello');
-    // A fresh connection with the key on its first hello still works.
-    const fresh = await connect({ socketPath, tokenPath, mainKey });
-    opened.push(fresh);
-    assert.equal((await fresh.bus('notes_pending', {}, null)).notes.length, 0);
-  } finally { for (const c of opened) c.close(); await b.cleanup(); }
 });

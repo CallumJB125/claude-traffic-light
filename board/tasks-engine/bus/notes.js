@@ -3,9 +3,10 @@
 // and scrubbed the text, so every identity here is main's, never an agent's own word. A note never starts a
 // turn or a run and carries no hop: the recipient's hook shows only a Plexiform notice (count and sender), and
 // the text reaches it only as the result of its own bus_notes call, framed as data from another AI.
-// Ops: note, notes, notes_pending (main's notices after a restart), notified (main saw the notice written).
+// Ops: note, notes (unread ones, still unread), notes_ack (main has their bodies: now read), notes_pending (main's
+// notices after a restart), notified (main saw the notice written).
 import crypto from 'node:crypto';
-import { NoteArgs, NotesArgs, NotifiedArgs, NOTE_LIMITS, issue } from '../../shared/bus-schema.js';
+import { NoteArgs, NotesArgs, NotesAckArgs, NotifiedArgs, NOTE_LIMITS, issue } from '../../shared/bus-schema.js';
 import untrustedFrame from '../../shared/untrusted-frame.cjs';
 
 const { frame, fold } = untrustedFrame;
@@ -56,6 +57,8 @@ export function createNotes({ log, now = Date.now, halted = () => false, record 
 
   // The caller's own notes only (me is the session main verified): unread ones oldest first, at most NOTE_LIMITS.read,
   // or one by id. Reading never deletes: the person can still see them until they are swept. status: what I sent.
+  // Two-phase (PR B review point 4): this leaves them unread; main marks them read with notes_ack once it has the
+  // bodies, so an answer lost to a timeout or a helper exit re-offers them instead of losing them.
   function notes(raw) {
     const { args: a, refusal } = parse(NotesArgs, raw);
     if (refusal) return refusal;
@@ -67,9 +70,17 @@ export function createNotes({ log, now = Date.now, halted = () => false, record 
     }
     if (halted()) return HALTED;
     const rows = a.note_id ? [log.noteFor(a.me.key, a.note_id, t)].filter(Boolean) : log.unreadFor(a.me.key, t, NOTE_LIMITS.read);
-    const moved = new Set(log.setNotes(a.me.key, rows.map((r) => r.note_id), 'read', t));
-    mark('note.read', rows.filter((r) => moved.has(r.note_id)));
-    return { notes: rows.map(view), more: log.unreadCount(a.me.key, t) };
+    const unread = rows.filter((r) => r.state === 'queued' || r.state === 'notified').length;
+    return { notes: rows.map(view), more: Math.max(0, log.unreadCount(a.me.key, t) - unread) };
+  }
+
+  function ack(raw) {
+    const { args: a, refusal } = parse(NotesAckArgs, raw);
+    if (refusal) return refusal;
+    const t = now();
+    const ids = log.setNotes(a.me.key, a.note_ids, 'read', t);
+    mark('note.read', ids.map((id) => log.noteFor(a.me.key, id, 0)).filter(Boolean));
+    return { read: ids };
   }
 
   // Metadata only, for main's notices: who each unread note is for and from. Never the text.
@@ -93,6 +104,7 @@ export function createNotes({ log, now = Date.now, halted = () => false, record 
     op(name, args) {
       if (name === 'note') return note(args);
       if (name === 'notes') return notes(args);
+      if (name === 'notes_ack') return ack(args);
       if (name === 'notes_pending') return pending();
       if (name === 'notified') return notified(args);
       return { reason: 'VALIDATION', message: 'unknown note op' };

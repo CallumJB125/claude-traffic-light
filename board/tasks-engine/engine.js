@@ -116,7 +116,8 @@ export class ApiError extends Error {
   constructor(code, message, details) { super(message); this.code = code; this.details = details; }
 }
 
-const MAIN_ONLY = new Set(['note', 'notes', 'notes_pending', 'notified']);
+// The note ops: main's only, over the utilityProcess parentPort (board/tasks-engine/parent-bus.js), never the socket.
+export const MAIN_ONLY = new Set(['note', 'notes', 'notes_ack', 'notes_pending', 'notified']);
 
 export function defaultMaxParallel(ramGb) {
   return ramGb >= 32 ? 4 : ramGb >= 16 ? 2 : 1;
@@ -136,12 +137,8 @@ export class TasksEngine extends EventEmitter {
    * env (the parent env the allowlist is built from), maxParallel (≤ 8), retentionDays, retentionMax,
    * mcpServer, interruptWaitMs, stopGraceMs, tickMs.
    */
-  // Main's capability for MAIN_ONLY bus ops (src/tasks-process.js): set once, never logged, never on disk.
-  #mainKey = null;
-
-  constructor({ mainKey, ...opts }) {
+  constructor(opts) {
     super();
-    this.setMainKey(mainKey);
     this.opts = opts;
     this.dataDir = opts.dataDir;
     this.store = opts.store;
@@ -2144,18 +2141,15 @@ export class TasksEngine extends EventEmitter {
     return this.getLimits();
   }
 
-  setMainKey(hex) {
-    if (this.#mainKey || typeof hex !== 'string' || !/^[0-9a-f]{64}$/.test(hex)) return;
-    this.#mainKey = Buffer.from(hex, 'hex');
-  }
-
+  // Main's own call: only parent-bus.js sets viaParent, for a message that came over the utilityProcess
+  // parentPort. The socket transport builds its ctx from a fixed literal ({principal, auth}), so no socket peer
+  // can ever set it (PR B review point 1); an inherited or truthy-but-not-true value does not count.
   #isMain(ctx) {
-    const k = typeof ctx.mainKey === 'string' && /^[0-9a-f]{64}$/.test(ctx.mainKey) ? Buffer.from(ctx.mainKey, 'hex') : null;
-    return !!(this.#mainKey && k && k.length === this.#mainKey.length && crypto.timingSafeEqual(k, this.#mainKey));
+    return !!ctx && Object.hasOwn(ctx, 'viaParent') && ctx.viaParent === true;
   }
 
-  /** The agent bus (board/AGENT-BUS.md): main's own client only; a relay never reaches it. The note ops also need
-   *  main's key, since tasks.token is on disk for any same-user process (the buddy CLI, a model's shell). */
+  /** The agent bus (board/AGENT-BUS.md): main's own client only; a relay never reaches it. The note ops come only
+   *  over parentPort, since tasks.token is on disk for any same-user process (the buddy CLI, a model's shell). */
   async bus({ op, args = {}, caller = null }, ctx = {}) {
     if (this.principal(ctx)?.kind === 'relay') throw new ApiError('POLICY_DENIED', 'only the local app can use the agent bus');
     if (!BUS_OPS.includes(op)) throw new ApiError('VALIDATION', 'unknown bus op');

@@ -468,7 +468,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
         return { ok: true, halted: false };
       }
       // From main only: who sends and who receives were settled there, from the calling process.
-      case 'note': case 'notes': case 'notes_pending': case 'notified': return notes.op(name, rawArgs);
+      case 'note': case 'notes': case 'notes_ack': case 'notes_pending': case 'notified': return notes.op(name, rawArgs);
       default: throw new BusRefusal('VALIDATION', 'unknown bus op');
     }
   }

@@ -30,7 +30,7 @@ const SERVERS = [{ command: PLEX, args: ['--disable-sigusr1', ASAR, '--profile',
 // A fake process table behind /bin/ps, /usr/sbin/lsof and /usr/bin/codesign; git runs for real. It answers the
 // call shapes of this branch and of the commit the review looked at (71283064), so the review's proofs of concept
 // below run against both.
-function world(t, { platform = 'darwin' } = {}) {
+function world(t, { platform = 'darwin', at = Date.now() } = {}) {
   const dir = fs.realpathSync(testTempDir('pf-bind-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const home = path.join(dir, 'home');
@@ -94,7 +94,7 @@ function world(t, { platform = 'darwin' } = {}) {
     }
     return none();
   };
-  const now = Date.now();
+  const now = at;
   const state = { config: {}, sessions: [] };
   const logs = [];
   // A Codex rollout under CODEX_HOME whose first line names the thread, as Codex writes it.

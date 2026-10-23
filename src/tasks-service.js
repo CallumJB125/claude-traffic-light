@@ -188,9 +188,9 @@ function createTasksService(opts) {
     setConn('connecting');
     let c;
     try {
-      const helper = await opts.ensureSupervisor?.();
+      await opts.ensureSupervisor?.();
       if (stopped) return;
-      c = await api.client.connect({ env: { ...process.env, BOARD_HOME: opts.boardHome }, client: { name: 'plexiform-tasks', version: '1' }, mainKey: helper?.mainKey ?? null });
+      c = await api.client.connect({ env: { ...process.env, BOARD_HOME: opts.boardHome }, client: { name: 'plexiform-tasks', version: '1' } });
       if (stopped) { c.close(); return; }
     } catch (e) {
       throw Object.assign(new Error('connect'), { code: codeOf(e) });
@@ -742,7 +742,16 @@ function createTasksService(opts) {
   // so this waits for it (bounded) and for the connection's bus context push. A helper that cannot start, or
   // exits mid-call, rejects here and the /bus relay answers tasks_helper_unavailable at once.
   // Worst case for one op stays under the /bus relay's 30 s deadline: 10 s to connect, 5 s for context, 12 s for the op.
+  // The note ops (MAIN_ONLY in board/tasks-engine/engine.js) go only over the helper's parentPort (opts.busMain,
+  // src/tasks-process.js), never the socket, which refuses them; with no parentPort (a dev fixture home) they are
+  // UNAVAILABLE, with no fallback.
+  const NOTE_OPS = new Set(['note', 'notes', 'notes_ack', 'notes_pending', 'notified']);
   async function bus(op, args = {}, caller = null) {
+    if (NOTE_OPS.has(op)) {
+      if (typeof opts.busMain !== 'function') throw Object.assign(new Error('unavailable'), { code: 'UNAVAILABLE' });
+      try { await opts.ensureSupervisor?.(); } catch { throw Object.assign(new Error('unavailable'), { code: 'SUPERVISOR_UNREACHABLE' }); }
+      return opts.busMain(op, args);
+    }
     try { await opts.ensureSupervisor?.(); } catch { throw Object.assign(new Error('unavailable'), { code: 'SUPERVISOR_UNREACHABLE' }); }
     start();
     const until = now() + 10_000;

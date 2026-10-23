@@ -55,6 +55,8 @@ export const NoteArgs = z.object({
   text: z.string().trim().min(1).max(NOTE_LIMITS.text), request_id: requestId, ttl_s: z.number().int().min(60).max(NOTE_LIMITS.maxTtlS).optional(),
 }).strict();
 export const NotesArgs = z.object({ me: z.object({ key: sessionKey }).strict(), status: z.literal(true).optional(), note_id: noteId.optional() }).strict();
+// Main got the bodies of these notes (a bus_notes answer): only now are they read, so a lost answer never loses a note.
+export const NotesAckArgs = z.object({ me: z.object({ key: sessionKey }).strict(), note_ids: z.array(noteId).min(1).max(NOTE_LIMITS.read) }).strict();
 export const NotifiedArgs = z.object({ to: z.object({ key: sessionKey }).strict(), note_ids: z.array(noteId).min(1).max(NOTE_LIMITS.queued) }).strict();
 
 // The run surface (board/mcp/task-tools.js; source, hop and visited come from the run, never the caller).

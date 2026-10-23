@@ -56,7 +56,7 @@ No new dependencies (CONTRACT.md §1). `face.js`, `protocol.js`, `validate.js` a
 | Client token read | `client.readToken()` refuses a token file with any group/other permission bits or owned by another uid (`FORBIDDEN`), so a loosened file is noticed, not used |
 | Peer uid | Node has no `getpeereid`/`SO_PEERCRED` API. The OS-level guard is the 0700 `BOARD_HOME` + 0600 socket; the token is the second factor. A native peer-uid check is optional later (it would reject a peer uid ≠ the supervisor's uid) |
 | Windows (later, spec only) | Named pipe `\\.\pipe\buddy-board-<sha256(user SID)[0..16]>` created with a DACL granting only the current user SID (and SYSTEM), `PIPE_REJECT_REMOTE_CLIENTS`. Token file `%LOCALAPPDATA%\Buddy\board\tasks.token` with an ACL for the current user only. Same framing and methods; `net.createConnection(pipePath)` works unchanged in `client.js` |
-| Handshake | The first request on a connection must be `hello {protocol, client:{name, version}, mainKey?}`; anything else first → `VALIDATION` ("send hello first"). `protocol ≠ 1` → `PROTOCOL_UNSUPPORTED` with `details.protocol` = the server's version. `mainKey` (64 hex) is the desktop app's capability for the note bus ops (`note`, `notes`, `notes_pending`, `notified`): the app makes a fresh one per helper process and hands it over parentPort, never env, argv or disk; without the matching key those ops are `POLICY_DENIED`, so the file token alone (the CLI, any same-user process) cannot read or send notes. The key is taken on a connection's first `hello` only: a later `hello` carrying `mainKey` → `POLICY_DENIED` and the connection is closed, and a later `hello` without one keeps what the first set |
+| Handshake | The first request on a connection must be `hello {protocol, client:{name, version}}`; anything else first → `VALIDATION` ("send hello first"). `protocol ≠ 1` → `PROTOCOL_UNSUPPORTED` with `details.protocol` = the server's version. The note bus ops (`note`, `notes`, `notes_ack`, `notes_pending`, `notified`) are never served on this socket: the desktop app sends them over the helper's Electron parentPort (`board/tasks-engine/parent-bus.js`), which no other process can reach, so on the socket they are always `POLICY_DENIED`, whatever the token or the frame says. A `hello` carrying `mainKey` (the capability these ops used before) → `POLICY_DENIED` and the connection is closed. |
 | Rotation | Deleting `tasks.token` and restarting the supervisor rotates it; open connections stay authenticated until closed |
 
 ## 4. Frames
@@ -79,7 +79,7 @@ push      {push:'event', sub, event}
 
 | Method | Params (`$defs`) | Result (`$defs`) | Errors |
 |---|---|---|---|
-| `hello` | `HelloParams {protocol, client, mainKey?}` | `HelloResult {protocol, serverVersion, epoch, mock}` | `PROTOCOL_UNSUPPORTED` |
+| `hello` | `HelloParams {protocol, client}` | `HelloResult {protocol, serverVersion, epoch, mock}` | `PROTOCOL_UNSUPPORTED` |
 | `createTask` | `CreateTaskParams {requestId, spec:TaskSpec}` | `CreateTaskResult {id, duplicate}` | `VALIDATION`, `CONFLICT`, `POLICY_DENIED`, `AI_UNAVAILABLE`, `CAPABILITY_MISSING`, `IN_PLACE_BUSY`, `DISK_FULL`, `BUDGET_EXCEEDED` |
 | `listTasks` | `ListTasksParams {includeDone?, after?, limit?}` (includeDone default true; one page in creation order, `after` = the previous page's last id, `limit` 1–500, default 200) | `ListTasksResult [TaskView]` | — |
 | `getTask` | `GetTaskParams {id}` | `TaskDetail` | `NOT_FOUND` |

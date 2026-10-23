@@ -348,3 +348,18 @@ test('the engine spend cap: BUDGET_HELD first, then Start anyway through the nat
     assert.equal(ok.ok, true, JSON.stringify(ok));
   } finally { capped.stop(); await capSrv.close(); fs.rmSync(capDir, { recursive: true, force: true }); }
 });
+
+test('PR B: the note ops go only to busMain (the helper\'s parentPort); with none they are UNAVAILABLE and nothing is tried on the socket', async () => {
+  let loads = 0;
+  const loadApi = async () => { loads += 1; throw Object.assign(new Error('the socket client must not be loaded'), { code: 'ERR_MODULE_NOT_FOUND' }); };
+  const none = createTasksService({ boardHome: '/nonexistent', homeDir: '', loadApi });
+  for (const op of ['note', 'notes', 'notes_ack', 'notes_pending', 'notified']) {
+    assert.equal((await none.bus(op, {}).catch((e) => e)).code, 'UNAVAILABLE', op);
+  }
+  const calls = [];
+  const svc = createTasksService({ boardHome: '/nonexistent', homeDir: '', loadApi, ensureSupervisor: async () => ({}), busMain: async (op, args) => { calls.push([op, args]); return { ok: op }; } });
+  assert.deepEqual(await svc.bus('notes', { me: { key: 'claude|X' } }), { ok: 'notes' });
+  assert.deepEqual(calls, [['notes', { me: { key: 'claude|X' } }]]);
+  assert.equal(loads, 0, 'no socket connection was attempted for a note op');
+  none.stop(); svc.stop();
+});
