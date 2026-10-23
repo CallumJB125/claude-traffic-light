@@ -579,3 +579,56 @@ test('M1: restoring folder modes never follows a link and never touches anything
   assert.equal(fs.statSync(victim).mode & 0o7777, 0o755, 'the link target\'s mode is unchanged');
   assert.deepEqual(backupsOf(s), []);
 });
+
+// Review #54 M2 (poc10): a subfolder swapped for a link while it's copied,
+// then put back. Setting modes from the source side went through the copied
+// link and chmod'ed the folder it pointed to, outside the backup.
+test('M2: a subfolder swapped for a link and back during the copy never changes a mode outside the backup', () => {
+  const s = setup();
+  fs.mkdirSync(path.join(s.fx.dir, 'sub', 'inner'), { recursive: true });
+  fs.chmodSync(path.join(s.fx.dir, 'sub', 'inner'), 0o700);
+  const victim = path.join(s.home, 'victim');
+  fs.mkdirSync(path.join(victim, 'inner'), { recursive: true });
+  fs.chmodSync(path.join(victim, 'inner'), 0o755);
+  fs.chmodSync(victim, 0o755);
+  const S = path.join(s.fx.dir, 'sub'), HOLD = path.join(s.home, 'hold');
+  let swapped = false, restored = false;
+  const fsApi = new Proxy(fs, { get: (tg, k) => {
+    if (k === 'mkdirSync') return (p, o) => { const r = tg.mkdirSync(p, o); if (/claude-agents-\d/.test(String(p)) && !swapped) { swapped = true; tg.renameSync(S, HOLD); tg.symlinkSync(victim, S); } return r; };
+    if (k === 'symlinkSync') return (t, p, ty) => { const r = tg.symlinkSync(t, p, ty); if (swapped && !restored && String(p).includes('agent-backups') && path.basename(String(p)) === 'sub') { restored = true; tg.unlinkSync(S); tg.renameSync(HOLD, S); } return r; };
+    return tg[k];
+  } });
+  const r = s.inst(shipped, { fsApi }).adopt();
+  assert.ok(swapped && restored, 'the race ran');
+  assert.equal(r.ok, false);
+  assert.equal(fs.lstatSync(path.join(victim, 'inner')).mode & 0o7777, 0o755, 'victim/inner unchanged');
+  assert.equal(fs.lstatSync(victim).mode & 0o7777, 0o755, 'victim unchanged');
+  assert.deepEqual(backupsOf(s), [], 'no backup left');
+  assert.equal(ownedCount(s), 0, 'nothing adopted');
+  assert.deepEqual(s.it.status().ops ?? [], [], 'no op');
+});
+
+// Review #54 L2 nit: [ -e ] is false for a dangling link, so a planted one
+// would be written through. Both checks also test -L.
+test('L2: a dangling link where a restore folder would go counts as there, so nothing is copied or moved', { skip: process.platform !== 'darwin' }, () => {
+  const s = setup();
+  s.it = createAgentInstaller({ home: s.home, dataRoot: path.join(s.home, 'Library', 'Plexiform'), catalog: shipped, ledgerKey: Buffer.alloc(32, 9) });
+  const a = s.it.adopt();
+  assert.equal(a.ok, true, a.error);
+  const tag = a.backup.replace(/^claude-agents-/, '');
+  const [copy, swap] = s.it.restoreCommand(a.backup).split('\n');
+  assert.ok(copy.includes(`[ -L "$HOME/.claude/agents-restored-${tag}" ]`) && swap.includes(`[ -L "$HOME/.claude/agents-old-${tag}" ]`));
+  const sh = (line) => execFileSync('/bin/sh', ['-c', line], { env: { ...process.env, HOME: s.home } }).toString();
+  const live = s.fp();
+  const elsewhere = path.join(s.home, 'not-here');
+  const R = path.join(s.home, '.claude', `agents-restored-${tag}`), O = path.join(s.home, '.claude', `agents-old-${tag}`);
+  fs.symlinkSync(elsewhere, R);
+  assert.match(sh(copy), /nothing was copied/);
+  assert.equal(fs.existsSync(elsewhere), false, 'nothing written through the link');
+  fs.unlinkSync(R);
+  assert.equal(sh(copy), '');
+  fs.symlinkSync(elsewhere, O);
+  assert.match(sh(swap), /nothing was moved/);
+  assert.equal(fs.existsSync(elsewhere), false);
+  assert.deepEqual(s.fp(), live, 'the live folder is where it was');
+});
