@@ -366,7 +366,7 @@ test('scrubTitle: named commit hashes, version numbers and test ids stay; a MAC 
   const { scrubTitle } = require('../src/scrub.js');
   const H = '3f2c9a0e4b1d8c7f6e5a4b3c2d1e0f9a8b7c6d5e';
   for (const keep of [`commit ${H}`, `reverts ${H}`, `sha: ${H}`, `cherry-picked ${H}`, `see github.com/acme/app/commit/${H}`,
-    'version 1.2.3.4', 'APP_VERSION=1.2.3.4', 'ver. 0.9.0.101', 'IDs 0123 4567 8901', 'id 0123456789', 'id 01234567890', 'id 9876543210']) assert.equal(scrubTitle(keep), keep, keep);
+    'version 1.2.3.4', 'ver. 0.9.0.101', 'IDs 0123 4567 8901', 'id 0123456789', 'id 01234567890', 'id 9876543210']) assert.equal(scrubTitle(keep), keep, keep);
   // A bare 40-hex run may be a legacy GitHub token; an address after a non-version word stays [ip].
   for (const [input, want] of [[`token ${H}`, 'token [redacted]'], [H, '[redacted]'], ['ssh root@10.0.0.5', 'ssh root@[ip]'], ['server=10.0.0.5', 'server=[ip]'],
     ['driver 1.2.3.4', 'driver [ip]'], ['call 082 555 0199', 'call [phone]'], ['mac 00:1a:2b:3c:4d:5e', 'mac [mac]'], ['mac 00-1A-2B-3C-4D-5E', 'mac [mac]'],
@@ -385,3 +385,14 @@ test('scrubTitle: three or more labels stay a host unless clearly code; internal
     'index.d.mts', 'jest.config.cts', 'app.config.prod.json', 'src/app.config.ts', 'api.v1.core', 'docs.python.org']) assert.equal(scrubTitle(keep), keep, keep);
 });
 
+test('scrubTitle: only commit words keep a hash; version words need a boundary and never keep a private address (#59 review)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  const H = '0d4fc953a1b2c3d4e5f60718293a4b5c6d7e8f90';
+  for (const keep of [`/commit/${H}`, `see commit/${H}`, `https://github.com/acme/app/commit/${H}`, `sha ${H}`, `sha1 ${H}`, `merged ${H}`, 'version 1.2.3.4', 'Version: 1.2.3.4']) {
+    assert.equal(scrubTitle(keep), keep, keep);
+  }
+  for (const [input, want] of [[`password hash ${H}`, 'password [redacted] [redacted]'], [`hash ${H}`, 'hash [redacted]'],
+    ['version=10.0.0.5', 'version=[ip]'], ['ip_version: 10.0.0.5', 'ip_version: [ip]'], ['Version: 192.168.1.10', 'Version: [ip]'],
+    ['version 127.0.0.2', 'version [ip]'], ['version 169.254.1.1', 'version [ip]'], ['version 172.16.0.9', 'version [ip]'], ['version 100.101.2.3', 'version [ip]'],
+    ['APP_VERSION=1.2.3.4', 'APP_VERSION=[ip]'], ['subversion 1.2.3.4', 'subversion [ip]']]) assert.equal(scrubTitle(input), want, input);
+});

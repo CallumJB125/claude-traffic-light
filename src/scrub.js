@@ -450,14 +450,19 @@ const foldSpaces = (t) => t.replace(/(?<=\S)[ \t]{2,}/g, ' ');
 
 // A full commit hash named as one ("commit 3f2c…", ".../commit/3f2c…") is no secret.
 // Elsewhere a 40-hex run stays redacted: legacy GitHub tokens look the same.
-const GIT_HASH = /\b((?:commits?|sha(?:1|256)?|rev(?:ision)?|reverts?|reverted|cherry-pick(?:ed)?|merged?|hash)\b\s*[:#]?\s*|\/commit\/)([0-9a-f]{40}|[0-9a-f]{64})\b/gi;
+// Only commit words count: "password hash <hex>" is a secret's hash, not a commit.
+const GIT_HASH = /(\b(?:commits?|sha(?:1|256)?|rev(?:ision)?|reverts?|reverted|cherry-pick(?:ed)?|merged?)\b\s*[:#]?\s*|\bcommit\/)([0-9a-f]{40}|[0-9a-f]{64})\b/gi;
 // A MAC address names a device.
 const MAC = /(?<![\w:.-])[0-9a-f]{2}([:-])(?:[0-9a-f]{2}\1){4}[0-9a-f]{2}(?![\w:.-])/gi;
 // After "/" a bare name is checked like any other (fix/db1.corp.acme.internal); file
 // paths stay because their last label is an extension or no real top-level domain.
 const TITLE_HOST = /(?<![\w.@:\\-])(?=([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8}))\1(?![\w-]|\.\w)(:\d{1,5}(?!\d))?/gi;
-// "version 1.2.3.4" is a version; a 4-part number elsewhere may be an address.
-const VERSION_WORD = /(?:^|[^a-z])(?:version|ver)\.?\s*[:=]?\s*$/i;
+// "version 1.2.3.4" is a version; a 4-part number elsewhere may be an address. The word
+// stands alone (not "ip_version", "subversion"), and "version=" is a setting, not prose.
+// A private, loopback, link-local or CGNAT (tailnet) address is never a version.
+const VERSION_WORD = /(?<![\w-])(?:version|ver)\.?\s*:?\s*$/i;
+const PRIVATE_V4 = /^(?:10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/;
+const versionNumber = (m, at, all) => !PRIVATE_V4.test(m) && VERSION_WORD.test(all.slice(Math.max(0, at - 24), at));
 
 // Text on its way to a team hub or a teammate (review L2): a title, a task's report.
 // Unlike scrub() it labels what it removes ([ip], [host], [phone], [email]) instead of
@@ -473,7 +478,7 @@ function scrubText(text, { hubHost = null } = {}) {
   out = out.replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8})(:\d{1,5})?/gi, (m, scheme, host, port) => (privateHost(host, port, hub, { inUrl: true }) ? `${scheme}[host]` : m));
   out = out.replace(MAC, '[mac]');
   // "1.2.3.4-beta" is a version with a prerelease tag, not an address.
-  out = out.replace(PATTERNS.IPV4, (m, at, all) => (KEEP_IPS.has(m) || /^-[a-z]/i.test(all.slice(at + m.length)) || VERSION_WORD.test(all.slice(Math.max(0, at - 24), at)) ? m : '[ip]'));
+  out = out.replace(PATTERNS.IPV4, (m, at, all) => (KEEP_IPS.has(m) || /^-[a-z]/i.test(all.slice(at + m.length)) || versionNumber(m, at, all) ? m : '[ip]'));
   // IPv6 needs a digit: "a::b" and "std::vector" are code.
   out = out.replace(PATTERNS.IPV6, (m) => (KEEP_IPS.has(m) || !/\d/.test(m) ? m : '[ip]'));
   out = out.replace(TITLE_HOST, (m, host, port) => (privateHost(host, port, hub) ? '[host]' : m));
