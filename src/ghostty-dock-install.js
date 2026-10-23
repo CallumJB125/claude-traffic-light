@@ -50,6 +50,8 @@ function scriptBody(file, dir) {
   const claim = path.join(dir, 'started');
   const say = (line) => `print -r -- ${quote(line)}`;
   return ['#!/bin/zsh',
+    // So `curl -f … | bash` reports curl's failure, not bash's 0 from reading nothing.
+    'setopt pipefail',
     `/bin/mkdir ${quote(claim)} 2>/dev/null || exit 0`,
     `/bin/rm -f ${quote(file)}`,
     `trap ${quote(`/bin/rm -rf ${quote(dir)}`)} EXIT`,

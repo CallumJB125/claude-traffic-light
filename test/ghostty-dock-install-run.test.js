@@ -1,7 +1,8 @@
 'use strict';
 // The real one-use install script, run by zsh in a temp folder with only its
 // installer line swapped for a stub, so nothing is downloaded or installed.
-// Security review L2: any typed line installed.
+// Security review L2 (any typed line installed) and L3 (a failed download
+// still said "Done.").
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -43,4 +44,11 @@ test('L2: Return alone, y or Y installs', () => {
     assert.equal(r.code, 0);
   }
   assert.match(runScript('\n').out, /Press Return or type y to install; anything else cancels\./);
+});
+
+test('L3: a failed download in the pipe is reported as a failure, not "Done."', () => {
+  const r = runScript('\n', '/usr/bin/false | /bin/bash');
+  assert.doesNotMatch(r.out, /Done\./);
+  assert.match(r.out, /The installer stopped with code 1\./);
+  assert.equal(r.code, 1);
 });

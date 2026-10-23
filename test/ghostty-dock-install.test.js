@@ -41,9 +41,10 @@ test('the one-use script prints the command, waits for Return, then runs exactly
     const body = fs.readFileSync(s.file, 'utf8');
     const lines = body.split('\n');
     assert.equal(lines[0], '#!/bin/zsh');
-    assert.match(lines[1], /^\/bin\/mkdir '.*\/started' 2>\/dev\/null \|\| exit 0$/);
-    assert.match(lines[2], /^\/bin\/rm -f '.*continue\.command'$/);
-    assert.match(lines[3], /^trap '.*rm -rf.*' EXIT$/);
+    assert.equal(lines[1], 'setopt pipefail');
+    assert.match(lines[2], /^\/bin\/mkdir '.*\/started' 2>\/dev\/null \|\| exit 0$/);
+    assert.match(lines[3], /^\/bin\/rm -f '.*continue\.command'$/);
+    assert.match(lines[4], /^trap '.*rm -rf.*' EXIT$/);
     const ask = lines.findIndex((l) => l.includes('Press Return or type y to install; anything else cancels.'));
     const read = lines.indexOf('IFS= read -r reply || exit 1');
     const runs = lines.indexOf(UPSTREAM);
