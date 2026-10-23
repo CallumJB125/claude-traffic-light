@@ -68,6 +68,8 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
       // per-run sockets at <profile>/tasks/run/<id>/ipc.sock. Under macOS's /var/folders
       // temp dir that is 103 or 104 bytes depending on the pid; AF_UNIX allows 103.
       ...(process.platform === 'darwin' ? { TMPDIR: '/tmp' } : {}),
+      // No voice helper, built or not: Settings shows the same Voice block on every machine.
+      PLEXIFORM_VOICE_HELPER_PATH: path.join(home, 'no-voice-helper', 'buddy-listen'),
       ...env,
     },
   });

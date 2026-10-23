@@ -4,6 +4,19 @@
 //
 // The helper keeps audio in memory only; this side only ever sees text.
 const readline = require('readline');
+const path = require('path');
+
+// Where the helper binary is. A packaged app only ever uses its own bundled copy.
+// A dev or test run may name another with PLEXIFORM_VOICE_HELPER_PATH (absolute
+// paths only), so the visual suite sees the same "not built" state on every machine
+// whether or not `npm run voice-helper` was run there.
+const HELPER_PATH_ENV = 'PLEXIFORM_VOICE_HELPER_PATH';
+function helperPathFor({ packaged, env = {}, resourcesPath = '', appDir = '' } = {}) {
+  if (packaged === true) return path.join(resourcesPath, 'voice', 'buddy-listen');
+  const override = env[HELPER_PATH_ENV];
+  if (typeof override === 'string' && override && path.isAbsolute(override) && !override.includes('\0')) return override;
+  return path.join(appDir, 'native', 'voice', 'build', 'buddy-listen');
+}
 
 const FRIENDLY = {
   'speech-denied': 'Speech recognition is off for Plexiform. Turn it on in System Settings, Privacy and Security, Speech Recognition.',
@@ -146,4 +159,4 @@ function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, ma
   return { promise, cancel };
 }
 
-module.exports = { createListener, createFlow, askClaude, friendly, STOP_GRACE_MS };
+module.exports = { createListener, createFlow, askClaude, friendly, helperPathFor, HELPER_PATH_ENV, STOP_GRACE_MS };
