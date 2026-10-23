@@ -19,7 +19,8 @@ async function actual(t, overrides = {}) {
   const dir = tmp(t), f = await tenancy(); t.after(() => f.h.close()); let share = false;
   const user = f.users.amember, client = createAccountClient({ origin: f.h.base,
     store: { load: () => ({ hub: f.h.base, token: user.token, device_id: user.device_id, user: { id: user.id } }), clear() {} } });
-  const setup = { file: path.join(dir, 'capture.json'), host: 'fixture', now: () => f.h.hub.wallMs(), resolveRepo: async () => 'github.com/shared/app',
+  // Automatic cards start off on a new install (createWorkCapture's startEnabled); these tests are about an enabled one.
+  const setup = { startEnabled: true, file: path.join(dir, 'capture.json'), host: 'fixture', now: () => f.h.hub.wallMs(), resolveRepo: async () => 'github.com/shared/app',
     getRoutes: async () => { const r = await client.captureRoutes(); assert.equal(r.ok, true); return { ...r,
       routes: r.routes.map((route) => ({ ...route, hub: f.h.base, user_id: user.id, share_summaries: share })) }; },
     sendTeam: (destination, body) => client.captureWork(destination.team_id, destination.board_id, body),
