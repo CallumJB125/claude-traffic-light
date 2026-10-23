@@ -105,6 +105,19 @@ function uninstall({ home, name = NAME, marker = null }) {
   });
 }
 
+// Our entry, rewritten in place: to(cur) → the new entry, or null to leave it. Decided on what this atomic edit read,
+// so a change landing in between is never overwritten.
+function rewrite({ home, name = NAME, to }) {
+  return edit(home, (data) => {
+    const cur = data.mcpServers && data.mcpServers[name];
+    if (!isOurs(cur, name)) return { changed: false };
+    const next = to(cur);
+    if (!next || JSON.stringify(next) === JSON.stringify(cur)) return { changed: false };
+    data.mcpServers = { ...data.mcpServers, [name]: next };
+    return { changed: true };
+  });
+}
+
 function status({ home, entry, name = NAME }) {
   let cur = null;
   let error = null;
@@ -112,4 +125,4 @@ function status({ home, entry, name = NAME }) {
   return { installed: isOurs(cur, name), current: !!entry && JSON.stringify(cur) === JSON.stringify(entry), name, path: configPath(home), entry: cur, error };
 }
 
-module.exports = { NAME, BUS_NAME, MARKER, NODE_FLAGS, nodeHasFlags, markerFor, markerOf, configPath, launch, isOurs, install, uninstall, status };
+module.exports = { NAME, BUS_NAME, MARKER, NODE_FLAGS, nodeHasFlags, markerFor, markerOf, configPath, launch, isOurs, install, uninstall, rewrite, status };

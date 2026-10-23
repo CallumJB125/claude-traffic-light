@@ -77,14 +77,12 @@ function create({ rootDir, home, config, launch, codexBin, codexEnv = process.en
   // binds a caller to a server started that way, so it is rewritten with the flag. Anything else under that name
   // (another copy's, or the person's own edit) is left as it is.
   const canon = (e) => JSON.stringify({ type: e.type || 'stdio', command: e.command, args: e.args, env: Object.fromEntries(Object.entries(e.env && typeof e.env === 'object' ? e.env : {}).sort()) });
+  // Only args change: keys the person added (timeout, alwaysAllow) stay, and the match is made inside the atomic edit.
   function upgradeFull() {
     const want = mcpInstall.launch(launch);
-    const cur = mcpInstall.status({ home, entry: want });
-    if (cur.error || !cur.installed || cur.current || !cur.entry || !Array.isArray(cur.entry.args)) return false;
     if (!McpInstall.NODE_FLAGS.every((f) => want.args.includes(f))) return false;
-    const before = { ...want, args: want.args.filter((a) => !McpInstall.NODE_FLAGS.includes(a)) };
-    if (canon(cur.entry) !== canon(before)) return false;
-    return !!mcpInstall.install({ home, entry: want }).changed;
+    const before = canon({ ...want, args: want.args.filter((a) => !McpInstall.NODE_FLAGS.includes(a)) });
+    return !!mcpInstall.rewrite({ home, to: (cur) => (Array.isArray(cur.args) && canon(cur) === before ? { ...cur, args: want.args } : null) }).changed;
   }
 
   function addClaude(rec) {

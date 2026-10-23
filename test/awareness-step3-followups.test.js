@@ -178,3 +178,25 @@ test('L5: every node --test in the npm test scripts has a --test-timeout', () =>
     for (const r of runs) assert.ok(Number((/--test-timeout=(\d+)/.exec(r) || [])[1]) >= 120000, `${f}: ${r}`);
   }
 });
+
+test('L5 (PR #35 review): keys the person added to the old claude-buddy (timeout, alwaysAllow) survive the rewrite; only args change', async (t) => {
+  const w = mcpWorld(t);
+  const old = { ...withoutFlag(McpInstall.launch(PACKAGED)), timeout: 30000, alwaysAllow: ['buddy_sessions'] };
+  fs.writeFileSync(path.join(w.home, '.claude.json'), JSON.stringify({ mcpServers: { 'claude-buddy': old } }, null, 2));
+  await w.make().sync();
+  assert.deepEqual(w.claudeJson().mcpServers['claude-buddy'], { ...old, args: McpInstall.launch(PACKAGED).args });
+});
+
+test('L5 (PR #35 review): the old-entry check is made on what the atomic edit read, so an edit landing after the first look is kept', async (t) => {
+  const w = mcpWorld(t);
+  const file = path.join(w.home, '.claude.json');
+  const old = withoutFlag(McpInstall.launch(PACKAGED));
+  const edited = { ...old, args: [...old.args, '--verbose'] };
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: { 'claude-buddy': old } }, null, 2));
+  // The person's edit lands right after Plexiform first reads the file.
+  let once = false;
+  const racing = { ...McpInstall, status(o) { const r = McpInstall.status(o); if (!once) { once = true; fs.writeFileSync(file, JSON.stringify({ mcpServers: { 'claude-buddy': edited } }, null, 2)); } return r; } };
+  const auto = McpAuto.create({ rootDir: w.root, home: w.home, config: () => w.state.config, launch: PACKAGED, mcpInstall: racing, codexBin: () => null, codexEnv: { PATH: '/usr/bin:/bin', CODEX_HOME: w.codexHome }, trustCodexBin: async (b) => b });
+  await auto.sync();
+  assert.deepEqual(w.claudeJson().mcpServers['claude-buddy'], edited);
+});
