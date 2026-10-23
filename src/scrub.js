@@ -339,19 +339,47 @@ function phoneOk(m) {
   return digits >= 9 && digits <= 15;
 }
 // Private names that need no third label: nas.local, jenkins.corp, api.internal.
-const PRIVATE_SUFFIX = /\.(?:local|lan|internal|corp|intranet|home\.arpa)$/;
+const PRIVATE_SUFFIX = /\.(?:local|lan|internal|corp|intranet|home\.arpa|svc)$/;
 // A tailnet name is kept only when it is the hub the text is going to; with no hub
 // given (diagnostics) every tailnet name is kept, as before.
 const tailnetKept = (h, hubHost) => /\.ts\.net$/.test(h) && (hubHost === undefined || h === hubHost);
 // File names look like dotted host names (foo.test.js); a last label that is a code or
 // document extension is a file, not a host.
-const FILE_EXTS = new Set(['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'md', 'mdx', 'html', 'htm', 'css', 'scss', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'cs', 'php', 'sh', 'zsh', 'yml', 'yaml', 'toml', 'lock', 'txt', 'log', 'xml', 'svg', 'png', 'jpg', 'gif', 'sql', 'vue', 'svelte', 'map', 'snap', 'plist', 'env', 'ini', 'cfg', 'conf', 'pdf', 'csv', 'zip', 'gz', 'tar', 'wasm', 'dart', 'lua', 'ex', 'exs', 'erl', 'hs', 'ml', 'scala', 'gradle', 'mod', 'sum']);
-const privateHost = (host, port, hubHost = null) => {
+const FILE_EXTS = new Set(['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'md', 'mdx', 'html', 'htm', 'css', 'scss', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'cs', 'php', 'sh', 'zsh', 'yml', 'yaml', 'toml', 'lock', 'txt', 'log', 'xml', 'svg', 'png', 'jpg', 'gif', 'sql', 'vue', 'svelte', 'map', 'snap', 'plist', 'env', 'ini', 'cfg', 'conf', 'pdf', 'csv', 'zip', 'gz', 'tar', 'wasm', 'dart', 'lua', 'ex', 'exs', 'erl', 'hs', 'ml', 'scala', 'gradle', 'mod', 'sum', 'mts', 'cts', 'mdc']);
+// A bare name (no scheme) is a host only when it ends in a real top-level domain: any
+// two-letter country code, the common generic ones, or a private suffix. "api.v1.core",
+// "com.anthropic.claude" and "Dockerfile.prod.arm64" are not. An unknown or new
+// generic TLD reads as not a host; a country code that is also a file extension
+// (notes.final.pt) reads as a host, the safe direction.
+const GENERIC_TLDS = new Set(('com net org edu gov mil int arpa info biz name pro mobi aero coop museum jobs travel tel asia cat post '
+  + 'io co ai app dev tech cloud xyz site online page blog shop store live news one top club design art wiki work works world zone '
+  + 'agency academy band bar best bio blue cafe cam capital care cash center city codes coffee company computer consulting digital '
+  + 'email energy engineering expert fun games global gmbh group guru host inc institute international link ltd market marketing '
+  + 'media moe network ninja nyc plus press run sale school science services social software solutions space studio systems team '
+  + 'technology today tools town university vip website build systems google amazon microsoft apple').split(' '));
+const realTld = (h) => {
+  const tld = h.slice(h.lastIndexOf('.') + 1);
+  return /^[a-z]{2}$/.test(tld) || GENERIC_TLDS.has(tld) || tld.startsWith('xn--') || PRIVATE_SUFFIX.test(h);
+};
+// Public developer sites: the registrable domain and a few well-known service names under
+// it stay. Any other name under it (secret-project.anthropic.com, callum.github.com) can
+// name a private project or a person, so it goes.
+const KEEP_DOMAINS = new Set(['python.org', 'google.com', 'github.com', 'githubusercontent.com', 'gitlab.com', 'bitbucket.org', 'npmjs.com',
+  'npmjs.org', 'nodejs.org', 'mozilla.org', 'microsoft.com', 'apple.com', 'anthropic.com', 'claude.ai', 'stackoverflow.com', 'readthedocs.io']);
+const KEEP_SERVICES = new Set(['www', 'docs', 'api', 'raw', 'gist', 'cdn']);
+const publicName = (h) => {
+  if (KEEP_HOSTS.has(h)) return true;
+  const labels = h.split('.');
+  return KEEP_DOMAINS.has(labels.slice(-2).join('.')) && (labels.length === 2 || (labels.length === 3 && KEEP_SERVICES.has(labels[0])));
+};
+//   inUrl: the name came after a scheme, which already says it is a host
+const privateHost = (host, port, hubHost = null, { inUrl = false } = {}) => {
   const h = host.toLowerCase();
   const labels = h.split('.');
   if (labels.length < 3 && !port && !PRIVATE_SUFFIX.test(h)) return false;
   if (!/\.[a-z][a-z0-9-]{1,62}$/.test(h) || FILE_EXTS.has(labels[labels.length - 1])) return false;
-  return !KEEP_HOSTS.has(h) && h !== hubHost;
+  if (!inUrl && !port && !realTld(h)) return false;
+  return !publicName(h) && h !== hubHost;
 };
 
 // Invisible and compatibility characters can split a number or a name so no pattern sees
@@ -419,6 +447,9 @@ const cutLongLines = (t) => (t.length <= MAX_LINE ? t : t.split('\n').map((l) =>
 // indentation at the start of a line stays.
 const foldSpaces = (t) => t.replace(/(?<=\S)[ \t]{2,}/g, ' ');
 
+// After "/" a bare name is checked like any other (fix/db1.corp.acme.internal); file
+// paths stay because their last label is an extension or no real top-level domain.
+const TITLE_HOST = /(?<![\w.@:\\-])(?=([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8}))\1(?![\w-]|\.\w)(:\d{1,5}(?!\d))?/gi;
 // Text on its way to a team hub or a teammate (review L2): a title, a task's report.
 // Unlike scrub() it labels what it removes ([ip], [host], [phone], [email]) instead of
 // hashing, so the text still reads. Line breaks and spacing are kept.
@@ -427,12 +458,12 @@ function scrubText(text, { hubHost = null } = {}) {
   const hub = typeof hubHost === 'string' && hubHost ? hubHost.toLowerCase() : null;
   let out = redactSecretsPass(foldSpaces(plainText(String(text ?? ''))));
   out = out.replace(PATTERNS.EMAIL, '[email]');
-  out = out.replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8})(:\d{1,5})?/gi, (m, scheme, host, port) => (privateHost(host, port, hub) ? `${scheme}[host]` : m));
+  out = out.replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8})(:\d{1,5})?/gi, (m, scheme, host, port) => (privateHost(host, port, hub, { inUrl: true }) ? `${scheme}[host]` : m));
   // "1.2.3.4-beta" is a version with a prerelease tag, not an address.
   out = out.replace(PATTERNS.IPV4, (m, at, all) => (KEEP_IPS.has(m) || /^-[a-z]/i.test(all.slice(at + m.length)) ? m : '[ip]'));
   // IPv6 needs a digit: "a::b" and "std::vector" are code.
   out = out.replace(PATTERNS.IPV6, (m) => (KEEP_IPS.has(m) || !/\d/.test(m) ? m : '[ip]'));
-  out = out.replace(PATTERNS.BARE_HOST, (m, host, port) => (privateHost(host, port, hub) ? '[host]' : m));
+  out = out.replace(TITLE_HOST, (m, host, port) => (privateHost(host, port, hub) ? '[host]' : m));
   return out.replace(PATTERNS.PHONE, (m) => (phoneOk(m) ? '[phone]' : m));
 }
 // scrubText for a one-line title: runs of spaces left by removals fold to one.

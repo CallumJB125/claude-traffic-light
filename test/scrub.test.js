@@ -351,3 +351,13 @@ test('scrubTitle: Cyrillic and Greek lookalikes in a mixed word cannot hide a na
     ['ssh db1.cоrp.acme.internаl', 'ssh [host]'], ['ping jеnkins.corp', 'ping [host]'], ['ssh οps.lan', 'ssh [host]']]) assert.equal(scrubTitle(input), want, input);
   for (const keep of ['сервер работает', 'Привет, мир', 'αβγ δοκιμή', 'Ошибка в модуле auth', 'test σ value']) assert.equal(scrubTitle(keep), keep, keep);
 });
+
+test('scrubTitle: a bare name is a host only with a real top-level domain; public sites keep only their own service names (#52 follow-up)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  for (const keep of ['read docs.python.org', 'www.google.com', 'raw.githubusercontent.com', 'gist.github.com', 'api.github.com', 'cdn.anthropic.com',
+    'com.anthropic.claude', 'api.v1.core', 'Dockerfile.prod.arm64', 'index.d.mts', 'jest.config.cts', 'src/app.config.ts', 'docs/index.d.mts',
+    'node_modules/lodash.merge/index.js', 'see a/b/c.test.js', 'github.com/acme/app']) assert.equal(scrubTitle(keep), keep, keep);
+  for (const [input, want] of [['ssh secret-project.anthropic.com', 'ssh [host]'], ['open callum.github.com', 'open [host]'], ['curl my-app.default.svc', 'curl [host]'],
+    ['ssh db1.internal.example.com', 'ssh [host]'], ['ssh build.acme.engineering', 'ssh [host]'], ['open https://build.acme.foo/x', 'open https://[host]/x'],
+    ['branch fix/db1.corp.acme.internal', 'branch fix/[host]'], ['tail logs/db1.corp.acme.com today', 'tail logs/[host] today'], ['nas.svc', '[host]']]) assert.equal(scrubTitle(input), want, input);
+});
