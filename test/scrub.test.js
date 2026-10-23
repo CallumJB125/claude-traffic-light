@@ -252,3 +252,11 @@ test('scrub: the review phone shapes go and package versions are no email', () =
   for (const g of REVIEW_GUARDS) { const out = scrub(g, opts); assert.ok(!/\[phone\]|\[email\]/.test(out), `${g} -> ${out}`); }
   for (const h of ['nas.local', 'jenkins.corp', 'api.internal']) assert.ok(!scrub(`open ${h}`, opts).includes(h), h);
 });
+test('scrubTitle and scrub: a North American number needs NANP area code and exchange (2-9)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  for (const g of ['ids 100-200-3000', 'seq 123-456-7890', 'seq 123.456.7890', 'seq (123) 456-7890', 'n 415-155-0100']) {
+    assert.equal(scrubTitle(g), g, g);
+    assert.doesNotMatch(scrub(g, opts), /\[phone\]/, g);
+  }
+  for (const p of ['(415) 555-0100', '415-555-0100', '1-800-555-0100', '415.555.0100']) assert.equal(scrubTitle(`call ${p}`), 'call [phone]', p);
+});
