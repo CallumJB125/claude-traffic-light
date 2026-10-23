@@ -471,11 +471,21 @@ test('work-organise: L1 — invisible fillers and tag characters are removed bef
   }
 });
 
-test('work-organise: L3 — lower-case Linear-style tickets count in branches, never in prompts', () => {
+test('work-organise: L3/N2 — lower-case Linear-style tickets count only after a person segment, never in prompts', () => {
   const t = (branch) => W.titleOf({ team: false, branch });
   assert.deepEqual(t('sam/abc-123-fix-login'), { title: 'ABC-123 · Fix login', source: 'ticket' });
-  assert.deepEqual(t('abc-123-fix-login'), { title: 'ABC-123 · Fix login', source: 'ticket' });
-  assert.deepEqual(t('claude/eng-42'), { title: 'ENG-42', source: 'ticket' });
+  assert.deepEqual(t('sam.lee/eng-42'), { title: 'ENG-42', source: 'ticket' });
+  assert.deepEqual(t('feat/node-22-upgrade'), { title: 'Node 22 upgrade', source: 'branch' }, 'a runtime version is no ticket');
+  assert.equal(t('release-2-prep').source, 'branch', 'a release number is no ticket');
+  assert.equal(t('abc-123-fix-login').source, 'branch', 'no person segment');
+  assert.equal(t('claude/eng-42').source, 'branch', 'an agent prefix is not a person');
+  assert.equal(t('sam/node-22-upgrade').source, 'branch');
+  assert.equal(t('sam/python-3-12').source, 'branch');
+  assert.equal(t('sam/ios-17-fix').source, 'branch');
+  assert.equal(t('sam/v-2-layout').source, 'branch');
+  assert.equal(t('sam/x/abc-123').source, 'branch', 'only directly after the first segment');
+  assert.deepEqual(W.titleOf({ team: false, branch: 'feat/ENG-42-fix' }), { title: 'ENG-42 · Fix', source: 'ticket' }, 'capitals still count anywhere');
+  assert.equal(W.titleOf({ team: false, branch: 'feat/NODE-22' }).source, 'branch');
   assert.deepEqual(t('codex/work-organise-2026-10-23'), { title: 'Work organise', source: 'branch' }, 'a word then a date is no ticket');
   assert.deepEqual(t('feat/utf-8-paths'), { title: 'Utf 8 paths', source: 'branch' }, 'standards stay excluded');
   assert.deepEqual(t('fix/v-2-layout'), { title: 'V 2 layout', source: 'branch' });

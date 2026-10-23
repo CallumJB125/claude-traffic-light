@@ -183,7 +183,9 @@
   }
 
   // Branch → sub-label: agent and kind prefixes dropped, separators shown as ›.
-  const BRANCH_PREFIX = /^(?:claude|codex|cursor|gemini|hermes|copilot|aider|agent|bot|feat|feature|fix|bugfix|hotfix|chore|docs|doc|refactor|test|tests|wip|spike|release|perf|ci|build|style)[/_-]+/i;
+  const PREFIX_WORDS = 'claude|codex|cursor|gemini|hermes|copilot|aider|agent|bot|feat|feature|fix|bugfix|hotfix|chore|docs|doc|refactor|test|tests|wip|spike|release|perf|ci|build|style';
+  const BRANCH_PREFIX = new RegExp(`^(?:${PREFIX_WORDS})[/_-]+`, 'i');
+  const PREFIX_WORD = new RegExp(`^(?:${PREFIX_WORDS})$`, 'i');
   function branchSub(branch, defaultBranch, redact) {
     const b = cleanBranch(branch, redact);
     if (!b || DEFAULT_BRANCHES.has(b.toLowerCase()) || (typeof defaultBranch === 'string' && b === defaultBranch)) return null;
@@ -224,18 +226,24 @@
   const aiName = (p) => (typeof p === 'string' && Object.hasOwn(AI_NAMES, p.trim().toLowerCase()) ? AI_NAMES[p.trim().toLowerCase()] : 'AI');
 
   // ABC-123 (not a standard such as UTF-8 or SHA-256), #123, gh-123.
-  const NOT_TICKETS = new Set(['UTF', 'SHA', 'ISO', 'GPT', 'RFC', 'CVE', 'MD', 'AES', 'RSA', 'HTTP', 'TLS', 'SSL', 'IPV', 'ES', 'ECMA', 'PEP', 'ARM', 'X', 'GH', 'PR', 'CSS', 'H', 'MP', 'COVID', 'F', 'B', 'IE', 'WCAG', 'OAUTH', 'S3', 'EC2', 'P', 'Q', 'V', 'ISSUE', 'BUG', 'BETA', 'ALPHA', 'RC', 'STEP', 'PHASE', 'PART', 'ROUND', 'WAVE', 'DAY', 'WEEK', 'SPRINT', 'PY', 'K8S']);
+  const NOT_TICKETS = new Set(['UTF', 'SHA', 'ISO', 'GPT', 'RFC', 'CVE', 'MD', 'AES', 'RSA', 'HTTP', 'TLS', 'SSL', 'IPV', 'ES', 'ECMA', 'PEP', 'ARM', 'X', 'GH', 'PR', 'CSS', 'H', 'MP', 'COVID', 'F', 'B', 'IE', 'WCAG', 'OAUTH', 'S3', 'EC2', 'P', 'Q', 'V', 'ISSUE', 'BUG', 'BETA', 'ALPHA', 'RC', 'STEP', 'PHASE', 'PART', 'ROUND', 'WAVE', 'DAY', 'WEEK', 'SPRINT', 'PY', 'K8S',
+    // Runtimes, platforms and release words: "node-22", "release-2", "v-3", "ios-17".
+    'NODE', 'NODEJS', 'PYTHON', 'GO', 'GOLANG', 'JAVA', 'JDK', 'JRE', 'RUBY', 'RUST', 'PHP', 'PERL', 'DOTNET', 'NET', 'DENO', 'BUN', 'NPM', 'PNPM', 'YARN',
+    'TS', 'JS', 'KOTLIN', 'SWIFT', 'SCALA', 'ELIXIR', 'ERLANG', 'LUA', 'GCC', 'CLANG', 'LLVM', 'CUDA', 'REACT', 'VUE', 'ANGULAR', 'NEXT', 'NUXT', 'SVELTE', 'VITE',
+    'WEBPACK', 'IOS', 'IPADOS', 'MACOS', 'ANDROID', 'WIN', 'WINDOWS', 'UBUNTU', 'DEBIAN', 'ALPINE', 'CHROME', 'FIREFOX', 'SAFARI', 'PG', 'POSTGRES', 'MYSQL', 'REDIS',
+    'OPENSSL', 'LTS', 'API', 'SDK', 'RELEASE', 'VERSION', 'VER', 'REV', 'RC', 'PATCH', 'MINOR', 'MAJOR', 'HOTFIX', 'BUILD', 'TAG']);
   const TICKET = /(?<![A-Za-z0-9])(?:gh-(\d{1,6})|([A-Z][A-Z0-9]{1,9})-(\d{1,6})|#(\d{1,6}))(?![A-Za-z0-9])/gi;
-  // In a branch, Linear's lower-case key also counts, but only where a segment starts:
-  // "sam/abc-123-fix-login", not "work-organise-2026-10-23".
-  const BRANCH_TICKET = /(?:^|[\\/])([a-z][a-z0-9]{1,9})-(\d{1,6})(?=$|[-_./])/;
+  // In a branch, Linear's lower-case key also counts, but only straight after a person's
+  // segment, the shape Linear generates: "sam/abc-123-fix-login". Not "feat/node-22-upgrade",
+  // "release-2-prep" or "work-organise-2026-10-23".
+  const BRANCH_TICKET = /^([^\\/]+)[\\/]([a-z][a-z0-9]{1,9})-(\d{1,6})(?=$|[-_./])/;
   function branchTicket(branch) {
     if (typeof branch !== 'string') return null;
     const upper = ticketIn(branch);
     if (upper) return upper;
     const m = BRANCH_TICKET.exec(branch);
-    if (!m || /^\d+$/.test(m[1]) || NOT_TICKETS.has(m[1].toUpperCase())) return null;
-    return { id: `${m[1].toUpperCase()}-${m[2]}`, match: `${m[1]}-${m[2]}` };
+    if (!m || PREFIX_WORD.test(m[1]) || NOT_TICKETS.has(m[2].toUpperCase())) return null;
+    return { id: `${m[2].toUpperCase()}-${m[3]}`, match: `${m[2]}-${m[3]}` };
   }
   // Elsewhere a key must be written in capitals: lower-case "organise-2026" is a word and a year.
   function ticketIn(text) {
