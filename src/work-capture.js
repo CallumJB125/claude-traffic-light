@@ -179,14 +179,16 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     if((e.status==='ended'||e.status==='idle')&&seen&&now()-seen>STALE_MS)delete store.state.tasks[key];
   }
   try{store.save(store.state);}catch{/* pruning is best effort */}
-  let state=store.state,latest=[],active=null,stopped=false,lastCatalogAt=0,catalog={routes:[],complete:true},notice=null;
+  let state=store.state,latest=null,active=null,stopped=false,lastCatalogAt=0,catalog={routes:[],complete:true},notice=null;
   const records=WorkRecord.createWorkRecords({file:recordsFile,now,log});
   const factsOf=WorkRecord.factsCache(factsFor,now);
   // Facts, handover, spend and PR are kept per run: a folded Hermes cron card looks them up by its latest run.
   const run=o=>o.run_id?{...o,session_id:o.run_id}:o;
   const shareSalt=()=>crypto.createHash('sha256').update(`work-record:${state.install_id}`).digest('hex').slice(0,16);
   const call=(fn,o)=>{try{return typeof fn==='function'?fn(o)??null:null;}catch{return null;}};
-  const recordFor=(o,raw,entry=null)=>WorkRecord.build({install_id:state.install_id,o,raw,facts:factsOf(run(o)),repo_id:entry?.destination.kind==='team'?entry.destination.repo_id:null,
+  // A wrapped task's localTitle (its prompt's first line) titles a My board card only; a team record never sees it.
+  const localOnly=(raw,entry)=>entry?.destination.kind==='local'&&typeof raw?.localTitle==='string'&&!untag(raw.taskTitle)?{...raw,taskTitle:raw.localTitle}:raw;
+  const recordFor=(o,raw,entry=null)=>WorkRecord.build({install_id:state.install_id,o,raw:localOnly(raw,entry),facts:factsOf(run(o)),repo_id:entry?.destination.kind==='team'?entry.destination.repo_id:null,
     handover:entry?call(handoverFor,run(o)):null,spend:entry?call(spendFor,run(o)):null,home});
   const shows=rec=>!!(rec&&(rec.goal||rec.summary||rec.files.edited.length));
   const placeless=cwd=>typeof cwd!=='string'||!path.isAbsolute(cwd)||path.resolve(cwd)===path.parse(path.resolve(cwd)).root||typeof home==='string'&&home!==''&&path.resolve(cwd)===path.resolve(home);
@@ -226,24 +228,27 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
         delete e.fingerprint;delete e.last_seen;delete e.sent_at;}
     })&&before!==JSON.stringify([state.tasks[key].card_id,state.tasks[key].status,state.tasks[key].title,state.tasks[key].untracked]))changed();
   }
-  async function pass(sessions) {
+  // O3: wrapped (person-started Tasks) records come after at most 50 sessions, at most 20 of them, through the same
+  // loop; each is one piece of work by its task id, never folded into a session with the same title.
+  async function pass({sessions,wrapped}) {
     if(now()-lastCatalogAt>15000||!lastCatalogAt){catalog=await getRoutes();lastCatalogAt=now();}
     const routesByKey=new Map((catalog.routes??[]).map(r=>[routeKey(r),r]));
     const current=new Set();
     // Repeated sessions with the same provider/cwd/explicit title are one piece of work:
     // keep the newest report; the older ones go idle through the sweep below.
     const newest=new Map();
-    for(const raw of sessions.slice(0,50)) {
+    const all=[...sessions.slice(0,50),...wrapped.slice(0,20)],isWrapped=new Set(wrapped.slice(0,20));
+    for(const raw of all) {
       const o=observation(raw,{ownedRoots,host});if(!o)continue;
       // Background work seen only through its facts (a memories run titled by its prompt) gets no card,
       // and a session restarted on the same request (resume, retry) is the same work.
       const draft=fresh(raw)?recordFor(o,raw):null;if(draft&&BACKGROUND_TITLE.test(draft.title))continue;
       const goal=draft?.goal??'';
-      const dup=JSON.stringify(untag(raw.taskTitle)?[o.provider,o.cwd??null,o.title]:goal.length>=20?[o.provider,o.cwd??null,goal]:[o.provider,o.session_id,o.task_id]),at=Date.parse(raw.updatedAt)||0;
+      const dup=JSON.stringify(isWrapped.has(raw)?['task',o.provider,o.session_id,o.task_id]:untag(raw.taskTitle)?[o.provider,o.cwd??null,o.title]:goal.length>=20?[o.provider,o.cwd??null,goal]:[o.provider,o.session_id,o.task_id]),at=Date.parse(raw.updatedAt)||0;
       if(!newest.has(dup)||at>newest.get(dup).at)newest.set(dup,{at,raw});
     }
     const keep=new Set([...newest.values()].map(v=>v.raw));
-    for(const raw of sessions.slice(0,50)) {
+    for(const raw of all) {
       if(stopped||state.enabled===false)return;
       if(!keep.has(raw))continue;
       const o=observation(raw,{ownedRoots,host});if(!o)continue;
@@ -349,8 +354,10 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     backfillTimer=setTimeout(run,delayMs);backfillTimer.unref?.();
   }
   async function drain() {while(latest&&!stopped){const next=latest;latest=null;await pass(next);}}
-  return {observe(sessions){if(stopped||state.enabled===false)return;latest=Array.isArray(sessions)?sessions:[];
-      if(!active){active=drain().catch(()=>log('automatic cards unavailable')).finally(()=>{active=null;if(latest&&!stopped)this.observe(latest);});}return active;},
+  function kick(){if(stopped||state.enabled===false)return;
+    if(!active){active=drain().catch(()=>log('automatic cards unavailable')).finally(()=>{active=null;if(latest&&!stopped)kick();});}return active;}
+  return {observe(sessions,{wrapped=[]}={}){if(stopped||state.enabled===false)return;
+      latest={sessions:Array.isArray(sessions)?sessions:[],wrapped:Array.isArray(wrapped)?wrapped:[]};return kick();},
     // One-off card for one session, whatever the automatic toggle says. Same identity and
     // routing as the automatic path, so a session that already has a card never gets a second.
     async captureOnce(raw,boardKey=null){

@@ -556,6 +556,14 @@ try { WorkScope = require('./src/work-scope.js'); } catch (e) { if (!(e.code ===
 // Specs inject scope states through a mock that is never packaged.
 if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_TRAFFIC_LIGHT_WORK_SCOPE_MOCK) WorkScope = require('./test-visual/work-scope-mock.js').create(process.env.CLAUDE_TRAFFIC_LIGHT_WORK_SCOPE_MOCK);
 const WorkScopeView = require('./src/work-scope-view.js');
+// O3: the Tasks helper's wrapped tasks that did real work, as session-shaped records with the scope a session in
+// that folder gets, handed to Buddy's automatic cards only.
+let wrappedWorkRows = [];
+function pushWrappedWork() {
+  if (DEMO) return;
+  const records = require('./src/wrapped-work.js').wrappedRecords(wrappedWorkRows, { host: LOCAL_HOST, scopeFor: withScope });
+  buddyWin?.wrappedWorkChanged?.(records);
+}
 function withScope(sessions) {
   if (typeof WorkScope?.scopeFor !== 'function') return sessions;
   const linked = typeof WorkScope.linkedRepos === 'function' ? WorkScope.linkedRepos() : undefined;
@@ -1600,6 +1608,7 @@ function getBuddy() {
       prFor: (o) => (loadConfig().gitSignals !== false ? git.prFor(o.cwd) : null),
     });
     refreshTrayMenu();
+    if (wrappedWorkRows.length) pushWrappedWork();
     if (typeof buddyWin[BudgetNotice.CONTRACT.subscribeMethod] === 'function') {
       const unsubscribe = buddyWin[BudgetNotice.CONTRACT.subscribeMethod](handleBudgetEvent);
       if (typeof unsubscribe === 'function') onQuit(app, unsubscribe);
@@ -2162,6 +2171,8 @@ function getTasks() {
       entry: path.join(__dirname, 'board', 'tasks-engine', 'utility-entry.js'), dataDir,
       onRuns: (runs) => { wrappedRuns = runs.slice(0, 50); AgentAwareness.schedule(); },
       peersForTask: (taskId) => AgentAwareness.peersForTask(taskId),
+      // O3: wrapped tasks that did real work get automatic cards through the session path (src/wrapped-work.js).
+      onWork: (rows) => { wrappedWorkRows = rows; pushWrappedWork(); },
     });
   }
   tasksSvc = require('./src/tasks-service.js').createTasksService({

@@ -15,8 +15,9 @@ function tasksEnv(dataDir, base = process.env) {
 }
 
 // onRuns(rows): the helper's wrapped runs (O1b), [] whenever it is not running; peersForTask(taskId): main's answer
-// to a wrapped run's bus_peers.
-function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStatus = () => {}, onRuns = () => {}, peersForTask = async () => null,
+// to a wrapped run's bus_peers. onWork(rows): the helper's wrapped tasks that did real work (O3), for automatic cards;
+// [] whenever it is not running.
+function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStatus = () => {}, onRuns = () => {}, peersForTask = async () => null, onWork = () => {},
   now = Date.now, readyTimeoutMs = 20_000, shutdownGraceMs = 20_000, killPid = process.kill.bind(process),
   timers = { setTimeout, clearTimeout } }) {
   let child = null; let ready = null; let info = null; let disposed = false; let stopping = false; let state = 'stopped';
@@ -47,6 +48,7 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
               .then((result) => { if (child === c) { try { c.postMessage({ type: 'awareness.peers.reply', id: m.id, result: result ?? null }); } catch { /* gone */ } } });
             return;
           }
+          if (m?.type === 'tasks.work' && child === c) { try { onWork(Array.isArray(m.rows) ? m.rows : []); } catch { /* cards only */ } return; }
           if (m?.type !== 'tasks.listening' || m.socket !== path.join(dataDir, 'tasks.sock') || !/^[0-9a-f-]{36}$/.test(m.epoch ?? '')) return;
           if (disposed || stopping || child !== c) return fail();
           try { c.postMessage({ type: 'tasks.mainKey', key: mainKey }); } catch { return fail(); }
@@ -57,6 +59,7 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
           if (child !== c) return;
           child = null; info = null;
           try { onRuns([]); } catch { /* main's view only */ }
+          try { onWork([]); } catch { /* cards only */ }
           if (stopping || disposed) { status('stopped'); return; }
           const wasReady = state === 'ready'; ready = null; restarts.push(now()); status('failed');
           if (!wasReady) fail();
