@@ -141,3 +141,10 @@ test('inbox: the Burst row mirrors the card\'s dimmed flag', () => {
   assert.equal(burstRow({ view: { kind: 'broken', headline: 'h', detail: 'd', chip: null, action: { kind: 'repair', label: 'Repair' }, dimmed: false } }).dimmed, false);
   assert.equal(burstRow({ view: { kind: 'on', headline: 'h', detail: 'd', chip: null, action: null, dimmed: 'yes' }, looseEnds: { repos: 1, text: 't' } }).dimmed, false, 'only a real true');
 });
+
+test('a finished piece of work is "Check it", the word every view uses', () => {
+  const { LABEL } = require('../src/attention-inbox.js');
+  const W = require('../src/work-organise.js');
+  assert.equal(LABEL.review, 'Check it');
+  assert.equal(LABEL.review, W.BUCKETS.find((b) => b.id === 'check').label);
+});

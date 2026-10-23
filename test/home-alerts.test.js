@@ -278,7 +278,7 @@ test('Home renders the Burst row with its one button, which sends only the actio
     alertAct: async (kind, action, handle) => { calls.push(['alertAct', kind, action, handle]); return { ok: true }; },
     teamToday: async () => null, teamInbox: async () => [],
   };
-  for (const f of ['src/attention-inbox.js', 'home-inbox-view.js']) dom.window.eval(read(f));
+  for (const f of ['src/work-organise.js', 'src/attention-inbox.js', 'home-inbox-view.js']) dom.window.eval(read(f));
   await new Promise((r) => setTimeout(r, 20));
   const li = dom.window.document.querySelector('#inbox li[data-kind="burst"]');
   assert.ok(li, 'the Burst row is in the Inbox');
