@@ -106,3 +106,12 @@ test('hubPoster: https only, own bearer, no redirects; refuses without a token',
   assert.equal((await post('https://other.example.test', '/x', {})).reason, 'signed_out');
   assert.equal(seen.length, 1);
 });
+
+test('shareable: text bound for the hub loses addresses, private hosts, numbers and other tailnet names (#52 follow-up)', () => {
+  const route = { repo_id: workRecord().repo_id, share_summaries: true, hub: 'https://plexi.tail1234.ts.net' };
+  const out = shareable(workRecord({ title: 'Fix nas.local mount', goal: 'ping 10.0.0.5', summary: 'Called +27 82 555 0199; ssh callums-mac.tail1234.ts.net and plexi.tail1234.ts.net', branch: 'feat/export' }), route);
+  assert.equal(out.title, 'Fix [host] mount');
+  assert.equal(out.goal, 'ping [ip]');
+  assert.equal(out.summary, 'Called [phone]; ssh [host] and plexi.tail1234.ts.net');
+  assert.equal(out.branch, 'feat/export');
+});

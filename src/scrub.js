@@ -350,10 +350,11 @@ const privateHost = (host, port, hubHost = null) => {
   return !KEEP_HOSTS.has(h) && h !== hubHost;
 };
 
-// A title on its way to a team hub (review L2). Unlike scrub() it labels what it removes
-// ([ip], [host], [phone], [email]) instead of hashing, so the title still reads.
-//   hubHost: the destination hub's host name, the one tailnet name a title may keep
-function scrubTitle(text, { hubHost = null } = {}) {
+// Text on its way to a team hub or a teammate (review L2): a title, a task's report.
+// Unlike scrub() it labels what it removes ([ip], [host], [phone], [email]) instead of
+// hashing, so the text still reads. Line breaks and spacing are kept.
+//   hubHost: the destination hub's host name, the one tailnet name the text may keep
+function scrubText(text, { hubHost = null } = {}) {
   const hub = typeof hubHost === 'string' && hubHost ? hubHost.toLowerCase() : null;
   let out = redactSecretsPass(String(text ?? ''));
   out = out.replace(PATTERNS.EMAIL, '[email]');
@@ -363,8 +364,9 @@ function scrubTitle(text, { hubHost = null } = {}) {
   // IPv6 needs a digit: "a::b" and "std::vector" are code.
   out = out.replace(PATTERNS.IPV6, (m) => (KEEP_IPS.has(m) || !/\d/.test(m) ? m : '[ip]'));
   out = out.replace(PATTERNS.BARE_HOST, (m, host, port) => (privateHost(host, port, hub) ? '[host]' : m));
-  out = out.replace(PATTERNS.PHONE, (m) => (phoneOk(m) ? '[phone]' : m));
-  return out.replace(/[ \t]{2,}/g, ' ');
+  return out.replace(PATTERNS.PHONE, (m) => (phoneOk(m) ? '[phone]' : m));
 }
+// scrubText for a one-line title: runs of spaces left by removals fold to one.
+const scrubTitle = (text, opts) => scrubText(text, opts).replace(/[ \t]{2,}/g, ' ');
 
-module.exports = { scrub, scrubTitle, redactSecretsPass, maskPii, hashName, cleanJsonError, PATTERNS, MAX_LINE };
+module.exports = { scrub, scrubText, scrubTitle, redactSecretsPass, maskPii, hashName, cleanJsonError, PATTERNS, MAX_LINE };
