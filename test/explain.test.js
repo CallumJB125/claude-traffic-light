@@ -181,3 +181,17 @@ test('recaps are kept scrubbed in a capped file and come back after a restart', 
   assert.equal(b.cardFor({ sessionId: 'unknown' }), null);
   assert.equal(ExplainMain.create({ config: () => ({}), file }).cardFor({ sessionId: 's1' }), null, 'off: nothing');
 });
+
+test('a recap with no folder to name drops "in …" instead of saying "in Other work"', async () => {
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recaps-'));
+  try {
+    const m = ExplainMain.create({ config: () => ({ explainMode: true }), now: () => 5000, file: path.join(dir, ExplainMain.FILE), scrub: (x) => x,
+      readSession: () => ({ facts: { lastPrompt: 'fix it', files: {}, commands: [], lastToolFailed: { tool: 'Bash' } }, ports: [] }) });
+    await m.turnEnded({ sessionId: 's1', cwd: '' });
+    const card = m.cardFor({ sessionId: 's1' });
+    assert.equal(card.recap.headline, 'What your AI just did');
+    assert.ok(card.help.length > 0);
+    assert.equal(Explain.buildRecap({ project: 'shop' }).headline, 'What your AI just did in shop');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

@@ -90,7 +90,9 @@ function create({ config, inputs = () => [], sessions = () => [], runner = Expla
     try { read = readSession({ adapter, sessionId }) || read; } catch (e) { log(`[explain] transcript: ${e?.message ?? e}`); }
     let files = null;
     try { files = await turnFiles(sessionId); } catch { files = null; }
-    const project = Organise.projectOf({ cwd: String(cwd || read.facts?.cwd || '') || null }).heading;
+    const heading = Organise.projectOf({ cwd: String(cwd || read.facts?.cwd || '') || null }).heading;
+    // No folder to name: the headline drops "in …" rather than say "in Other work".
+    const project = heading === Organise.FALLBACK ? null : heading;
     const recap = storable({ ...Explain.buildRecap({ project, facts: read.facts, turnFiles: files, ports: read.ports }), sessionId, at: now(),
       failed: !!read.facts?.lastToolFailed }, scrub);
     if (!recap) return null;
@@ -117,7 +119,7 @@ function create({ config, inputs = () => [], sessions = () => [], runner = Expla
     }
     for (const r of recaps) {
       if (!r.failed || t - r.at > FAIL_FRESH_MS || help.length >= 5) continue;
-      help.push({ project: r.headline.replace(/^What your AI just did in /, ''), why: 'A command failed in the last turn.', prompts: Explain.stuckHelp({ failed: true }).map((p) => ({ label: p.label, handle: handle({ prompt: p.id }) })) });
+      help.push({ project: /^What your AI just did in (.+)$/.exec(r.headline)?.[1] ?? Organise.FALLBACK, why: 'A command failed in the last turn.', prompts: Explain.stuckHelp({ failed: true }).map((p) => ({ label: p.label, handle: handle({ prompt: p.id }) })) });
     }
     return { on: true, recaps: out, help: help.slice(0, 5) };
   }

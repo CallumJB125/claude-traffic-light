@@ -331,3 +331,9 @@ test('Burst card gating: not installed, off on purpose and one missed poll give 
   state.view = null; state.burst = { kind: 'unreachable', installed: true, misses: 1 };
   return alerts.act('burst', 'act', 'retry').then((r) => assert.equal(r.ok, false, 'a withheld action cannot be run from Home'));
 });
+
+test('a stuck session with no folder to name reads "a session", never the fallback heading', () => {
+  const { alerts, state } = make();
+  state.sessions = [stuck('app', 7, { cwd: null })];
+  assert.deepEqual(alerts.snapshot().stuck.map((c) => c.title), ['Stuck: a session silent for 7 min']);
+});

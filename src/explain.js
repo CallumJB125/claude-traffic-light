@@ -172,7 +172,7 @@ function buildRecap({ project = 'your project', facts = null, turnFiles = null, 
   if (f.lastToolFailed) lines.push(`Something it tried failed${f.lastToolFailed.tool ? ` (${f.lastToolFailed.tool})` : ''}. Check that it finished what you asked.`);
   const port = ports.length ? ports[ports.length - 1] : null;
   return {
-    headline: `What your AI just did in ${project}`,
+    headline: project ? `What your AI just did in ${project}` : 'What your AI just did',
     lines, risky: risky.slice(0, 5), changed: edited.length, commands: commands.length,
     testUrl: port ? `http://localhost:${port}/` : null,
   };
