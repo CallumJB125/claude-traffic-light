@@ -12,6 +12,11 @@ const Runtime = require('./adapters/runtime.js');
 
 const NAME = 'claude-buddy';
 const SCRIPT = 'mcp-server.js';
+// The bus-only profile Plexiform registers by itself (plan-agent-awareness §3.9): its own name, and a marker
+// naming the channel, so a packaged app and a dev checkout never re-point each other's entry.
+const BUS_NAME = 'plexiform-bus';
+const MARKER = 'PLEXIFORM_MCP';
+const markerFor = (channel) => `bus-v1:${channel === 'dev' ? 'dev' : 'packaged'}`;
 
 const configPath = (home = os.homedir()) => path.join(home, '.claude.json');
 
@@ -19,14 +24,23 @@ const configPath = (home = os.homedir()) => path.join(home, '.claude.json');
 // copy of the SDK: mcp-server.js and its node_modules live inside app.asar,
 // which only Electron's own node can read, so it runs the app binary as node
 // (the same trick the hook commands use).
-function launch({ packaged, execPath, appPath, dir, root }) {
-  const env = root ? { CLAUDE_TRAFFIC_LIGHT_HOME: root } : {};
+// --disable-sigusr1: main trusts this program to act only on its parent's requests (src/agent-awareness.js
+// bindOnce), and SIGUSR1 would start an inspector any program running as the person could drive; the
+// listener in mcp-server.js comes too late for the first few milliseconds after start.
+const NODE_FLAGS = Object.freeze(['--disable-sigusr1']);
+function launch({ packaged, execPath, appPath, dir, root, profile = null }) {
+  const env = { ...(root ? { CLAUDE_TRAFFIC_LIGHT_HOME: root } : {}), ...(profile === 'bus' ? { [MARKER]: markerFor(packaged ? 'packaged' : 'dev') } : {}) };
+  const extra = profile === 'bus' ? ['--profile', 'bus'] : [];
   return packaged
-    ? { type: 'stdio', command: execPath, args: [path.join(appPath, SCRIPT)], env: { ELECTRON_RUN_AS_NODE: '1', ...env } }
-    : { type: 'stdio', command: 'node', args: [path.join(dir, SCRIPT)], env };
+    ? { type: 'stdio', command: execPath, args: [...NODE_FLAGS, path.join(appPath, SCRIPT), ...extra], env: { ELECTRON_RUN_AS_NODE: '1', ...env } }
+    : { type: 'stdio', command: 'node', args: [...NODE_FLAGS, path.join(dir, SCRIPT), ...extra], env };
 }
 
-const isOurs = (entry) => !!entry && Array.isArray(entry.args) && entry.args.some((a) => path.basename(String(a)) === SCRIPT);
+// The full server: any entry running our script. The bus profile: only an entry carrying the marker.
+const markerOf = (entry) => (entry && entry.env && typeof entry.env === 'object' && typeof entry.env[MARKER] === 'string' && /^bus-v1:(?:packaged|dev)$/.test(entry.env[MARKER]) ? entry.env[MARKER] : null);
+const isOurs = (entry, name = NAME) => (name === NAME
+  ? !!entry && Array.isArray(entry.args) && entry.args.some((a) => path.basename(String(a)) === SCRIPT)
+  : !!markerOf(entry));
 
 const readText = (file) => { try { return fs.readFileSync(file, 'utf8'); } catch (err) { if (err.code === 'ENOENT') return null; throw err; } };
 
@@ -55,31 +69,37 @@ function edit(home, change) {
   throw new Error(`${file} kept changing under us; try again`);
 }
 
-function install({ home, entry }) {
+// A bus-profile entry of the other channel is someone else's (a dev checkout vs the installed app): left alone.
+const sameChannel = (cur, entry, name) => name === NAME || markerOf(cur) === markerOf(entry);
+
+function install({ home, entry, name = NAME }) {
   return edit(home, (data) => {
     const servers = data.mcpServers && typeof data.mcpServers === 'object' ? data.mcpServers : {};
-    const cur = servers[NAME];
-    if (cur && !isOurs(cur)) throw new Error(`an MCP server named "${NAME}" already exists and isn't Plexiform's`);
+    const cur = servers[name];
+    if (cur && !isOurs(cur, name)) throw Object.assign(new Error(`an MCP server named "${name}" already exists and isn't Plexiform's`), { code: 'FOREIGN' });
+    if (cur && !sameChannel(cur, entry, name)) throw Object.assign(new Error(`"${name}" belongs to another copy of Plexiform`), { code: 'OTHER_CHANNEL' });
     if (JSON.stringify(cur) === JSON.stringify(entry)) return { changed: false };
-    data.mcpServers = { ...servers, [NAME]: entry };
+    data.mcpServers = { ...servers, [name]: entry };
     return { changed: true };
   });
 }
 
-function uninstall({ home }) {
+// marker: remove a bus-profile entry only while it still carries exactly this marker.
+function uninstall({ home, name = NAME, marker = null }) {
   return edit(home, (data) => {
-    if (!data.mcpServers || !isOurs(data.mcpServers[NAME])) return { changed: false };
-    const { [NAME]: _gone, ...rest } = data.mcpServers;
+    const cur = data.mcpServers && data.mcpServers[name];
+    if (!isOurs(cur, name) || (marker && markerOf(cur) !== marker)) return { changed: false };
+    const { [name]: _gone, ...rest } = data.mcpServers;
     data.mcpServers = rest;
     return { changed: true };
   });
 }
 
-function status({ home, entry }) {
+function status({ home, entry, name = NAME }) {
   let cur = null;
   let error = null;
-  try { cur = (read(configPath(home)).mcpServers || {})[NAME] || null; } catch (err) { error = err.message; }
-  return { installed: isOurs(cur), current: !!entry && JSON.stringify(cur) === JSON.stringify(entry), name: NAME, path: configPath(home), entry: cur, error };
+  try { cur = (read(configPath(home)).mcpServers || {})[name] || null; } catch (err) { error = err.message; }
+  return { installed: isOurs(cur, name), current: !!entry && JSON.stringify(cur) === JSON.stringify(entry), name, path: configPath(home), entry: cur, error };
 }
 
-module.exports = { NAME, configPath, launch, isOurs, install, uninstall, status };
+module.exports = { NAME, BUS_NAME, MARKER, NODE_FLAGS, markerFor, markerOf, configPath, launch, isOurs, install, uninstall, status };

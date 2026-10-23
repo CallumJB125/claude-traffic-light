@@ -29,5 +29,5 @@ test('no hook handler carries an additionalContextLimit (no hooks.json shape cha
   const rt = Runtime.make({ hooksDir: '/repo/hooks', dataDir: '/Users/u/.claude-traffic-light', node: true });
   for (const groups of Object.values(Codex.applyActivity({}, rt).hooks)) for (const g of groups) for (const h of g.hooks) assert.deepEqual(Object.keys(h).sort(), ['command', 'statusMessage', 'timeout', 'type']);
   const root = path.join(__dirname, '..', '..');
-  for (const f of ['adapters/codex.js', 'hooks/emit.js', 'hooks/awareness.js', 'src/agent-awareness.js', 'main.js']) assert.ok(!/trusted_hash/.test(fs.readFileSync(path.join(root, f), 'utf8')), f);
+  for (const f of ['adapters/codex.js', 'adapters/codex-mcp.js', 'src/mcp-auto.js', 'hooks/emit.js', 'hooks/awareness.js', 'src/agent-awareness.js', 'main.js']) assert.ok(!/trusted_hash/.test(fs.readFileSync(path.join(root, f), 'utf8')), f);
 });

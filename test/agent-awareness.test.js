@@ -9,6 +9,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFile, execFileSync } = require('node:child_process');
 const A = require('../src/agent-awareness.js');
+const PeerPid = require('../src/peer-pid.js');
 const Hook = require('../hooks/awareness.js');
 const { testTempDir } = require('./helpers/tmp');
 
@@ -33,11 +34,19 @@ function world(t) {
   const fakeExec = (file, args, opts, cb) => {
     calls.push([file, ...args]);
     if (file === 'git') return execFile(file, args, opts, cb);
+    // codesign on a running process: Anthropic's requirement for the claude binary, OpenAI's for codex.
+    if (file === '/usr/bin/codesign') {
+      const q = procs.get(Number(args[args.length - 1]));
+      const want = q && !q.unsigned ? (q.exe === claudeExe ? 'claude' : q.exe === codexExe ? 'codex' : null) : null;
+      return want && args.includes(`-R=${PeerPid.REQUIREMENT[want]}`) ? cb(null, '') : cb(Object.assign(new Error('failed to satisfy'), { code: 3 }), '');
+    }
     const pid = Number(args[args.indexOf('-p') + 1]);
     const p = procs.get(pid);
     if (file === '/bin/ps') {
       if (!p) return cb(Object.assign(new Error('no such process'), { code: 1 }), '');
-      return cb(null, args.includes('lstart=') ? `${p.start}\n` : `${p.args || ''}\n`);
+      if (args.includes('lstart=')) return cb(null, `${p.start}\n`);
+      const argv = p.args || path.basename(p.exe);
+      return cb(null, args.includes('command=') ? `${argv}${p.env ? ` ${p.env}` : ''}\n` : `${argv}\n`);
     }
     if (file === '/usr/sbin/lsof') return p ? cb(null, `p${pid}\nfcwd\nn${p.cwd}\nftxt\nn${p.exe}\n${args.includes('-d') ? '' : (p.files || []).map(({ path: f, st }, i) => `f${30 + i}\nD0x${st.dev.toString(16)}\ni${st.ino}\nn${f}\n`).join('')}`) : cb(Object.assign(new Error('none'), { code: 1 }), '');
     return cb(Object.assign(new Error(`unexpected ${file}`), { code: 'ENOENT' }));
@@ -145,16 +154,17 @@ test('verification: a session file is not a peer without an observed event, a re
   fs.mkdirSync(sub);
   w.claude('cd-inside', sub, { procCwd: repo });
   assert.equal((await w.make().build()).self['claude|cd-inside'].verified, true);
-  assert.ok(w.calls.every(([f]) => f === 'git' || f === '/bin/ps' || f === '/usr/sbin/lsof'), 'ps and lsof by absolute path only');
+  assert.ok(w.calls.every(([f]) => f === 'git' || f === '/bin/ps' || f === '/usr/sbin/lsof' || f === '/usr/bin/codesign'), 'ps, lsof and codesign by absolute path only');
 });
 
-test('executable allow-list: Claude native and Homebrew, Claude Code cli.js under node, ChatGPT.app and the managed daemon copy of Codex', () => {
+test('executable allow-list: Claude native and Homebrew, ChatGPT.app and the managed daemon copy of Codex; never node (npm Claude Code is unverifiable)', () => {
   const home = '/Users/u';
   const o = { home, codexHome: '/Users/u/.codex' };
   assert.ok(A.allowedExe('claude', '/Users/u/.local/share/claude/versions/2.1.308', o));
   assert.ok(A.allowedExe('claude', '/opt/homebrew/Caskroom/claude-code/2.1.308/claude', o));
-  assert.ok(A.allowedExe('claude', '/usr/local/bin/node', { ...o, args: 'node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js' }));
-  assert.ok(!A.allowedExe('claude', '/usr/local/bin/node', { ...o, args: 'node /tmp/cli.js' }));
+  // Review #1: any node whose command line merely mentions cli.js passed; nothing signs node for Anthropic.
+  assert.ok(!A.allowedExe('claude', '/usr/local/bin/node', { ...o, args: 'node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js' }));
+  assert.ok(!A.allowedExe('claude', '/usr/local/bin/node', { ...o, args: 'node -e x /nope/node_modules/@anthropic-ai/claude-code/cli.js' }));
   assert.ok(!A.allowedExe('claude', '/bin/sleep', o));
   assert.ok(!A.allowedExe('claude', '/Users/u/.local/share/claude/versions/../../../../tmp/x', o));
   assert.ok(A.allowedExe('codex', '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex', o));
@@ -576,4 +586,105 @@ test('re-review N3: one lsof of a server per rebuild, however many of its thread
   assert.equal(r.peers.length, 4);
   assert.equal(w.calls.filter((c) => c[0] === '/usr/sbin/lsof' && c.includes('-FDi')).length, 1);
   assert.deepEqual([...A.lsofFiles('p1\nf3\nD0x10\ni42\nn/x\nf4\ni7\n')], ['16:42'], 'a file with no device line is not counted');
+});
+
+test('re-review trade-off: sessions Plexiform cannot verify are one count-only line, with no handle, folder, branch or status', async (t) => {
+  const w = world(t);
+  const repoA = gitInit(path.join(w.dir, 'code', 'alpha'));
+  const repoB = gitInit(path.join(w.dir, 'code', 'secret-plan'));
+  w.claude('me', repoA);
+  // Claude Code installed with npm (plain node) and a Codex thread on an unsigned binary: both unverifiable.
+  const npm = w.claude('npm', repoB);
+  w.procs.set(npm.claudePid, { start: 'Thu Oct 22 10:00:00 2026', exe: '/opt/homebrew/bin/node', cwd: repoB });
+  w.codex('cx', repoB, { server: 4343 });
+  w.procs.get(4343).exe = '/opt/homebrew/bin/node';
+  const r = await w.make().build();
+  assert.equal(r.unverified, 2);
+  assert.deepEqual(r.peers.map((p) => p.folder), ['alpha'], 'only the verified session has a line');
+  const text = Hook.render(Hook.viewOf(r, r.self['claude|me']));
+  assert.match(text, /^- 2 Claude Code or Codex sessions Plexiform couldn't verify$/m);
+  assert.ok(!text.includes('secret-plan') && !/claude-secret|codex-secret/.test(text), 'nothing about them but the number');
+  // The unverified session itself is not counted in its own view; one verified peer makes the line an "and N more".
+  w.claude('peer', repoB);
+  const r2 = await w.make().build();
+  const forNpm = Hook.render(Hook.viewOf(r2, r2.self['claude|npm']));
+  assert.match(forNpm, /^- and 1 more Claude Code or Codex session Plexiform couldn't verify$/m);
+  assert.equal(r2.self['claude|npm'].handle, undefined, 'never a handle, so never a hand-off or note target');
+  // The count is part of what the hook compares, so a change shows on the next turn.
+  assert.notEqual(Hook.versionOf(Hook.viewOf(r, r.self['claude|me'])), Hook.versionOf(Hook.viewOf({ ...r, unverified: 3 }, r.self['claude|me'])));
+  // A roster value that is not a small whole number is no line at all.
+  for (const bad of [-1, 1.5, '3', 10_000]) assert.equal(Hook.render(Hook.viewOf({ ...r, unverified: bad }, r.self['claude|me'])), null, String(bad));
+});
+
+// /proc and the system folders on a Linux machine, over the real filesystem for everything else (git, the repos).
+function linuxFs({ procs, tree }) {
+  const real = fs.promises;
+  const proc = (p) => { const m = /^\/proc\/(\d+)\/(.+)$/.exec(p); return m ? [procs[m[1]], m[2]] : null; };
+  const enoent = () => Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+  const over = {
+    readFile: (p, ...a) => {
+      const q = proc(String(p));
+      if (!q) return real.readFile(p, ...a);
+      const [x, what] = q;
+      if (!x) return enoent();
+      if (what === 'stat') return Promise.resolve(`${1} (${path.basename(x.exe)}) S ${Array.from({ length: 19 }, (_, i) => (i === 19 - 1 ? x.start : '0')).join(' ')} 0 0`);
+      if (what === 'cmdline') return Promise.resolve(`${x.argv.join('\0')}\0`);
+      if (what === 'environ') return x.environ === null ? Promise.reject(Object.assign(new Error('EACCES'), { code: 'EACCES' })) : Promise.resolve(`${x.environ.join('\0')}\0`);
+      return enoent();
+    },
+    readlink: (p) => { const q = proc(String(p)); if (!q) return real.readlink(p); const [x, what] = q; if (!x) return enoent(); return what === 'exe' ? Promise.resolve(x.exe) : what === 'cwd' ? Promise.resolve(x.cwd) : enoent(); },
+    readdir: (p, ...a) => { const q = proc(String(p)); if (!q) return real.readdir(p, ...a); const [x, what] = q; return x && what === 'fd' ? Promise.resolve(x.files.map((_, i) => String(30 + i))) : enoent(); },
+    stat: (p, ...a) => {
+      const s = String(p);
+      const q = proc(s);
+      if (q) { const [x, what] = q; const m = /^fd\/(\d+)$/.exec(what); return x && m && x.files[Number(m[1]) - 30] ? real.stat(x.files[Number(m[1]) - 30]) : enoent(); }
+      if (Object.hasOwn(tree, s)) return Promise.resolve({ uid: tree[s].uid, mode: tree[s].mode, isFile: () => !!tree[s].file, isDirectory: () => !tree[s].file });
+      return real.stat(p, ...a);
+    },
+    realpath: (p, ...a) => (Object.hasOwn(tree, String(p)) ? Promise.resolve(tree[String(p)].link || String(p)) : real.realpath(p, ...a)),
+  };
+  return new Proxy(real, { get: (target, k) => over[k] || target[k] });
+}
+
+test('re-review trade-off (Linux): a session is verified only when its program is root\'s in folders nobody else can write, with nothing injected', async (t) => {
+  const w = world(t);
+  const repo = gitInit(path.join(w.dir, 'code', 'app'));
+  const sys = (uid = 0, mode = 0o755) => ({ uid, mode });
+  const tree = {
+    '/': sys(), '/usr': sys(), '/usr/bin': sys(), '/usr/bin/claude': { ...sys(), file: true }, '/usr/bin/node': { ...sys(), file: true },
+    '/usr/lib': sys(), '/usr/lib/node_modules': sys(), '/usr/lib/node_modules/@anthropic-ai': sys(), '/usr/lib/node_modules/@anthropic-ai/claude-code': sys(),
+    '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js': { ...sys(), file: true },
+    '/usr/bin/claude-npm': { ...sys(), file: true, link: '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js' },
+    '/usr/lib/node_modules/@openai': sys(), '/usr/lib/node_modules/@openai/codex': sys(), '/usr/lib/node_modules/@openai/codex/vendor': sys(),
+    '/usr/lib/node_modules/@openai/codex/vendor/codex-x86_64-unknown-linux-musl': { ...sys(), file: true },
+    '/home': sys(), '/home/u': sys(1000, 0o755), '/home/u/.npm-global': sys(1000), '/home/u/.npm-global/bin': sys(1000), '/home/u/.npm-global/bin/node': { ...sys(1000), file: true },
+    '/home/u/.local': sys(1000), '/home/u/.local/bin': sys(1000), '/home/u/.local/bin/claude': { ...sys(1000), file: true },
+    '/opt': sys(), '/opt/tools': sys(0, 0o775), '/opt/tools/claude': { ...sys(), file: true },
+  };
+  const procs = {};
+  const clean = ['PATH=/usr/bin', 'HOME=/home/u', 'CLAUDE_CODE_ENTRYPOINT=cli'];
+  let pid = 6000;
+  const session = (id, p) => { pid += 1; procs[pid] = { start: '123456', cwd: repo, argv: [p.exe], environ: clean, files: [], ...p };
+    w.state.sessions.push({ sessionId: id, host: HOST, cwd: repo, signal: 'stop', updatedAt: iso(T0 + 30_000), claudePid: pid, interactive: true, startedAt: iso(T0 - 600_000) }); };
+  session('system', { exe: '/usr/bin/claude' });
+  session('npm-root', { exe: '/usr/bin/node', argv: ['node', '/usr/bin/claude-npm'] });
+  session('npm-home', { exe: '/home/u/.npm-global/bin/node', argv: ['node', '/usr/bin/claude-npm'] });
+  session('native-home', { exe: '/home/u/.local/bin/claude' });
+  session('group-writable', { exe: '/opt/tools/claude' });
+  session('preload', { exe: '/usr/bin/claude', environ: [...clean, 'LD_PRELOAD=/tmp/x.so'] });
+  session('node-opts', { exe: '/usr/bin/node', argv: ['node', '/usr/bin/claude-npm'], environ: [...clean, 'NODE_OPTIONS=--require=/tmp/x.js'] });
+  session('node-flag', { exe: '/usr/bin/node', argv: ['node', '--require', '/tmp/x.js', '/usr/bin/claude-npm'] });
+  session('no-env', { exe: '/usr/bin/claude', environ: null });
+  // A Codex thread on a root-installed codex, holding its rollout open.
+  const transcript = w.rollout('cx-1', repo);
+  pid += 1;
+  procs[pid] = { start: '99', cwd: '/', exe: '/usr/lib/node_modules/@openai/codex/vendor/codex-x86_64-unknown-linux-musl', argv: ['codex', 'app-server'], environ: clean, files: [transcript] };
+  w.state.sessions.push({ sessionId: 'cx-1', host: HOST, source: 'codex', cwd: repo, signal: 'stop', updatedAt: iso(T0 + 20_000), codexHookAt: iso(T0 + 20_000), codexServerPid: pid, codexInteractive: true, codexTranscript: transcript });
+  const r = await w.make({ platform: 'linux', fsp: linuxFs({ procs, tree }) }).build();
+  const v = (k) => r.self[k].verified;
+  assert.deepEqual(['system', 'npm-root'].map((k) => v(`claude|${k}`)), [true, true], 'root-installed claude, and npm Claude Code under /usr/lib/node_modules');
+  assert.equal(v('codex|cx-1'), true);
+  for (const k of ['npm-home', 'native-home', 'group-writable', 'preload', 'node-opts', 'node-flag', 'no-env']) assert.equal(v(`claude|${k}`), false, k);
+  assert.equal(r.unverified, 7);
+  assert.ok(w.calls.every(([f]) => f === 'git'), 'no ps or lsof on Linux: /proc only');
 });

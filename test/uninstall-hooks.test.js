@@ -33,19 +33,23 @@ function seededHome() {
   fs.writeFileSync(path.join(home, '.gemini', 'settings.json'), geminiText);
   fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ numStartups: 3, mcpServers: { other: { command: 'x', args: ['y.js'] } } }));
   McpInstall.install({ home, entry: McpInstall.launch({ packaged: true, execPath: '/opt/Plexiform/plexiform', appPath: '/opt/Plexiform/resources/app.asar' }) });
+  // The bus-only profile Plexiform adds by itself (src/mcp-auto.js) goes too.
+  McpInstall.install({ home, name: McpInstall.BUS_NAME, entry: McpInstall.launch({ packaged: true, execPath: '/opt/Plexiform/plexiform', appPath: '/opt/Plexiform/resources/app.asar', profile: 'bus' }) });
   return { home, geminiText };
 }
 
-function assertClean(home, geminiText) {
+function assertClean(home, geminiText, { codexConfig = true } = {}) {
   const claude = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   assert.equal(claude.model, 'opus');
   assert.deepEqual(claude.hooks, { Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'echo mine' }] }] });
   const cursor = JSON.parse(fs.readFileSync(path.join(home, '.cursor', 'hooks.json'), 'utf8'));
   assert.deepEqual(cursor.hooks, { stop: [{ command: 'my-own-stop' }] });
-  const codex = fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8');
-  assert.ok(!/notify/.test(codex), codex);
-  assert.match(codex, /model = "o3"/);
-  assert.match(codex, /\[profiles\.x\]/);
+  if (codexConfig) {
+    const codex = fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8');
+    assert.ok(!/notify/.test(codex), codex);
+    assert.match(codex, /model = "o3"/);
+    assert.match(codex, /\[profiles\.x\]/);
+  }
   assert.equal(fs.readFileSync(path.join(home, '.gemini', 'settings.json'), 'utf8'), geminiText, 'a file with nothing of ours is not rewritten');
   const cj = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'));
   assert.equal(cj.numStartups, 3);
@@ -55,7 +59,7 @@ function assertClean(home, geminiText) {
 test('uninstall-hooks: removes only Buddy entries from every agent config and ~/.claude.json', () => {
   const { home, geminiText } = seededHome();
   const results = UninstallAll.run({ home, mcp: McpInstall });
-  assert.deepEqual(Object.fromEntries(results.map((r) => [r.id, r.changed])), { copilot: false, goose: false, cline: false, opencode: false, aider: false, claude: true, cursor: true, codex: true, gemini: false, mcp: true });
+  assert.deepEqual(Object.fromEntries(results.map((r) => [r.id, r.changed])), { copilot: false, goose: false, cline: false, opencode: false, aider: false, claude: true, cursor: true, codex: true, gemini: false, mcp: true, 'mcp-bus': true });
   assert.ok(results.every((r) => !r.error), JSON.stringify(results));
   assertClean(home, geminiText);
   // Running again changes nothing.
@@ -83,11 +87,15 @@ test('uninstall-hooks: an unparsable config is reported and left alone', () => {
 
 test('uninstall-hooks: the plain-Node entry the .deb prerm runs works against HOME', { skip: process.platform === 'win32' && 'HOME is not the home on Windows' }, () => {
   const { home, geminiText } = seededHome();
-  const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'hooks', 'uninstall-hooks.js')], { env: { ...process.env, HOME: home }, encoding: 'utf8' });
+  // No Codex config here: with one, the entry would run the real Codex CLI it finds on this machine
+  // (`codex mcp get`). That branch is covered in-process with a fake runner below.
+  fs.rmSync(path.join(home, '.codex', 'config.toml'));
+  const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'hooks', 'uninstall-hooks.js')], { env: { ...process.env, HOME: home }, encoding: 'utf8', timeout: 30000 });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /claude: removed/);
   assert.match(r.stdout, /mcp: removed/);
-  assertClean(home, geminiText);
+  assert.match(r.stdout, /codex-mcp: nothing to remove/, 'no Codex config, so the Codex CLI is never run');
+  assertClean(home, geminiText, { codexConfig: false });
   fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -157,4 +165,36 @@ test('plain Node uninstall CLI returns nonzero for malformed synthetic-home data
   const file = path.join(home, '.claude', 'settings.json'), bytes = Buffer.from('{ malformed foreign config\r\n'); fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, bytes);
   const result = spawnSync(process.execPath, [path.join(__dirname, '../hooks/uninstall-hooks.js')], { env, encoding: 'utf8', timeout: 2000, maxBuffer: 4096 });
   assert.equal(result.status, 1); assert.ok(!result.signal); assert.deepEqual(fs.readFileSync(file), bytes);
+});
+
+test('uninstall: plexiform-bus is removed from Codex through its own CLI (a fake runner), only while it carries the marker', () => {
+  const { home } = seededHome();
+  const bus = McpInstall.launch({ packaged: true, execPath: '/opt/Plexiform/plexiform', appPath: '/opt/Plexiform/resources/app.asar', profile: 'bus' });
+  const fake = (spec, { getFails = null } = {}) => {
+    const calls = [];
+    const execFileSync = (bin, args, opts) => {
+      calls.push({ bin, args, home: opts.env.HOME, codexHome: opts.env.CODEX_HOME });
+      if (args[1] === 'get') {
+        if (getFails) throw Object.assign(new Error('exit 1'), { stderr: getFails });
+        return JSON.stringify({ name: 'plexiform-bus', transport: { type: 'stdio', command: spec.command, args: spec.args, env: spec.env } });
+      }
+      return "Removed global MCP server 'plexiform-bus'.\n";
+    };
+    return { calls, execFileSync };
+  };
+  const codexOf = (results) => results.find((r) => r.id === 'codex-mcp');
+  const ours = fake(bus);
+  assert.deepEqual(codexOf(UninstallAll.run({ home, mcp: McpInstall, codexBin: '/fake/codex', execFileSync: ours.execFileSync })), { id: 'codex-mcp', file: 'codex mcp plexiform-bus', changed: true });
+  assert.deepEqual(ours.calls.map((c) => c.args.slice(0, 3)), [['mcp', 'get', 'plexiform-bus'], ['mcp', 'remove', 'plexiform-bus']]);
+  assert.ok(ours.calls.every((c) => c.bin === '/fake/codex' && c.home === home && c.codexHome === path.join(home, '.codex')), 'only against this home');
+  // A same-named entry without Plexiform's marker is someone else's: read, never removed.
+  const { home: home2 } = seededHome();
+  const foreign = fake({ command: 'npx', args: ['other'], env: {} });
+  assert.equal(codexOf(UninstallAll.run({ home: home2, mcp: McpInstall, codexBin: '/fake/codex', execFileSync: foreign.execFileSync })).changed, false);
+  assert.deepEqual(foreign.calls.map((c) => c.args[1]), ['get']);
+  // Not registered, and a CLI that does not answer.
+  const { home: home3 } = seededHome();
+  assert.deepEqual(codexOf(UninstallAll.run({ home: home3, mcp: McpInstall, codexBin: '/fake/codex', execFileSync: fake(bus, { getFails: "Error: No MCP server named 'plexiform-bus' found." }).execFileSync })), { id: 'codex-mcp', file: 'codex mcp plexiform-bus', changed: false });
+  assert.equal(codexOf(UninstallAll.run({ home: home3, mcp: McpInstall, codexBin: '/fake/codex', execFileSync: fake(bus, { getFails: 'boom' }).execFileSync })).error, 'codex did not answer');
+  for (const h of [home, home2, home3]) fs.rmSync(h, { recursive: true, force: true });
 });

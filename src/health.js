@@ -173,6 +173,34 @@ function checkMcp(ctx) {
   return { status: 'warn', detail: 'Off: Claude can\'t ask Plexiform "why is my light amber?".', fix: 'enable-mcp', next: RESTART_SESSIONS };
 }
 
+// ctx.busMcp: src/mcp-auto.js status() from the app (null elsewhere: the MCP server's own health has no row).
+const BUS_APPROVALS = 'Codex asks you before each bus_handoff unless you allow plexiform-bus in Codex; Plexiform never sets that for you.';
+function busRow(which) {
+  return (ctx) => {
+    const b = ctx.busMcp && ctx.busMcp[which];
+    if (!b || b.state === 'unknown') return null;
+    const where = which === 'claude' ? '~/.claude.json' : "Codex's config";
+    switch (b.state) {
+      case 'ours': return { status: 'ok', detail: which === 'claude' ? 'Registered as plexiform-bus.' : `Registered with Codex as plexiform-bus. ${BUS_APPROVALS}` };
+      case 'full': return { status: 'ok', detail: "Plexiform's Claude integration is on and already carries the bus tools." };
+      case 'off': return { status: 'info', detail: "Off (agent awareness and the agent bus are off, you pressed Undo, or you turned Plexiform's Claude integration off)." };
+      case 'missing': return { status: 'info', detail: 'Codex CLI not found.' };
+      case 'untrusted': return { status: 'warn', detail: "The codex Plexiform found is not OpenAI's signed Codex, so Plexiform did not run it.", next: 'Install Codex from OpenAI (ChatGPT.app, Homebrew or npm), or remove the codex in ~/.local/bin, then restart Plexiform.' };
+      case 'foreign': return { status: 'warn', detail: `An MCP server named plexiform-bus in ${where} is not Plexiform's. Plexiform left it alone.`, next: 'Rename or remove that entry to let Plexiform add its bus tools.' };
+      case 'other-channel': return { status: 'info', detail: 'plexiform-bus belongs to another copy of Plexiform (a development checkout or the installed app). Left alone.' };
+      case 'mismatch': return { status: 'warn', detail: 'Codex did not keep plexiform-bus as Plexiform wrote it (ChatGPT.app manages the same file).', next: 'Quit ChatGPT.app and Codex, then restart Plexiform.' };
+      default: return { status: 'warn', detail: `Plexiform could not register its bus tools${b.error ? ` (${b.error})` : ''}.` };
+    }
+  };
+}
+function checkBusHook(ctx) {
+  const h = ctx.busMcp && ctx.busMcp.codexHook;
+  if (!h || ['unknown', 'off'].includes(h.state)) return null;
+  if (h.state === 'approved') return { status: 'ok', detail: 'Codex sessions join the agent bus when they start.' };
+  if (h.state === 'needs-approval') return { status: 'warn', detail: "Approve Plexiform's Codex hook in Codex (/hooks).", next: 'In Codex, run /hooks and approve the plexiform-bus bus_session hook. Until then a Codex session joins the agent bus at its first bus tool call. Plexiform never approves hooks for you.' };
+  return { status: 'warn', detail: 'Plexiform could not add its bus_session hook to ~/.codex/hooks.json.' };
+}
+
 // ctx.signal: { listening, port, error } from the app, or { running: false }
 // when the MCP server found nothing answering.
 function checkSignal(ctx) {
@@ -415,6 +443,9 @@ const CHECKS = [
   ['last-hook', 'Last hook event', checkLastHook],
   ['signal', "Plexiform's local connection", checkSignal],
   ['mcp', 'Claude integration (MCP)', checkMcp],
+  ['bus-mcp-claude', 'Agent bus tools (Claude Code)', busRow('claude')],
+  ['bus-mcp-codex', 'Agent bus tools (Codex)', busRow('codex')],
+  ['bus-codex-hook', 'Codex agent bus hook', checkBusHook],
   ['transcripts', 'Transcripts', checkTranscripts],
   ['disk', 'Disk space', checkDisk],
   ['burst', 'Burst trusted', checkBurst],

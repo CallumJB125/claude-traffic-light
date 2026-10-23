@@ -34,6 +34,13 @@ module.exports = {
   // points electron-updater at each signed release's own folder); it is
   // here because electron-builder writes the latest*.yml feed files from it.
   publish: [{ provider: 'generic', url: Brand.urls.updates }],
+  // Flipped just before signing. No --inspect flag and no SIGUSR1 inspector: Plexiform's bus server
+  // (mcp-server.js, run as node) is trusted to act only on its parent's requests, and nothing Plexiform
+  // ships starts an inspector. runAsNode stays on: the hooks and that server run the app binary as node.
+  // NODE_OPTIONS stays honoured for now: the same fuse also turns off NODE_EXTRA_CA_CERTS, which the board
+  // runner (Electron's node) forwards for people behind a TLS-inspecting proxy (board/CONTRACT.md D15);
+  // main refuses a bus caller with NODE_OPTIONS set instead (src/peer-pid.js INJECT).
+  electronFuses: { enableNodeCliInspectArguments: false },
 
   mac: {
     ...base.mac,

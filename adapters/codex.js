@@ -173,6 +173,70 @@ function isActivityInstalled({ home, runtime, fs: fsImpl = fs }) {
   try { return checkActivity(activitySnapshot(lifecycleConfigPath(home), fsImpl).data, runtime) && Runtime.wrapperPresent(runtime, {}, fsImpl); } catch { return false; }
 }
 
+// Agent bus binding (plan-agent-awareness step 3, findings §1): a SEPARATE, new
+// SessionStart handler of type mcp_tool. Codex calls Plexiform's bus_session
+// tool on that thread's own MCP server process, stamped with the thread id, so
+// the thread is tied to that process before the model does anything. Codex
+// runs it only once the person approves it in Codex (/hooks); Plexiform never
+// writes hook trust, and the lifecycle handlers above stay byte for byte as they were.
+const BUS_SERVER = 'plexiform-bus';
+const BUS_TOOL = 'bus_session';
+const busHook = () => ({ type: 'mcp_tool', server: BUS_SERVER, tool: BUS_TOOL, input: {}, timeout: 5 });
+const isBusHookOurs = (h) => object(h) && Object.keys(h).sort().join(',') === 'input,server,timeout,tool,type' && h.type === 'mcp_tool'
+  && h.server === BUS_SERVER && h.tool === BUS_TOOL && h.timeout === 5 && object(h.input) && Object.keys(h.input).length === 0;
+
+// Codex keys hook trust by position (findings §2): taking a group out shifts every group after it, and
+// the person would silently lose the trust of those hooks. So ours goes only while it is the very last
+// SessionStart handler; anywhere else it stays and the caller says so ({ kept: true }).
+function stripBusHook(config) {
+  validateActivity(config);
+  const groups = config.hooks?.SessionStart;
+  if (!groups || !groups.some((g) => g.hooks.some(isBusHookOurs))) return { config, kept: false };
+  const last = groups[groups.length - 1];
+  const ours = last.hooks.findIndex(isBusHookOurs);
+  const elsewhere = groups.slice(0, -1).some((g) => g.hooks.some(isBusHookOurs)) || last.hooks.filter(isBusHookOurs).length > 1;
+  if (ours !== last.hooks.length - 1 || elsewhere) return { config, kept: true };
+  const handlers = last.hooks.slice(0, -1);
+  const keep = handlers.length || Object.keys(last).some((k) => !['matcher', 'hooks'].includes(k));
+  return { config: { ...config, hooks: { ...config.hooks, SessionStart: [...groups.slice(0, -1), ...(keep ? [{ ...last, hooks: handlers }] : [])] } }, kept: false };
+}
+
+function checkBusHook(config) {
+  validateActivity(config);
+  const ours = (config.hooks?.SessionStart || []).flatMap((g) => g.hooks.filter(isBusHookOurs).map(() => g));
+  return ours.length === 1 && (!ours[0].matcher || ours[0].matcher === '');
+}
+
+// A group of its own at the end of SessionStart: every existing group and handler keeps its place (Codex keys trust by
+// position). One of ours already anywhere is left as it is, for the same reason.
+function installBusHook({ home, fs: fsImpl = fs }) {
+  const file = lifecycleConfigPath(home);
+  try {
+    const cur = activitySnapshot(file, fsImpl);
+    validateActivity(cur.data);
+    if ((cur.data.hooks?.SessionStart || []).some((g) => g.hooks.some(isBusHookOurs))) return { ok: true, file, changed: false };
+    const next = { ...cur.data, hooks: { ...(cur.data.hooks || {}) } };
+    next.hooks.SessionStart = [...(next.hooks.SessionStart || []), { hooks: [busHook()] }];
+    writeActivity(file, cur, next, fsImpl);
+    return { ok: true, file, changed: true };
+  } catch (err) { return { ok: false, file, changed: false, error: err.message }; }
+}
+
+function uninstallBusHook({ home, fs: fsImpl = fs }) {
+  const file = lifecycleConfigPath(home);
+  try {
+    const cur = activitySnapshot(file, fsImpl);
+    const { config: next, kept } = stripBusHook(cur.data);
+    const changed = JSON.stringify(next) !== JSON.stringify(cur.data) && !!cur.stat;
+    if (changed) writeActivity(file, cur, next, fsImpl);
+    return { ok: true, file, changed, kept };
+  } catch (err) { return { ok: false, file, changed: false, error: err.message }; }
+}
+
+function isBusHookInstalled({ home, fs: fsImpl = fs }) {
+  try { return checkBusHook(activitySnapshot(lifecycleConfigPath(home), fsImpl).data); } catch { return false; }
+}
+
 function normalizeLifecycle(event, d) {
   if (!object(d) || d.hook_event_name !== event || typeof d.session_id !== 'string' || !ID.test(d.session_id) || typeof d.cwd !== 'string' || !d.cwd || d.cwd.length > 500 || /[\0\r\n]/.test(d.cwd)) return [];
   if (!['SessionStart', 'SessionEnd'].includes(event) && (typeof d.turn_id !== 'string' || !TURN_ID.test(d.turn_id))) return [];
@@ -263,6 +327,7 @@ module.exports = {
   normalize,
   LIFECYCLE_VERSION, LIFECYCLE_EVENTS, lifecycleConfigPath, lifecycleCommandFor, isActivityOurs,
   validateActivity, applyActivity, stripActivity, checkActivity, installActivity, uninstallActivity, isActivityInstalled,
+  busHook, isBusHookOurs, stripBusHook, checkBusHook, installBusHook, uninstallBusHook, isBusHookInstalled,
   install({ home, runtime, fs: fsImpl = fs }) {
     const file = configPath(home);
     const r = apply(readText(file, fsImpl), runtime);

@@ -42,6 +42,7 @@ const HostApp = require('./hostapp.js');
 const Motion = require('./motion.js');
 const Cameos = require('./cameos.js');
 const McpInstall = require('./mcp-install.js');
+const McpAutoRule = require('./src/mcp-auto.js');
 const NativeBoard = require('./native-board/service');
 const Setup = require('./setup.js');
 const Help = require('./help.js');
@@ -304,6 +305,8 @@ const DEFAULT_CONFIG = {
   agentAwareness: { enabled: true, notes: true, midTurnNotices: false },
   // The bus-only MCP registration, once it ships (plan-agent-awareness §3.9): true after Undo or turning it off.
   mcpBusUserOff: false,
+  // The AI tools page's Claude integration switch, turned off by the person (from step 3 on it is remembered).
+  mcpUserOff: false,
   // A role reset the team hub never acknowledged ({origin, userId}; no token): retried at start.
   remoteInteractionResetPending: null,
   // Existing Codex CLI sessions on Codex's shared daemon (src/codex-daemon.js): off until ticked in Preferences.
@@ -361,6 +364,7 @@ function buildConfig() {
   config.spend = Spend.normalize(saved.spend);
   config.agentAwareness = require('./src/agent-awareness.js').normalize(saved.agentAwareness);
   config.mcpBusUserOff = saved.mcpBusUserOff === true;
+  config.mcpUserOff = saved.mcpUserOff === true;
   config.voice = Voice.normalizeConfig(saved.voice);
   config.compaction = Compaction.normalizeSettings(saved.compaction);
   config.integrations = { ...(saved.integrations && typeof saved.integrations === 'object' && !Array.isArray(saved.integrations) ? saved.integrations : {}), ghosttyDock: GhosttyDock.normalizeMode(saved.integrations && saved.integrations.ghosttyDock) };
@@ -401,6 +405,7 @@ function saveConfig(partial) {
   if (partial.agentBus) next.agentBus = require('./src/agent-bus-main.js').normalize(partial.agentBus);
   if (partial.agentAwareness) next.agentAwareness = require('./src/agent-awareness.js').normalize(partial.agentAwareness);
   if ('mcpBusUserOff' in partial) next.mcpBusUserOff = partial.mcpBusUserOff === true;
+  if ('mcpUserOff' in partial) next.mcpUserOff = partial.mcpUserOff === true;
   if (partial.autoAnswer) next.autoAnswer = { v: 1, sealed: null, rules: AutoRules.sanitize(partial.autoAnswer.rules).rules };
   fs.mkdirSync(ROOT_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2));
@@ -525,7 +530,9 @@ const { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor } = 
   broadcastStatus: (...a) => broadcastStatus(...a),
   teamActivity: (op, args) => TeamActivity.call(op, args),
   agentMail: (op, args) => (op === 'request_handoff' || op === 'hand_off_status' ? localHandoffOp(op, args) : AgentMail.op(op, args)),
-  agentBus: (op, args, caller) => AgentBusMain.relay(op, args, caller),
+  // Who is calling comes from the socket's peer process (src/agent-awareness.js bindCaller), never the body:
+  // bus_peers and bus_session are answered here; a bound caller's real provider replaces the one it declared.
+  agentBus: (op, args, caller, ident) => AgentAwareness.relay(op, args, caller, ident, { forward: (o, a, c) => AgentBusMain.relay(o, a, c), onCodexSession: () => McpAuto.codexHookSeen() }),
   // GET /status names a session's folder only when awareness has resolved it as allowed.
   cwdVisible: (s) => AgentAwareness.visible(s),
 });
@@ -1657,7 +1664,9 @@ if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_COLLISION_HOOK ===
 const ProviderStatus = require('./src/provider-status.js');
 // Agent awareness (src/agent-awareness.js, plan-agent-awareness): the roster file every interactive AI session's hooks
 // read. Async only; rebuilt on session changes (debounced), on exclude changes, and every 2 minutes as a heartbeat.
-const AgentAwareness = require('./src/agent-awareness.js').create({ rootDir: ROOT_DIR, host: LOCAL_HOST, home: os.homedir(), codexHome: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), dataDirs: [ROOT_DIR, path.join(app.getPath('userData'), 'tasks')], config: () => loadConfig(), sessions: () => localSessions(aggregateState().sessions || []), halted: () => AgentBusMain.halted(), log: (m) => console.log(m) });
+const AgentAwareness = require('./src/agent-awareness.js').create({ rootDir: ROOT_DIR, host: LOCAL_HOST, home: os.homedir(), codexHome: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), dataDirs: [ROOT_DIR, path.join(app.getPath('userData'), 'tasks')], config: () => loadConfig(), sessions: () => localSessions(aggregateState().sessions || []), halted: () => AgentBusMain.halted(), mcpCaps: () => McpAuto.caps(),
+  // The only command lines a bound caller may be running: Plexiform's own server, as it registers it (bus profile and full).
+  servers: () => [McpInstall.launch({ ...mcpLaunch(), profile: 'bus' }), McpInstall.launch(mcpLaunch())], log: (m) => console.log(m) });
 app.whenReady().then(() => { if (!DEMO) AgentAwareness.start(); });
 onQuit(app, () => AgentAwareness.stop());
 const sessionsSender = e => fromUtilityPage(e, 'sessions');
@@ -3807,6 +3816,8 @@ function commitConfig(partial) {
   // A changed exclude list drops every cached awareness verdict; the switch rebuilds (or removes) the roster.
   if ('agentBus' in partial && JSON.stringify(prev.agentBus?.exclude) !== JSON.stringify(next.agentBus?.exclude)) AgentAwareness.invalidate();
   else if ('agentAwareness' in partial) AgentAwareness.schedule();
+  // The bus tools follow (awareness || bus) && !mcpBusUserOff: added or removed when that flips.
+  if (['agentAwareness', 'agentBus', 'mcpBusUserOff'].some((k) => k in partial) && McpAutoRule.effective(prev) !== McpAutoRule.effective(next)) registerBusTools().catch(() => {});
   if ('compaction' in partial) InteractionMain.hub.compactionSettingsChanged().catch(() => {});
   // Opting out disconnects at once; attached daemon sessions end in Plexiform (they keep running in Codex).
   if (next.codexDaemonMessaging !== true) CodexDaemon.stop();
@@ -4753,9 +4764,24 @@ utilityHandle('import-rules', widgetConfigSender, async () => {
 function mcpOpts() {
   return {
     home: IS_DEV_RUN ? path.join(os.tmpdir(), 'plexiform-mcp-dev-home') : os.homedir(),
-    entry: McpInstall.launch({ packaged: app.isPackaged, execPath: HOOK_PATHS.execPath || process.execPath, appPath: HOOK_PATHS.mcpAppPath, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }),
+    entry: McpInstall.launch(mcpLaunch()),
   };
 }
+function mcpLaunch() {
+  return { packaged: app.isPackaged, execPath: HOOK_PATHS.execPath || process.execPath, appPath: HOOK_PATHS.mcpAppPath, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME };
+}
+// The bus-only profile, registered by Plexiform itself for Claude Code and Codex (src/mcp-auto.js). The installed
+// app writes the person's own configs; dev runs only their sandbox HOME (and a sandbox CODEX_HOME); a plain
+// checkout run, or a copy running from a disk image, never registers anything.
+const MCP_AUTO_HOME = mcpOpts().home;
+const McpAuto = require('./src/mcp-auto.js').create({
+  rootDir: ROOT_DIR, home: MCP_AUTO_HOME, config: () => loadConfig(), launch: mcpLaunch(), codexBin: () => CodexAppServer.findCodexBin(),
+  codexEnv: IS_DEV_RUN ? { ...process.env, CODEX_HOME: path.join(MCP_AUTO_HOME, '.codex') } : process.env, log: (m) => console.log(m),
+});
+const MCP_AUTO_ON = (app.isPackaged && AUTO_INSTALL_HOOKS) || IS_DEV_RUN;
+const registerBusTools = () => (MCP_AUTO_ON ? McpAuto.sync().then(() => AgentAwareness.schedule()) : Promise.resolve());
+// Once per start, after ready and deferred: the Claude Code write is the one sync config write (plan AW10).
+app.whenReady().then(() => { const t = setTimeout(() => { registerBusTools().catch(() => {}); }, 8000); if (t.unref) t.unref(); });
 let nativeBoardService = null;
 function nativeBoardDir() { return path.join(app.getPath('userData'), 'native-board'); }
 function getNativeBoard() {
@@ -4797,6 +4823,9 @@ utilityHandle('mcp-set-enabled', (e) => fromUtilityPage(e, 'aitools'), (_e, on) 
   try {
     const r = on ? McpInstall.install(mcpOpts()) : McpInstall.uninstall(mcpOpts());
     console.log(`[mcp] ${on ? 'registered' : 'unregistered'} in ${r.path}${r.changed ? '' : ' (no change)'}`);
+    // Remembered from now on: auto-registration never adds the full server, and the bus profile follows it.
+    saveConfig({ mcpUserOff: !on });
+    registerBusTools().catch(() => {});
     return McpInstall.status(mcpOpts());
   } catch (err) {
     console.warn('[mcp] registration failed:', err.message);
@@ -4818,7 +4847,7 @@ deployStatus = require('./src/deploy-status-main.js').install({ ipcMain, file: p
   StarterMain.register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), starter });
   onQuit(app, () => starter.close());
 }
-require('./src/home-alerts.js').wire({ ipcMain, dialog, clipboard, homeAllowed: (e) => fromUtilityPage(e, 'home'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessions: () => aggregateState().sessions || [], burst: () => BurstIpc.snapshot().d, burstView: () => BurstIpc.status(), burstLooseEnds: () => BurstIpc.looseEndsView(), burstAct: async (kind) => { const r = await BurstIpc.act(kind); return r && r.error === 'Unknown action.' ? BurstIpc.runAction(kind) : r; }, tasksRows: () => tasksSvc?.snapshot().tasks || [], tasksService: getTasks, handoverText: (key) => SessionHandoverMain.writer.text(key), jump: (s) => jumpToSession(s, Rules.folderOf(s.cwd), s.hostApp), mail: () => AgentMail.pending(), openMail: async () => { openBuddy('sessions'); } });
+require('./src/home-alerts.js').wire({ ipcMain, dialog, clipboard, homeAllowed: (e) => fromUtilityPage(e, 'home'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessions: () => aggregateState().sessions || [], burst: () => BurstIpc.snapshot().d, burstView: () => BurstIpc.status(), burstLooseEnds: () => BurstIpc.looseEndsView(), burstAct: async (kind) => { const r = await BurstIpc.act(kind); return r && r.error === 'Unknown action.' ? BurstIpc.runAction(kind) : r; }, tasksRows: () => tasksSvc?.snapshot().tasks || [], tasksService: getTasks, handoverText: (key) => SessionHandoverMain.writer.text(key), jump: (s) => jumpToSession(s, Rules.folderOf(s.cwd), s.hostApp), mail: () => AgentMail.pending(), openMail: async () => { openBuddy('sessions'); }, busNotices: () => (MCP_AUTO_ON ? McpAuto.notices() : []), busAct: (handle, action) => McpAuto.act(handle, action, { undo: async () => { commitConfig({ mcpBusUserOff: true }); } }) });
 require('./src/digest-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), rootDir: ROOT_DIR, userData: app.getPath('userData'), safeStorage: require('electron').safeStorage, clipboard, dialog, shell, Notification, fetch: (...a) => net.fetch(...a), usageTurns: () => getUsageTurns(), costGuard: () => (costGuardReport ? costGuardReport() : null), workCost: () => workCostReport(), scheduledRuns: (from, to) => (recipeScheduler ? recipeScheduler.runsBetween(from, to).map((h) => ({ ...h, title: recipes.find(h.id)?.title || 'A recipe' })) : []), teamBrief: (cwd) => (loadConfig().teamBrief === true ? TeamActivity.call('team_brief', { cwd }) : null), interruptible: () => InterruptGate.isInterruptible(), openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // privacy-flow: digest-slack
 { const TeamToday = require('./src/team-today.js'); const fake = IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_FAKE_TEAM_TODAY; TeamToday.wire({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), file: path.join(ROOT_DIR, 'team-today.json'), log: (m) => console.log(m), ...(fake ? TeamToday.fixtureSources(JSON.parse(fs.readFileSync(fake, 'utf8'))) : { links: async () => (await buddyWin?.teamMemoryLinks?.()) ?? [], board: async (route) => (await buddyWin?.teamBoardSnapshot?.(route)) ?? null, mine: () => buddyWin?.workCostRows?.().records ?? [], fetch: (...a) => net.fetch(...a) }) }); } // privacy-flow: team-today
 // Team depth lane B: the hub inbox. Live rows arrive as `inbox.item` on the
@@ -4941,6 +4970,7 @@ function healthReport() {
     version: app.getVersion(),
     updateStatus,
     mcp: McpInstall.status(mcpOpts()),
+    busMcp: MCP_AUTO_ON ? McpAuto.status() : null,
     signal: { listening: !!signalServer?.listening, port: SIGNAL_PORT, error: signalServerError },
     burst: BurstIpc.status(),
     burstFacts: BurstIpc.healthFacts(),
@@ -4982,7 +5012,7 @@ ipcMain.handle('health-fix', (e, id) => {
         if (!r.ok) error = r.error || 'Codex hooks could not be configured.';
       }
     } else if (id === 'connect-hermes') error = 'Open the installed app to connect Hermes.';
-    else if (id === 'enable-mcp') McpInstall.install(mcpOpts());
+    else if (id === 'enable-mcp') { McpInstall.install(mcpOpts()); saveConfig({ mcpUserOff: false }); registerBusTools().catch(() => {}); }
     else if (id === 'clear-stale-locks') Health.clearStaleLocks({ root: ROOT_DIR });
     else if (id === 'open-burst-console') BurstIpc.openConsole().catch((err) => console.log(`[health] burst console: ${err.message}`));
     else error = 'unknown fix';

@@ -5,8 +5,8 @@
 // teammates' shared work, agent mail, followed-session events); teammates' rows
 // therefore only ever describe sessions their owners explicitly shared.
 (function (root) {
-  const SEVERITY = Object.freeze({ approval: 0, question: 0, blocker: 1, burst: 1, failed: 2, handoff: 3, mention: 3, review: 4, reply: 4, waiting: 5, moment: 5, finished: 6 });
-  const LABEL = Object.freeze({ approval: 'Approval', question: 'Question', blocker: 'Blocked', burst: 'Burst', failed: 'Failed', handoff: 'Handoff', mention: 'Mention', review: 'Ready for review', reply: 'Reply', waiting: 'Waiting on', moment: 'Moment', finished: 'Finished' });
+  const SEVERITY = Object.freeze({ approval: 0, question: 0, blocker: 1, burst: 1, failed: 2, handoff: 3, mention: 3, review: 4, reply: 4, setup: 4, waiting: 5, moment: 5, finished: 6 });
+  const LABEL = Object.freeze({ approval: 'Approval', question: 'Question', blocker: 'Blocked', burst: 'Burst', failed: 'Failed', handoff: 'Handoff', mention: 'Mention', review: 'Ready for review', reply: 'Reply', waiting: 'Waiting on', moment: 'Moment', setup: 'Plexiform', finished: 'Finished' });
   const TEAM_KINDS = Object.freeze(['mention', 'reply', 'moment', 'handoff']);
   const MAX = 30;
   const OPTIONS_MAX = 4;
@@ -49,6 +49,8 @@
     for (const l of alerts?.limits || []) push({ kind: 'blocker', title: str(l.title, 400), meta: str(l.meta, 400), ageMs: null, action: l.canResume ? { kind: 'alert', alert: 'limit', op: 'resume', handle: l.handle, label: 'Resume at reset' } : { kind: 'alert', alert: 'limit', op: 'dismiss', handle: l.handle, label: 'Dismiss' }, key: `limit:${l.handle}` });
     const burst = burstRow(alerts?.burst);
     if (burst) push(burst);
+    // Plexiform's agent bus notices (src/home-alerts.js busCards): Undo what it added, or dismiss.
+    for (const b of alerts?.bus || []) if (str(b.handle, 100) && (b.action === 'undo' || b.action === 'dismiss')) push({ kind: 'setup', title: str(b.title, 400), meta: str(b.meta, 400), ageMs: null, action: { kind: 'alert', alert: 'bus', op: b.action, handle: b.handle, label: b.action === 'undo' ? 'Undo' : 'Dismiss' }, key: `bus:${b.handle}` });
     for (const w of alerts?.waiting || []) push({ kind: 'waiting', title: str(w.title, 400), meta: str(w.meta, 400), ageMs: null, action: { kind: 'alert', alert: 'waiting', op: 'open', handle: w.handle, label: 'Open request' }, key: `waiting:${w.handle}` });
     for (const m of alerts?.mail || []) push({ kind: 'question', title: str(m.title, 400), meta: str(m.meta, 400), ageMs: null, action: { kind: 'alert', alert: 'mail', op: 'open', handle: m.handle, label: 'Open agent mail' }, key: `mail:${m.handle}` });
     for (const [i, t] of (morning?.items || []).entries()) {
