@@ -405,6 +405,15 @@
     return parts.join('/') || '/';
   }
 
+  /**
+   * @param {object} opts
+   * @param {(dir: string, args: string[]) => Promise<string>} opts.git
+   * @param {(cwd: string) => Promise<string|null>} [opts.repoFor]
+   * @param {(p: string) => Promise<string>} [opts.realpath] The caller must pass
+   *   `fsp.realpath` (node:fs/promises). The default is the identity, so without it a session
+   *   started from a symlinked folder (/tmp vs /private/tmp, a linked checkout) is not folded
+   *   into the same project as its real path.
+   */
   function createGitInfoResolver({ git, repoFor = async () => null, realpath = async (p) => p, now = () => Date.now(), ttlMs = 60_000, max = 500 } = {}) {
     if (typeof git !== 'function') throw new TypeError('git runner required');
     const cache = new Map(); // cwd → { at, value: Promise }
