@@ -66,15 +66,18 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
  const placed=(status,bucket)=>({status,bucket,...(PLAIN_LABELS.has(status)||status===Organise.headingOf(bucket)?{}:{detail:status})});
  // A managed task waiting on the person needs them whatever its run state: an open ask or a
  // confirm to approve (its actions say so), or parked until they log in or their limit resets.
+ // A run that stopped at a usage limit or its budget waits on the person too (work-organise's rule).
+ const PERSON_FAIL=['limit','budget'];
  const managedBucket=t=>{
   const actions=Array.isArray(t.actions)?t.actions:[];
+  if(t.state==='failed'&&PERSON_FAIL.includes(t.failKind))return 'needs';
   if(actions.includes('answer')||actions.includes('approve')||(t.state==='queued'&&t.awaitingConfirm===true)||(t.state==='parked'&&['limit','auth'].includes(t.parkReason)))return 'needs';
   return typeof t.state==='string'&&Object.hasOwn(RUN_BUCKET,t.state)?RUN_BUCKET[t.state]:'idle';
  };
  const boardPlaced=(data,row)=>{
   const status=managedStatus(data,row);
   // Blocked with no decision for this person is stuck on something else, not waiting on them.
-  const bucket=status==='Waiting on you'?'needs':status==='Blocked'?'stuck':['Connection unavailable','No recent activity','Unknown'].includes(status)?'idle':RUN_BUCKET[row.card.run_state]??'idle';
+  const bucket=status==='Waiting on you'||(row.card.run_state==='failed'&&PERSON_FAIL.includes(row.card.fail_kind))?'needs':status==='Blocked'?'stuck':['Connection unavailable','No recent activity','Unknown'].includes(status)?'idle':RUN_BUCKET[row.card.run_state]??'idle';
   return placed(status,bucket);
  };
  function register(row,entry,next){const handle=crypto.randomUUID();next.set(handle,{...entry,canOpen:row.capabilities.open.enabled===true,canMessage:row.capabilities.message.enabled===true,expires:now()+45000});row.handle=handle;return row;}

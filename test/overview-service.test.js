@@ -72,3 +72,12 @@ test('Overview managed tasks waiting on the person are Needs you whatever their 
  assert.equal((await managed({state:'parked',label:'Paused',parkReason:'user'})).bucket,'idle');
  assert.equal((await managed({state:'queued',label:'Queued'})).bucket,'working');
 });
+
+test('Overview a run stopped at a usage limit or its budget is Needs you, other failures stay Stuck or failed',async()=>{
+ const managed=t=>createOverviewService({now:()=>time,managed:()=>({conn:{status:'connected'},tasks:[{id:'t1',title:'Managed task',ai:{id:'codex'},green:false,actions:[],state:'failed',...t}]})}).snapshot().then(s=>s.sessions[0]);
+ for(const [failKind,label,bucket] of [['budget','Stopped at cap','needs'],['limit','Plan limit reached','needs'],['crash','Failed','stuck'],[undefined,'Stopped','stuck']]){
+  const m=await managed({failKind,label});assert.equal(m.bucket,bucket,label);assert.equal(m.status,label);
+ }
+ const x=fixture({sessions:()=>[]});x.row.card.run_state='failed';
+ for(const [fail_kind,bucket] of [['limit','needs'],['budget','needs'],['network','stuck'],[undefined,'stuck']]){x.row.card.fail_kind=fail_kind;assert.equal((await x.svc.snapshot()).sessions[0].bucket,bucket,String(fail_kind));}
+});
