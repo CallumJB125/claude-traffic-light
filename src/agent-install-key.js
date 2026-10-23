@@ -9,13 +9,22 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function createLedgerKeyStore({ file, safeStorage, fsApi = fs }) {
+// On Linux, safeStorage falls back to a hard-coded password (basic_text) when
+// no keyring is running; that, or an unknown backend, counts as unavailable.
+const WEAK_LINUX_BACKENDS = new Set(['basic_text', 'unknown']);
+
+function createLedgerKeyStore({ file, safeStorage, fsApi = fs, platform = process.platform }) {
   let failed = null, key = null;
   const fail = (msg) => { failed = new Error(msg); throw failed; };
   return function ledgerKey() {
     if (key) return key;
     if (failed) throw failed;
-    const sealable = (() => { try { return !!safeStorage && safeStorage.isEncryptionAvailable(); } catch { return false; } })();
+    const sealable = (() => {
+      try {
+        if (!safeStorage || !safeStorage.isEncryptionAvailable()) return false;
+        return platform !== 'linux' || !WEAK_LINUX_BACKENDS.has(safeStorage.getSelectedStorageBackend?.() ?? 'unknown');
+      } catch { return false; }
+    })();
     if (!sealable) fail('agent ledger key needs safeStorage, which is not available');
     let text = null;
     try { text = fsApi.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') fail(`agent ledger key unreadable (${e.code || 'error'})`); }

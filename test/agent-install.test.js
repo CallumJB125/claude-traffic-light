@@ -831,3 +831,17 @@ test('security R3 (F5): undoProject will not follow a symlinked ancestor of the 
   assert.equal(s.inst.undoProject(r.opId).ok, true);
   assert.ok(!fs.existsSync(path.join(real, 'p2/.cursor/rules/frontend-developer.mdc')));
 });
+
+// Security third pass K1: on Linux, safeStorage may "encrypt" with a hard-coded
+// password (basic_text) or an unknown backend; that is no better than clear text.
+test('security K1: on Linux the ledger key refuses a basic_text or unknown safeStorage backend', () => {
+  const { createLedgerKeyStore } = require('../src/agent-install-key.js');
+  const fakeSafe = (backend) => ({ isEncryptionAvailable: () => true, getSelectedStorageBackend: () => backend, encryptString: (s) => Buffer.from(`sealed:${s}`), decryptString: (b) => b.toString().slice(7) });
+  for (const backend of ['basic_text', 'unknown']) {
+    const file = path.join(tmp(), 'agent-installs.key');
+    assert.throws(() => createLedgerKeyStore({ file, safeStorage: fakeSafe(backend), platform: 'linux' })(), /safeStorage/, backend);
+    assert.ok(!fs.existsSync(file), backend);
+  }
+  for (const backend of ['gnome_libsecret', 'kwallet5']) assert.equal(createLedgerKeyStore({ file: path.join(tmp(), 'k'), safeStorage: fakeSafe(backend), platform: 'linux' })().length, 32, backend);
+  assert.equal(createLedgerKeyStore({ file: path.join(tmp(), 'k'), safeStorage: fakeSafe('basic_text'), platform: 'darwin' })().length, 32);
+});
