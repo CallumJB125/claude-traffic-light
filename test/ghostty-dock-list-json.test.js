@@ -90,3 +90,12 @@ test('the reviewer\'s fake CLI end to end (real process, temp dir): no forged ad
     assert.equal(await GhosttyDock.listStatus({ dock: { ...DOCK, cli }, exec }), null);
   } finally { GhosttyDock.invalidateList(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('PRIVACY.md says exactly when list is asked: every local jump, plus the needs-you click', () => {
+  const privacy = fs.readFileSync(path.join(__dirname, '..', 'PRIVACY.md'), 'utf8');
+  const para = privacy.split('\n').find((l) => l.includes('flow:ghostty-dock-local'));
+  assert.doesNotMatch(para, /a click on a session that needs you also asks it/, 'not only the needs-you click');
+  assert.match(para, /every jump to a session on this Mac/);
+  assert.match(para, /`ghostty-dock list --json`/);
+  assert.match(para, /at most once per click/);
+});
