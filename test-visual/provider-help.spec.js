@@ -13,17 +13,17 @@ test('actual Help and widget report multiple local providers and preserve the sa
     const widget = await windowByFile(h.app, 'index.html');
     const configBefore = fs.readFileSync(path.join(h.home, 'config.json'));
     await widget.evaluate(() => window.trafficLight.openHelp());
-    await expect.poll(() => inspect('help.html', 'document.querySelector("#headline").textContent')).toBe('Claude: working · Codex: working · Cursor: working · Gemini: working');
+    await expect.poll(() => inspect('help.html', 'document.querySelector("#headline").textContent')).toBe('Claude: Working on it · Codex: Working on it · Cursor: Working on it · Gemini: Working on it');
     expect(await inspect('help.html', 'document.querySelector("#why").textContent')).toContain('“Claude is working”');
     expect(await inspect('help.html', 'document.querySelector("#why").textContent')).toContain('MY HUMAN SIGN');
     expect(await inspect('help.html', 'document.querySelector("#providers").textContent')).toContain('not a check that work succeeded');
-    await expect.poll(() => widget.locator('#tooltip').textContent()).toContain('Codex: working');
+    await expect.poll(() => widget.locator('#tooltip').textContent()).toContain('Codex: Working on it');
     expect(await widget.locator('#tooltip').textContent()).toContain('Rule “Claude is working”');
     expect(fs.readFileSync(path.join(h.home, 'config.json')).equals(configBefore)).toBe(true);
     const codex = JSON.parse(fs.readFileSync(path.join(h.home, 'sessions/codex.json'))); codex.codexHookAt = new Date(Date.now() - 91000).toISOString();
     fs.writeFileSync(path.join(h.home, 'sessions/codex.json'), JSON.stringify(codex));
-    await expect.poll(() => inspect('help.html', 'document.querySelector("#headline").textContent')).toContain('Codex: stale');
-    await expect.poll(() => widget.locator('#tooltip').textContent()).toContain('Codex: stale');
+    await expect.poll(() => inspect('help.html', 'document.querySelector("#headline").textContent')).toContain('Codex: Idle');
+    await expect.poll(() => widget.locator('#tooltip').textContent()).toContain('Codex: Idle');
     expect(fs.readFileSync(path.join(h.home, 'config.json')).equals(configBefore)).toBe(true);
   } finally { await h.cleanup(); fs.rmSync(syntheticHome, { recursive: true, force: true }); }
 });
