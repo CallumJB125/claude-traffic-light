@@ -497,7 +497,9 @@ test('PR4 adopt: native confirm from main\'s own counts, Cancel the default; the
   assert.equal(r.adopted, 2);
   assert.equal(r.skipped, 0);
   assert.match(r.backup, /^claude-agents-\d{8}T\d{9}Z-[0-9a-f]{8}$/);
-  assert.equal(r.restore, `ditto "$HOME/Library/Plexiform/agent-backups/${r.backup}" "$HOME/.claude/agents-restored"`);
+  const tag = r.backup.replace(/^claude-agents-/, '');
+  assert.ok(r.restore.includes(`"$HOME/Library/Plexiform/agent-backups/${r.backup}" "$HOME/.claude/agents-restored-${tag}"`), r.restore);
+  assert.ok(r.restore.includes(`mv "$HOME/.claude/agents" "$HOME/.claude/agents-old-${tag}"`), r.restore);
   assert.deepEqual(r.paths.sort(), ['~/.claude/agents/frontend-developer.md', '~/.claude/agents/reviewer.md']);
   const m = await s.call('agents:mine');
   assert.deepEqual(m.agents.map((a) => [a.name, a.platforms.map((p) => `${p.how}:${p.state}`).join()]), [['Frontend Developer', 'adopted:current'], ['reviewer', 'adopted:current']]);

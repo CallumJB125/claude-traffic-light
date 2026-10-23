@@ -265,14 +265,35 @@ test('step 11: the documented restore (into a new folder, then swap by hand) get
   fs.appendFileSync(path.join(s.fx.dir, s.fx.own[0]), 'edit\n');
   const live = s.fp();
   const cmd = s.it.restoreCommand(a.backup);
-  assert.match(cmd, /^ditto "\$HOME\/[^"]+" "\$HOME\/\.claude\/agents-restored"$/);
-  execFileSync('/bin/sh', ['-c', cmd], { env: { ...process.env, HOME: s.home } });
+  const tag = a.backup.replace(/^claude-agents-/, '');
+  const R = path.join(s.home, '.claude', `agents-restored-${tag}`), O = path.join(s.home, '.claude', `agents-old-${tag}`);
+  // Two lines, named with the backup's stamp (review #54 L2): copy, check, swap.
+  const [copy, swap, ...more] = cmd.split('\n');
+  assert.deepEqual(more, []);
+  assert.equal(copy, `if [ -e "$HOME/.claude/agents-restored-${tag}" ]; then echo "~/.claude/agents-restored-${tag} already exists, so nothing was copied."; else ditto "$HOME/Library/Plexiform/agent-backups/${a.backup}" "$HOME/.claude/agents-restored-${tag}"; fi`);
+  assert.equal(swap, `if [ -e "$HOME/.claude/agents-old-${tag}" ] || [ ! -d "$HOME/.claude/agents-restored-${tag}" ]; then echo "~/.claude/agents-old-${tag} already exists or there's nothing to swap in, so nothing was moved."; else mv "$HOME/.claude/agents" "$HOME/.claude/agents-old-${tag}" && mv "$HOME/.claude/agents-restored-${tag}" "$HOME/.claude/agents"; fi`);
+  const sh = (line) => execFileSync('/bin/sh', ['-c', line], { env: { ...process.env, HOME: s.home } }).toString();
+  // The swap before a copy moves nothing.
+  assert.match(sh(swap), /nothing was moved/);
+  assert.deepEqual(s.fp(), live);
+  assert.equal(sh(copy), '');
   assert.deepEqual(s.fp(), live, 'restoring into a new folder leaves the live one alone');
-  assert.deepEqual(FP.fingerprint(path.join(s.home, '.claude', 'agents-restored'), { linkTimes: false }), before);
-  // The swap, by hand.
-  fs.renameSync(s.fx.dir, path.join(s.home, '.claude', 'agents-old'));
-  fs.renameSync(path.join(s.home, '.claude', 'agents-restored'), s.fx.dir);
-  fs.utimesSync(s.fx.dir, fs.statSync(path.join(s.home, '.claude', 'agents-old')).atime, fs.statSync(path.join(s.home, '.claude', 'agents-old')).mtime);
+  assert.deepEqual(FP.fingerprint(R, { linkTimes: false }), before);
+  // A second copy never merges into the first.
+  fs.writeFileSync(path.join(R, 'checked.txt'), 'looked at it\n');
+  const restored = FP.fingerprint(R);
+  assert.match(sh(copy), /already exists, so nothing was copied/);
+  assert.deepEqual(FP.fingerprint(R), restored);
+  fs.rmSync(path.join(R, 'checked.txt'));
+  // An agents-old-<stamp> already there: the swap stops rather than nest inside it.
+  fs.mkdirSync(O);
+  assert.match(sh(swap), /nothing was moved/);
+  assert.deepEqual(s.fp(), live);
+  assert.deepEqual(fs.readdirSync(O), []);
+  fs.rmdirSync(O);
+  assert.equal(sh(swap), '');
+  assert.deepEqual(FP.fingerprint(O), live, 'the folder you had is kept as agents-old-<stamp>');
+  fs.utimesSync(s.fx.dir, fs.statSync(O).atime, fs.statSync(O).mtime);
   assert.deepEqual(s.fp({ linkTimes: false }), before);
   assert.equal(execFileSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'agents-fingerprint.js'), s.fx.dir, '--restore']).toString().trim(), `digest ${FP.digest(before)} (${before.length} entries)`);
 });
@@ -301,7 +322,14 @@ test('change 4: no restore command when the data folder is outside home; ids onl
   const home = s.home, data = path.join(home, 'Library', 'Plexiform');
   const t = createAgentInstaller({ home, dataRoot: data, catalog: shipped, ledgerKey: Buffer.alloc(32, 9) });
   const b = t.adopt([`.claude/agents/${s.fx.exact[0].name}`]);
-  assert.equal(t.restoreCommand(b.backup), `ditto "$HOME/Library/Plexiform/agent-backups/${b.backup}" "$HOME/.claude/agents-restored"`);
+  const tag = b.backup.replace(/^claude-agents-/, '');
+  const mac = t.restoreCommand(b.backup);
+  assert.ok(mac.includes(`ditto "$HOME/Library/Plexiform/agent-backups/${b.backup}" "$HOME/.claude/agents-restored-${tag}"`), mac);
+  // ditto is macOS only: Linux gets cp -Rp, anything else only Show backup (L2).
+  const on = (platform) => createAgentInstaller({ home, dataRoot: data, catalog: shipped, ledgerKey: Buffer.alloc(32, 9), platform }).restoreCommand(b.backup);
+  assert.equal(on('linux'), mac.replace(`ditto "$HOME`, `cp -Rp "$HOME`));
+  assert.ok(!on('linux').includes('ditto'));
+  assert.equal(on('win32'), null);
 });
 
 test('change 9: restoreBackupPlan gives names and states only, never bytes, and reads no link', () => {

@@ -42,7 +42,10 @@ const MINE = {
     { opId: '11111111-1111-4111-8111-111111111111', kind: 'adopt', agentId: null, name: null, at: '2026-10-22T09:15:00.000Z', files: 1, thisRun: false },
     { opId: '22222222-2222-4222-8222-222222222222', kind: 'add', agentId: 'agency/frontend-developer', name: 'Frontend Developer', at: '2026-10-21T16:40:00.000Z', files: 2, thisRun: false },
   ],
-  backups: [{ id: 'claude-agents-20261022T091500000Z-0a1b2c3d', at: '2026-10-22T09:15:00.000Z', files: 171, restore: 'ditto "$HOME/Library/Application Support/Plexiform/agent-backups/claude-agents-20261022T091500000Z-0a1b2c3d" "$HOME/.claude/agents-restored"' }],
+  backups: [{ id: 'claude-agents-20261022T091500000Z-0a1b2c3d', at: '2026-10-22T09:15:00.000Z', files: 171, restore: [
+    'if [ -e "$HOME/.claude/agents-restored-20261022T091500000Z-0a1b2c3d" ]; then echo "~/.claude/agents-restored-20261022T091500000Z-0a1b2c3d already exists, so nothing was copied."; else ditto "$HOME/Library/Application Support/Plexiform/agent-backups/claude-agents-20261022T091500000Z-0a1b2c3d" "$HOME/.claude/agents-restored-20261022T091500000Z-0a1b2c3d"; fi',
+    'if [ -e "$HOME/.claude/agents-old-20261022T091500000Z-0a1b2c3d" ] || [ ! -d "$HOME/.claude/agents-restored-20261022T091500000Z-0a1b2c3d" ]; then echo "~/.claude/agents-old-20261022T091500000Z-0a1b2c3d already exists or there\'s nothing to swap in, so nothing was moved."; else mv "$HOME/.claude/agents" "$HOME/.claude/agents-old-20261022T091500000Z-0a1b2c3d" && mv "$HOME/.claude/agents-restored-20261022T091500000Z-0a1b2c3d" "$HOME/.claude/agents"; fi',
+  ].join('\n') }],
 };
 const ADOPTABLE = { ok: true, demo: false, userOwned: 40, reason: null, matches: ['ai-engineer.md', 'backend-architect.md', 'devops-automator.md'].map((n) => ({ name: n, path: `~/.claude/agents/${n}`, agentId: 'x/y', agentName: n.replace('.md', '') })) };
 
@@ -126,7 +129,9 @@ for (const theme of ['light', 'dark']) {
       expect(await page.locator('.af-ops .af-btn').count()).toBe(2);
       expect(await page.evaluate(() => document.querySelectorAll('a, [href]:not(link)').length)).toBe(0);
       await page.click('.af-restore summary');
-      expect(await page.textContent('.af-restore code')).toContain('"$HOME/.claude/agents-restored"');
+      // Exactly the two lines main gave, named with the backup's stamp (L2).
+      expect(await page.textContent('.af-restore code')).toBe(MINE.backups[0].restore);
+      expect(await page.textContent('.af-restore code')).not.toMatch(/agents-(old|restored)(\s|"|$)/);
       await expect(page).toHaveScreenshot(`find-agents-mine-${theme}.png`, { ...SHOT, fullPage: true });
     } finally { await done(); }
   });
