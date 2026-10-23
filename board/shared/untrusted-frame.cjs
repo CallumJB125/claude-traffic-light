@@ -8,9 +8,13 @@ const NAME_MAX = 60;
 
 // What a session sees: who it is from (hub-proven), that it is task data, and the
 // body inside a block delimited by a per-message random nonce. The body cannot
-// close the block (it never contains '<<<' or '>>>') and every square bracket in it,
-// ASCII or lookalike, becomes a parenthesis, so no line can open like a Plexiform
-// header whatever homoglyphs or invisible characters it hides. First the body is
+// close the block (it never contains '<<<' or '>>>'), every ASCII square bracket in
+// it becomes a parenthesis, and a line that starts (after spaces) with any non-ASCII
+// opening punctuation or symbol (Unicode Ps, Pi, Sm, So, Sk: ⸢ ⎡ 「 ⌈ 〈 ˹ and the
+// rest, by category rather than a list that keeps missing some) starts with '('
+// instead, so no line can open like a Plexiform header whatever homoglyphs or
+// invisible characters it hides. Emoji are not openers and ASCII symbols keep their
+// meaning (JSON, diffs, quotes). First the body is
 // folded (fold(), below), so what is left is what a model reads. No rewrite makes
 // text longer in chars or bytes: the hub's session body budget (MESSAGING.md §3)
 // keeps the framed text within the adapter's limit.
@@ -30,7 +34,7 @@ const fold = (text) => text.replace(/[^\x00-\x7f]/gu, (c) => {
 const neutral = (text) => fold(text)
   .replace(/<<</g, '(((').replace(/>>>/g, ')))')
   .replace(/\[/g, '(').replace(/\]/g, ')')
-  .replace(/[［⟦〚【〔⁅﹝❲⦋⦍⦏〖〘]/g, '（').replace(/[］⟧〛】〕⁆﹞❳⦌⦎⦐〗〙]/g, '）');
+  .replace(/^(\s*)(?![\x00-\x7f]|\p{Extended_Pictographic})[\p{Ps}\p{Pi}\p{Sm}\p{So}\p{Sk}]/gmu, '$1(');
 const label = (v, fallback) => {
   const s = typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f\u2028\u2029[\]<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, NAME_MAX) : '';
   return s || fallback;
