@@ -49,6 +49,8 @@ function createHomeFiles({ home, fsApi = fs, maxBytes = 16 * 1024 * 1024 }) {
   }
   function writeTarget(file, text, mode, { exclusive = false } = {}) {
     const parts = file.split('/');
+    // Checked before any folder is made, so a bad path creates nothing.
+    if (parts.some((p) => p === '' || p === '.' || p === '..') || !path.join(HOME, ...parts).startsWith(HOME + path.sep)) throw new Error('outside home');
     let cur = HOME;
     for (const part of parts.slice(0, -1)) {
       cur = path.join(cur, part);

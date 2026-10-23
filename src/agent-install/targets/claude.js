@@ -15,6 +15,8 @@ module.exports = {
     if (!alt) return { ok: true, file: `${agent.slug}.md`, text: agent.raw };
     // A separately named copy: only the name line changes, so both can load.
     const head = agent.raw.slice(0, agent.bodyOffset);
+    // A block or multi-line name would leave its extra lines behind.
+    if (!/^name:[ \t]*[^|>\s]/m.test(head)) return { ok: false, reason: 'Could not rename this agent.' };
     const renamed = head.replace(/^name:.*$/m, `name: ${yamlString(`${agent.name}-plexiform`)}`);
     if (renamed === head) return { ok: false, reason: 'Could not rename this agent.' };
     return { ok: true, file: `${slugOf(agent, true)}.md`, text: renamed + agent.raw.slice(agent.bodyOffset), notes: [`Named "${agent.name}-plexiform" so it does not clash with yours.`] };

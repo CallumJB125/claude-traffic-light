@@ -18,7 +18,13 @@ module.exports = {
     const text = body(agent);
     if (text.length > 30000) return { ok: false, reason: 'Its prompt is longer than Copilot\'s 30,000-character limit.' };
     const fm = [`name: ${yamlString(alt ? `${agent.name}-plexiform` : agent.name)}`, `description: ${yamlString(agent.description)}`];
-    if (agent.tools.declared) fm.push(`tools: [${agent.tools.declared.map(yamlString).join(', ')}]`);
+    if (agent.tools.declared) {
+      // Only plain tool names are kept: whether Copilot honours a scoped grant
+      // such as Bash(git status:*) is not documented, so it is dropped.
+      const tools = agent.tools.declared.map((t) => t.trim()).filter((t) => !t.includes('('));
+      if (!tools.length) return { ok: false, reason: 'None of the tools its author gave it can be kept in Copilot CLI.' };
+      fm.push(`tools: [${tools.map(yamlString).join(', ')}]`);
+    }
     return { ok: true, file: `${slug}.agent.md`, text: `---\n${fm.join('\n')}\n---\n${text}` };
   },
 };

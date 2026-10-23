@@ -5,7 +5,7 @@
 // off (features.shell_tool = false).
 // Docs: https://developers.openai.com/codex/subagents (now served from
 // https://learn.chatgpt.com/docs/agent-configuration/subagents)
-const { tomlString, body, slugOf, has, EDITS } = require('./common.js');
+const { tomlString, body, slugOf, has, oneLine, EDITS } = require('./common.js');
 
 module.exports = {
   id: 'codex',
@@ -15,7 +15,7 @@ module.exports = {
   render(agent, { alt = false } = {}) {
     const slug = slugOf(agent, alt);
     const notes = [];
-    const lines = [`# Added by Plexiform from ${agent.id} (${agent.attribution})`, `name = ${tomlString(slug)}`, `description = ${tomlString(agent.description)}`, `developer_instructions = ${tomlString(body(agent))}`];
+    const lines = [`# Added by Plexiform from ${oneLine(`${agent.id} (${agent.attribution})`)}`, `name = ${tomlString(slug)}`, `description = ${tomlString(agent.description)}`, `developer_instructions = ${tomlString(body(agent))}`];
     if (agent.tools.declared) {
       // Codex can't make one agent read-only, so an agent its author limited
       // to reading is not added there rather than given edit access.

@@ -120,7 +120,7 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
     const rendered = t.render(agent, { alt });
     if (!rendered.ok) return { platform: t.id, label: t.label, status: 'unmappable', reason: rendered.reason };
     const rel = `${t.dir}/${rendered.file}`;
-    const base = { platform: t.id, label: t.label, path: tilde(rel), rel, text: rendered.text, notes: rendered.notes ?? [] };
+    const base = { platform: t.id, label: t.label, path: tilde(rel), rel, alt, text: rendered.text, notes: rendered.notes ?? [] };
     const cur = current(rel);
     if (!cur.ok) return { ...base, status: 'refused', reason: cur.reason };
     const owned = ledger.owned[keyOf(t.id, rel)];
@@ -181,19 +181,35 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
         done.push(p);
         results.push({ platform: p.platform, label: p.label, path: p.path, outcome: 'added', notes: p.notes });
       } catch {
+        // The file did not exist before this click, so bytes identical to ours are ours.
+        const left = current(p.rel);
+        if (left.ok && left.sha === sha(p.text)) try { files.removeTarget(p.rel); } catch { /* left; the result says so */ }
         for (const d of done.reverse()) { const c = current(d.rel); if (c.ok && c.sha === sha(d.text)) try { files.removeTarget(d.rel); } catch { /* left; the result says so */ } }
         return refuse('failed', `Couldn't write to ${p.label}. Nothing from this click was kept.`, { results: plans.map((x) => ({ platform: x.platform, label: x.label, outcome: x === p ? 'failed' : done.includes(x) ? 'rolled-back' : 'not-tried' })) });
       }
     }
     if (!done.length) return { ok: true, installId: null, results };
     const op = { id: randomUUID(), kind: 'add', at: new Date(now()).toISOString(), agentId, catalogSha: catalog.sha256, changes: done.map((d) => ({ platform: d.platform, rel: d.rel, before: null, after: sha(d.text) })) };
-    for (const d of done) ledger.owned[keyOf(d.platform, d.rel)] = { platform: d.platform, rel: d.rel, agentId, how: 'added', sha: sha(d.text), fileSha256: agent.fileSha256, since: op.at };
+    for (const d of done) ledger.owned[keyOf(d.platform, d.rel)] = { platform: d.platform, rel: d.rel, agentId, how: 'added', alt: d.alt === true, sha: sha(d.text), fileSha256: agent.fileSha256, since: op.at };
     ledger.ops.push(op);
     try { writeLedger(ledger); } catch {
       for (const d of done) { const c = current(d.rel); if (c.ok && c.sha === sha(d.text)) try { files.removeTarget(d.rel); } catch { /* left */ } }
       return refuse('ledger', 'Couldn\'t save Plexiform\'s record of added agents, so the new files were removed again.');
     }
     return { ok: true, installId: op.id, results };
+  }
+
+  // Puts back files an unfinished update or remove click already changed.
+  // Only touches a file still exactly as this click left it.
+  function rollBack(changes) {
+    for (const c of [...changes].reverse()) {
+      if (c.before === null || c.before === c.after) continue;
+      const cur = current(c.rel);
+      if (!cur.ok) continue;
+      try {
+        if (c.after === null) { if (cur.text == null) files.writeTarget(c.rel, original(c.before), 0o644, { exclusive: true }); } else if (cur.sha === c.after) files.writeTarget(c.rel, original(c.before), 0o644);
+      } catch { /* left as it is; the file shows as modified */ }
+    }
   }
 
   // ── update an owned copy to the current catalogue version ─────────────────
@@ -209,16 +225,27 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
       if (o.fileSha256 === agent.fileSha256) { results.push({ platform: o.platform, path: tilde(o.rel), outcome: 'current' }); continue; }
       const r = t.render(agent, { alt: o.alt === true });
       if (!r.ok) { results.push({ platform: o.platform, path: tilde(o.rel), outcome: 'skipped', reason: r.reason }); continue; }
-      const before = keepOriginal(cur.text);
-      write(o.rel, r.text);
-      changes.push({ platform: o.platform, rel: o.rel, before, after: sha(r.text), prevFileSha256: o.fileSha256 });
-      Object.assign(o, { sha: sha(r.text), fileSha256: agent.fileSha256 });
+      let before = null;
+      try {
+        before = keepOriginal(cur.text);
+        write(o.rel, r.text);
+        changes.push({ platform: o.platform, rel: o.rel, before, after: sha(r.text), prevFileSha256: o.fileSha256 });
+      } catch {
+        // A write whose read-back failed may still have landed.
+        if (before) changes.push({ platform: o.platform, rel: o.rel, before, after: sha(r.text) });
+        rollBack(changes);
+        return refuse('failed', `Couldn't update ${tilde(o.rel)}. Nothing from this click was kept.`);
+      }
       results.push({ platform: o.platform, path: tilde(o.rel), outcome: 'updated' });
     }
     if (!changes.length) return { ok: true, opId: null, results };
+    for (const c of changes) Object.assign(ledger.owned[keyOf(c.platform, c.rel)], { sha: c.after, fileSha256: agent.fileSha256 });
     const op = { id: randomUUID(), kind: 'update', at: new Date(now()).toISOString(), agentId, catalogSha: catalog.sha256, changes };
     ledger.ops.push(op);
-    writeLedger(ledger);
+    try { writeLedger(ledger); } catch {
+      rollBack(changes);
+      return refuse('ledger', 'Couldn\'t save Plexiform\'s record of added agents, so the update was put back.');
+    }
     return { ok: true, opId: op.id, results };
   }
 
@@ -238,16 +265,26 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
         results.push({ platform: o.platform, path: tilde(o.rel), outcome: 'released', reason: 'You installed this one yourself, so the file is kept; Plexiform just stops managing it.' });
         continue;
       }
-      const before = keepOriginal(cur.text);
-      files.removeTarget(o.rel);
+      try {
+        const before = keepOriginal(cur.text);
+        if (failAfterWrites !== null && writesDone >= failAfterWrites) throw new Error('simulated remove failure');
+        files.removeTarget(o.rel);
+        writesDone++;
+        changes.push({ platform: o.platform, rel: o.rel, before, after: null, owned: o });
+      } catch {
+        rollBack(changes);
+        return refuse('failed', `Couldn't remove ${tilde(o.rel)}. Nothing from this click was kept.`);
+      }
       delete ledger.owned[k];
-      changes.push({ platform: o.platform, rel: o.rel, before, after: null, owned: o });
       results.push({ platform: o.platform, path: tilde(o.rel), outcome: 'removed' });
     }
     if (!changes.length) return { ok: true, opId: null, results };
     const op = { id: randomUUID(), kind: 'remove', at: new Date(now()).toISOString(), agentId, changes };
     ledger.ops.push(op);
-    writeLedger(ledger);
+    try { writeLedger(ledger); } catch {
+      rollBack(changes);
+      return refuse('ledger', 'Couldn\'t save Plexiform\'s record of added agents, so the removed files were put back.');
+    }
     return { ok: true, opId: op.id, results };
   }
 
@@ -351,13 +388,16 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
       const label = tilde(c.rel);
       if (!cur.ok) { conflicts.push({ path: label, reason: cur.reason }); continue; }
       try {
+        const o = ledger.owned[k];
         if (op.kind === 'add') {
-          if (cur.text == null) { delete ledger.owned[k]; restored.push(label); continue; }
+          // Only a file Plexiform still owns, unchanged, is ever removed.
+          const ours = o && o.how === 'added' && o.sha === c.after;
+          if (cur.text == null) { if (ours) delete ledger.owned[k]; restored.push(label); continue; }
+          if (!ours) { conflicts.push({ path: label, reason: 'Plexiform no longer manages this file, so it is kept.' }); continue; }
           if (cur.sha !== c.after) { conflicts.push({ path: label, reason: 'Changed since it was added, so it is kept.' }); continue; }
           files.removeTarget(c.rel);
           delete ledger.owned[k];
         } else if (op.kind === 'adopt') {
-          const o = ledger.owned[k];
           // Never deletes: puts the original bytes back if Plexiform changed them.
           if (cur.text == null) { conflicts.push({ path: label, reason: 'The file is gone; nothing to restore over.' }); delete ledger.owned[k]; continue; }
           if (cur.sha !== c.before) {
@@ -366,10 +406,10 @@ function createAgentInstaller({ home, dataRoot, catalog, fsApi = fs, now = Date.
           }
           delete ledger.owned[k];
         } else if (op.kind === 'update') {
+          if (!o || o.sha !== c.after) { conflicts.push({ path: label, reason: 'Plexiform no longer manages this file as updated, so it is kept.' }); continue; }
           if (cur.sha !== c.after) { conflicts.push({ path: label, reason: 'Changed since the update, so it is kept.' }); continue; }
           write(c.rel, original(c.before));
-          const o = ledger.owned[k];
-          if (o) Object.assign(o, { sha: c.before, fileSha256: c.prevFileSha256 });
+          Object.assign(o, { sha: c.before, fileSha256: c.prevFileSha256 });
         } else if (op.kind === 'remove' || op.kind === 'release') {
           if (c.after === null && c.before !== null) {
             if (cur.text != null) { conflicts.push({ path: label, reason: 'A file is there again, so it is kept.' }); continue; }

@@ -199,6 +199,110 @@ test('a failure in the second platform rolls back the first, and nothing is reco
   assert.ok(!fs.existsSync(path.join(data, 'agent-installs.json')));
 });
 
+// The same home and data folder, with a newer catalogue version of FE.
+function newerVersion(s, opts = {}) {
+  const FE2 = agentOf(FE.id, { name: 'Frontend Developer', description: 'Builds UIs.', body: '# Frontend Developer\n\nVersion 2.\n' });
+  const cat2 = catalogOf([FE2, RO], 'e'.repeat(64));
+  return { FE2, inst2: createAgentInstaller({ home: s.home, dataRoot: s.data, catalog: cat2, ...opts }) };
+}
+
+test('Undo of an add never removes a file Plexiform no longer manages, even with the same bytes', () => {
+  const { home, inst, add } = setup();
+  const r = add(FE.id, ['claude']);
+  inst.remove(FE.id);
+  fs.writeFileSync(path.join(home, '.claude/agents/frontend-developer.md'), FE.raw);
+  const u = inst.undo(r.installId);
+  assert.deepEqual(u.restored, []);
+  assert.match(u.conflicts[0].reason, /no longer manages/);
+  assert.equal(read(home, '.claude/agents/frontend-developer.md'), FE.raw);
+});
+
+test('Undo of an update leaves a file that has since been removed and put back by hand', () => {
+  const s = setup();
+  s.add(FE.id, ['claude']);
+  const { FE2, inst2 } = newerVersion(s);
+  const up = inst2.update(FE.id);
+  assert.deepEqual(up.results.map((x) => x.outcome), ['updated']);
+  inst2.remove(FE.id);
+  fs.writeFileSync(path.join(s.home, '.claude/agents/frontend-developer.md'), FE2.raw);
+  const u = inst2.undo(up.opId);
+  assert.equal(u.conflicts.length, 1);
+  assert.equal(read(s.home, '.claude/agents/frontend-developer.md'), FE2.raw);
+});
+
+test('update keeps a separately named copy separately named', () => {
+  const s = setup();
+  fs.mkdirSync(path.join(s.home, '.claude/agents'), { recursive: true });
+  fs.mkdirSync(path.join(s.home, '.codex/agents'), { recursive: true });
+  fs.writeFileSync(path.join(s.home, '.claude/agents/frontend-developer.md'), 'mine\n');
+  fs.writeFileSync(path.join(s.home, '.codex/agents/frontend-developer.toml'), 'mine\n');
+  s.add(FE.id, [{ platform: 'claude', alt: true }, { platform: 'codex', alt: true }]);
+  const { inst2 } = newerVersion(s);
+  assert.deepEqual(inst2.update(FE.id).results.map((x) => x.outcome), ['updated', 'updated']);
+  const claude = read(s.home, '.claude/agents/frontend-developer-plexiform.md');
+  assert.match(claude, /^name: "Frontend Developer-plexiform"$/m);
+  assert.match(claude, /Version 2\./);
+  assert.match(read(s.home, '.codex/agents/frontend-developer-plexiform.toml'), /^name = "frontend-developer-plexiform"$/m);
+  assert.equal(read(s.home, '.claude/agents/frontend-developer.md'), 'mine\n');
+});
+
+test('a failed update puts back the files it already changed, and records nothing', () => {
+  const s = setup();
+  s.add(FE.id, ['claude', 'gemini']);
+  const ledger = fs.readFileSync(path.join(s.data, 'agent-installs.json'), 'utf8');
+  const { inst2 } = newerVersion(s, { failAfterWrites: 1 });
+  const r = inst2.update(FE.id);
+  assert.equal(r.status, 'failed');
+  assert.equal(read(s.home, '.claude/agents/frontend-developer.md'), FE.raw);
+  assert.equal(fs.readFileSync(path.join(s.data, 'agent-installs.json'), 'utf8'), ledger);
+  assert.deepEqual(inst2.status().items.map((i) => i.state), ['update-available', 'update-available']);
+});
+
+test('a failed remove puts back the files it already removed, and records nothing', () => {
+  const s = setup();
+  s.add(FE.id, ['claude', 'gemini']);
+  const ledger = fs.readFileSync(path.join(s.data, 'agent-installs.json'), 'utf8');
+  const inst2 = createAgentInstaller({ home: s.home, dataRoot: s.data, catalog: s.cat, failAfterWrites: 1 });
+  assert.equal(inst2.remove(FE.id).status, 'failed');
+  assert.equal(read(s.home, '.claude/agents/frontend-developer.md'), FE.raw);
+  assert.ok(exists(s.home, '.gemini/agents/frontend-developer.md'));
+  assert.equal(fs.readFileSync(path.join(s.data, 'agent-installs.json'), 'utf8'), ledger);
+  assert.deepEqual(inst2.status().items.map((i) => i.state), ['current', 'current']);
+});
+
+test('a scoped tool such as Bash(git status:*) never becomes the whole tool elsewhere', () => {
+  const SC = agentOf('o/scoped', { name: 'scoped', tools: ['Read', 'Edit', 'Bash(git status:*)'] });
+  const MCP = agentOf('o/mcp-only', { name: 'mcp-only', tools: ['mcp__gateway__call'] });
+  const { home, add } = setup({ agents: [SC, MCP] });
+  add(SC.id, ['gemini', 'opencode', 'codex', 'copilot']);
+  assert.match(read(home, '.gemini/agents/scoped.md'), /^tools: \[read_file, replace\]$/m);
+  assert.match(read(home, '.config/opencode/agents/scoped.md'), /^ {2}shell: deny$/m);
+  assert.match(read(home, '.codex/agents/scoped.toml'), /^shell_tool = false$/m);
+  assert.match(read(home, '.copilot/agents/scoped.agent.md'), /^tools: \["Read", "Edit"\]$/m);
+  const r = add(MCP.id, ['gemini']);
+  assert.equal(r.results[0].outcome, 'skipped');
+  assert.match(r.results[0].reason, /None of the tools/);
+  assert.ok(!exists(home, '.gemini/agents/mcp-only.md'));
+});
+
+test('catalogue text cannot add lines to a Codex file', () => {
+  const EV = { ...agentOf('o/evil', { name: 'evil', tools: ['Read', 'Edit'] }), attribution: 'x\nsandbox_mode = "danger-full-access" y' };
+  const r = Codex.render(EV);
+  assert.equal(r.text.split('\n')[0], '# Added by Plexiform from o/evil (x sandbox_mode = "danger-full-access" y)');
+  assert.doesNotMatch(r.text, /^sandbox_mode/m);
+});
+
+test('home files refuse a path that leaves the root before making any folder', () => {
+  const { createHomeFiles } = require('../src/home-files.js');
+  const root = tmp(), home = path.join(root, 'home');
+  fs.mkdirSync(home);
+  const hf = createHomeFiles({ home });
+  assert.throws(() => hf.writeTarget('a/../../outside/x.md', 'x', 0o644), /outside home/);
+  assert.throws(() => hf.writeTarget('a//x.md', 'x', 0o644), /outside home/);
+  assert.deepEqual(fs.readdirSync(root), ['home']);
+  assert.deepEqual(fs.readdirSync(home), []);
+});
+
 test('refusals: stale catalogue, unknown or per-project platforms, disabled targets', () => {
   const { inst, cat, add } = setup();
   assert.equal(inst.add(FE.id, ['claude'], { catalogSha: 'd'.repeat(64) }).status, 'changed');

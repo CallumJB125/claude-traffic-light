@@ -21,7 +21,9 @@ module.exports = {
     if (!/^[a-z0-9_-]+$/.test(name)) return { ok: false, reason: 'Gemini CLI does not accept this agent\'s name.' };
     const fm = [`name: ${name}`, `description: ${yamlString(agent.description)}`];
     if (agent.tools.declared) {
-      const mapped = [...new Set(agent.tools.declared.flatMap((t) => TOOLS[t.replace(/\(.*$/, '').trim()] ?? []))];
+      const mapped = [...new Set(agent.tools.declared.flatMap((t) => TOOLS[t.trim()] ?? []))];
+      // An empty list could read as "every tool", so such an agent is not added.
+      if (!mapped.length) return { ok: false, reason: 'None of the tools its author gave it exist in Gemini CLI.' };
       fm.push(`tools: [${mapped.join(', ')}]`);
     }
     return { ok: true, file: `${name}.md`, text: `---\n${fm.join('\n')}\n---\n${body(agent)}` };
