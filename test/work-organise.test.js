@@ -440,3 +440,21 @@ test('work-organise: M2 — the team gate fails closed: prompt and cron titles o
   assert.equal(W.titleOf({ cronJob: 'nightly', team: false }).source, 'cron');
   assert.equal(W.titleOf({ cronJob: 'nightly', team: 1 }).source, 'fallback');
 });
+
+test('work-organise: L1 — invisible fillers and tag characters are removed before scrubbing', () => {
+  const fillers = [0xe0061, 0xe0020, 0xe007f, 0x034f, 0x115f, 0x1160, 0x3164, 0xffa0, 0xfe0f, 0xe0100, 0x180b, 0x17b4, 0x2800];
+  const sk = 'sk-abcdefghijklmnopqrstuvwx';
+  const ghp = 'ghp_' + 'a1B2'.repeat(9);
+  for (const cp of fillers) {
+    const f = String.fromCodePoint(cp);
+    for (const token of [sk, ghp]) {
+      const split = token.slice(0, 6) + f + token.slice(6, 14) + f + token.slice(14);
+      for (const input of [{ team: false, firstPrompt: `deploy with ${split} today` }, { human: `rotate ${split}` }, { team: false, branch: `fix/${split}` }]) {
+        const { title } = W.titleOf(input);
+        const visible = title.replace(/[^\x20-\x7e]/gu, '');
+        assert.ok(!visible.includes(token.slice(6, 14)), `U+${cp.toString(16)} ${JSON.stringify(input)} → ${JSON.stringify(title)}`);
+        assert.ok(!title.includes(f), `U+${cp.toString(16)} left in ${JSON.stringify(title)}`);
+      }
+    }
+  }
+});

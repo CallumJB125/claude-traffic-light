@@ -59,9 +59,10 @@
 
   // ---- untrusted text ----
   const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
-  // Invisible format characters (zero-width, bidi, soft hyphen) are removed, not spaced: a secret
+  // Invisible characters (zero-width, bidi, soft hyphen, combining grapheme joiner, Hangul and
+  // Braille fillers, variation selectors, tag characters) are removed, not spaced: a secret
   // split by one is whole again for the scrubber.
-  const INVISIBLE = /[\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb]/g;
+  const INVISIBLE = /[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\u2800\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\u{1d173}-\u{1d17a}\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]/gu;
   const BLOCK = /<([A-Za-z][\w:.-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/g;
   const TAG = /<\/?[A-Za-z][\w:.-]*(?:\s[^<>]*)?\/?>/g;
   const URL_RE = /\b[a-z][a-z0-9+.-]{1,30}:\/\/\S*/gi;
