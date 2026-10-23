@@ -358,6 +358,7 @@ test('PRIVACY.md documents the agent awareness roster: metadata only, local only
   assert.ok(entry, 'flow:agent-awareness-local');
   for (const f of ['src/agent-awareness.js', 'hooks/awareness.js', 'src/signal-server.js', 'mcp-server.js']) assert.ok(flows.get('agent-awareness-local').has(f), f);
   assert.match(entry, /~\/\.claude-traffic-light\/awareness\/roster\.json/);
+  assert.match(entry, /one line from Plexiform when it starts, even with no other AI session running \(at most 200 characters\)[^.]*a number only\./);
   assert.match(entry, /Never a prompt, transcript, title, summary or note/);
   assert.match(entry, /branch name is shown only to sessions in the same repository/);
   assert.match(entry, /Headless runs[^.]*never listed/);

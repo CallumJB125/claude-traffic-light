@@ -162,10 +162,13 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
       switch (msg.method) {
         case 'hello': {
           if (!engine.relayActive(principal)) { fail('POLICY_DENIED', 'relay parent is no longer active'); conn.end(); return; }
+          // mainKey is taken on a connection's first hello only (PR #35 re-review R1): a connection that is already
+          // open cannot be upgraded later with a key learnt elsewhere, and a later hello never drops or swaps it.
+          if (st.hello && params?.mainKey !== undefined) { st.dead = true; fail('POLICY_DENIED', 'mainKey is accepted only on the first hello'); conn.end(); return; }
           const r = engine.hello(params);
+          if (!st.hello) st.mainKey = typeof params?.mainKey === 'string' ? params.mainKey : null;
           st.hello = true;
           st.token = msg.token;
-          st.mainKey = typeof params?.mainKey === 'string' ? params.mainKey : null;
           clearTimeout(st.helloTimer);
           return send(conn, { id, result: r });
         }
