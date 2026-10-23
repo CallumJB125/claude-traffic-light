@@ -102,8 +102,9 @@ function cardBody(rec) {
 
 // The one shape that may leave the Mac: only for a route with share_summaries,
 // paths only with share_files, every free text through the full scrub.
-// The hub's own host name, so shared text keeps it and no other tailnet name.
-const hostOf = (u) => { try { return new URL(String(u)).hostname.toLowerCase() || null; } catch { return null; } };
+// The hub's own host name, so shared text keeps it and no other tailnet name. With no
+// valid hub it is '' and every tailnet name goes (fails closed, like scrubTitle).
+const hostOf = (u) => { try { return new URL(String(u)).hostname.toLowerCase(); } catch { return ''; } };
 function forShare(rec, route, { salt, home = null, user = null } = {}) {
   if (!rec || route?.share_summaries !== true || typeof salt !== 'string' || !salt) return null;
   const hubHost = hostOf(route.hub);
