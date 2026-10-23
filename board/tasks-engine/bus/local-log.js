@@ -9,7 +9,8 @@ import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-export const RETENTION_MS = Object.freeze({ handoff: 30 * DAY_MS, claim: 30 * DAY_MS, result: 30 * DAY_MS, control: 90 * DAY_MS });
+// Notes (plan-agent-awareness §3.6): a day, text included; they expire long before that (2 h by default, 24 h at most).
+export const RETENTION_MS = Object.freeze({ handoff: 30 * DAY_MS, claim: 30 * DAY_MS, result: 30 * DAY_MS, control: 90 * DAY_MS, note: DAY_MS });
 export const DEAD_AFTER = 5;
 
 const SCHEMA = `
@@ -26,7 +27,13 @@ CREATE TABLE IF NOT EXISTS bus_claims (handoff_id TEXT PRIMARY KEY, fence INTEGE
 CREATE TABLE IF NOT EXISTS bus_spend (day TEXT PRIMARY KEY, reserved_usd REAL NOT NULL DEFAULT 0, spent_usd REAL NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS bus_state (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS bus_hops (domain TEXT PRIMARY KEY, hop INTEGER NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS bus_notes (note_id TEXT PRIMARY KEY, request_key TEXT NOT NULL UNIQUE, from_key TEXT NOT NULL, from_handle TEXT NOT NULL,
+  from_provider TEXT NOT NULL, from_folder TEXT NOT NULL, to_key TEXT NOT NULL, to_handle TEXT NOT NULL, text TEXT NOT NULL, text_hash TEXT NOT NULL,
+  state TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, notified_at INTEGER, read_at INTEGER);
+CREATE INDEX IF NOT EXISTS bus_notes_to ON bus_notes (to_key, state, created_at);
+CREATE INDEX IF NOT EXISTS bus_notes_from ON bus_notes (from_key, created_at);
 `;
+const UNREAD = "state IN ('queued', 'notified')";
 
 export function openBusLog(file, { now = Date.now } = {}) {
   const fd = fs.openSync(file, 'a', 0o600);
@@ -138,8 +145,45 @@ export function openBusLog(file, { now = Date.now } = {}) {
       if (hop > cur) st('INSERT INTO bus_hops (domain, hop, at) VALUES (?, ?, ?) ON CONFLICT(domain) DO UPDATE SET hop = excluded.hop, at = excluded.at').run(domain, hop, now());
     },
 
+    // Notes: one row per note, the only place its text is kept; bus_events gets its state changes without it.
+    addNote(n) {
+      st(`INSERT INTO bus_notes (note_id, request_key, from_key, from_handle, from_provider, from_folder, to_key, to_handle, text, text_hash, state, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)`).run(n.note_id, n.request_key, n.from_key, n.from_handle, n.from_provider, n.from_folder, n.to_key, n.to_handle, n.text, n.text_hash, n.created_at, n.expires_at);
+    },
+    noteByRequest(requestKey) { return st('SELECT * FROM bus_notes WHERE request_key = ?').get(requestKey) ?? null; },
+    noteDuplicate(fromKey, toKey, hash, since) { return st(`SELECT * FROM bus_notes WHERE from_key = ? AND to_key = ? AND text_hash = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1`).get(fromKey, toKey, hash, since) ?? null; },
+    countNotes({ fromKey, toKey = null, since }) {
+      return toKey ? st('SELECT COUNT(*) AS n FROM bus_notes WHERE from_key = ? AND to_key = ? AND created_at >= ?').get(fromKey, toKey, since).n
+        : st('SELECT COUNT(*) AS n FROM bus_notes WHERE from_key = ? AND created_at >= ?').get(fromKey, since).n;
+    },
+    unreadCount(toKey, at) { return st(`SELECT COUNT(*) AS n FROM bus_notes WHERE to_key = ? AND ${UNREAD} AND expires_at > ?`).get(toKey, at).n; },
+    /** Unread, unexpired notes for one recipient, oldest first. */
+    unreadFor(toKey, at, limit) { return st(`SELECT * FROM bus_notes WHERE to_key = ? AND ${UNREAD} AND expires_at > ? ORDER BY created_at, note_id LIMIT ?`).all(toKey, at, limit); },
+    noteFor(toKey, noteId, at) { return st('SELECT * FROM bus_notes WHERE to_key = ? AND note_id = ? AND expires_at > ?').get(toKey, noteId, at) ?? null; },
+    sentBy(fromKey, noteId = null, limit = 20) {
+      return noteId ? st('SELECT * FROM bus_notes WHERE from_key = ? AND note_id = ?').all(fromKey, noteId)
+        : st('SELECT * FROM bus_notes WHERE from_key = ? ORDER BY created_at DESC, note_id LIMIT ?').all(fromKey, limit);
+    },
+    /** Every unread, unexpired note (metadata for main's notices after a restart; main never asks for the text). */
+    unread(at, limit = 1000) { return st(`SELECT note_id, to_key, from_handle, from_provider, from_folder, created_at, expires_at FROM bus_notes WHERE ${UNREAD} AND expires_at > ? ORDER BY created_at LIMIT ?`).all(at, limit); },
+    /** Moves notes on: queued → notified (only from queued), anything unread → read. Returns the note ids that moved. */
+    setNotes(toKey, ids, state, at) {
+      const from = state === 'notified' ? "state = 'queued'" : UNREAD;
+      const col = state === 'notified' ? 'notified_at' : 'read_at';
+      return tx(() => ids.filter((id) => st(`UPDATE bus_notes SET state = ?, ${col} = ? WHERE to_key = ? AND note_id = ? AND ${from}`).run(state, at, toKey, id).changes === 1));
+    },
+    /** Unread notes past their expiry become expired; returns them. */
+    expireNotes(at) {
+      return tx(() => {
+        const rows = st(`SELECT note_id, from_handle, to_handle FROM bus_notes WHERE ${UNREAD} AND expires_at <= ? LIMIT 500`).all(at);
+        for (const r of rows) st('UPDATE bus_notes SET state = \'expired\' WHERE note_id = ?').run(r.note_id);
+        return rows;
+      });
+    },
+
     sweep() {
       const t = now();
+      st('DELETE FROM bus_notes WHERE created_at < ?').run(t - RETENTION_MS.note);
       for (const [topic, ms] of Object.entries(RETENTION_MS)) st('DELETE FROM bus_events WHERE topic = ? AND created_at < ?').run(topic, t - ms);
       st("DELETE FROM bus_claims WHERE state NOT IN ('granted', 'started') AND updated_at < ?").run(t - RETENTION_MS.claim);
       st('DELETE FROM bus_hops WHERE at < ?').run(t - DAY_MS);

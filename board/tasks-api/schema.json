@@ -4943,7 +4943,11 @@
             "list",
             "busSetContext",
             "halt",
-            "resume"
+            "resume",
+            "note",
+            "notes",
+            "notes_pending",
+            "notified"
           ]
         },
         "args": {

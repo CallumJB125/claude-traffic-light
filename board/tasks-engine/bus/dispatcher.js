@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { openBusLog, DEAD_AFTER } from './local-log.js';
+import { createNotes } from './notes.js';
 import { admit, strictSettings, dayOf } from './guard.js';
 import { runCost } from './pricing.js';
 import { BUS_VERSION, Envelope, HelloArgs, HandoffArgs, ReadArgs, WaitArgs, StatusArgs, RunHandoffArgs, ResultArgs, LIMITS, issue } from '../../shared/bus-schema.js';
@@ -77,6 +78,9 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   }
   const append = (ev, keys) => log.append(ev, keys);
   const systemSource = { device_id: deviceId, agent_id: 'bus:local:dispatcher', provider: 'bus', tier: 'person', identity_source: 'local_token' };
+  // Notes (plan-agent-awareness §3.6): main's ops only; their events carry handles and states, never the text.
+  const notes = createNotes({ log, now, halted: () => log.state('halted', false),
+    record: (kind, data) => append(envelope({ topic: 'note', kind, handoff: null, source: systemSource, data })) });
 
   async function gitTop(dir) {
     if (typeof dir !== 'string' || !path.isAbsolute(dir)) return null;
@@ -341,7 +345,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     for (const c of log.openClaims()) if (c.state === 'started' && ACTIVE.has(engine.tasks.get(c.task_id)?.state)) log.setClaim(c.handoff_id, c.fence, { lease_until: now() + LEASE_MS });
   }, RENEW_MS);
   const tick = setInterval(() => { pump(); }, PUMP_MS);
-  const sweep = setInterval(() => { try { log.sweep(); } catch { /* next time */ } }, HOUR_MS);
+  const sweep = setInterval(() => { try { log.sweep(); notes.expire(); } catch { /* next time */ } }, HOUR_MS);
   for (const t of [renew, tick, sweep]) t.unref?.();
   setImmediate(pump);
 
@@ -463,6 +467,8 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
         setImmediate(pump);
         return { ok: true, halted: false };
       }
+      // From main only: who sends and who receives were settled there, from the calling process.
+      case 'note': case 'notes': case 'notes_pending': case 'notified': return notes.op(name, rawArgs);
       default: throw new BusRefusal('VALIDATION', 'unknown bus op');
     }
   }

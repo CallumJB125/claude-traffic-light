@@ -4,7 +4,7 @@
 import { z } from 'zod';
 
 export const BUS_VERSION = 1;
-export const TOPICS = Object.freeze(['handoff', 'claim', 'result', 'control']);
+export const TOPICS = Object.freeze(['handoff', 'claim', 'result', 'control', 'note']);
 export const TIERS = Object.freeze(['person', 'run_capability', 'local_attested']);
 export const PROVIDERS = Object.freeze(['claude', 'codex', 'gemini']);
 // The providers a bus run may start on: the ones with an OS sandbox and network off (AC7).
@@ -15,6 +15,8 @@ export const KINDS = Object.freeze({
   claim: ['claim.granted', 'claim.denied', 'claim.started', 'claim.released', 'claim.lost'],
   result: ['result.done', 'result.failed', 'result.outcome_unknown', 'result.expired'],
   control: ['control.halt', 'control.resume', 'control.cap_reached', 'control.policy_changed', 'control.card_paused'],
+  // Session-to-session notes (plan-agent-awareness §3.6): state changes only, never the text (bus_notes rows hold it).
+  note: ['note.queued', 'note.notified', 'note.read', 'note.expired'],
 });
 export const LIMITS = Object.freeze({ title: 200, brief: 3200, summary: 2000, file: 300, files: 50, branch: 200, evidence: 10 });
 
@@ -40,6 +42,20 @@ export const HandoffArgs = z.object({ ...handoffFields, repo: z.string().min(1).
 export const ReadArgs = z.object({ topic: z.enum(['handoff', 'result']), after_offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(50).optional(), card_id: cardId.optional(), provider: z.string().regex(/^[a-z]{2,12}$/).optional() }).strict();
 export const WaitArgs = z.object({ handoff_id: handoffId, timeout_s: z.number().int().min(0).max(120).optional(), provider: z.string().regex(/^[a-z]{2,12}$/).optional() }).strict();
 export const StatusArgs = z.object({ handoff_id: handoffId.optional() }).strict();
+
+// Notes (plan-agent-awareness §3.6). Only main builds these: it verified the sender from the calling process and
+// looked up the recipient by handle, so the helper never takes an identity from an agent's own words.
+export const NOTE_LIMITS = Object.freeze({ text: 800, read: 5, queued: 30, perSenderHour: 20, perPairHour: 10, dedupeMs: 10 * 60 * 1000, ttlS: 2 * 60 * 60, maxTtlS: 24 * 60 * 60 });
+const sessionKey = z.string().regex(/^(?:claude|codex|gemini)\|[\w.-]{1,120}$/);
+const handle = z.string().regex(/^(?:claude|codex|gemini)-[a-z0-9-]{1,16}-[0-9a-f]{4,6}$/);
+const noteId = z.string().regex(/^note_[a-f0-9]{16,32}$/);
+export const NoteArgs = z.object({
+  from: z.object({ key: sessionKey, handle, provider: z.enum(PROVIDERS), folder: z.string().regex(/^[A-Za-z0-9._-]{1,16}$/) }).strict(),
+  to: z.object({ key: sessionKey, handle }).strict(),
+  text: z.string().trim().min(1).max(NOTE_LIMITS.text), request_id: requestId, ttl_s: z.number().int().min(60).max(NOTE_LIMITS.maxTtlS).optional(),
+}).strict();
+export const NotesArgs = z.object({ me: z.object({ key: sessionKey }).strict(), status: z.literal(true).optional(), note_id: noteId.optional() }).strict();
+export const NotifiedArgs = z.object({ to: z.object({ key: sessionKey }).strict(), note_ids: z.array(noteId).min(1).max(NOTE_LIMITS.queued) }).strict();
 
 // The run surface (board/mcp/task-tools.js; source, hop and visited come from the run, never the caller).
 export const RunHandoffArgs = z.object(handoffFields).strict().refine(teamNeedsCard, CARD_MSG);
