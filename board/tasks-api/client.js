@@ -46,8 +46,12 @@ export function readToken(tokenPath) {
 export const newRequestId = () => crypto.randomUUID();
 
 export class TasksClient extends EventEmitter {
-  constructor(sock, token, { timeoutMs = 30000 } = {}) {
+  // Main's key for the note ops (src/tasks-process.js): private, so it never shows up in a log of the client.
+  #mainKey;
+
+  constructor(sock, token, { timeoutMs = 30000, mainKey = null } = {}) {
     super();
+    this.#mainKey = mainKey;
     this.sock = sock;
     this.token = token;
     this.timeoutMs = timeoutMs;
@@ -202,7 +206,7 @@ export class TasksClient extends EventEmitter {
   }
 
   async hello(client = { name: 'buddy-tasks-client', version: '1' }) {
-    const r = await this.call('hello', { protocol: TASKS_PROTOCOL_VERSION, client });
+    const r = await this.call('hello', { protocol: TASKS_PROTOCOL_VERSION, client, ...(this.#mainKey ? { mainKey: this.#mainKey } : {}) });
     this.epoch = r.epoch;
     this.server = r;
     return r;
@@ -272,7 +276,7 @@ export class TasksClient extends EventEmitter {
   }
 }
 
-/** connect({socketPath, tokenPath, token, client, timeoutMs}) → hello'd TasksClient. */
+/** connect({socketPath, tokenPath, token, client, timeoutMs, mainKey}) → hello'd TasksClient. */
 export async function connect(opts = {}) {
   const d = defaultPaths(opts.env);
   const socketPath = opts.socketPath ?? d.socketPath;

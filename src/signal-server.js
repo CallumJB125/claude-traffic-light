@@ -17,18 +17,20 @@ const Answer = require('../hooks/answer-file.js');
 const AgentReports = require('./agent-self-report');
 const { describeRequest } = require('./request-view.js');
 const Scrub = require('./scrub.js');
+const { fold } = require('../board/shared/untrusted-frame.cjs');
 
 const SIGNAL_PORT = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
 const SIGNAL_TOKEN = crypto.randomBytes(32).toString('hex');
 const SIGNAL_TOKEN_HEADER = 'x-buddy-token';
 const KNOWN_SIGNALS = new Set(Rules.SIGNALS.filter((x) => x.hook).map((x) => x.id).concat(['session-end']));
 // Agent bus (board/AGENT-BUS.md): the only ops an agent may send. halt, resume and busSetContext are main's own.
-// peers and session (bus_peers, bus_session) are answered by main's awareness side.
-const BUS_AGENT_OPS = new Set(['hello', 'handoff', 'read', 'wait', 'status', 'peers', 'session']);
+// peers and session (bus_peers, bus_session) are answered by main's awareness side; note and notes (bus_note,
+// bus_notes) only for a caller main verified, with arguments main rebuilds (src/agent-awareness.js notesOp).
+const BUS_AGENT_OPS = new Set(['hello', 'handoff', 'read', 'wait', 'status', 'peers', 'session', 'note', 'notes']);
 // The thread id Codex stamps on a tools/call (_meta.threadId), forwarded by mcp-server.js: a claim main checks
 // against the calling process (src/agent-awareness.js bindCaller), never identity on its own.
 const THREAD_ID = /^[\w.-]{1,120}$/;
-const BUS_LIMITS = { title: 200, brief: 3200, file: 300, branch: 200 };
+const BUS_LIMITS = { title: 200, brief: 3200, file: 300, branch: 200, text: 800 };
 const BUS_UNAVAILABLE = { available: false, reason: 'tasks_helper_unavailable', message: 'Plexiform could not reach its Tasks helper. Nothing was handed off.' };
 // A handoff that timed out, or whose helper went away mid-call, may have been posted.
 const BUS_UNKNOWN = { available: false, reason: 'tasks_helper_unavailable', outcome: 'unknown',
@@ -36,12 +38,17 @@ const BUS_UNKNOWN = { available: false, reason: 'tasks_helper_unavailable', outc
 // Above the Tasks service's own worst case for one op (10 s to connect, 5 s for context, 12 s for the op).
 const BUS_DEADLINE_MS = 30_000;
 
-// Handoff text is scrubbed here, before it leaves main: secrets out, home folder shown as ~ (handoff-packet.js clean),
-// then cut to the limit, so scrubbing never makes it longer than the bus accepts.
+// Handoff and note text is scrubbed here, before it leaves main: folded first (untrusted-frame.cjs fold, as every frame
+// and the helper fold it later), then secrets out, home folder shown as ~ (handoff-packet.js clean), then cut to the limit,
+// so scrubbing never makes it longer than the bus accepts.
 function busScrub(args, home = os.homedir()) {
-  const clean = (v, max) => (typeof v === 'string' ? Scrub.redactSecretsPass(home ? v.slice(0, max * 2).split(home).join('~') : v.slice(0, max * 2)).slice(0, max) : v);
+  const clean = (v, max) => {
+    if (typeof v !== 'string') return v;
+    const s = fold(v.slice(0, max * 2));
+    return Scrub.redactSecretsPass(home ? s.split(home).join('~') : s).slice(0, max);
+  };
   const out = { ...args };
-  for (const k of ['title', 'brief', 'branch']) if (k in out) out[k] = clean(out[k], BUS_LIMITS[k]);
+  for (const k of ['title', 'brief', 'branch', 'text']) if (k in out) out[k] = clean(out[k], BUS_LIMITS[k]);
   if (Array.isArray(out.files)) out.files = out.files.slice(0, 50).map((f) => clean(f, BUS_LIMITS.file));
   return out;
 }
@@ -136,7 +143,7 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
           const op = String(d.op || '');
           if (!BUS_AGENT_OPS.has(op)) return done(200, { reason: 'VALIDATION', message: 'unknown bus op' });
           const { cwd, ...raw } = d.args && typeof d.args === 'object' && !Array.isArray(d.args) ? d.args : {};
-          const args = op === 'handoff' ? busScrub(raw) : raw;
+          const args = op === 'handoff' || op === 'note' ? busScrub(raw) : raw;
           const caller = { provider: typeof raw.provider === 'string' ? raw.provider.slice(0, 12) : null, cwd: typeof cwd === 'string' ? cwd.slice(0, 1024) : null };
           // Who is calling comes from this socket's peer process, which main looks up; the body only carries Codex's thread claim.
           const threadId = d.meta && typeof d.meta === 'object' && typeof d.meta.thread_id === 'string' && THREAD_ID.test(d.meta.thread_id) ? d.meta.thread_id : null;

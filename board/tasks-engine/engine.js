@@ -110,6 +110,8 @@ export class ApiError extends Error {
   constructor(code, message, details) { super(message); this.code = code; this.details = details; }
 }
 
+const MAIN_ONLY = new Set(['note', 'notes', 'notes_pending', 'notified']);
+
 export function defaultMaxParallel(ramGb) {
   return ramGb >= 32 ? 4 : ramGb >= 16 ? 2 : 1;
 }
@@ -128,8 +130,12 @@ export class TasksEngine extends EventEmitter {
    * env (the parent env the allowlist is built from), maxParallel (≤ 8), retentionDays, retentionMax,
    * mcpServer, interruptWaitMs, stopGraceMs, tickMs.
    */
-  constructor(opts) {
+  // Main's capability for MAIN_ONLY bus ops (src/tasks-process.js): set once, never logged, never on disk.
+  #mainKey = null;
+
+  constructor({ mainKey, ...opts }) {
     super();
+    this.setMainKey(mainKey);
     this.opts = opts;
     this.dataDir = opts.dataDir;
     this.store = opts.store;
@@ -1962,11 +1968,24 @@ export class TasksEngine extends EventEmitter {
     return this.getLimits();
   }
 
-  /** The agent bus (board/AGENT-BUS.md): main's own client only; a relay never reaches it. */
+  setMainKey(hex) {
+    if (this.#mainKey || typeof hex !== 'string' || !/^[0-9a-f]{64}$/.test(hex)) return;
+    this.#mainKey = Buffer.from(hex, 'hex');
+  }
+
+  #isMain(ctx) {
+    const k = typeof ctx.mainKey === 'string' && /^[0-9a-f]{64}$/.test(ctx.mainKey) ? Buffer.from(ctx.mainKey, 'hex') : null;
+    return !!(this.#mainKey && k && k.length === this.#mainKey.length && crypto.timingSafeEqual(k, this.#mainKey));
+  }
+
+  /** The agent bus (board/AGENT-BUS.md): main's own client only; a relay never reaches it. The note ops also need
+   *  main's key, since tasks.token is on disk for any same-user process (the buddy CLI, a model's shell). */
   async bus({ op, args = {}, caller = null }, ctx = {}) {
     if (this.principal(ctx)?.kind === 'relay') throw new ApiError('POLICY_DENIED', 'only the local app can use the agent bus');
     if (!BUS_OPS.includes(op)) throw new ApiError('VALIDATION', 'unknown bus op');
-    const c = caller && typeof caller === 'object' ? { provider: typeof caller.provider === 'string' ? caller.provider.slice(0, 12) : null, cwd: typeof caller.cwd === 'string' && path.isAbsolute(caller.cwd) ? caller.cwd.slice(0, 1024) : null } : null;
+    if (MAIN_ONLY.has(op) && !this.#isMain(ctx)) throw new ApiError('POLICY_DENIED', 'notes come only from Plexiform');
+    const c = caller && typeof caller === 'object' ? { provider: typeof caller.provider === 'string' ? caller.provider.slice(0, 12) : null, cwd: typeof caller.cwd === 'string' && path.isAbsolute(caller.cwd) ? caller.cwd.slice(0, 1024) : null,
+      ...(caller.after_note === true ? { after_note: true } : {}) } : null;
     try { return await this.agentBus.op(op, args, c); } catch (e) {
       if (e instanceof BusRefusal) throw new ApiError(['VALIDATION', 'POLICY_DENIED', 'CONFLICT'].includes(e.code) ? e.code : 'INTERNAL', e.message);
       throw e;

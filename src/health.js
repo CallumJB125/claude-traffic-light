@@ -201,6 +201,16 @@ function checkBusHook(ctx) {
   return { status: 'warn', detail: 'Plexiform could not add its bus_session hook to ~/.codex/hooks.json.' };
 }
 
+// ctx.mcpNode: { version, flags } of the `node` a development run registers its MCP server with (main only, never
+// packaged). Without --disable-sigusr1 the server still starts, but the agent bus never treats a call from it as
+// coming from a particular session (src/agent-awareness.js), so it fails closed and says why.
+function checkMcpNode(ctx) {
+  const n = ctx.mcpNode;
+  if (!n || n.flags === true || n.version === null) return null;
+  const which = typeof n.version === 'string' && /^v\d+\.\d+\.\d+$/.test(n.version) ? `node ${n.version}` : 'The node on your PATH';
+  return { status: 'warn', detail: `${which} is older than 22.14, so Plexiform's MCP server runs without --disable-sigusr1 and the agent bus answers its calls as no particular session (no notes, no "you are" line).`, next: 'Install Node 22.14 or later (for example brew install node@22), then restart Plexiform.' };
+}
+
 // ctx.signal: { listening, port, error } from the app, or { running: false }
 // when the MCP server found nothing answering.
 function checkSignal(ctx) {
@@ -446,6 +456,7 @@ const CHECKS = [
   ['bus-mcp-claude', 'Agent bus tools (Claude Code)', busRow('claude')],
   ['bus-mcp-codex', 'Agent bus tools (Codex)', busRow('codex')],
   ['bus-codex-hook', 'Codex agent bus hook', checkBusHook],
+  ['mcp-node', 'Node for the MCP server (development)', checkMcpNode],
   ['transcripts', 'Transcripts', checkTranscripts],
   ['disk', 'Disk space', checkDisk],
   ['burst', 'Burst trusted', checkBurst],

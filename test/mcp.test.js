@@ -212,12 +212,12 @@ test('buddy_spend: today, this week and runaways from the transcripts, with the 
   assert.match(r.summary, /1 turn this week unpriced/);
 });
 
-test('the server exposes fourteen buddy_ tools, nine team_ tools and seven bus_ tools, read-only but for the ones that draft held agent mail or hand off on the agent bus', () => {
-  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_spend', 'buddy_usage_history', 'buddy_health', 'buddy_pending_requests', 'buddy_burst_status', 'buddy_burst_coordination', 'buddy_burst_requests', 'team_activity', 'who_touched', 'team_handover', 'team_brief', 'team_memory_search', 'team_memory_get', 'team_ask', 'team_hand_off', 'hand_off_to_tool', 'hand_off_status', 'bus_peers', 'bus_session', 'bus_hello', 'bus_handoff', 'bus_wait', 'bus_read', 'bus_status', 'team_agent_mail']);
-  assert.deepEqual(M.TOOLS.filter((t) => t.readOnly === false).map((t) => t.name), ['team_ask', 'team_hand_off', 'hand_off_to_tool', 'bus_handoff']);
+test('the server exposes fourteen buddy_ tools, nine team_ tools and nine bus_ tools, read-only but for the ones that draft held agent mail, hand off or leave a note on the agent bus', () => {
+  assert.deepEqual(M.TOOLS.map((t) => t.name), ['buddy_status', 'buddy_sessions', 'buddy_why', 'buddy_rules', 'buddy_recent_transitions', 'buddy_model_mix', 'buddy_git_status', 'buddy_spend', 'buddy_usage_history', 'buddy_health', 'buddy_pending_requests', 'buddy_burst_status', 'buddy_burst_coordination', 'buddy_burst_requests', 'team_activity', 'who_touched', 'team_handover', 'team_brief', 'team_memory_search', 'team_memory_get', 'team_ask', 'team_hand_off', 'hand_off_to_tool', 'hand_off_status', 'bus_peers', 'bus_session', 'bus_hello', 'bus_handoff', 'bus_wait', 'bus_read', 'bus_status', 'bus_note', 'bus_notes', 'team_agent_mail']);
+  assert.deepEqual(M.TOOLS.filter((t) => t.readOnly === false).map((t) => t.name), ['team_ask', 'team_hand_off', 'hand_off_to_tool', 'bus_handoff', 'bus_note']);
 });
 
-test('stdio: the server starts, lists thirty-two tools and answers buddy_status and buddy_health end to end', async () => {
+test('stdio: the server starts, lists thirty-four tools and answers buddy_status and buddy_health end to end', async () => {
   const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
   const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
   const root = fixture({ config: base, sessions: { a: session('a', { updatedAt: new Date().toISOString() }) } });
@@ -231,7 +231,7 @@ test('stdio: the server starts, lists thirty-two tools and answers buddy_status 
   await client.connect(transport);
   try {
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 32);
+    assert.equal(tools.length, 34);
     // The same synthetic home on every host, without an installed Codex profile.
     const health = JSON.parse((await client.callTool({ name: 'buddy_health', arguments: {} })).content[0].text);
     assert.equal(health.checks.length, 8);
@@ -252,7 +252,9 @@ const entry = McpInstall.launch({ packaged: true, execPath: '/Applications/Claud
 
 test('mcp-install: launch runs the packaged app as node, or plain node in dev', () => {
   assert.deepEqual(entry, { type: 'stdio', command: '/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy', args: ['--disable-sigusr1', path.join('/Applications/Claude Buddy.app/Contents/Resources/app.asar', 'mcp-server.js')], env: { ELECTRON_RUN_AS_NODE: '1' } });
-  assert.deepEqual(McpInstall.launch({ packaged: false, dir: '/repo', root: '/r' }), { type: 'stdio', command: 'node', args: ['--disable-sigusr1', path.join('/repo', 'mcp-server.js')], env: { CLAUDE_TRAFFIC_LIGHT_HOME: '/r' } });
+  assert.deepEqual(McpInstall.launch({ packaged: false, dir: '/repo', root: '/r', nodeVersion: 'v22.14.0' }), { type: 'stdio', command: 'node', args: ['--disable-sigusr1', path.join('/repo', 'mcp-server.js')], env: { CLAUDE_TRAFFIC_LIGHT_HOME: '/r' } });
+  // A node too old for the option (or not yet asked) still starts the server, without it.
+  assert.deepEqual(McpInstall.launch({ packaged: false, dir: '/repo', root: '/r' }).args, [path.join('/repo', 'mcp-server.js')]);
 });
 
 test('mcp-install: idempotent install/uninstall that keeps every other key and server', () => {
@@ -359,7 +361,7 @@ test('buddy_health: hooks from this copy, the app answering, MCP registered — 
   const home = testTempDir('ctl-mcp-home-');
   fs.mkdirSync(path.join(home, '.claude', 'projects', '-w-a'), { recursive: true });
   fs.writeFileSync(Claude.configPath(home), JSON.stringify(Claude.apply({}, M.hookRuntime(root), { home })));
-  McpInstall.install({ home, entry: McpInstall.launch({ packaged: false, dir: path.join(__dirname, '..'), root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }) });
+  McpInstall.install({ home, entry: McpInstall.launch({ packaged: false, dir: path.join(__dirname, '..'), root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME, nodeVersion: process.version }) });
   const statfs = () => ({ bavail: 1e6, bsize: 1e6 });
   const h = await M.buddyHealth({ root, home, now: NOW, live: { look: {} }, statfs, mcpConnected: true });
   const by = (id) => h.checks.find((c) => c.id === id);

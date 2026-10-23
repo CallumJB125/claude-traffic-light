@@ -13,7 +13,10 @@ async function close() {
   try { await engine?.close(); process.exit(0); }
   catch { process.exit(1); }
 }
-parent?.on('message', (e) => { if (e?.data?.type === 'tasks.shutdown') close(); });
+parent?.on('message', (e) => {
+  if (e?.data?.type === 'tasks.shutdown') close();
+  if (e?.data?.type === 'tasks.mainKey') engine?.engine.setMainKey(e.data.key);
+});
 process.on('SIGTERM', close);
 process.on('SIGINT', close);
 try {

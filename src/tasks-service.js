@@ -188,9 +188,9 @@ function createTasksService(opts) {
     setConn('connecting');
     let c;
     try {
-      await opts.ensureSupervisor?.();
+      const helper = await opts.ensureSupervisor?.();
       if (stopped) return;
-      c = await api.client.connect({ env: { ...process.env, BOARD_HOME: opts.boardHome }, client: { name: 'plexiform-tasks', version: '1' } });
+      c = await api.client.connect({ env: { ...process.env, BOARD_HOME: opts.boardHome }, client: { name: 'plexiform-tasks', version: '1' }, mainKey: helper?.mainKey ?? null });
       if (stopped) { c.close(); return; }
     } catch (e) {
       throw Object.assign(new Error('connect'), { code: codeOf(e) });
