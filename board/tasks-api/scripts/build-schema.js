@@ -286,7 +286,7 @@ const schema = {
       ],
     },
     // method params / results
-    HelloParams: obj({ protocol: int({ minimum: 1 }), client: obj({ name: str(), version: str() }), mainKey: str({ minLength: 64, maxLength: 64 }) }, ['protocol']),
+    HelloParams: obj({ protocol: int({ minimum: 1 }), client: obj({ name: str(), version: str() }) }, ['protocol']),
     HelloResult: obj({ protocol: int({ minimum: 1 }), serverVersion: str(), epoch: str(), mock: bool }),
     CreateTaskParams: obj({ requestId: str({ minLength: 8, maxLength: 128 }), spec: ref('TaskSpec') }),
     CreateTaskResult: obj({ id: str(), duplicate: bool }),

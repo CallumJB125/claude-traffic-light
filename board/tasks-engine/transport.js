@@ -144,7 +144,8 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
     // One authenticated principal per connection; subscriptions must never
     // retain a stronger token after a caller switches credentials.
     if (st.hello && st.token !== msg.token) { fail('UNAUTHENTICATED', 'connection principal changed'); conn.destroy(); return; }
-    const ctx = { principal, auth: () => authOf(msg.token), mainKey: st.mainKey ?? null };
+    // A fixed literal: nothing from the frame, its params or the hello is ever copied into ctx (PR B review point 1).
+    const ctx = { principal, auth: () => authOf(msg.token) };
     const re = validate(SCHEMA, 'Request', msg);
     if (re) {
       if (typeof msg.method === 'string' && !METHODS.includes(msg.method)) return fail('UNKNOWN_METHOD', 'unknown method');
@@ -152,6 +153,11 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
     }
     if (!st.hello && msg.method !== 'hello') return fail('VALIDATION', 'send hello first');
     const params = msg.params;
+    // mainKey was main's capability for the note ops until they moved to parentPort (PR B). A hello still carrying
+    // one is refused and the connection closed, first hello or not, as PR #37 did for a late one.
+    if (msg.method === 'hello' && params && typeof params === 'object' && Object.hasOwn(params, 'mainKey')) {
+      st.dead = true; fail('POLICY_DENIED', 'mainKey is not accepted: note ops come only from the app'); conn.end(); return;
+    }
     const def = PARAMS_DEF[msg.method];
     if (def) {
       const pe = validate(SCHEMA, def, params);
@@ -163,11 +169,7 @@ export async function startTransport({ engine, dir, log, hbMs = HB_PUSH_MS }) {
       switch (msg.method) {
         case 'hello': {
           if (!engine.relayActive(principal)) { fail('POLICY_DENIED', 'relay parent is no longer active'); conn.end(); return; }
-          // mainKey is taken on a connection's first hello only (PR #35 re-review R1): a connection that is already
-          // open cannot be upgraded later with a key learnt elsewhere, and a later hello never drops or swaps it.
-          if (st.hello && params?.mainKey !== undefined) { st.dead = true; fail('POLICY_DENIED', 'mainKey is accepted only on the first hello'); conn.end(); return; }
           const r = engine.hello(params);
-          if (!st.hello) st.mainKey = typeof params?.mainKey === 'string' ? params.mainKey : null;
           st.hello = true;
           st.token = msg.token;
           clearTimeout(st.helloTimer);

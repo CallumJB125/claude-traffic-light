@@ -1,4 +1,4 @@
-// Electron utilityProcess entry. Only readiness and fixed error codes cross
+// Electron utilityProcess entry. Only readiness, fixed error codes and main's note ops (parent-bus.js) cross
 // parentPort: credentials remain in the engine's private files.
 import os from 'node:os';
 import path from 'node:path';
@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { startTasksEngine } from './index.js';
 import { makeLogger } from '../runner/util.js';
 import { desktopProviders } from './desktop-providers.js';
+import { parentBus, BUS_REQUEST } from './parent-bus.js';
 
 // The app's enforced spend cap (src/spend-enforce.js writes it; hooks/spend-gate.js reads it, fail-open). The
 // router skips every AI while it holds.
@@ -36,8 +37,10 @@ function peersFor(taskId) {
 }
 parent?.on('message', (e) => {
   if (e?.data?.type === 'tasks.shutdown') close();
-  if (e?.data?.type === 'tasks.mainKey') engine?.engine.setMainKey(e.data.key);
   if (e?.data?.type === 'awareness.peers.reply') asks.get(e.data.id)?.(e.data.result ?? null);
+  if (e?.data?.type === BUS_REQUEST) {
+    parentBus(engine?.engine ?? null, e.data).then((r) => { if (r && !closing) parent.postMessage(r); }, () => {});
+  }
 });
 process.on('SIGTERM', close);
 process.on('SIGINT', close);

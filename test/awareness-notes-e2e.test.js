@@ -44,7 +44,10 @@ async function setup(t, { halted = () => false, config = {} } = {}) {
   w.state.config = config;
   const h = await helper(t);
   const forwarded = [];
-  const forward = async (op, args, caller) => { forwarded.push({ op, args, caller }); return h.op(op, args); };
+  // fault(op): an error for that op, or null. e.before: lost on the way to the helper (it never ran); otherwise the
+  // helper ran it and the answer was lost on the way back.
+  const fault = { fn: () => null };
+  const forward = async (op, args, caller) => { forwarded.push({ op, args, caller }); const e = fault.fn(op); if (e && e.before) throw e; const r = await h.op(op, args); if (e) throw e; return r; };
   let refreshed = 0;
   const aw = w.make({ mcpCaps: () => ({ claude: true, codex: true }), halted, bus: (op, args) => h.op(op, args), busStarted: () => true, refreshHalt: async () => { refreshed += 1; } });
   t.after(() => aw.stop());
@@ -60,7 +63,7 @@ async function setup(t, { halted = () => false, config = {} } = {}) {
   const handleOf = (key) => roster.self[key].handle;
   // As each session's own MCP child: Codex stamps its thread id; Claude's child is known by its parent.
   const as = { codex: () => { w.call(201); return { ...c, meta: { threadId: w.T } }; }, claude: () => { w.call(101); return c; }, z: () => { w.call(111); return c; } };
-  return { w, h, aw, c, as, forwarded, roster, handleOf, refreshedCount: () => refreshed };
+  return { w, h, aw, c, as, forwarded, roster, handleOf, fault, refreshedCount: () => refreshed };
 }
 
 // The recipient's real Claude Code hook for one prompt; bounded, never left running.
@@ -307,7 +310,7 @@ test('red team: 30 bodies cannot produce a header-like line in bus_notes, and no
     assert.equal(r.state, 'queued', `${i}: ${JSON.stringify(r)}`);
   }
   const framed = [];
-  for (;;) { const r = h.notes.op('notes', { me: { key: 'claude|X' } }); framed.push(...r.notes); if (!r.more) break; }
+  for (;;) { const r = h.notes.op('notes', { me: { key: 'claude|X' } }); framed.push(...r.notes); if (r.notes.length) h.notes.op('notes_ack', { me: { key: 'claude|X' }, note_ids: r.notes.map((n) => n.note_id) }); if (!r.more) break; }
   assert.equal(framed.length, 30);
   for (const n of framed) {
     const lines = fold(n.text);
@@ -444,7 +447,7 @@ test('L1: none of the 16 listed opener lookalikes, nor any other non-ASCII openi
     framed.push(frame({ kind: 'message', source: { kind: 'person', name: 'Alex' }, body: b }, nonce));
     framed.push(frame({ kind: 'handoff', source: { kind: 'session', name: 'This Mac', provider: 'claude' }, body: b, handoff: { card_refs: [b], artifacts: [] } }, nonce));
   });
-  for (;;) { const r = h.notes.op('notes', { me: { key: 'claude|X' } }); framed.push(...r.notes.map((n) => n.text)); if (!r.more) break; }
+  for (;;) { const r = h.notes.op('notes', { me: { key: 'claude|X' } }); framed.push(...r.notes.map((n) => n.text)); if (r.notes.length) h.notes.op('notes_ack', { me: { key: 'claude|X' }, note_ids: r.notes.map((n) => n.note_id) }); if (!r.more) break; }
   assert.equal(framed.length, 48);
   const opener = /^\s*(?![\x00-\x7f])[\p{Ps}\p{Pi}\p{Sm}\p{So}\p{Sk}]/u;
   for (const text of framed) {
@@ -478,4 +481,47 @@ test('L3 (PR #35 review): a handoff from a session after it read a note through 
   // The agent's own words never set it.
   await handoff(s.as.z(), { after_note: false });
   assert.ok(!('after_note' in last().caller) || last().caller.after_note === undefined);
+});
+
+test('PR B two-phase: a bus_notes answer whose ack is lost leaves the notes unread and the notice up, and the next read gets them again; a lost note answer is outcome unknown, and its retry is the same note', async (t) => {
+  const s = await setup(t);
+  const y = s.handleOf('claude|X');
+  const lost = (code, before = false) => Object.assign(new Error('lost'), { code, before });
+  // The note's answer is lost after the helper queued it: unknown, and the same request_id is the same note.
+  s.fault.fn = (op) => (op === 'note' ? lost('TIMEOUT') : null);
+  const first = await M.busCall('note', { to: y, text: 'two-phase check', request_id: 'req-2phase-0001' }, s.as.codex());
+  assert.equal(first.outcome, 'unknown');
+  assert.match(first.message, /same request_id/);
+  s.fault.fn = () => null;
+  const again = await M.busCall('note', { to: y, text: 'two-phase check', request_id: 'req-2phase-0001' }, s.as.codex());
+  assert.equal(again.duplicate, true);
+  assert.equal(s.h.log.unread(Date.now()).length, 1, 'one note, not two');
+  await s.aw.syncNotes();
+  // The ack never reaches the helper: X still gets the text now, and the note stays unread and noticed.
+  s.fault.fn = (op) => (op === 'notes_ack' ? lost('TIMEOUT', true) : null);
+  const got = await M.busCall('notes', {}, s.as.claude());
+  assert.equal(got.notes.length, 1);
+  assert.equal(s.h.log.unread(Date.now()).length, 1, 'not read yet');
+  await s.aw.refresh();
+  assert.equal(JSON.parse(fs.readFileSync(path.join(s.w.root, 'awareness', 'roster.json'), 'utf8')).self['claude|X'].notices.length, 1, 'the notice stays');
+  // The notes answer itself is lost: nothing is read either.
+  s.fault.fn = (op) => (op === 'notes' ? lost('UNAVAILABLE') : null);
+  await M.busCall('notes', {}, s.as.claude()).catch(() => null);
+  assert.equal(s.h.log.unread(Date.now()).length, 1);
+  // Next time it goes through: offered again, then read, and the notice goes.
+  s.fault.fn = () => null;
+  assert.equal((await M.busCall('notes', {}, s.as.claude())).notes[0].note_id, got.notes[0].note_id);
+  assert.equal(s.h.log.unread(Date.now()).length, 0);
+  assert.deepEqual(s.forwarded.filter((f) => f.op === 'notes_ack').map((f) => f.args), [{ me: { key: 'claude|X' }, note_ids: [got.notes[0].note_id] }, { me: { key: 'claude|X' }, note_ids: [got.notes[0].note_id] }]);
+  await s.aw.refresh();
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(s.w.root, 'awareness', 'roster.json'), 'utf8')).self['claude|X'].notices, []);
+  // An ack the helper applied whose answer was lost: read (X has the text), and the next sync drops the notice.
+  await M.busCall('note', { to: y, text: 'second note', request_id: 'req-2phase-0002' }, s.as.codex());
+  s.fault.fn = (op) => (op === 'notes_ack' ? lost('TIMEOUT') : null);
+  assert.equal((await M.busCall('notes', {}, s.as.claude())).notes.length, 1);
+  s.fault.fn = () => null;
+  assert.equal(s.h.log.unread(Date.now()).length, 0);
+  await s.aw.syncNotes();
+  await s.aw.refresh();
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(s.w.root, 'awareness', 'roster.json'), 'utf8')).self['claude|X'].notices, []);
 });

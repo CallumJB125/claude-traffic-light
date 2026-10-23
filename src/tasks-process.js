@@ -2,9 +2,12 @@
 // auth key, stderr or environment value is sent to a renderer or app log.
 'use strict';
 const path = require('node:path');
-const crypto = require('node:crypto');
 const WINDOW_MS = 10 * 60_000;
 const MAX_RESTARTS = 5;
+// Main's note ops over parentPort (board/tasks-engine/parent-bus.js): bounded, never queued without limit.
+const BUS_MAX_INFLIGHT = 64;
+const BUS_TIMEOUT_MS = 12_000;
+const busError = (code) => Object.assign(new Error(code === 'TIMEOUT' ? 'The Tasks helper did not answer in time' : 'The Tasks helper is not available'), { code });
 // CLAUDE_TRAFFIC_LIGHT_HOME: main's data folder when overridden, where the engine reads spend-gate.json (the router's spend gate).
 const PASS = ['HOME', 'USER', 'LOGNAME', 'PATH', 'TMPDIR', 'LANG', 'TZ', 'CODEX_HOME', 'CLAUDE_TRAFFIC_LIGHT_HOME'];
 function tasksEnv(dataDir, base = process.env) {
@@ -22,6 +25,10 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
   timers = { setTimeout, clearTimeout } }) {
   let child = null; let ready = null; let info = null; let disposed = false; let stopping = false; let state = 'stopped';
   const restarts = [];
+  // id → {child, resolve, reject, timer}. An answer counts only from the child the request went to.
+  const pending = new Map();
+  let busSeq = 0;
+  const rejectPending = (c, code) => { for (const [id, p] of pending) if (!c || p.child === c) { pending.delete(id); timers.clearTimeout(p.timer); p.reject(busError(code)); } };
   const status = (s) => { state = s; try { onStatus({ state, restarts: restarts.length }); } catch { /* UI may be gone */ } };
   function start() {
     while (restarts.length && now() - restarts[0] > WINDOW_MS) restarts.shift();
@@ -30,9 +37,6 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
     status('starting');
     let c;
     let timer;
-    // Main's capability for the main-only bus ops (notes): fresh per helper, sent over parentPort once it listens, never
-    // in env or argv (other same-user processes can read those) and never written to disk or logged.
-    const mainKey = crypto.randomBytes(32).toString('hex');
     const p = new Promise((resolve, reject) => {
       const fail = () => reject(new Error('Tasks helper could not start'));
       try {
@@ -41,6 +45,14 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
         // Drain outputs without retaining them: errors can contain personal paths.
         c.stderr?.on('data', () => {}); c.stdout?.on('data', () => {});
         c.on('message', (m) => {
+          if (m?.type === 'tasks.busResult') {
+            const p = typeof m.id === 'string' ? pending.get(m.id) : null;
+            if (!p || p.child !== c) return;
+            pending.delete(m.id); timers.clearTimeout(p.timer);
+            if (m.ok === true) p.resolve(m.result);
+            else p.reject(Object.assign(new Error('The Tasks helper refused the request'), { code: typeof m.code === 'string' ? m.code.slice(0, 32) : 'INTERNAL' }));
+            return;
+          }
           if (m?.type === 'tasks.fatal') fail();
           if (m?.type === 'tasks.runs' && child === c) { try { onRuns(Array.isArray(m.runs) ? m.runs : []); } catch { /* main's view only */ } return; }
           if (m?.type === 'awareness.peers' && child === c && Number.isSafeInteger(m.id) && typeof m.taskId === 'string') {
@@ -51,11 +63,11 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
           if (m?.type === 'tasks.work' && child === c) { try { onWork(Array.isArray(m.rows) ? m.rows : []); } catch { /* cards only */ } return; }
           if (m?.type !== 'tasks.listening' || m.socket !== path.join(dataDir, 'tasks.sock') || !/^[0-9a-f-]{36}$/.test(m.epoch ?? '')) return;
           if (disposed || stopping || child !== c) return fail();
-          try { c.postMessage({ type: 'tasks.mainKey', key: mainKey }); } catch { return fail(); }
-          info = { socketPath: m.socket, epoch: m.epoch, mainKey }; status('ready'); resolve(info);
+          info = { socketPath: m.socket, epoch: m.epoch }; status('ready'); resolve(info);
         });
         c.once('error', fail);
         c.once('exit', () => {
+          rejectPending(c, 'UNAVAILABLE');
           if (child !== c) return;
           child = null; info = null;
           try { onRuns([]); } catch { /* main's view only */ }
@@ -85,9 +97,26 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
   return {
     ensure() { if (disposed) return Promise.reject(new Error('Tasks helper is stopped')); return ready || start(); },
     status: () => ({ state, restarts: restarts.length }),
+    // One note op to the running helper over parentPort. Refused at once (UNAVAILABLE) with no ready helper or
+    // BUS_MAX_INFLIGHT in flight; TIMEOUT after timeoutMs, and a late answer is dropped; the helper exiting or
+    // being replaced, or stop(), rejects what is pending. A timeout is ambiguous: the helper may have acted.
+    busMain(op, args = {}, { timeoutMs = BUS_TIMEOUT_MS } = {}) {
+      const c = child;
+      if (!c || state !== 'ready' || stopping || disposed) return Promise.reject(busError('UNAVAILABLE'));
+      if (pending.size >= BUS_MAX_INFLIGHT) return Promise.reject(busError('UNAVAILABLE'));
+      busSeq += 1;
+      const id = `b${busSeq}`;
+      return new Promise((resolve, reject) => {
+        const timer = timers.setTimeout(() => { if (pending.get(id)?.child === c) { pending.delete(id); reject(busError('TIMEOUT')); } }, timeoutMs);
+        timer.unref?.();
+        pending.set(id, { child: c, resolve, reject, timer });
+        try { c.postMessage({ type: 'tasks.bus', id, op, args }); } catch { pending.delete(id); timers.clearTimeout(timer); reject(busError('UNAVAILABLE')); }
+      });
+    },
     async stop({ final = false } = {}) {
       if (final) disposed = true;
       stopping = true; const c = child; ready = null; info = null;
+      rejectPending(null, 'UNAVAILABLE');
       if (c) await new Promise((resolve) => {
         const t = timers.setTimeout(() => { try { if (c.pid) killPid(c.pid, 'SIGKILL'); else c.kill(); } catch { /* gone */ } resolve(); }, shutdownGraceMs);
         c.once('exit', () => { timers.clearTimeout(t); resolve(); });

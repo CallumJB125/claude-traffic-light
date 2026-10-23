@@ -50,7 +50,7 @@ export const REMOTE_SOURCES = Object.freeze(['board', 'phone', 'slack', 'voice',
 // busSetContext, halt and resume are main's own (tray, Preferences) and never reachable from an agent.
 // note and notes arrive from an agent through main's relay, but main rebuilds their arguments (sender and recipient
 // from the calling process, never the body); notes_pending and notified are main's own.
-export const BUS_OPS = Object.freeze(['hello', 'handoff', 'read', 'wait', 'status', 'list', 'busSetContext', 'halt', 'resume', 'note', 'notes', 'notes_pending', 'notified']);
+export const BUS_OPS = Object.freeze(['hello', 'handoff', 'read', 'wait', 'status', 'list', 'busSetContext', 'halt', 'resume', 'note', 'notes', 'notes_ack', 'notes_pending', 'notified']);
 export const BUS_AGENT_OPS = Object.freeze(['hello', 'handoff', 'read', 'wait', 'status', 'note', 'notes']);
 export const PARK_REASONS = Object.freeze(['user', 'limit', 'auth', 'ask_timeout', 'approval_timeout', 'message_loop']);
 export const OUTCOMES = Object.freeze(['merged', 'pr_opened', 'pr_merged', 'discarded']);

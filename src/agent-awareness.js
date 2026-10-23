@@ -702,9 +702,18 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     if (!me || me.verified !== true || typeof me.handle !== 'string' || !book.has(b.key)) return op === 'notes' ? { ...NOT_BOUND, notes: [] } : NOT_BOUND;
     if (op === 'notes') {
       const r = await forward('notes', { me: { key: b.key }, ...(status ? { status: true } : {}), ...(typeof args.note_id === 'string' && Hook.NOTE_ID.test(args.note_id) ? { note_id: args.note_id } : {}) }, null);
-      const read = r && Array.isArray(r.notes) ? r.notes.map((n) => n && n.note_id).filter((id) => typeof id === 'string') : [];
-      if (read.length) { dropNotices(b.key, read); readNote(b.key); schedule(); }
-      log(`[awareness] notes read=${read.length}${r && r.reason ? ` ${String(r.reason).toLowerCase()}` : ''}`);
+      const got = !status && r && Array.isArray(r.notes) ? r.notes.map((n) => n && n.note_id).filter((id) => typeof id === 'string' && Hook.NOTE_ID.test(id)) : [];
+      // Two-phase (PR B review point 4): the helper marks them read only now that main has the bodies. An ack that
+      // fails leaves them unread, so they are offered again rather than lost.
+      let read = [];
+      if (got.length) {
+        const ack = await forward('notes_ack', { me: { key: b.key }, note_ids: got }, null).catch(() => null);
+        read = ack && Array.isArray(ack.read) ? ack.read.filter((id) => got.includes(id)) : [];
+        readNote(b.key);
+        if (read.length) dropNotices(b.key, read);
+        schedule();
+      }
+      log(`[awareness] notes got=${got.length} read=${read.length}${r && r.reason ? ` ${String(r.reason).toLowerCase()}` : ''}`);
       return r;
     }
     const to = typeof args.to === 'string' ? args.to : '';
@@ -714,7 +723,17 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
       return { reason: 'UNKNOWN_PEER', message: 'No live AI session that can take notes has that handle (see bus_peers).' };
     }
     const from = book.get(b.key);
-    const r = await forward('note', { from: { key: b.key, handle: me.handle, provider: from.provider, folder: from.folder }, to: { key: toKey, handle: to }, text: args.text, request_id: args.request_id }, null);
+    let r;
+    try {
+      r = await forward('note', { from: { key: b.key, handle: me.handle, provider: from.provider, folder: from.folder }, to: { key: toKey, handle: to }, text: args.text, request_id: args.request_id }, null);
+    } catch (e) {
+      // The helper may have queued it before the answer was lost: the same request_id never sends it twice.
+      if (e && (e.code === 'TIMEOUT' || e.code === 'UNAVAILABLE')) {
+        log('[awareness] note unknown');
+        return { outcome: 'unknown', message: 'Plexiform could not confirm this note. Retry with the same request_id: it is never sent twice.' };
+      }
+      throw e;
+    }
     if (r && r.state === 'queued' && !r.duplicate) { addNotice(toKey, { note_id: r.note_id, from_handle: me.handle, from_provider: from.provider, from_folder: from.folder, expires_at: r.expires_at }); schedule(); }
     log(`[awareness] note ${r && r.reason ? String(r.reason).toLowerCase() : r && r.state ? r.state : 'error'}`);
     return r && typeof r.note_id === 'string' ? { note_id: r.note_id, state: r.state, ...(r.duplicate ? { duplicate: true } : {}) } : r;

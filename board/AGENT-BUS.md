@@ -4,7 +4,7 @@ AI tools hand bounded work to each other. A handoff is claimed and started autom
 
 ## 1. Where it runs
 
-- **Electron main** relays only: `POST /bus` on the signal server (`src/signal-server.js`), token-checked, no browser origin, scrubbed, then forwarded asynchronously over the Tasks socket (`tasks-service.bus`). Main never opens `bus.db`, SQLite or a repo path for the bus (`test/bus-main-thread.test.js`).
+- **Electron main** relays only: `POST /bus` on the signal server (`src/signal-server.js`), token-checked, no browser origin, scrubbed, then forwarded asynchronously over the Tasks socket (`tasks-service.bus`). The session notes ops (`note`, `notes`, `notes_ack`, `notes_pending`, `notified`) are the exception: they go only over the helper's parentPort (`src/tasks-process.js` busMain → `board/tasks-engine/parent-bus.js`) and the socket refuses them. Main never opens `bus.db`, SQLite or a repo path for the bus (`test/bus-main-thread.test.js`).
 - **Tasks utilityProcess** owns everything else (`board/tasks-engine/bus/`): `local-log.js` (`bus.db`, 0600, in the engine data dir), `guard.js` (admission), `dispatcher.js` (claim → `engine.createTask` in-process with `source: 'bus'` → result), `pricing.js`.
 - **Agents**: interactive sessions use `bus_*` in `mcp-server.js`; bus-started runs get `bus_result` and `bus_handoff` on their per-run task server (`board/mcp/task-tools.js`, handled in `collaboration.js`).
 

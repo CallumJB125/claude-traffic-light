@@ -2178,6 +2178,8 @@ function getTasks() {
   tasksSvc = require('./src/tasks-service.js').createTasksService({
     boardHome: dataDir,
     ensureSupervisor: () => tasksProcess?.ensure(),
+    // The note ops, over the helper's parentPort only (none in a dev fixture home: UNAVAILABLE).
+    ...(tasksProcess ? { busMain: (op, args) => tasksProcess.busMain(op, args) } : {}),
     homeDir: os.homedir(),
     detectedTools: () => AiTools.quick(),
     startGuard: (cwd) => (taskStartGuard ? taskStartGuard(cwd) : null),
