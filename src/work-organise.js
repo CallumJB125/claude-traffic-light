@@ -264,14 +264,18 @@
     return '';
   }
 
-  // Display-time title. Stored titles are never rewritten. Team cards without
-  // share_summaries never get a prompt-made or cron title (rules 5–6); their
-  // ticket comes from the branch only.
+  // Display-time title. Stored titles are never rewritten. A prompt-made or
+  // cron title (rules 5–6) needs either an explicitly local session
+  // (team === false, no share setting) or shareSummaries === true; anything
+  // else — a missing flag, a truthy string, share off — fails closed, and the
+  // ticket then comes from the branch only.
   //   {human, card, reported, branch, firstPrompt, provider, project, cronJob, team, shareSummaries}
   //   → {title, source}
   function titleOf(input = {}, { redact = defaultRedact } = {}) {
     const o = input !== null && typeof input === 'object' ? input : {};
-    const promptsAllowed = !(o.team === true && o.shareSummaries !== true) && typeof redact === 'function';
+    const shared = o.shareSummaries === true || o.share_summaries === true;
+    const local = o.team === false && o.shareSummaries === undefined && o.share_summaries === undefined;
+    const promptsAllowed = (shared || local) && typeof redact === 'function';
     const typed = (v) => safeText(v, { redact: typeof redact === 'function' ? redact : (t) => t });
     for (const source of ['human', 'card', 'reported']) {
       const t = typed(o[source]);

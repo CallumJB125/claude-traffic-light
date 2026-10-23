@@ -125,13 +125,13 @@ const TITLES = [
 
 test('work-organise: titleOf rule table', () => {
   for (const { input, want, source } of TITLES) {
-    assert.deepEqual(titleOf(input), { title: want, source }, JSON.stringify(input));
+    assert.deepEqual(titleOf({ team: false, ...input }), { title: want, source }, JSON.stringify(input));
   }
 });
 
 test('work-organise: first prompt, not last, so a title is stable across turns', () => {
-  const a = titleOf({ firstPrompt: 'Add CSV export', lastPrompt: 'turn 1' });
-  const b = titleOf({ firstPrompt: 'Add CSV export', lastPrompt: 'turn 9: change everything' });
+  const a = titleOf({ team: false, firstPrompt: 'Add CSV export', lastPrompt: 'turn 1' });
+  const b = titleOf({ team: false, firstPrompt: 'Add CSV export', lastPrompt: 'turn 9: change everything' });
   assert.deepEqual(a, b);
   assert.equal(a.title, 'Add CSV export');
 });
@@ -159,7 +159,7 @@ test('work-organise: secrets and personal numbers are scrubbed out of every titl
     { provider: 'codex', project: 'sk-abcdefghijklmnopqrstuvwx' },
   ];
   for (const input of inputs) {
-    const { title } = titleOf(input);
+    const { title } = titleOf({ team: false, ...input });
     for (const s of secrets) assert.ok(!title.includes(s), `${JSON.stringify(input)} → ${title}`);
     assert.doesNotMatch(title, /\[redacted\]|\[email\]|\[card\]/);
   }
@@ -168,24 +168,24 @@ test('work-organise: secrets and personal numbers are scrubbed out of every titl
 });
 
 test('work-organise: normalised before scrubbing — a split or full-width secret is still caught', () => {
-  const zw = titleOf({ firstPrompt: 'use sk-abcdefghij\u200bklmnopqrstuvwx to deploy' }).title;
+  const zw = titleOf({ team: false, firstPrompt: 'use sk-abcdefghij\u200bklmnopqrstuvwx to deploy' }).title;
   assert.ok(!/abcdefghij/.test(zw), zw);
-  const wide = titleOf({ firstPrompt: 'use ｓｋ-ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔ to deploy' }).title;
+  const wide = titleOf({ team: false, firstPrompt: 'use ｓｋ-ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔ to deploy' }).title;
   assert.ok(!/abcdefghij/i.test(wide), wide);
 });
 
 test('work-organise: without a scrubber (a renderer), prompt text is never used', () => {
   const none = { redact: null };
-  assert.deepEqual(titleOf({ firstPrompt: 'Add dark mode', provider: 'claude' }, none), { title: 'Claude session', source: 'fallback' });
-  assert.deepEqual(titleOf({ firstPrompt: 'Fix #4', cronJob: 'x', provider: 'hermes' }, none), { title: 'Hermes session', source: 'fallback' });
-  assert.deepEqual(titleOf({ card: 'Card title' }, none), { title: 'Card title', source: 'card' });
+  assert.deepEqual(titleOf({ team: false, firstPrompt: 'Add dark mode', provider: 'claude' }, none), { title: 'Claude session', source: 'fallback' });
+  assert.deepEqual(titleOf({ team: false, firstPrompt: 'Fix #4', cronJob: 'x', provider: 'hermes' }, none), { title: 'Hermes session', source: 'fallback' });
+  assert.deepEqual(titleOf({ team: false, card: 'Card title' }, none), { title: 'Card title', source: 'card' });
   assert.equal(projectOf({ cwd: '/x/app', branch: 'feat/y' }, none).sub, null, 'an unscrubbed branch is not shown');
 });
 
 test('work-organise: an injected scrubber is used', () => {
   const seen = [];
   const redact = (t) => { seen.push(t); return t.replace(/banana/g, '[redacted]'); };
-  assert.equal(titleOf({ firstPrompt: 'Peel the banana and ship it' }, { redact }).title, 'Peel the and ship it');
+  assert.equal(titleOf({ team: false, firstPrompt: 'Peel the banana and ship it' }, { redact }).title, 'Peel the and ship it');
   assert.ok(seen.length > 0);
 });
 
@@ -210,7 +210,7 @@ test('work-organise: property — no title or heading has a path, the home folde
     const firstPrompt = randomText(r, 12);
     const branch = randomText(r, 4);
     const cwd = r() < 0.5 ? `${HOME}/${randomText(r, 3)}` : randomText(r, 3);
-    const out = titleOf({ firstPrompt, branch, cronJob: r() < 0.2 ? randomText(r, 3) : undefined, provider: 'codex', project: randomText(r, 2) });
+    const out = titleOf({ team: false, firstPrompt, branch, cronJob: r() < 0.2 ? randomText(r, 3) : undefined, provider: 'codex', project: randomText(r, 2) });
     bad(out.title, `title(${JSON.stringify({ firstPrompt, branch })})`);
     // Derived titles never contain a separator; a person's own title may ("CI/CD").
     if (out.source !== 'human' && out.source !== 'card' && out.source !== 'reported') assert.doesNotMatch(out.title, /[\\/]/, `${out.source}: ${out.title}`);
@@ -225,11 +225,11 @@ test('work-organise: property — no title or heading has a path, the home folde
 test('work-organise: long Unicode input is cut on a code point and word boundary, bounded in time', () => {
   const long = '修复 '.repeat(5000) + '😀'.repeat(5000);
   const t0 = process.hrtime.bigint();
-  const { title } = titleOf({ firstPrompt: long });
+  const { title } = titleOf({ team: false, firstPrompt: long });
   assert.ok(Number(process.hrtime.bigint() - t0) / 1e6 < 2000);
   assert.ok(Array.from(title).length <= MAX_TITLE);
   assert.ok(title.endsWith('…'));
-  const emoji = titleOf({ human: 'Ship ' + '😀'.repeat(200) }).title;
+  const emoji = titleOf({ team: false, human: 'Ship ' + '😀'.repeat(200) }).title;
   assert.ok(Array.from(emoji).length <= MAX_TITLE);
   assert.doesNotMatch(emoji, /[\ud800-\udbff](?![\udc00-\udfff])/);
 });
@@ -343,7 +343,7 @@ test('work-organise: pure and browser-safe — no fs, exec or network, loads wit
   assert.ok(api && Object.isFrozen(api));
   assert.equal(api.bucketOf('blocked'), 'needs');
   assert.equal(api.projectOf({ commonDir: '/d/app/.git' }).heading, 'app');
-  assert.equal(api.titleOf({ firstPrompt: 'Add dark mode', provider: 'codex' }).title, 'Codex session', 'no scrubber in a page: no prompt titles');
+  assert.equal(api.titleOf({ team: false, firstPrompt: 'Add dark mode', provider: 'codex' }).title, 'Codex session', 'no scrubber in a page: no prompt titles');
 });
 
 // Wall time on a shared machine is noisy: best of three after a warm-up.
@@ -365,27 +365,27 @@ test('work-organise: H1 — no-space and NFKC-expanding input stays linear (unde
     'redacted run': 'sk-abcdefghijklmnopqrstuvwx'.repeat(150),
   };
   for (const [label, firstPrompt] of Object.entries(cases)) {
-    const ms = best(() => titleOf({ firstPrompt, branch: firstPrompt, human: undefined }));
+    const ms = best(() => titleOf({ team: false, firstPrompt, branch: firstPrompt, human: undefined }));
     assert.ok(ms < 50, `${label}: ${ms.toFixed(1)} ms`);
     for (const k of ['human', 'card', 'reported', 'cronJob', 'project']) {
-      const t = best(() => titleOf({ [k]: firstPrompt }));
+      const t = best(() => titleOf({ team: false, [k]: firstPrompt }));
       assert.ok(t < 50, `${label} as ${k}: ${t.toFixed(1)} ms`);
     }
     assert.ok(best(() => projectOf({ cwd: `/x/${firstPrompt}`, branch: firstPrompt })) < 50, `${label} as project`);
   }
-  assert.ok(Array.from(titleOf({ firstPrompt: cases['U+3315 ×4000 (5× after NFKC)'] }).title).length <= MAX_TITLE);
+  assert.ok(Array.from(titleOf({ team: false, firstPrompt: cases['U+3315 ×4000 (5× after NFKC)'] }).title).length <= MAX_TITLE);
 });
 
 test('work-organise: H1 — 100 sessions of pasted blobs title in under 500 ms', () => {
   const sessions = Array.from({ length: 100 }, (_, i) => ({ firstPrompt: pasted(100 + i), provider: 'claude', project: 'app' }));
-  const ms = best(() => { for (const s of sessions) titleOf(s); }, 2);
+  const ms = best(() => { for (const s of sessions) titleOf({ team: false, ...s }); }, 2);
   assert.ok(ms < 500, `${ms.toFixed(0)} ms`);
 });
 
 test('work-organise: H1 — the prompt is scrubbed once per title', () => {
   let calls = 0;
   const redact = (t) => { calls++; return t; };
-  titleOf({ firstPrompt: 'Fix the login loop for good' }, { redact });
+  titleOf({ team: false, firstPrompt: 'Fix the login loop for good' }, { redact });
   assert.equal(calls, 1);
 });
 
@@ -401,11 +401,11 @@ test('work-organise: M1 — a path after any delimiter is removed, and no home f
     'go to ~sam': 'go to',
   };
   for (const [human, want] of Object.entries(probes)) {
-    assert.deepEqual(titleOf({ human }), { title: want, source: 'human' }, human);
+    assert.deepEqual(titleOf({ team: false, human }), { title: want, source: 'human' }, human);
   }
-  assert.deepEqual(titleOf({ firstPrompt: 'fix the bug in [/Users/sam]' }), { title: 'Fix the bug', source: 'prompt' });
-  assert.doesNotMatch(titleOf({ firstPrompt: 'fix the bug in fix/Users/sam' }).title, /Users|sam/, 'a home folder glued to a word goes too');
-  assert.equal(titleOf({ human: 'Set up CI/CD and/or docs' }).title, 'Set up CI/CD and/or docs', 'a slash inside words stays');
+  assert.deepEqual(titleOf({ team: false, firstPrompt: 'fix the bug in [/Users/sam]' }), { title: 'Fix the bug', source: 'prompt' });
+  assert.doesNotMatch(titleOf({ team: false, firstPrompt: 'fix the bug in fix/Users/sam' }).title, /Users|sam/, 'a home folder glued to a word goes too');
+  assert.equal(titleOf({ team: false, human: 'Set up CI/CD and/or docs' }).title, 'Set up CI/CD and/or docs', 'a slash inside words stays');
 });
 
 test('work-organise: M1 property — typed, card and reported titles, with and without a scrubber, never show a path or the user', () => {
@@ -414,7 +414,7 @@ test('work-organise: M1 property — typed, card and reported titles, with and w
     const text = randomText(r, 10);
     for (const source of ['human', 'card', 'reported', 'firstPrompt', 'cronJob', 'project', 'branch']) {
       for (const opts of [{}, { redact: null }]) {
-        const { title } = titleOf({ [source]: text, provider: 'codex' }, opts);
+        const { title } = titleOf({ team: false, [source]: text, provider: 'codex' }, opts);
         const label = `${source}${opts.redact === null ? ' (renderer)' : ''}: ${JSON.stringify(text)} → ${title}`;
         assert.ok(Array.from(title).length <= MAX_TITLE, label);
         assert.ok(!/\/Users\/|\/home\/|[A-Za-z]:\\|\\\\|~\//i.test(title), label);
@@ -424,4 +424,19 @@ test('work-organise: M1 property — typed, card and reported titles, with and w
       }
     }
   }
+});
+
+test('work-organise: M2 — the team gate fails closed: prompt and cron titles only when plainly local or share_summaries === true', () => {
+  const p = { firstPrompt: 'Add dark mode to settings', cronJob: 'nightly', provider: 'claude', project: 'app' };
+  const closed = { title: 'Claude session in app', source: 'fallback' };
+  for (const extra of [{}, { team: true }, { team: 1 }, { team: 'true' }, { team: 'yes' }, { team: {} }, { team: null }, { team: undefined },
+    { shareSummaries: false }, { shareSummaries: 'true' }, { shareSummaries: 1 }, { team: true, shareSummaries: 'true' }, { team: true, shareSummaries: 1 },
+    { team: false, shareSummaries: false }, { team: false, share_summaries: false }, { team: 0 }, { team: '' }]) {
+    assert.deepEqual(W.titleOf({ ...p, ...extra }), closed, JSON.stringify(extra));
+  }
+  for (const extra of [{ team: false }, { team: true, shareSummaries: true }, { team: true, share_summaries: true }, { shareSummaries: true }]) {
+    assert.equal(W.titleOf({ ...p, ...extra }).source, 'prompt', JSON.stringify(extra));
+  }
+  assert.equal(W.titleOf({ cronJob: 'nightly', team: false }).source, 'cron');
+  assert.equal(W.titleOf({ cronJob: 'nightly', team: 1 }).source, 'fallback');
 });
