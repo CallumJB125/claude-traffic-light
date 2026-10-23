@@ -661,3 +661,13 @@ test('work-organise: R2 — lower-case Linear keys count after an agent prefix, 
   assert.equal(t('codex/node-22-upgrade').source, 'branch', 'release words still skipped');
   assert.deepEqual(t('codex/work-organise-2026-10-23'), { title: 'Work organise', source: 'branch' });
 });
+
+test('work-organise: a bare home folder goes whatever its case', () => {
+  for (const text of ['see users/sam/x', 'see USERS/sam', 'see Home/sam', 'see HOME\\sam\\notes']) {
+    for (const opts of [{}, { redact: null }]) {
+      assert.equal(W.titleOf({ team: false, human: text }, opts).title, 'see', `${JSON.stringify(text)}${opts.redact === null ? ' (renderer)' : ''}`);
+    }
+    assert.equal(W.titleOf({ team: false, firstPrompt: text }).title, 'See', text);
+  }
+  assert.equal(W.titleOf({ team: false, human: 'go home now' }).title, 'go home now', 'no separator, no path');
+});

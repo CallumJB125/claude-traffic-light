@@ -73,7 +73,7 @@
   const HOME_RE = new RegExp(`(?:[A-Za-z]:)?(?<![\\\\/])[\\\\/]+(?:Users|home)(?:[\\\\/]${PATH_CHARS}|(?![\\w.-]))`, 'g');
   const UNC_RE = new RegExp(`\\\\\\\\${PATH_CHARS}`, 'g');
   // A home folder named without its leading slash ("see Users/sam", "home/sam/x"), and $HOME.
-  const BARE_HOME_RE = new RegExp(`(?<![\\w.~%$-])(?:Users|home)[\\\\/]+${PATH_CHARS}`, 'g');
+  const BARE_HOME_RE = new RegExp(`(?<![\\w.~%$-])(?:Users|home)[\\\\/]+${PATH_CHARS}`, 'gi');
   const HOME_VAR_RE = new RegExp(`\\$(?:\\{HOME\\}|HOME(?![\\w]))${PATH_CHARS}`, 'g');
   const TILDE_RE = new RegExp(`~[\\w.-]*[\\\\/]${PATH_CHARS}|(?<![\\w.~%-])~[A-Za-z_][\\w.-]*`, 'g');
   const PATH_RE = new RegExp(`(?<![\\w.~%-])(?:[A-Za-z]:|\\.{1,2})?[\\\\/]${PATH_CHARS}`, 'g');
