@@ -215,6 +215,27 @@ test('doctor: app and hook state from the health checks', async () => {
   assert.match(human.out, /^App: {3}running \(port 47172\)\nHook: {2}ok · 2 min ago/);
 });
 
+// Coordination-only use (plan-orchestrator "Product principle"): the wrapper is optional. No other command mentions
+// it, prompts, or reaches the Tasks helper; only help lists it.
+test('the run wrapper never nags: other commands neither mention it nor connect to Tasks', async () => {
+  const { home } = fixture({ sessions: { a: session('a') } });
+  let connected = 0;
+  const seen = [];
+  for (const argv of [['status'], ['sessions'], ['waiting'], ['doctor'], ['spend'], ['handover'], ['status', '--json']]) {
+    let out = '', err = '';
+    const code = await Cli.run({
+      argv, env: {}, home, cwd: home, now: NOW, out: (x) => { out += x; }, err: (x) => { err += x; },
+      fetchLive: async () => LIVE, health: async () => ({ ok: true, problems: 0, checks: [] }), projectsDir: path.join(home, 'projects'),
+      tty: true, prompt: async () => { throw new Error(`${argv.join(' ')} prompted`); }, connectTasks: async () => { connected++; throw new Error('connected'); },
+    });
+    seen.push(code);
+    assert.doesNotMatch(out + err, /plexiform run|\brun\b.*wrapper/i, argv.join(' '));
+  }
+  assert.equal(connected, 0);
+  assert.ok(seen.every((c) => c === 0 || c === 1), String(seen));
+  assert.match((await cli(['help'], { home })).out, /plexiform run/);
+});
+
 test('errors inside a command exit 2 with a JSON error', async () => {
   const { home } = fixture();
   const r = await cli(['doctor', '--json'], { home, health: async () => { throw new Error('boom'); } });

@@ -34,10 +34,12 @@ import { createCollaboration, collaborationReceipts } from './collaboration.js';
 import { createAgentBus, BusRefusal } from './bus/dispatcher.js';
 import { strictSettings } from './bus/guard.js';
 import { BUS_RUN_PROVIDERS } from '../shared/bus-schema.js';
+
 import { TASK_TOOL_NAMES } from '../mcp/task-tools.js';
 import { createTaskIntegration } from './integration.js';
 import { createTaskPullRequest } from './pull-request.js';
 import { createProviderSwitch, workspaceBinding } from './provider-switch.js';
+import Route from '../../src/route-rules.js';
 import { lstartOf, sameProcess, killTree, commandLines } from '../runner/procs.js';
 import { ensureDir, writeJsonAtomic, writeFileAtomic, clip, RUNNER_VERSION } from '../runner/util.js';
 
@@ -159,6 +161,7 @@ export class TasksEngine extends EventEmitter {
     this.timers = new Set();
     this.pendingOperations = new Set();
     this.ais = [];
+    this.usage = {};                // ai → the last rate_limit report from one of its runs {status, resetsAt, utilization}
     this.closing = false;
     this.closed = false;
     this.closePromise = null;
@@ -249,17 +252,76 @@ export class TasksEngine extends EventEmitter {
     this.ais = out;
   }
 
+  // The raw reading from a run's rate_limit event; the router decides whether it is known (Route.known). A report
+  // whose utilization is not known (null, a string, true…) never replaces a known reading for the same window.
+  #noteUsage(id, info) {
+    const prev = this.usage[id];
+    const status = Route.USAGE_STATUSES.includes(info?.status) ? info.status : null;
+    const resetsAt = typeof info?.resetsAt === 'number' && Number.isFinite(info.resetsAt) ? info.resetsAt * 1000 : null;
+    const next = { status, resetsAt, utilization: info?.utilization };
+    const now = this.now();
+    const keep = prev && Route.known(next, now) == null && Route.known(prev, now) != null && (resetsAt == null || resetsAt === prev.resetsAt);
+    this.usage[id] = keep ? { status: status ?? prev.status, resetsAt: prev.resetsAt, utilization: prev.utilization } : next;
+  }
+
   #aiInfo(id) { return this.ais.find((a) => a.id === id) ?? null; }
 
   #usable(a) { return !!a && a.installed && a.loggedIn !== false && a.startable; }
 
-  #chooseAi(want, level) {
+  // The router's inputs (src/route-rules.js). gates:false leaves out the spend gate and usage windows (a provider
+  // review's eligibility check keeps its old meaning).
+  #routeInput(want, level, o = {}) {
+    const now = this.now();
+    const usage = {};
+    const spend = {};
+    if (o.gates !== false) {
+      for (const a of this.ais) {
+        const u = this.usage[a.id];
+        const parked = [...this.tasks.values()].filter((t) => t.ai.id === a.id && t.state === 'parked' && t.parkReason === 'limit' && t.limitResetAt > now).map((t) => t.limitResetAt);
+        const until = Math.max(-1, ...parked, ...(u?.status === 'rejected' && u.resetsAt > now ? [u.resetsAt] : []));
+        usage[a.id] = { limitedUntil: until > now ? until : null, utilization: u?.utilization, status: u?.status, resetsAt: u?.resetsAt };
+      }
+      // The enforced spend cap (src/spend-enforce.js → spend-gate.json) holds every AI's runs while it is reached.
+      let gate = null;
+      try { gate = this.opts.spendGate?.() ?? null; } catch { gate = null; }
+      if (gate?.cap && !o.spendOverride) for (const a of this.ais) spend[a.id] = true;
+    }
+    return {
+      want, level, now, ais: this.ais, usage, spend, defaultAi: this.opts.defaultAi ?? null,
+      needsBudget: !!o.budget, waitForReset: !!o.afterReset, text: o.text ?? '', repoPreferred: o.repoPreferred ?? null, rules: o.rules ?? [],
+    };
+  }
+
+  /**
+   * The AI for a wrapper task (local/cli) and the one-line reason (plan-orchestrator §3). o: {text, budget, afterReset,
+   * repoPreferred, rules, expectAi, gates}. A tie needs the person: CONFIRM_REQUIRED with the two choices, unless they
+   * already picked one of them (expectAi).
+   */
+  #chooseAi(want, level, o = {}) {
+    let r = Route.route(this.#routeInput(want, level, o));
+    if (r.decision === 'ask') {
+      const picked = o.expectAi ? Route.pickFromTie(r, o.expectAi) : null;
+      if (picked) r = picked;
+      else throw new ApiError('CONFIRM_REQUIRED', r.reason, { choices: r.alternatives.slice(0, 2) });
+    }
+    if (r.decision === 'refuse') throw new ApiError(r.code, r.reason, { ai: want, ...(r.capability ? { capability: r.capability } : {}), ...(r.code === 'BUDGET_EXCEEDED' ? { canOverride: true } : {}) });
+    if (o.expectAi && r.ai !== o.expectAi) throw new ApiError('CONFLICT', `Routing changed since you confirmed it. ${r.reason}`, { ai: r.ai });
+    return { id: r.ai, reason: r.reason, route: r };
+  }
+
+  // Only backends with an OS sandbox and no network can take a bus run (Gemini has neither); a budget needs a native cap.
+  #aiFits(ai, spec, source) {
+    if (source === 'bus' && !BUS_RUN_PROVIDERS.includes(ai.id)) throw new ApiError('POLICY_DENIED', `${AI_LABEL[ai.id]} cannot take agent bus runs`, { reason: 'NO_ELIGIBLE_AGENT' });
+    if (spec.budgetUsd != null && this.backends[ai.id].describe().capabilities.budget !== 'native') throw new ApiError('CAPABILITY_MISSING', `${AI_LABEL[ai.id]} does not offer a native spend cap`, { capability: 'budget' });
+  }
+
+  // The pick every non-wrapper source had before routing: the default AI, else the first usable one; no gates.
+  #plainAi(want, level) {
     let a;
     let reason = null;
     if (want === 'auto') {
       a = this.opts.defaultAi ? this.#aiInfo(this.opts.defaultAi) : AIS.map((id) => this.#aiInfo(id)).find((x) => this.#usable(x));
-      if (!this.#usable(a)) a = null;
-      if (!a) throw new ApiError('AI_UNAVAILABLE', 'no AI that can run tasks is installed', { ai: 'auto' });
+      if (!this.#usable(a)) throw new ApiError('AI_UNAVAILABLE', 'no AI that can run tasks is installed', { ai: 'auto' });
       reason = `Auto: ${AI_LABEL[a.id]} is installed and can run in the background`;
     } else {
       a = this.#aiInfo(want);
@@ -270,6 +332,48 @@ export class TasksEngine extends EventEmitter {
       throw new ApiError('CAPABILITY_MISSING', `${AI_LABEL[a.id]} can't route approvals to Plexiform in the background`, { capability: 'permissionRouting' });
     }
     return { id: a.id, reason };
+  }
+
+  /** policy.json repos[<realpath or canonical remote>].preferred_ai for this folder, or null. */
+  async #repoPreferred(root, policy) {
+    if (!root) return null;
+    let url;
+    for (const [key, v] of Object.entries(policy.repos)) {
+      if (!AIS.includes(v?.preferred_ai)) continue;
+      if (path.isAbsolute(key)) {
+        let real = key;
+        try { real = fs.realpathSync(key); } catch { /* as given */ }
+        if (real === root) return v.preferred_ai;
+        continue;
+      }
+      if (url === undefined) url = await this.git(root, ['config', '--get', 'remote.origin.url']).then((x) => normalizeRemoteUrl(x.trim()), () => null);
+      if (url && (normalizeRemoteUrl(key) ?? key) === url) return v.preferred_ai;
+    }
+    return null;
+  }
+
+  async #routeOptions(spec, root, policy) {
+    return {
+      text: spec.text, budget: spec.budgetUsd != null, afterReset: spec.afterReset === true, expectAi: spec.expectAi,
+      spendOverride: spec.overrideSpendCap === true,
+      repoPreferred: await this.#repoPreferred(root, policy), rules: policy.routeRules,
+    };
+  }
+
+  /** route {spec}: what createTask would pick for this spec, and why. Read-only; the person's own token only. */
+  async route({ spec }, ctx = {}) {
+    if (this.principal(ctx)?.kind === 'relay') throw new ApiError('POLICY_DENIED', 'only the person can preview routing');
+    const level = spec.permissionLevel ?? 'auto-edits';
+    if (level === 'bypass') throw new ApiError('POLICY_DENIED', 'bypass needs a per-project opt-in, which this version does not offer');
+    if (!path.isAbsolute(spec.cwd)) throw new ApiError('VALIDATION', 'cwd must be an absolute path');
+    let cwd;
+    try { cwd = fs.realpathSync(spec.cwd); } catch { throw new ApiError('VALIDATION', 'cwd must be an existing folder'); }
+    const top = await this.git(cwd, ['rev-parse', '--show-toplevel']).then((x) => fs.realpathSync(x.trim()), () => null);
+    const policy = this.#policy();
+    const o = await this.#routeOptions({ ...spec, expectAi: undefined }, top ?? cwd, policy);
+    const r = Route.route(this.#routeInput(spec.ai ?? 'auto', level, o));
+    if (r.decision === 'refuse') throw new ApiError(r.code, r.reason, { ai: spec.ai ?? 'auto', ...(r.capability ? { capability: r.capability } : {}), ...(r.code === 'BUDGET_EXCEEDED' ? { canOverride: true } : {}) });
+    return { decision: r.decision, ai: r.ai, rule: r.rule, confidence: r.confidence, reason: r.reason, alternatives: r.alternatives };
   }
 
   // ── task record → face/view/detail ────────────────────────────────────────
@@ -318,7 +422,7 @@ export class TasksEngine extends EventEmitter {
   #switchTarget(task, id) {
     if (!['claude', 'codex'].includes(id) || id === task.ai.id) throw new ApiError('AI_UNAVAILABLE', 'Choose a different supported AI.');
     if (!Object.hasOwn(MODE_OF, task.permissionLevel)) throw new ApiError('CAPABILITY_MISSING', 'This permission level needs a manual provider handover.');
-    const chosen = this.#chooseAi(id, task.permissionLevel), info = this.#aiInfo(chosen.id);
+    const chosen = this.#chooseAi(id, task.permissionLevel, { gates: false }), info = this.#aiInfo(chosen.id);
     if (!info.capabilities.sandbox) throw new ApiError('CAPABILITY_MISSING', 'The next AI cannot preserve this task sandbox.');
     if (task.cost.budgetUsd != null && (!info.capabilities.budget || task.cost.usd >= task.cost.budgetUsd))
       throw new ApiError(task.cost.usd >= task.cost.budgetUsd ? 'BUDGET_EXCEEDED' : 'CAPABILITY_MISSING', 'The next AI must preserve the remaining task budget.');
@@ -647,11 +751,9 @@ export class TasksEngine extends EventEmitter {
     if (spec.model != null && !MODEL_RE.test(spec.model)) throw new ApiError('VALIDATION', 'model is not a model name');
     if (spec.baseBranch != null && !REF_RE.test(spec.baseBranch)) throw new ApiError('VALIDATION', 'baseBranch is not a branch name');
     if (spec.budgetUsd != null && !(spec.budgetUsd > 0)) throw new ApiError('VALIDATION', 'budgetUsd must be more than 0');
-    const ai = this.#chooseAi(spec.ai ?? 'auto', level);
-    // Only backends with an OS sandbox and no network can take a bus run (Gemini has neither).
-    if (source === 'bus' && !BUS_RUN_PROVIDERS.includes(ai.id)) throw new ApiError('POLICY_DENIED', `${AI_LABEL[ai.id]} cannot take agent bus runs`, { reason: 'NO_ELIGIBLE_AGENT' });
-    if (spec.budgetUsd != null && this.backends[ai.id].describe().capabilities.budget !== 'native') throw new ApiError('CAPABILITY_MISSING', `${AI_LABEL[ai.id]} does not offer a native spend cap`, { capability: 'budget' });
-
+    // Every source but the wrapper keeps its plain pick, at its old place, so its errors read exactly as before.
+    let ai = LOCAL_SOURCES.includes(source) ? null : this.#plainAi(spec.ai ?? 'auto', level);
+    if (ai) this.#aiFits(ai, spec, source);
     if (!path.isAbsolute(spec.cwd)) throw new ApiError('VALIDATION', 'cwd must be an absolute path');
     let cwd;
     try { cwd = fs.realpathSync(spec.cwd); } catch { throw new ApiError('VALIDATION', 'cwd must be an existing folder'); }
@@ -670,6 +772,11 @@ export class TasksEngine extends EventEmitter {
     if (workInPlace && this.#protectedFolder(top ?? cwd)) throw new ApiError('POLICY_DENIED', "this folder can't be used for a task in place");
     if (parent && (!parent.repo || parent.repo.root !== top)) throw new ApiError('POLICY_DENIED', "a spin-off works only in its parent task's repo");
     const policy = this.#policy();
+    // Routing is the wrapper's (the composer and `plexiform run`); it needs the repo for its preference.
+    if (local) {
+      ai = this.#chooseAi(spec.ai ?? 'auto', level, await this.#routeOptions(spec, top ?? cwd, policy));
+      this.#aiFits(ai, spec, source);
+    }
     if (source === 'bus' ? !(await this.busRepoAllowed(top, policy)) : remote && !(await this.#remoteAllowed(top, policy))) throw new ApiError('POLICY_DENIED', 'tasks from other people or devices are not turned on for this repo');
     if (spec.wallClockMs != null && !(Number.isSafeInteger(spec.wallClockMs) && spec.wallClockMs >= 60_000 && spec.wallClockMs <= DAY_MS)) throw new ApiError('VALIDATION', 'wallClockMs must be 1 minute to 24 hours');
     const root = top ?? cwd;
@@ -750,8 +857,9 @@ export class TasksEngine extends EventEmitter {
         acceptFrom: new Set(Array.isArray(j.accept_from) ? j.accept_from.filter((x) => typeof x === 'string') : []),
         repos: j.repos && typeof j.repos === 'object' && !Array.isArray(j.repos) ? j.repos : {},
         bus: j.bus && typeof j.bus === 'object' && !Array.isArray(j.bus) ? j.bus : null,
+        routeRules: Array.isArray(j.route_rules) ? j.route_rules : [],
       };
-    } catch { return { acceptFrom: new Set(), repos: {}, bus: null }; }
+    } catch { return { acceptFrom: new Set(), repos: {}, bus: null, routeRules: [] }; }
   }
 
   // policy.json's bus keys and what main pushed from Preferences (busSetContext); the stricter wins.
@@ -1170,6 +1278,7 @@ export class TasksEngine extends EventEmitter {
       this.#activity(task, run);
     });
     b.on('rate_limit', ({ info }) => {
+      if (live()) this.#noteUsage(task.ai.id, info);
       if (live() && info?.status === 'rejected') run.rateLimited = { resetsAt: Number.isFinite(info.resetsAt) ? info.resetsAt * 1000 : null };
     });
     b.on('usage', (u) => {

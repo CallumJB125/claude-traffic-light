@@ -12,6 +12,7 @@ const Mcp = require('../mcp-server.js');
 const Rules = require('../rules.js');
 const Tap = require('../hooks/handover-tap.js');
 const GhosttyDock = require('./ghostty-dock.js');
+const RunCmd = require('./cli-run.js');
 
 const EXIT = { OK: 0, NOT_RUNNING: 1, ERROR: 2 };
 const DEFAULT_PORT = 47172;
@@ -23,6 +24,7 @@ const COMMANDS = {
   handover: { flags: ['force'], values: ['out'], about: 'print a session\'s handover doc, or write it with --out <file>' },
   waiting: { flags: ['short'], about: 'permission prompts, plan approvals and questions waiting on you' },
   doctor: { flags: [], about: 'is the app running, is the hook connected' },
+  run: { flags: RunCmd.SPEC.flags, values: RunCmd.SPEC.values, about: 'give a task to Claude or Codex: shows who and why, waits for Enter' },
   help: { flags: [], about: 'this help' },
 };
 
@@ -35,8 +37,18 @@ Options:
   --json     machine-readable output
   --short    one line (status, waiting, spend)
 
+  plexiform run "<task>" | -  [--in DIR] [--with claude|codex|gemini|auto]
+      [--perm plan|ask|auto-edits|auto] [--plan-first] [--budget USD] [--base BRANCH]
+      [--in-place] [--title T] [--mode background|tmux|tab] [--request-id ID]
+      [--follow] [--yes]
+    Shows which AI will run it and why, then waits for Enter. --follow streams
+    it until it is ready to review. --yes starts it without asking (scripts).
+
 Exit codes: 0 ok, 1 Plexiform is not running (status, sessions, waiting and
-doctor still answer from the data folder on disk and say so), 2 error.`;
+doctor still answer from the data folder on disk and say so), 2 error.
+run: 0 started (with --follow: ready to review or done), 2 usage or not
+confirmed, 3 Plexiform's task helper unreachable, 4 refused, 5 with --follow:
+failed or paused.`;
 
 class UsageError extends Error {}
 
@@ -65,7 +77,7 @@ function parseArgs(argv) {
   }
   if (args.flags.today && args.flags.week) throw new UsageError('use --today or --week, not both');
   if (args.command === 'handover' && args.positional.length > 1) throw new UsageError('handover takes one session id');
-  if (args.command !== 'handover' && args.positional.length) throw new UsageError(`unexpected argument "${args.positional[0]}"`);
+  if (!['handover', 'run'].includes(args.command) && args.positional.length) throw new UsageError(`unexpected argument "${args.positional[0]}"`);
   if (args.flags.help) args.command = 'help';
   return args;
 }
@@ -318,6 +330,7 @@ async function run({
   argv = [], env = process.env, home = os.homedir(), cwd = process.cwd(), now = Date.now(),
   out = (s) => process.stdout.write(s), err = (s) => process.stderr.write(s), color = false,
   fetchLive = (port) => Mcp.fetchLive(port), health = (o) => Mcp.buddyHealth(o), projectsDir = null, platform = process.platform,
+  tty = false, prompt = async () => null, readStdin = async () => '', connectTasks, onInterrupt,
 } = {}) {
   let args;
   try { args = parseArgs(argv); } catch (e) {
@@ -325,6 +338,7 @@ async function run({
     return EXIT.ERROR;
   }
   if (args.command === 'help') { out(`${USAGE}\n`); return EXIT.OK; }
+  if (args.command === 'run') return RunCmd.runTask(args, { cwd, env, home, platform, out, err, tty, prompt, readStdin, connectTasks, onInterrupt });
   const root = env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(home, '.claude-traffic-light');
   const ctx = { root, home, cwd, now, port: portOf(root, env), fetchLive, health, projectsDir, paint: painter(color), platform };
   try {
@@ -343,7 +357,14 @@ async function run({
 
 function main() {
   const color = !!process.stdout.isTTY && !process.env.NO_COLOR;
-  run({ argv: process.argv.slice(2), color }).then((code) => { process.exitCode = code; }, (e) => { process.stderr.write(`plexiform: ${e.stack || e}\n`); process.exitCode = EXIT.ERROR; });
+  const prompt = RunCmd.terminalPrompt();
+  let interrupted = null;
+  process.on('SIGINT', () => { if (interrupted) interrupted(); else process.exit(130); });
+  run({
+    argv: process.argv.slice(2), color, tty: !!process.stdin.isTTY && !!process.stdout.isTTY, prompt,
+    readStdin: () => RunCmd.readAllStdin(), onInterrupt: (fn) => { interrupted = fn; },
+  }).then((code) => { process.exitCode = code; }, (e) => { process.stderr.write(`plexiform: ${e.stack || e}\n`); process.exitCode = EXIT.ERROR; })
+    .finally(() => prompt.close());
 }
 
 module.exports = { run, main, parseArgs, portOf, ago, EXIT, COMMANDS, USAGE, UsageError };

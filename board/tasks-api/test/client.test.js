@@ -114,7 +114,7 @@ for (const target of TARGETS) {
       const auto = await m.client.createTask({ ...m.spec, ai: 'auto' });
       const d = await m.client.getTask(auto.id);
       assert.equal(d.ai.id, 'claude');
-      assert.match(d.ai.reason, /^Auto: /);
+      assert.match(d.ai.reason, /^Claude: (it's your default AI|the only one that can run it; Codex is not available in Plexiform yet)$/);
     } finally { await m.close(); }
   });
 

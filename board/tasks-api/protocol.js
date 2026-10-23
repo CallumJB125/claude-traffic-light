@@ -24,7 +24,7 @@ export const TOKEN_NAME = 'tasks.token';
 
 export const METHODS = Object.freeze([
   'hello', 'createTask', 'listTasks', 'getTask', 'subscribe', 'unsubscribe', 'act',
-  'detectAIs', 'getLimits', 'setLimits', 'getClaims', 'listMessages', 'saveCheckpoint', 'bus',
+  'detectAIs', 'getLimits', 'setLimits', 'getClaims', 'listMessages', 'saveCheckpoint', 'bus', 'route',
 ]);
 
 export const ACTIONS = Object.freeze([
@@ -54,6 +54,8 @@ export const BUS_OPS = Object.freeze(['hello', 'handoff', 'read', 'wait', 'statu
 export const BUS_AGENT_OPS = Object.freeze(['hello', 'handoff', 'read', 'wait', 'status', 'note', 'notes']);
 export const PARK_REASONS = Object.freeze(['user', 'limit', 'auth', 'ask_timeout', 'approval_timeout', 'message_loop']);
 export const OUTCOMES = Object.freeze(['merged', 'pr_opened', 'pr_merged', 'discarded']);
+// The task router's rules (src/route-rules.js): which one picked the AI for a `route` result.
+export const ROUTE_RULES = Object.freeze(['override', 'repo', 'user-rule', 'only', 'default', 'headroom', 'usual', 'tie']);
 export const CAPABILITIES = Object.freeze(['background', 'resume', 'hooks', 'mcp', 'permissionRouting', 'modelSelect', 'costReport', 'budget', 'sandbox']);
 
 // Board error codes reused verbatim (shared/protocol.js ERRORS), plus the

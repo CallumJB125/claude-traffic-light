@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "about": "What the task router (src/route-rules.js) knows about each AI that can run a Plexiform task. Capabilities that the Tasks engine detects at run time (installed, signed in, permissionRouting, budget) come from detectAIs, not from here.",
+  "tools": {
+    "claude": {
+      "label": "Claude",
+      "autoRoute": true,
+      "summary": "asks you before risky steps; native spend cap",
+      "costClass": "subscription-or-api",
+      "budget": "native",
+      "interrupt": true,
+      "resume": true,
+      "sandbox": true,
+      "strengths": ["approvals", "budget-cap"]
+    },
+    "codex": {
+      "label": "Codex",
+      "autoRoute": true,
+      "summary": "OS sandbox with network off; can't ask you mid-run",
+      "costClass": "subscription-or-api",
+      "budget": "estimated",
+      "interrupt": true,
+      "resume": true,
+      "sandbox": true,
+      "strengths": ["sandboxed-edits"]
+    },
+    "gemini": {
+      "label": "Gemini",
+      "autoRoute": false,
+      "summary": "only when you pick it; no sandbox",
+      "costClass": "subscription-or-api",
+      "budget": "none",
+      "interrupt": false,
+      "resume": true,
+      "sandbox": false,
+      "strengths": []
+    }
+  }
+}

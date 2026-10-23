@@ -228,7 +228,7 @@ test('AI and spec checks: codex not available yet, gemini missing, bad cwd, othe
   const auto = await m.client.createTask({ ...m.spec, ai: 'auto' });
   const d = await m.client.getTask(auto.id);
   assert.equal(d.ai.id, 'claude');
-  assert.match(d.ai.reason, /^Auto: /);
+  assert.equal(d.ai.reason, 'Claude: the only one that can run it; Codex is not available in Plexiform yet');
 }));
 
 test('a non-git folder runs in place, one task at a time', () => withEngine({ steps: [{ tool: 'Bash', input: { command: 'sleep 1' }, ms: 60000 }] }, async (m) => {

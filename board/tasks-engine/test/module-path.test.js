@@ -19,7 +19,7 @@ test('engine imports its complete schema from an escaped installation directory'
     fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ type: 'commonjs' }));
     fs.copyFileSync(path.join(board, 'package.json'), path.join(fixtureBoard, 'package.json'));
     fs.mkdirSync(path.join(fixture, 'src'));
-    fs.copyFileSync(path.join(board, '../src/result-cards.js'), path.join(fixture, 'src/result-cards.js'));
+    for (const name of ['result-cards.js', 'route-rules.js', 'tool-profiles.json']) fs.copyFileSync(path.join(board, '../src', name), path.join(fixture, 'src', name));
     // The bus "never" rule, shared with the hooks (hooks/repo-scope.js), ships beside board/ as src/ does.
     fs.mkdirSync(path.join(fixture, 'hooks'));
     fs.copyFileSync(path.join(board, '../hooks/repo-scope.js'), path.join(fixture, 'hooks/repo-scope.js'));
