@@ -788,3 +788,25 @@ test('security R1b: the ledger key is made once, sealed by safeStorage, and neve
   assert.throws(() => createLedgerKeyStore({ file, safeStorage: fakeSafe() })(), /unreadable/);
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).data, Buffer.from('garbage').toString('base64'));
 });
+
+// Security re-review R2: the frontmatter allowlist is checked by the installer
+// for every target, and disallowedTools is refused everywhere (dropping it
+// would widen what the author allowed).
+test('security R2: an agent with hooks, permissionMode or disallowedTools is refused on every target and in a project', () => {
+  const bad = [
+    agentOf('x/hooked', { name: 'hooked', extra: 'hooks:\n  PreToolUse:\n    - command: "echo hi"\n' }),
+    agentOf('x/bypass', { name: 'bypass', extra: 'permissionMode: bypassPermissions\n' }),
+    agentOf('x/ro', { name: 'ro', extra: 'disallowedTools: Bash, Write\n' }),
+  ];
+  for (const a of bad) {
+    const s = setup({ agents: [a], enableCursorProject: true });
+    const r = s.add(a.id, ALL);
+    assert.ok(r.results.length > 0, a.id);
+    for (const x of r.results) assert.notEqual(x.outcome, 'added', `${a.id} on ${x.platform}`);
+    for (const p of ['.claude/agents', '.codex/agents', '.gemini/agents', '.copilot/agents', '.config/opencode/agents']) assert.ok(!fs.existsSync(path.join(s.home, p)) || fs.readdirSync(path.join(s.home, p)).length === 0, `${a.id} in ${p}`);
+    const project = tmp();
+    const pr = s.inst.addToProject(a.id, project, { catalogSha: s.cat.sha256 });
+    assert.equal(pr.ok, false, a.id);
+    assert.ok(!fs.existsSync(path.join(project, '.cursor')), a.id);
+  }
+});

@@ -21,6 +21,7 @@ const path = require('node:path');
 const { createHash, createHmac, randomUUID, timingSafeEqual } = require('node:crypto');
 const { createHomeFiles, NOFOLLOW } = require('./home-files.js');
 const { TARGETS, UNSUPPORTED } = require('./agent-install/targets/index.js');
+const { parseFrontmatter, ALLOWED_KEYS } = require('./agent-frontmatter.js');
 
 const LEDGER_FILE = 'agent-installs.json';
 const ORIGINALS_DIR = 'agent-originals';
@@ -38,6 +39,14 @@ const HEX64 = /^[0-9a-f]{64}$/;
 const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const CURSOR_REL = /^\.cursor\/rules\/[a-z0-9]+(?:-[a-z0-9]+)*\.mdc$/;
 const OP_KINDS = new Set(['add', 'update', 'remove', 'adopt', 'release', 'add-project']);
+// Checked again here for every target, not just Claude: the build already
+// drops such agents and the catalogue is pinned, so this is defence in depth.
+// disallowedTools is refused rather than dropped, since dropping it would
+// give the agent tools its author took away.
+const NOT_ALLOWED = 'Its settings include more than a name, description, model and tools, so Plexiform does not add it.';
+function frontmatterAllowed(raw) {
+  try { return Object.keys(parseFrontmatter(raw).fields).every((k) => ALLOWED_KEYS.has(k)); } catch { return false; }
+}
 const hexOrNull = (v) => v === null || (typeof v === 'string' && HEX64.test(v));
 
 // The ledger lives in the data folder, which other same-user programs can
@@ -208,6 +217,7 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
 
   // ── plan one platform for one agent ─────────────────────────────────────
   function planOne(agent, t, ledger, { alt = false } = {}) {
+    if (!frontmatterAllowed(agent.raw)) return { platform: t.id, label: t.label, status: 'unmappable', reason: NOT_ALLOWED };
     const rendered = t.render(agent, { alt });
     if (!rendered.ok) return { platform: t.id, label: t.label, status: 'unmappable', reason: rendered.reason };
     const rel = `${t.dir}/${rendered.file}`;
@@ -569,6 +579,7 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     const t = targets.find((x) => x.id === 'cursor-project');
     if (!agent || !t) return refuse('unavailable', 'This agent is not in the catalogue.');
     if (!t.verified) return refuse('disabled', `Cursor: ${t.reason}`);
+    if (!frontmatterAllowed(agent.raw)) return refuse('unmappable', NOT_ALLOWED);
     if (typeof projectDir !== 'string' || !path.isAbsolute(projectDir)) return refuse('invalid', 'Choose a project folder.');
     const root = path.resolve(projectDir);
     let st; try { st = fsApi.lstatSync(root); } catch { return refuse('invalid', 'That folder is gone.'); }
