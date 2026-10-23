@@ -449,8 +449,10 @@ test('change 8: hostile folders and files: swaps, links, planted backups, a link
 test('change 3: a file whose backup copy is not its exact bytes is not adopted', () => {
   const s = setup();
   const name = s.fx.exact[0].name;
+  // Reads 1 and 2 of the copy are the backup's two verifies (the second is
+  // M3's re-check); read 3 is the per-file check this test is about.
   let reads = 0;
-  const fsApi = new Proxy(fs, { get: (t, k) => (k === 'readFileSync' ? (p, ...a) => { const out = t.readFileSync(p, ...a); if (String(p).includes('agent-backups') && String(p).endsWith(`/${name}`) && ++reads === 2) return Buffer.from('tampered'); return out; } : t[k]) });
+  const fsApi = new Proxy(fs, { get: (t, k) => (k === 'readFileSync' ? (p, ...a) => { const out = t.readFileSync(p, ...a); if (String(p).includes('agent-backups') && String(p).endsWith(`/${name}`) && ++reads === 3) return Buffer.from('tampered'); return out; } : t[k]) });
   const r = s.inst(shipped, { fsApi }).adopt();
   assert.equal(r.ok, true);
   assert.ok(!r.adopted.some((p) => p.endsWith(`/${name}`)));

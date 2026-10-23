@@ -422,11 +422,24 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
 
   // ── adoption of agents already in ~/.claude/agents ───────────────────────
   const CLAUDE_DIR = '.claude/agents';
+  // ~/.claude and ~/.claude/agents themselves: 'ok' (real folders),
+  // 'missing', or 'bad' (a link or not a folder). Checked directly, so an
+  // entry of yours inside, whatever its name, never decides it.
+  function agentsFolder() {
+    let cur = HOME;
+    for (const part of CLAUDE_DIR.split('/')) {
+      cur = path.join(cur, part);
+      let st;
+      try { st = fsApi.lstatSync(cur); } catch (e) { if (e.code === 'ENOENT') return 'missing'; return 'bad'; }
+      if (st.isSymbolicLink() || !st.isDirectory()) return 'bad';
+    }
+    return 'ok';
+  }
   /** Files in ~/.claude/agents whose bytes match a catalogue entry exactly. Reads only. */
   function adoptable() {
     const ledger = readLedger();
     const dir = path.join(HOME, CLAUDE_DIR);
-    try { files.locate(`${CLAUDE_DIR}/x`); } catch { return { ok: true, matches: [], userOwned: 0, reason: 'The agents folder is a link or not a folder, so Plexiform leaves it alone.' }; }
+    if (agentsFolder() === 'bad') return { ok: true, matches: [], userOwned: 0, reason: 'The agents folder is a link or not a folder, so Plexiform leaves it alone.' };
     let names = [];
     try { names = fsApi.readdirSync(dir).filter((n) => n.endsWith('.md') && FILE_NAME.test(n) && !n.includes('..')).sort().slice(0, MAX_ADOPT_SCAN); } catch { return { ok: true, matches: [], userOwned: 0 }; }
     const byHash = new Map();
@@ -526,14 +539,18 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     };
     // cpSync rounds a file's times, skips a link's, and a folder's change as
     // its copy fills; set every entry's from the source, deepest first, so the
-    // copy is the folder exactly (scripts/agents-fingerprint.js). lutimes never
-    // follows a link, and the copy's entries are all checked to be no links
-    // where the source has none.
+    // copy is the folder exactly (scripts/agents-fingerprint.js). Like
+    // dirModes, this walks the backup's own side and enters only entries
+    // lstat shows are real folders there, so lutimes never reaches through a
+    // copied link. A source entry of another kind than its copy (a link
+    // swapped for a folder after the verify) is refused (review #54 M3).
+    const kind = (st) => (st.isSymbolicLink() ? 'L' : st.isDirectory() ? 'D' : st.isFile() ? 'F' : 'O');
     const times = (a, b) => {
-      for (const e of fsApi.readdirSync(a, { withFileTypes: true })) {
-        const pa = path.join(a, e.name), pb = path.join(b, e.name), st = fsApi.lstatSync(pa);
-        if (st.isDirectory() && !st.isSymbolicLink()) times(pa, pb);
-        fsApi.lutimesSync(pb, st.atimeMs / 1000, st.mtimeMs / 1000);
+      for (const n of fsApi.readdirSync(b).sort()) {
+        const pa = path.join(a, n), pb = path.join(b, n), sb = fsApi.lstatSync(pb), sa = fsApi.lstatSync(pa);
+        if (kind(sa) !== kind(sb)) throw new Error('backup mismatch');
+        if (kind(sb) === 'D') times(pa, pb);
+        fsApi.lutimesSync(pb, sa.atimeMs / 1000, sa.mtimeMs / 1000);
       }
     };
     // cpSync makes every copied folder 755 (Node 22), so each folder in the
@@ -566,6 +583,9 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
       dirModes(src, dest);
       walk(src, dest);
       times(src, dest);
+      // Again, after the times: anything that changed during the copy is
+      // refused rather than recorded as a backup of the folder (M3).
+      walk(src, dest);
       if (pin() !== pinned) throw new Error('moved');
     } catch (err) {
       try { removeBackup(dest); } catch { /* left; never listed as reused (fingerprint differs) */ }
@@ -715,7 +735,7 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
       inBackup.set(n, st.isFile() && !st.isSymbolicLink() ? sha(fsApi.readFileSync(path.join(dir, n))) : null);
     }
     let here = [];
-    try { files.locate(`${CLAUDE_DIR}/x`); here = fsApi.readdirSync(path.join(HOME, CLAUDE_DIR)).sort(); } catch { here = []; }
+    try { if (agentsFolder() === 'ok') here = fsApi.readdirSync(path.join(HOME, CLAUDE_DIR)).sort(); } catch { here = []; }
     const out = [];
     for (const [n, h] of inBackup) {
       if (!here.includes(n)) { out.push({ path: tilde(`${CLAUDE_DIR}/${n}`), state: 'gone-now' }); continue; }
