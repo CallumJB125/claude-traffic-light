@@ -14,6 +14,15 @@ test('work-organise: five buckets, fixed order and plain headings', () => {
   assert.deepEqual(BUCKETS.map((b) => b.order), [0, 1, 2, 3, 4]);
   assert.deepEqual(BUCKETS.filter((b) => b.collapsed).map((b) => b.id), ['idle']);
   assert.ok(Object.isFrozen(BUCKETS) && Object.isFrozen(BUCKETS[0]));
+  assert.deepEqual(BUCKETS.map((b) => b.label), ['Needs you', 'Working on it', 'Check it', 'Stuck or failed', 'Idle'], 'Review is "Check it" on a badge');
+});
+
+test('work-organise: headingOf names any state with its bucket heading; unknown is Idle', () => {
+  assert.equal(W.headingOf('permission-ask'), 'Needs you');
+  assert.equal(W.headingOf({ state: 'in_review' }), 'Finished — check it');
+  assert.equal(W.headingOf('turn-failed'), 'Stuck or failed');
+  assert.equal(W.headingOf('no-such-state'), 'Idle');
+  assert.equal(W.headingOf(null), 'Idle');
 });
 
 test('work-organise: bucketOf maps hook signals, capture phases, board states and today\'s labels', () => {

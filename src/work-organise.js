@@ -17,12 +17,13 @@
   const MAX_INPUT = 4000;
   const FALLBACK = 'Other work';
 
+  // heading: a section or status line; label: the short form for a badge, pill or column.
   const BUCKETS = Object.freeze([
-    Object.freeze({ id: 'needs', heading: 'Needs you', order: 0, collapsed: false }),
-    Object.freeze({ id: 'working', heading: 'Working on it', order: 1, collapsed: false }),
-    Object.freeze({ id: 'check', heading: 'Finished — check it', order: 2, collapsed: false }),
-    Object.freeze({ id: 'stuck', heading: 'Stuck or failed', order: 3, collapsed: false }),
-    Object.freeze({ id: 'idle', heading: 'Idle', order: 4, collapsed: true }),
+    Object.freeze({ id: 'needs', heading: 'Needs you', label: 'Needs you', order: 0, collapsed: false }),
+    Object.freeze({ id: 'working', heading: 'Working on it', label: 'Working on it', order: 1, collapsed: false }),
+    Object.freeze({ id: 'check', heading: 'Finished — check it', label: 'Check it', order: 2, collapsed: false }),
+    Object.freeze({ id: 'stuck', heading: 'Stuck or failed', label: 'Stuck or failed', order: 3, collapsed: false }),
+    Object.freeze({ id: 'idle', heading: 'Idle', label: 'Idle', order: 4, collapsed: true }),
   ]);
   const BUCKET_BY_ID = Object.freeze(Object.fromEntries(BUCKETS.map((b) => [b.id, b])));
 
@@ -56,6 +57,8 @@
     if (id === 'check' && o.changes === false) return 'idle';
     return id;
   }
+  // The same input → the bucket's heading, so a view never names a state its own way.
+  const headingOf = (input) => BUCKET_BY_ID[bucketOf(input)].heading;
 
   // ---- untrusted text ----
   const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
@@ -459,7 +462,7 @@
     return { resolve, clear: () => cache.clear(), size: () => cache.size };
   }
 
-  const api = { BUCKETS, FALLBACK, MAX_TITLE, bucketOf, projectOf, titleOf, group, createGitInfoResolver, safeText, promptSummary, humaniseBranch };
+  const api = { BUCKETS, FALLBACK, headingOf, MAX_TITLE, bucketOf, projectOf, titleOf, group, createGitInfoResolver, safeText, promptSummary, humaniseBranch };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformWorkOrganise = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);
