@@ -156,7 +156,7 @@ test('Team sessions: explicit shares only, grouped by person, filters, reasons, 
     assert.equal(s.doc.querySelector('img'), null, 'hostile names and titles are text');
     assert.equal(bob.querySelector('.avatar').textContent, 'B<');
     assert.match(bob.textContent, /task title edited by a person/);
-    assert.match(bob.textContent, /Reviewer: Review diff/); assert.match(bob.textContent, /Needs you/);
+    assert.match(bob.textContent, /Reviewer: Review diff/); assert.match(bob.textContent, /Needs Bob/);
     assert.match(bob.textContent, /Handoff from Cara · offered · Take over tests/);
     assert.match(bob.textContent, /Handed to Dan, waiting/, 'a card handed to a person reads as the board shows it');
     assert.match(bob.textContent, /Shared with this team by its owner/);
