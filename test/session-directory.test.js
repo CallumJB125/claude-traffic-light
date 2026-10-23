@@ -261,3 +261,9 @@ test('a teammate’s waiting session reads "Needs <name>" (or "Needs them"), kee
   assert.equal(e.selfReported.state, 'Needs Bob');
   assert.equal(read({ state: 'working' }).state, 'Working on it');
 });
+
+test('a teammate’s child agent waiting on input reads "Needs <name>" too', () => {
+  const d = createSessionDirectory({ now: () => T0 });
+  const [e] = d.team({ team: TEAM, viewer: VIEWER, member: true, hubEntries: [hubEntry({ children: [{ ref: 'c1', name: 'Reviewer', state: 'input', observed_at: new Date(T0 - 1000).toISOString() }] })] }).entries;
+  assert.equal(e.children[0].state, 'Needs Bob'); assert.equal(e.children[0].bucket, 'needs'); assert.equal(e.children[0].input, true);
+});

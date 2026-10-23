@@ -280,7 +280,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
       if (!object(c) || typeof c.ref !== 'string') continue;
       // Each child keeps its own report time; the parent's activity never refreshes it.
       const ct = timing(`team-child:${team.key}:${x.ref}:${c.ref}`, c.observed_at, time);
-      const cst = teamState(c.state);
+      const cst = whose(teamState(c.state));
       entry.children.push({ id: publicId(['team-child', team.key, x.ref, c.ref]), parent: id, label: str(c.name, 80) || 'Agent', ...cst, input: c.state === 'input', task: taskOf({ reported: c.task_title }), ...ct, reporting:{source:['human','provider','self-reported','observed'].includes(c.source)?c.source:'unknown',observedAt:c.observed_at},selfReported: c.source==='self-reported'?{state:cst.state,at:c.observed_at}:null, provenance: ['shared',...(c.source==='self-reported'?['self-reported']:[])] });
     }
     return { entry, ref: x.ref, scope: share.scope };
