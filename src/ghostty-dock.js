@@ -123,15 +123,25 @@ function current({ now = Date.now(), ...opts } = {}) {
 }
 function invalidate() { memo = null; listMemo = null; }
 
+// Past the timeout, a CLI that ignores the TERM (or a child of it that keeps
+// the output pipe open) is SIGKILLed and given up on this long after.
+const KILL_GRACE_MS = 500;
 function execCli(file, args, { timeout = EXEC_TIMEOUT_MS, env, killSignal = 'SIGTERM' } = {}) {
   return new Promise((resolve) => {
+    let hard = null;
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; clearTimeout(hard); resolve(v); };
     try {
       const child = execFile(file, args, { timeout, killSignal, ...(env ? { env } : {}) }, (err, stdout, stderr) => { // privacy-flow: ghostty-dock-local
-        resolve({ ok: !err, stdout: String(stdout || ''), stderr: String(stderr || '') });
+        finish({ ok: !err, stdout: String(stdout || ''), stderr: String(stderr || '') });
       });
-      child.on('error', (e) => resolve({ ok: false, stdout: '', stderr: e.message }));
+      child.on('error', (e) => finish({ ok: false, stdout: '', stderr: e.message }));
+      hard = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch {}
+        finish({ ok: false, stdout: '', stderr: 'ghostty-dock timed out' });
+      }, timeout + KILL_GRACE_MS);
     } catch (e) {
-      resolve({ ok: false, stdout: '', stderr: e.message });
+      finish({ ok: false, stdout: '', stderr: e.message });
     }
   });
 }
@@ -169,14 +179,17 @@ async function run(op, args, { dock, exec = execCli, tmpRoot = os.tmpdir() } = {
   if (!argv) throw new Error(`Ghostty Dock: bad arguments for ${op}`);
   if (!dock || !dock.trusted || !dock.cli) return { ok: false, reason: (dock && dock.reason) || 'Ghostty Dock not available' };
   if (op === 'open' && !dock.canOpen) return { ok: false, reason: 'Ghostty Dock cannot open tabs here' };
-  const opts = { env: dock.env, killSignal: 'SIGTERM', timeout: op === 'open' ? OPEN_TIMEOUT_MS : op === 'list' ? LIST_TIMEOUT_MS : EXEC_TIMEOUT_MS };
+  // list answers inside a click, so its running check and the list itself share one budget.
+  const end = op === 'list' ? Date.now() + LIST_TIMEOUT_MS : 0;
+  const timeout = () => (op === 'open' ? OPEN_TIMEOUT_MS : op === 'list' ? end - Date.now() : EXEC_TIMEOUT_MS);
   // A request the app isn't there to answer would sit in its folder and be
   // acted on whenever the app next starts, so focus (and list) only a running app.
   if (op === 'focus' || op === 'list') {
-    const up = await exec('/usr/bin/osascript', ['-e', RUNNING_SCRIPT], opts);
+    const up = await exec('/usr/bin/osascript', ['-e', RUNNING_SCRIPT], { env: dock.env, killSignal: 'SIGTERM', timeout: timeout() });
     if (!up || !up.ok || String(up.stdout || '').trim() !== 'true') return { ok: false, reason: 'Ghostty Dock is not running' };
   }
-  const r = await exec(dock.cli, [op, ...argv], opts); // privacy-flow: ghostty-dock-local
+  if (timeout() <= 0) return { ok: false, reason: 'Ghostty Dock did not answer in time' };
+  const r = await exec(dock.cli, [op, ...argv], { env: dock.env, killSignal: 'SIGTERM', timeout: timeout() }); // privacy-flow: ghostty-dock-local
   if (!r || !r.ok) {
     invalidate();
     return { ok: false, reason: ((r && r.stderr) || 'ghostty-dock failed').trim().slice(0, 120) };
@@ -223,18 +236,30 @@ function parseListJson(out) {
   return seen;
 }
 
-// Dock's view of its sessions, cached briefly so a burst of clicks asks once.
-// null when it can't be asked (off, untrusted, not running, failed).
+// Dock's view of its sessions. A click asks once: callers share the call in
+// flight, it answers within LIST_TIMEOUT_MS of starting (null past that), and
+// its answer is kept LIST_CACHE_MS from when it came, so the queue and then
+// the jump's adoption cost one list under one budget.
+// null when it can't be asked (off, untrusted, not running, failed, too slow).
 let listMemo = null;
-async function listStatus({ dock, exec = execCli, now = Date.now() } = {}) {
+let listFlight = null;
+async function listStatus({ dock, exec = execCli, clock = Date.now } = {}) {
   if (!dock || !dock.trusted || !dock.cli) return null;
-  if (listMemo && now - listMemo.at < LIST_CACHE_MS && listMemo.cli === dock.cli) return listMemo.value;
-  const r = await run('list', ['--json'], { dock, exec });
-  const value = r.ok ? parseListJson(r.out) : null;
-  listMemo = { at: now, cli: dock.cli, value };
-  return value;
+  if (listMemo && listMemo.cli === dock.cli && clock() - listMemo.at < LIST_CACHE_MS) return listMemo.value;
+  if (listFlight && listFlight.cli === dock.cli) return listFlight.promise;
+  let timer;
+  const asked = run('list', ['--json'], { dock, exec }).then((r) => (r.ok ? parseListJson(r.out) : null), () => null);
+  const late = new Promise((r) => { timer = setTimeout(() => r(null), LIST_TIMEOUT_MS); });
+  const flight = { cli: dock.cli };
+  flight.promise = Promise.race([asked, late]).then((value) => {
+    clearTimeout(timer);
+    if (listFlight === flight) { listFlight = null; listMemo = { at: clock(), cli: dock.cli, value }; }
+    return value;
+  });
+  listFlight = flight;
+  return flight.promise;
 }
-function invalidateList() { listMemo = null; }
+function invalidateList() { listMemo = null; listFlight = null; }
 
 // The Preferences → Health and `plexiform doctor` row. Read-only.
 function healthRow(dock, mode) {
