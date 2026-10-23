@@ -703,15 +703,21 @@ test('work-organise: views name a project with projectOf — the folder-leaf cop
   }
 });
 
-test('work-organise: a bare home folder goes only where it looks like a real one, not an ordinary route', () => {
+test('work-organise: a bare home folder goes from prompts in any form; typed titles keep an ordinary route', () => {
+  const bare = ['see home/sam', 'see home/sam/', 'see (home/sam)', 'see users/sam', 'see USERS/sam', 'see Home/sam', 'see users\\sam', 'see users/sam/notes'];
+  for (const text of bare) {
+    assert.equal(W.titleOf({ team: false, firstPrompt: text }).title, 'See', `prompt: ${text}`);
+    for (const opts of [{}, { redact: null }]) {
+      assert.equal(W.titleOf({ team: false, human: text }, opts).title, 'see', `typed: ${text}`);
+    }
+  }
   for (const opts of [{}, { redact: null }]) {
     const typed = (human) => W.titleOf({ team: false, human }, opts).title;
+    assert.doesNotMatch(typed('cd home/sam; ls'), /sam/);
     assert.equal(typed('Fix home/about page'), 'Fix home/about page');
     assert.equal(typed('Update users/settings tab'), 'Update users/settings tab');
-    assert.equal(typed('see users/sam/notes'), 'see');
     assert.equal(typed('open Home/sam/projects/app now'), 'open now');
-    assert.equal(typed('see Users/sam'), 'see', 'macOS Users/<name> on its own still goes');
+    assert.equal(typed('see Users/sam page'), 'see page', 'macOS Users/<name> goes even with words after it');
   }
-  assert.equal(W.titleOf({ team: false, firstPrompt: 'Fix home/about page' }).title, 'Fix home about page', 'a prompt title only spaces the slash');
-  assert.equal(W.titleOf({ team: false, firstPrompt: 'read users/sam/notes' }).title, 'Read');
+  assert.doesNotMatch(W.titleOf({ team: false, firstPrompt: 'cd home/sam; ls' }).title, /sam/);
 });

@@ -79,16 +79,20 @@
   const PATH_CHARS = '[^\\s"\'`()<>\\[\\]{}|,;]*';
   const HOME_RE = new RegExp(`(?:[A-Za-z]:)?(?<![\\\\/])[\\\\/]+(?:Users|home)(?:[\\\\/]${PATH_CHARS}|(?![\\w.-]))`, 'g');
   const UNC_RE = new RegExp(`\\\\\\\\${PATH_CHARS}`, 'g');
-  // A home folder named without its leading slash, only where it looks like a real one:
-  // users/ or home/ (any case) with a name and more path after it ("home/sam/notes"), or
-  // macOS's own "Users/sam". A bare two-segment "home/about" is a page, so it stays.
+  // A home folder named without its leading slash ("see home/sam", "users\\sam"), any case.
   const PATH_SEG = '[^\\s"\'`()<>\\[\\]{}|,;\\\\/]+';
-  const BARE_HOME_RE = new RegExp(`(?<![\\w.~%$-])(?:(?:[Uu][Ss][Ee][Rr][Ss]|[Hh][Oo][Mm][Ee])[\\\\/]+${PATH_SEG}[\\\\/]+${PATH_SEG}|Users[\\\\/]+${PATH_SEG})${PATH_CHARS}`, 'g');
+  const ANY_HOME = '(?:[Uu][Ss][Ee][Rr][Ss]|[Hh][Oo][Mm][Ee])';
+  const LEAD = '(?<![\\w.~%$-])';
+  const BARE_HOME_RE = new RegExp(`${LEAD}${ANY_HOME}[\\\\/]+${PATH_SEG}${PATH_CHARS}`, 'g');
+  // A title a person typed can name a route such as "Fix home/about page", so there a
+  // two-segment one goes only when nothing but punctuation follows it; deeper paths
+  // and macOS's own "Users/sam" always go.
+  const TYPED_HOME_RE = new RegExp(`${LEAD}(?:Users[\\\\/]+${PATH_SEG}${PATH_CHARS}|${ANY_HOME}[\\\\/]+${PATH_SEG}(?:[\\\\/]+${PATH_CHARS}|(?=\\s*(?:$|[;,:!?.)\\]}>"\'\`|]))))`, 'g');
   const HOME_VAR_RE = new RegExp(`\\$(?:\\{HOME\\}|HOME(?![\\w]))${PATH_CHARS}`, 'g');
   const TILDE_RE = new RegExp(`~[\\w.-]*[\\\\/]${PATH_CHARS}|(?<![\\w.~%-])~[A-Za-z_][\\w.-]*`, 'g');
   const PATH_RE = new RegExp(`(?<![\\w.~%-])(?:[A-Za-z]:|\\.{1,2})?[\\\\/]${PATH_CHARS}`, 'g');
   // A pipe glued to a removed path (cfg|/etc/hosts) goes with it.
-  const stripPaths = (t) => t.replace(/\|(?=[~\\/]|[A-Za-z]:[\\/])/g, ' ').replace(HOME_RE, ' ').replace(HOME_VAR_RE, ' ').replace(BARE_HOME_RE, ' ').replace(UNC_RE, ' ').replace(TILDE_RE, ' ').replace(PATH_RE, ' ').replace(REL_PATH, ' ').replace(/[[{(]\s*[\]})]/g, ' ');
+  const stripPaths = (t, typed = false) => t.replace(/\|(?=[~\\/]|[A-Za-z]:[\\/])/g, ' ').replace(HOME_RE, ' ').replace(HOME_VAR_RE, ' ').replace(typed ? TYPED_HOME_RE : BARE_HOME_RE, ' ').replace(UNC_RE, ' ').replace(TILDE_RE, ' ').replace(PATH_RE, ' ').replace(REL_PATH, ' ').replace(/[[{(]\s*[\]})]/g, ' ');
   // Relative paths: a word/word token with a file extension or two separators.
   const REL_PATH = /(?<![\w.-])[\w.-]+(?:[\\/][\w.-]+)*[\\/][\w-]+\.[A-Za-z0-9]{1,8}(?![\w.-])|(?<![\w.-])[\w.-]+(?:[\\/][\w.-]+){2,}[\\/]?(?![\w.-])/g;
   // Percent-encoding is undone once, for printable ASCII only, so "%2FUsers%2Fsam" is a path the
@@ -144,15 +148,15 @@
   // Untrusted text → safe display text, or '' when nothing usable is left.
   // `slashes: false` also turns any remaining / or \ into a space, for text
   // that was derived (not typed as a title by a person).
-  function safeText(v, { redact, max = MAX_TITLE, slashes = true } = {}) {
-    return finish(prepare(v, redact), { max, slashes });
+  function safeText(v, { redact, max = MAX_TITLE, slashes = true, typed = false } = {}) {
+    return finish(prepare(v, redact, typed), { max, slashes });
   }
   // Normalised, scrubbed and stripped, but not yet cut: one scrub serves every use of a prompt.
-  function prepare(v, redact) {
+  function prepare(v, redact, typed = false) {
     const t = decodePercent(normalise(v));
     if (!t.trim() || typeof redact !== 'function') return '';
     // Markup goes before the scrubber reads it: a tag inside a token would hide it.
-    return dropEncoded(dropRedacted(stripPaths(redact(stripMarkup(t)).replace(URL_RE, ' '))));
+    return dropEncoded(dropRedacted(stripPaths(redact(stripMarkup(t)).replace(URL_RE, ' '), typed)));
   }
   function finish(t, { max = MAX_TITLE, slashes = true } = {}) {
     const out = (slashes ? t : t.replace(/[\\/]+/g, ' ')).replace(/\s+/g, ' ').replace(/^[\s|,;]+|[\s|,;]+$/g, '');
@@ -332,7 +336,7 @@
     const shared = o.shareSummaries === true || o.share_summaries === true;
     const local = o.team === false && o.shareSummaries === undefined && o.share_summaries === undefined;
     const promptsAllowed = (shared || local) && typeof redact === 'function';
-    const typed = (v) => safeText(v, { redact: typeof redact === 'function' ? redact : (t) => t });
+    const typed = (v) => safeText(v, { redact: typeof redact === 'function' ? redact : (t) => t, typed: true });
     for (const source of ['human', 'card', 'reported']) {
       const t = typed(o[source]);
       if (t && hasWords(t, 1)) return { title: t, source };
