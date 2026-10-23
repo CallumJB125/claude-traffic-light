@@ -586,7 +586,7 @@ async function buddyHealth({ root, now = Date.now(), home = os.homedir(), live, 
     now, home, root, runtime, projectsDir, statfs, mcpConnected,
     askFromWidget: !!loadConfig(root).askFromWidget,
     version: require('./package.json').version,
-    mcp: McpInstall.status({ home, entry: McpInstall.launch({ packaged, execPath: process.execPath, appPath: __dirname, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }) }),
+    mcp: McpInstall.status({ home, entry: McpInstall.launch({ packaged, execPath: process.execPath, appPath: __dirname, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME, nodeVersion: process.version }) }),
     signal: liveStatus ? { listening: true, port } : { running: false, port },
   });
   const lastHook = report.checks.find((c) => c.id === 'last-hook');

@@ -4767,8 +4767,14 @@ function mcpOpts() {
     entry: McpInstall.launch(mcpLaunch()),
   };
 }
+// A dev launch runs the `node` on PATH, which may be too old for --disable-sigusr1 (mcp-install.js nodeHasFlags):
+// asked once at start, before anything registers (8 s after ready). Until it answers, no flag, so nothing binds.
+let devNodeVersion = null;
+if (!app.isPackaged) execFile('node', ['--version'], { timeout: 3000, windowsHide: true }, (err, out) => { devNodeVersion = err ? 'unknown' : String(out).trim().slice(0, 40); }); // privacy-flow: agent-bus-tools-local
 function mcpLaunch() {
-  return { packaged: app.isPackaged, execPath: HOOK_PATHS.execPath || process.execPath, appPath: HOOK_PATHS.mcpAppPath, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME };
+  return { packaged: app.isPackaged, execPath: HOOK_PATHS.execPath || process.execPath, appPath: HOOK_PATHS.mcpAppPath, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME,
+    // A getter: src/mcp-auto.js keeps this object and spreads it at each write, after the version is known.
+    get nodeVersion() { return devNodeVersion; } };
 }
 // The bus-only profile, registered by Plexiform itself for Claude Code and Codex (src/mcp-auto.js). The installed
 // app writes the person's own configs; dev runs only their sandbox HOME (and a sandbox CODEX_HOME); a plain
@@ -4971,6 +4977,7 @@ function healthReport() {
     updateStatus,
     mcp: McpInstall.status(mcpOpts()),
     busMcp: MCP_AUTO_ON ? McpAuto.status() : null,
+    mcpNode: app.isPackaged ? null : { version: devNodeVersion, flags: McpInstall.nodeHasFlags(devNodeVersion) },
     signal: { listening: !!signalServer?.listening, port: SIGNAL_PORT, error: signalServerError },
     burst: BurstIpc.status(),
     burstFacts: BurstIpc.healthFacts(),

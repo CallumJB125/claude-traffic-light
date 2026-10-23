@@ -73,6 +73,20 @@ function create({ rootDir, home, config, launch, codexBin, codexEnv = process.en
     finally { await fsp.rm(tmp, { force: true }).catch(() => {}); }
   }
 
+  // Plexiform's full server exactly as this copy wrote it before it added --disable-sigusr1 (step 3): main never
+  // binds a caller to a server started that way, so it is rewritten with the flag. Anything else under that name
+  // (another copy's, or the person's own edit) is left as it is.
+  const canon = (e) => JSON.stringify({ type: e.type || 'stdio', command: e.command, args: e.args, env: Object.fromEntries(Object.entries(e.env && typeof e.env === 'object' ? e.env : {}).sort()) });
+  function upgradeFull() {
+    const want = mcpInstall.launch(launch);
+    const cur = mcpInstall.status({ home, entry: want });
+    if (cur.error || !cur.installed || cur.current || !cur.entry || !Array.isArray(cur.entry.args)) return false;
+    if (!McpInstall.NODE_FLAGS.every((f) => want.args.includes(f))) return false;
+    const before = { ...want, args: want.args.filter((a) => !McpInstall.NODE_FLAGS.includes(a)) };
+    if (canon(cur.entry) !== canon(before)) return false;
+    return !!mcpInstall.install({ home, entry: want }).changed;
+  }
+
   function addClaude(rec) {
     const want = entry();
     const full = mcpInstall.status({ home });
@@ -161,6 +175,10 @@ function create({ rootDir, home, config, launch, codexBin, codexEnv = process.en
     const rec = await readRecord();
     const had = !!(rec.claude || rec.codex);
     const c = config();
+    // Whatever the bus switches: it is the person's own Claude integration, only made safe to bind.
+    if (c && c.mcpUserOff !== true) {
+      try { if (upgradeFull()) log('[mcp-auto] the full server re-registered with --disable-sigusr1'); } catch { /* unreadable or changing: next start */ }
+    }
     if (effective(c)) {
       let claude;
       if (claudeOn(c)) {

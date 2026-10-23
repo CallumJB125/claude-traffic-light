@@ -252,7 +252,9 @@ const entry = McpInstall.launch({ packaged: true, execPath: '/Applications/Claud
 
 test('mcp-install: launch runs the packaged app as node, or plain node in dev', () => {
   assert.deepEqual(entry, { type: 'stdio', command: '/Applications/Claude Buddy.app/Contents/MacOS/Claude Buddy', args: ['--disable-sigusr1', path.join('/Applications/Claude Buddy.app/Contents/Resources/app.asar', 'mcp-server.js')], env: { ELECTRON_RUN_AS_NODE: '1' } });
-  assert.deepEqual(McpInstall.launch({ packaged: false, dir: '/repo', root: '/r' }), { type: 'stdio', command: 'node', args: ['--disable-sigusr1', path.join('/repo', 'mcp-server.js')], env: { CLAUDE_TRAFFIC_LIGHT_HOME: '/r' } });
+  assert.deepEqual(McpInstall.launch({ packaged: false, dir: '/repo', root: '/r', nodeVersion: 'v22.14.0' }), { type: 'stdio', command: 'node', args: ['--disable-sigusr1', path.join('/repo', 'mcp-server.js')], env: { CLAUDE_TRAFFIC_LIGHT_HOME: '/r' } });
+  // A node too old for the option (or not yet asked) still starts the server, without it.
+  assert.deepEqual(McpInstall.launch({ packaged: false, dir: '/repo', root: '/r' }).args, [path.join('/repo', 'mcp-server.js')]);
 });
 
 test('mcp-install: idempotent install/uninstall that keeps every other key and server', () => {
@@ -359,7 +361,7 @@ test('buddy_health: hooks from this copy, the app answering, MCP registered — 
   const home = testTempDir('ctl-mcp-home-');
   fs.mkdirSync(path.join(home, '.claude', 'projects', '-w-a'), { recursive: true });
   fs.writeFileSync(Claude.configPath(home), JSON.stringify(Claude.apply({}, M.hookRuntime(root), { home })));
-  McpInstall.install({ home, entry: McpInstall.launch({ packaged: false, dir: path.join(__dirname, '..'), root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME }) });
+  McpInstall.install({ home, entry: McpInstall.launch({ packaged: false, dir: path.join(__dirname, '..'), root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME, nodeVersion: process.version }) });
   const statfs = () => ({ bavail: 1e6, bsize: 1e6 });
   const h = await M.buddyHealth({ root, home, now: NOW, live: { look: {} }, statfs, mcpConnected: true });
   const by = (id) => h.checks.find((c) => c.id === id);

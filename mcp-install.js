@@ -28,12 +28,22 @@ const configPath = (home = os.homedir()) => path.join(home, '.claude.json');
 // bindOnce), and SIGUSR1 would start an inspector any program running as the person could drive; the
 // listener in mcp-server.js comes too late for the first few milliseconds after start.
 const NODE_FLAGS = Object.freeze(['--disable-sigusr1']);
-function launch({ packaged, execPath, appPath, dir, root, profile = null }) {
+// Node has --disable-sigusr1 from 22.14 and 23.7 (every later major too); an older node refuses to start with it.
+// The packaged app runs Electron's own node, which has it.
+function nodeHasFlags(version) {
+  const m = /^v?(\d+)\.(\d+)\.\d+/.exec(String(version || ''));
+  if (!m) return false;
+  const [major, minor] = [Number(m[1]), Number(m[2])];
+  return major > 23 || (major === 23 && minor >= 7) || (major === 22 && minor >= 14);
+}
+// nodeVersion: `node --version` of the node a dev launch runs. Without the flag the server still starts, and main
+// never binds a caller to it (src/agent-awareness.js ourServers); Health says why (health.js checkMcpNode).
+function launch({ packaged, execPath, appPath, dir, root, profile = null, nodeVersion = null }) {
   const env = { ...(root ? { CLAUDE_TRAFFIC_LIGHT_HOME: root } : {}), ...(profile === 'bus' ? { [MARKER]: markerFor(packaged ? 'packaged' : 'dev') } : {}) };
   const extra = profile === 'bus' ? ['--profile', 'bus'] : [];
   return packaged
     ? { type: 'stdio', command: execPath, args: [...NODE_FLAGS, path.join(appPath, SCRIPT), ...extra], env: { ELECTRON_RUN_AS_NODE: '1', ...env } }
-    : { type: 'stdio', command: 'node', args: [...NODE_FLAGS, path.join(dir, SCRIPT), ...extra], env };
+    : { type: 'stdio', command: 'node', args: [...(nodeHasFlags(nodeVersion) ? NODE_FLAGS : []), path.join(dir, SCRIPT), ...extra], env };
 }
 
 // The full server: any entry running our script. The bus profile: only an entry carrying the marker.
@@ -102,4 +112,4 @@ function status({ home, entry, name = NAME }) {
   return { installed: isOurs(cur, name), current: !!entry && JSON.stringify(cur) === JSON.stringify(entry), name, path: configPath(home), entry: cur, error };
 }
 
-module.exports = { NAME, BUS_NAME, MARKER, NODE_FLAGS, markerFor, markerOf, configPath, launch, isOurs, install, uninstall, status };
+module.exports = { NAME, BUS_NAME, MARKER, NODE_FLAGS, nodeHasFlags, markerFor, markerOf, configPath, launch, isOurs, install, uninstall, status };

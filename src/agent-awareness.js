@@ -30,6 +30,9 @@ const EXEC_TIMEOUT_MS = 3000;
 const VERIFY_TTL_MS = 60 * 1000;
 // One hung step (a FIFO, a stuck mount) must not hold every later rebuild.
 const BUILD_TIMEOUT_MS = 15 * 1000;
+// Session owner pins (owners.json): how many are kept, and how many dead-process checks run at once.
+const OWNERS_MAX = 200;
+const PRUNE_BATCH = 10;
 const OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0);
 const CONTEXT_PROVIDERS = new Set(['claude', 'codex', 'gemini']);
 // The only session-file fields the roster is built from.
@@ -345,7 +348,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   // to whichever process a rewritten file names first; dead processes are dropped. Every Claude id seen
   // on one process is remembered, so a child /clear did not respawn still matches.
   const ownersFile = path.join(rosterDir, 'owners.json');
-  const owners = new Map();  // `${provider}|${session id}` → { pid, start }
+  const owners = new Map();  // `${provider}|${session id}` → { pid, start }, oldest first
   const procIds = new Map(); // `${pid}|${start}` → Set of Claude session ids
   const OWNER_KEY = /^(?:claude|codex)\|[\w.-]{1,120}$/;
   const remember = (key, pid, start) => { if (key.startsWith('claude|')) once(procIds, `${pid}|${start}`, () => new Set()).add(key.slice(7)); };
@@ -355,12 +358,26 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     ownersSaving = ownersSaving.then(() => writeFile(ownersFile, text)).catch((e) => log(`[awareness] owners not written: ${e && e.code ? e.code : 'error'}`));
     return ownersSaving;
   };
+  // A file stuffed with live pids (it is the person's own, so any program of theirs can write it) costs at most
+  // OWNERS_MAX pins and one ps per pin, PRUNE_BATCH at a time, in the background: never inside a roster build.
   let lastPrune = 0;
-  async function pruneOwners() {
+  let pruning = null;
+  function schedulePrune() {
     lastPrune = now();
-    let gone = 0;
-    for (const [k, o] of [...owners]) if ((await startOf(o.pid)) !== o.start) { owners.delete(k); gone += 1; }
-    if (gone) await saveOwners();
+    if (!pruning) {
+      pruning = (async () => {
+        let gone = 0;
+        const list = [...owners];
+        for (let i = 0; i < list.length && !stopped; i += PRUNE_BATCH) {
+          const batch = list.slice(i, i + PRUNE_BATCH);
+          const alive = await Promise.all(batch.map(([, o]) => startOf(o.pid).then((s) => s === o.start)));
+          // A pin changed while it was checked is the new one's: kept.
+          batch.forEach(([k, o], j) => { if (!alive[j] && owners.get(k) === o) { owners.delete(k); gone += 1; } });
+        }
+        if (gone) await saveOwners();
+      })().catch(() => {}).finally(() => { pruning = null; });
+    }
+    return pruning;
   }
   let ownersLoad = null;
   const loadOwners = () => {
@@ -369,12 +386,11 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
         const head = await readHead(fsp, ownersFile, 512 * 1024);
         let list = [];
         try { const d = head ? JSON.parse(head.text) : null; if (d && d.v === 1 && Array.isArray(d.owners)) list = d.owners; } catch { list = []; }
-        for (const e of list.slice(0, 2000)) {
-          if (!Array.isArray(e) || typeof e[0] !== 'string' || !OWNER_KEY.test(e[0]) || !Number.isInteger(e[1]) || e[1] <= 1 || typeof e[2] !== 'string' || !e[2] || e[2].length > 64) continue;
-          if (!owners.has(e[0])) owners.set(e[0], { pid: e[1], start: e[2] });
-        }
-        await pruneOwners();
+        // Written oldest first: the newest OWNERS_MAX valid pins are kept.
+        const valid = list.filter((e) => Array.isArray(e) && typeof e[0] === 'string' && OWNER_KEY.test(e[0]) && Number.isInteger(e[1]) && e[1] > 1 && typeof e[2] === 'string' && e[2] && e[2].length <= 64);
+        for (const e of valid.slice(-OWNERS_MAX)) if (!owners.has(e[0])) owners.set(e[0], { pid: e[1], start: e[2] });
         for (const [k, o] of owners) remember(k, o.pid, o.start);
+        schedulePrune();
       })().catch(() => {});
     }
     return ownersLoad;
@@ -384,8 +400,10 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     const o = owners.get(key);
     if (o && (o.pid !== pid || o.start !== start) && (await startOf(o.pid)) === o.start) return false;
     if (!o || o.pid !== pid || o.start !== start) {
-      if (owners.size > 2000) owners.clear();
+      owners.delete(key);
       owners.set(key, { pid, start });
+      // Full: the oldest pin goes, never every pin at once.
+      while (owners.size > OWNERS_MAX) owners.delete(owners.keys().next().value);
       saveOwners();
     }
     remember(key, pid, start);
@@ -457,6 +475,9 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
       if (!l || typeof l.command !== 'string' || !Array.isArray(l.args)) continue;
       const argv = [l.command, ...l.args.map(String)];
       if (argv.some((x) => !x || /\s/.test(x))) continue;
+      // Without --disable-sigusr1 (a dev launch on a node older than 22.14, mcp-install.js) any program of the
+      // person's could open an inspector in the server early on: such a server is never a bound caller.
+      if (!l.args.includes('--disable-sigusr1')) continue;
       const exe = path.isAbsolute(l.command) ? await realOr(l.command) : await onPath(l.command);
       if (exe) out.push({ exe, args: argv.join(' ') });
     }
@@ -754,7 +775,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
       if (longCount.get(e.peer.handle) > 1) { e.entry.verified = false; entries.splice(i, 1); unverified += 1; } else e.entry.handle = e.peer.handle;
     }
     for (const k of firstSeen.keys()) if (!nextVerdicts.has(k)) firstSeen.delete(k);
-    if (at - lastPrune >= CLASSIFY_TTL_MS) await (ownersLoad ? pruneOwners() : loadOwners()).catch(() => {});
+    if (at - lastPrune >= CLASSIFY_TTL_MS) { if (ownersLoad) schedulePrune(); else loadOwners(); }
     for (const [k, v] of procChecks) if (at - v.at >= VERIFY_TTL_MS) procChecks.delete(k);
     verdicts.clear();
     for (const [k, v] of nextVerdicts) verdicts.set(k, v);
