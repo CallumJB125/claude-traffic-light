@@ -342,7 +342,9 @@ test('work-organise: pure and browser-safe — no fs, exec or network, loads wit
 });
 
 // Wall time on a shared machine is noisy: best of three after a warm-up.
-const best = (fn, n = 3) => { fn(); let min = Infinity; for (let i = 0; i < n; i++) { const t0 = process.hrtime.bigint(); fn(); min = Math.min(min, Number(process.hrtime.bigint() - t0) / 1e6); } return min; };
+// CPU time, not wall time: on a loaded machine the wall clock also counts time spent waiting to run.
+const cpuMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1e3; };
+const best = (fn, n = 3) => { fn(); let min = Infinity; for (let i = 0; i < n; i++) { const t0 = cpuMs(); fn(); min = Math.min(min, cpuMs() - t0); } return min; };
 const blob = (seed, bytes = 3072, enc = 'base64') => { const r = rng(seed); return Buffer.from(Array.from({ length: bytes }, () => Math.floor(r() * 256))).toString(enc); };
 // The shapes people paste as a first prompt: an image data URI, a token, a blob with a key glued on.
 const pasted = (i) => [`data:image/png;base64,${blob(i, 3072, 'base64url')}`, `eyJ${blob(i, 3000, 'base64url')}.eyJ${blob(i + 1, 300, 'base64url')}`, `${blob(i, 3072, 'base64url')}sk-abcdefghijklmnopqrstuvwx`, blob(i)][i % 4];
@@ -371,10 +373,25 @@ test('work-organise: H1 — no-space and NFKC-expanding input stays linear (unde
   assert.ok(Array.from(titleOf({ team: false, firstPrompt: cases['U+3315 ×4000 (5× after NFKC)'] }).title).length <= MAX_TITLE);
 });
 
-test('work-organise: H1 — 100 sessions of pasted blobs title in under 500 ms', () => {
-  const sessions = Array.from({ length: 100 }, (_, i) => ({ firstPrompt: pasted(100 + i), provider: 'claude', project: 'app' }));
-  const ms = best(() => { for (const s of sessions) titleOf({ team: false, ...s }); }, 2);
-  assert.ok(ms < 500, `${ms.toFixed(0)} ms`);
+test('work-organise: H1 — pasted blobs cost linearly: 100 titles about 10× of 10, a 4× blob at most about 8× (load-tolerant)', () => {
+  const sessions = Array.from({ length: 100 }, (_, i) => ({ team: false, firstPrompt: pasted(100 + i), provider: 'claude', project: 'app' }));
+  const run = (list) => () => { for (const s of list) titleOf(s); };
+  // Interleaved rounds, fastest of each: a load spike on a busy machine hits one round,
+  // not every round, so it cannot decide the ratio.
+  let t10 = Infinity;
+  let t100 = Infinity;
+  for (let round = 0; round < 6; round++) {
+    t100 = Math.min(t100, best(run(sessions), 1));
+    t10 = Math.min(t10, best(run(sessions.slice((round % 10) * 10, (round % 10) * 10 + 10)), 1));
+  }
+  assert.ok(t100 / Math.max(t10, 1) < 20, `100 titles ${t100.toFixed(0)} ms vs 10 titles ${t10.toFixed(0)} ms`);
+  assert.ok(t100 < 5000, `backstop: ${t100.toFixed(0)} ms`);
+  // Per-title cost against input size: a quadratic pass makes the 4 KB blob ~16× the 1 KB one.
+  const shapes = (n) => [0, 1, 2].map((k) => pasted(k).slice(0, n));
+  const per = (n) => best(() => { for (const p of shapes(n)) titleOf({ team: false, firstPrompt: p }); }, 15);
+  const small = per(1000);
+  const large = per(4000);
+  assert.ok(large / Math.max(small, 0.5) < 8, `4 KB ${large.toFixed(1)} ms vs 1 KB ${small.toFixed(1)} ms`);
 });
 
 test('work-organise: H1 — the prompt is scrubbed once per title', () => {
