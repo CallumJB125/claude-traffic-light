@@ -205,6 +205,10 @@ function build(root, opts = {}) {
       try { fm = parseFrontmatter(raw); } catch (e) { report.skipped.push({ source: src.id, path: rel, reason: e.message === 'no frontmatter' ? 'no frontmatter (not an agent file)' : `frontmatter: ${e.message}` }); continue; }
       const name = str(fm.fields, 'name')?.trim(), description = str(fm.fields, 'description')?.trim();
       if (!name || !description || name.length > 120 || !slugify(name)) { report.skipped.push({ source: src.id, path: rel, reason: 'no usable name or description' }); continue; }
+      // A name ends up on one line in other platforms' files, so it may not hold line breaks or control characters.
+      if (/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/u.test(name)) { report.skipped.push({ source: src.id, path: rel, reason: 'name contains control characters' }); continue; }
+      // Exclusions can't be carried to the other platforms, which would get the excluded tools.
+      if (fm.fields.disallowedTools !== undefined) { report.skipped.push({ source: src.id, path: rel, reason: 'uses disallowedTools, which other platforms cannot honour' }); continue; }
       const slug = slugify(name);
       const division = path.posix.dirname(rel) === '.' ? '' : path.posix.dirname(rel).replace(/^categories\//, '').replace(/^plugins\/([^/]+)\/agents$/, '$1').replace(/^agents$/, '');
       const key = src.dedupeKey === 'stem' ? slugify(path.posix.basename(rel, '.md')) : slug;
