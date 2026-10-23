@@ -208,14 +208,18 @@ function follow(client, t, args, ctx, interactive) {
       else if (END_BAD.has(state)) finish(EXIT.ENDED_BADLY, `Ended: ${oneLine(label, 60)}${reason ? ` · ${oneLine(reason)}` : ''}`);
       else if (END_ELSEWHERE.has(state)) finish(EXIT.OK, `Continued in a terminal: ${oneLine(label, 60)}. Hand it back in Plexiform when you're done.`);
     };
+    const settled = new Set();
     const answer = async (e) => {
       if (asked.has(e.approvalId)) return;
       asked.add(e.approvalId);
       if (!interactive) { if (!args.json) out('  Answer it in Plexiform (Tasks).'); return; }
-      // fresh: only input typed after this prompt answers it; anything typed ahead while following is dropped.
-      const a = await ctx.prompt('Approve once? a = approve, d = deny, Enter = answer it in Plexiform: ', { fresh: true });
+      // One approval at a time (the prompt queue), each naming its tool. fresh: only a line begun after the question
+      // is shown answers it. skip: it was answered elsewhere, or following ended, before its turn came.
+      const q = `Approve ${oneLine(e.tool, 60)}${e.inputSummary ? ` (${oneLine(e.inputSummary, 120)})` : ''} once? a = approve, d = deny, Enter = answer it in Plexiform: `;
+      const a = await ctx.prompt(q, { fresh: true, skip: () => done || settled.has(e.approvalId) });
       const k = a == null ? '' : a.trim().toLowerCase();
-      if (done || (k !== 'a' && k !== 'd')) return;
+      if (done || settled.has(e.approvalId) || (k !== 'a' && k !== 'd')) return;
+      settled.add(e.approvalId);
       try {
         await client.act(t.id, k === 'a' ? 'approve' : 'deny', k === 'a' ? { approvalId: e.approvalId, scope: 'once' } : { approvalId: e.approvalId });
       } catch (err) { if (!args.json) out(`  ! ${oneLine(err.message)}`); }
@@ -225,6 +229,7 @@ function follow(client, t, args, ctx, interactive) {
       if (args.json) out(JSON.stringify(e));
       else for (const l of eventLines(e, seen)) out(l);
       if (e.type === 'approval' && e.phase === 'requested') answer(e);
+      if (e.type === 'approval' && e.phase !== 'requested' && e.approvalId) settled.add(e.approvalId);
       if (e.type === 'state') end(e.state, e.label, e.reason);
     };
     ctx.onInterrupt?.(() => finish(EXIT.INTERRUPTED, `Stopped following. ${t.id} keeps running in Plexiform.`));
@@ -247,29 +252,50 @@ function readAllStdin(stdin = process.stdin) {
 }
 
 /**
- * One line from the terminal, or null on end of input. Readline is open only while a prompt waits: between prompts
- * the terminal is back in its normal mode, so the first Ctrl-C while following is a real SIGINT. Ctrl-C at a prompt
- * is passed on as SIGINT too. {fresh}: wait settleMs and drop whatever was typed ahead before showing the question.
+ * One line from the terminal, or null on end of input. Prompts run one at a time (a queue), and readline is open only
+ * while a prompt waits: between prompts the terminal is in its normal mode, so the first Ctrl-C while following is a
+ * real SIGINT. Ctrl-C at a prompt is passed on as SIGINT too.
+ * {fresh}: an answer must be begun after the question is shown. Reading resumes first and waits settleMs, so input
+ * typed ahead (buffered while nothing read it) arrives and is dropped; a line that was begun before the question and
+ * finished after it is voided and the question asked again. {skip()}: checked when the prompt's turn comes; true → null.
  */
 function terminalPrompt({ input = process.stdin, output = process.stderr, settleMs = 40, onSigint = () => process.emit('SIGINT', 'SIGINT') } = {}) {
   const readline = require('readline');
   let ended = false;
   input.once?.('end', () => { ended = true; });
-  const prompt = async (q, { fresh = false } = {}) => {
-    if (ended) return null;
+  const ask = async (q, { fresh = false, skip } = {}) => {
+    if (ended || skip?.()) return null;
+    let shown = false;
+    let partial = false; // bytes of an unfinished line arrived before the question was shown
+    const seen = (chunk) => { if (!shown) { const str = String(chunk); if (str.length) partial = !/[\r\n]$/.test(str); } };
+    input.on('data', seen);
     const rl = readline.createInterface({ input, output, terminal: !!input.isTTY });
     const lines = [];
     let take = null;
     rl.on('line', (l) => { if (take) { const t = take; take = null; t(l); } else lines.push(l); });
     rl.on('SIGINT', () => { rl.close(); onSigint(); });
     const closed = new Promise((res) => rl.once('close', () => res(null)));
+    const next = () => (lines.length ? Promise.resolve(lines.shift()) : Promise.race([new Promise((res) => { take = res; }), closed]));
     try {
-      if (fresh) { await new Promise((res) => setTimeout(res, settleMs)); lines.length = 0; }
+      if (fresh) {
+        await new Promise((res) => setTimeout(res, settleMs));
+        lines.length = 0;
+        if (rl.line) partial = true;
+      }
+      if (skip?.()) return null;
+      shown = true;
       output.write(q);
-      if (lines.length) return lines.shift();
-      return await Promise.race([new Promise((res) => { take = res; }), closed]);
-    } finally { rl.close(); }
+      if (!fresh) return await next();
+      for (;;) {
+        const l = await next();
+        if (l == null || !partial) return l;
+        partial = false;
+        output.write(`(ignored what was typed before the question)\n${q}`);
+      }
+    } finally { input.removeListener('data', seen); rl.close(); }
   };
+  let chain = Promise.resolve();
+  const prompt = (q, o) => { const p = chain.then(() => ask(q, o)); chain = p.catch(() => {}); return p; };
   prompt.close = () => {};
   return prompt;
 }

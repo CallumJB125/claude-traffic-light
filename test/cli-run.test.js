@@ -167,7 +167,7 @@ test('--follow: an approval is answered only by the person at the prompt', async
   try {
     const r = await plexiform(m, ['run', 'add a dependency', '--with', 'claude', '--perm', 'ask', '--follow'], {
       tty: true,
-      onPrompt: (q, n) => (n === 1 ? '' : (assert.match(q, /^Approve once\? a = approve, d = deny, Enter = answer it in Plexiform: $/), 'a')),
+      onPrompt: (q, n) => (n === 1 ? '' : (assert.match(q, /^Approve \S+.* once\? a = approve, d = deny, Enter = answer it in Plexiform: $/), 'a')),
     });
     assert.equal(r.code, 0, r.err);
     assert.match(r.out, /^! Bash needs your approval: npm install --save-dev @testing-library\/react$/m);
@@ -324,5 +324,76 @@ test('the mock routes through the same fail-safe: a malformed usage reading neve
     const r = await plexiform(m, ['run', 'fix it', '--json', '--yes']);
     assert.equal(r.code, 0, r.err);
     assert.match(r.json()[0].reason, /^Claude: the usual pick; no usage data to compare$/);
+  } finally { await m.close(); }
+});
+
+// Re-review R1–R4: approval answers are a safety surface.
+function pty(settleMs = 30) {
+  const { PassThrough } = require('stream');
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let shown = '';
+  output.on('data', (d) => { shown += String(d); });
+  const prompt = RunCmd.terminalPrompt({ input, output, settleMs, onSigint: () => {} });
+  const until = async (re) => { for (let i = 0; i < 200 && !re.test(shown); i += 1) await new Promise((res) => setTimeout(res, 5)); assert.match(shown, re); };
+  return { input, prompt, until, shown: () => shown };
+}
+
+test('R1: two pending approvals are asked one at a time; one keystroke answers exactly one', async () => {
+  const t = pty();
+  const first = t.prompt('Approve Bash (ls) once? ', { fresh: true });
+  const second = t.prompt('Approve Write (a.txt) once? ', { fresh: true });
+  let secondDone = false;
+  second.then(() => { secondDone = true; });
+  await t.until(/Approve Bash \(ls\) once\? $/);
+  assert.doesNotMatch(t.shown(), /Write/, 'the second question waits its turn');
+  t.input.write('a\n');
+  assert.equal(await first, 'a');
+  await t.until(/Approve Write \(a\.txt\) once\? $/);
+  await new Promise((res) => setTimeout(res, 60));
+  assert.equal(secondDone, false, 'the one "a" did not answer the second approval');
+  t.input.write('d\n');
+  assert.equal(await second, 'd');
+  assert.equal(t.input.listenerCount('data'), 0);
+});
+
+test('R1: a queued approval answered elsewhere is skipped when its turn comes', async () => {
+  const t = pty();
+  let answered = false;
+  const first = t.prompt('Approve Bash once? ', { fresh: true });
+  const second = t.prompt('Approve Write once? ', { fresh: true, skip: () => answered });
+  await t.until(/Approve Bash once\? $/);
+  answered = true;
+  t.input.write('d\n');
+  assert.equal(await first, 'd');
+  assert.equal(await second, null);
+  assert.doesNotMatch(t.shown(), /Write/);
+});
+
+test('R2/R3: a half-typed "a" finished by Enter at the question is void; late typed-ahead lines are dropped', async () => {
+  const t = pty(40);
+  t.input.write('a');
+  const p = t.prompt('Approve Bash once? ', { fresh: true });
+  await t.until(/Approve Bash once\? $/);
+  t.input.write('\n');
+  await t.until(/ignored what was typed before the question/);
+  t.input.write('d\n');
+  assert.equal(await p, 'd', 'the partial "a" never approved');
+  const late = t.prompt('Approve Write once? ', { fresh: true });
+  setTimeout(() => t.input.write('a\n'), 10);
+  await t.until(/Approve Write once\? $/);
+  t.input.write('\n');
+  assert.equal(await late, '', 'a whole line typed during the settle is dropped; only the Enter after the question counts');
+});
+
+test('R4: "run anyway?" is yes only for y: n, an empty answer and end of input leave it unstarted', async () => {
+  const m = await mock({ spendCap: true });
+  try {
+    for (const answers of [['n'], [''], [null], ['yes please']]) {
+      const r = await plexiform(m, ['run', 'fix it', '--with', 'claude'], { tty: true, answers });
+      assert.equal(r.code, 0, JSON.stringify(answers));
+      assert.match(r.out, /Not started\./, JSON.stringify(answers));
+      assert.deepEqual(await tasks(m), [], JSON.stringify(answers));
+    }
   } finally { await m.close(); }
 });
