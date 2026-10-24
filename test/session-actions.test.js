@@ -116,3 +116,42 @@ test('the hub page can only ask to show the Team page or a card\'s timeline: mai
   const { pageById } = require('../buddy-window/pages.js');
   assert.deepEqual([pageById('team').kind, pageById('team').screen], ['local', 'team']);
 });
+
+test('PR 7 routing strip: rows for the live sessions\' projects, words from work-routing-view, actions only on a listed project', async () => {
+  const chosen = [], linked = [];
+  const teams = [{ key: 't1', name: 'Acme', role: 'admin', boards: [{ key: 'b1', name: 'Main' }] }];
+  const routingRows = [{ repo: 'github.com/org/app', short: 'app', state: 'ask', destination: { kind: 'local' }, matches: [{ key: 'k1', team: 'Acme', board: 'Main', read_only: false }, { key: 'k2', team: 'Acme', board: 'Web', read_only: false }] }];
+  const asked = [];
+  const { a } = rig({
+    boards: { boards: async () => [], teams: async () => teams, linkRepo: async (b, c) => { linked.push([b, c]); return { ok: true }; }, captureKey: async () => null, searchCards: async () => [], destinationOf: () => ({ kind: 'local' }) },
+    capture: { captureOnce: async () => ({ ok: true }), routing: async (repos) => { asked.push(repos); return routingRows; }, choose: async (r, k) => { chosen.push([r, k]); return true; } },
+  });
+  const out = await a.routing();
+  assert.deepEqual(asked, [['github.com/org/app']], 'the live sessions\' repos, resolved here');
+  assert.equal(out.rows.length, 1);
+  assert.match(out.rows[0].text, /^app is linked to Acme \/ Main and Acme \/ Web/);
+  assert.deepEqual(out.rows[0].choices.map((c) => c.key), ['k1', 'k2', 'local']);
+  assert.equal(JSON.stringify(out).includes('/Users/me'), false);
+  assert.deepEqual(await a.routeChoose('github.com/org/app', 'k2'), { ok: true });
+  assert.deepEqual(chosen, [['github.com/org/app', 'k2']]);
+  assert.equal((await a.routeChoose('github.com/org/other', 'k2')).ok, false, 'a project not listed is refused');
+  assert.equal((await a.routeLink('github.com/org/app', 'b1')).ok, true);
+  assert.deepEqual(linked, [['b1', 'github.com/org/app']]);
+  assert.equal((await a.routeLink('github.com/org/other', 'b1')).ok, false);
+  assert.equal(linked.length, 1);
+});
+test('PR 7 routing strip: no team means no strip; a capture without routing gives none', async () => {
+  const none = rig({ boards: { boards: async () => [], teams: async () => [], linkRepo: async () => ({ ok: true }) }, capture: { captureOnce: async () => ({ ok: true }), routing: async () => [{ repo: 'github.com/org/app', short: 'app', state: 'unlinked', destination: { kind: 'local' }, matches: [] }] } });
+  assert.deepEqual(await none.a.routing(), { rows: [] });
+  const old = rig();
+  assert.deepEqual(await old.a.routing(), { rows: [] });
+});
+test('PR 7 board broker: teams() lists each signed-in team with its role and its boards\' keys', async () => {
+  const client = { me: async () => ({ ok: true, teams: [{ id: 't1', name: 'Acme', role: 'admin', boards: [{ id: 'b1', name: 'Main' }] }, { id: 't2', name: 'Ro', role: 'viewer', boards: [{ id: 'b2', name: 'Ro' }] }] }) };
+  const sb = createSessionBoards({ hubs: () => ['https://h.test'], clientFor: () => client, userOf: () => ({ id: 'u' }), local: { localRequest: async () => ({ ok: false }) }, getRoutes: async () => ({ routes: [], complete: true }), routeKey: () => 'k' });
+  const teams = await sb.teams();
+  assert.deepEqual(teams.map((t) => [t.name, t.role, t.boards.map((b) => b.name)]), [['Acme', 'admin', ['Main']], ['Ro', 'viewer', ['Ro']]]);
+  const boards = await sb.boards();
+  assert.equal(teams[0].boards[0].key, boards.find((b) => b.label === 'Acme / Main').key, 'a team board key is the Link form\'s board key');
+  assert.ok(!JSON.stringify(teams).match(/h\.test|"t1"|"b1"/), 'opaque keys only');
+});

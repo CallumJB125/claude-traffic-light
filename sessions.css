@@ -83,3 +83,16 @@ button:disabled { cursor: default; opacity: .55; }
 .how button { margin-top: 12px; }
 @media (max-width: 740px) { main { padding: 22px 16px; } header { flex-wrap: wrap; } .session, .add { padding: 16px; } .session h2 { line-height: 1.6; } .routes { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { button:active:enabled { transform: none; } }
+
+/* Organised views PR 7: where each project's work goes */
+.routing h2 { margin: 0 0 4px; font-size: var(--text-lg); }
+.routing .body { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; }
+.routing-row { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; }
+.routing-row p { margin: 0; } .routing-row p + p { margin-top: 2px; }
+.routing-text { font-weight: 600; overflow-wrap: anywhere; }
+.routing-ask, .routing-unlinked { border-color: var(--line-strong); }
+.routing-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-top: 8px; }
+.routing-pick { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; flex-basis: 100%; }
+.routing-pick[hidden] { display: none; }
+.routing-pick label { display: grid; gap: 2px; font-size: var(--text-sm); color: var(--muted); }
+.routing-pick select { font: inherit; color: inherit; background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 8px; min-height: 44px; }

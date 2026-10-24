@@ -8,6 +8,7 @@
 const crypto = require('node:crypto');
 const path = require('node:path');
 const BurstHandover = require('./burst-handover.js');
+const WorkRoutingView = require('./work-routing-view.js');
 
 // The same sentence the board's Team page shows (board/web/js/render-team.js SCOPE_RULE; a test keeps them equal).
 const SCOPE_RULE = 'A session only shows once it writes into a repo linked to this board. Personal repos and sessions marked “Personal — don’t track” never show.';
@@ -163,9 +164,38 @@ function create({ sessions, repoOf, rootOf, boards, capture, links, tickets = nu
   }
   const ticketCreate = (ref, title, description) => (tickets ? tickets.send(ref, title, description) : { ok: false, text: 'Not available.' });
 
+  // Where each live session's project's new work goes (organised views PR 7). Only projects listed here can be
+  // changed, linked or asked about, so the page cannot act on a repository it was not shown.
+  let listed = new Set();
+  async function routing() {
+    if (typeof capture.routing !== 'function' || typeof boards.teams !== 'function') return { rows: [] };
+    const repos = new Set();
+    for (const r of rows().slice(0, 50)) {
+      if (typeof r.cwd !== 'string' || !path.isAbsolute(r.cwd)) continue;
+      const root = await rootOf(r.cwd).catch(() => null);
+      const canonical = root ? await repoOf(root).catch(() => null) : null;
+      if (canonical) repos.add(canonical);
+      if (repos.size >= 20) break;
+    }
+    const teams = await boards.teams().catch(() => []);
+    if (!teams.length || !repos.size) { listed = new Set(); return { rows: [] }; }
+    const out = WorkRoutingView.rowsFor(await capture.routing([...repos]).catch(() => []), { teams });
+    listed = new Set(out.map((r) => r.repo));
+    return { rows: out };
+  }
+  async function routeChoose(repo, key) {
+    if (!listed.has(repo) || typeof capture.choose !== 'function') return { ok: false, text: 'Refresh, then choose again.' };
+    return (await capture.choose(repo, key)) ? { ok: true } : { ok: false, text: 'That board is no longer available. Refresh and try again.' };
+  }
+  async function routeLink(repo, board) {
+    if (!listed.has(repo)) return { ok: false, text: 'Refresh, then try again.' };
+    const r = await boards.linkRepo(board, repo);
+    return r.ok ? { ok: true } : { ok: false, needsAdmin: !!r.needsAdmin, text: r.error };
+  }
+
   const connect = () => openPage(pageExists(AI_TOOLS_PAGE_ID) ? AI_TOOLS_PAGE_ID : FALLBACK_PAGE_ID);
 
-  return { rowInfo, ticketDraft, ticketCreate, setup, chooseFolder, linkRepo, startSession, makeCard, searchCards, attach, shareHandover, linkFromSession, connect };
+  return { routing, routeChoose, routeLink, rowInfo, ticketDraft, ticketCreate, setup, chooseFolder, linkRepo, startSession, makeCard, searchCards, attach, shareHandover, linkFromSession, connect };
 }
 
 module.exports = { create, SCOPE_RULE, AI_TOOLS_PAGE_ID, providerOf };

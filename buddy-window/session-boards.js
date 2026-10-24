@@ -15,10 +15,11 @@ const FORBIDDEN = 'Only a team owner or admin can link a repository. Ask one of 
 // hubs(): signed-in hub origins. local: { localRequest }. getRoutes: work-capture's catalog read.
 function createSessionBoards({ hubs, clientFor, userOf, local, getRoutes, routeKey, log = () => {} }) {
   const known = new Map(); // key -> board
+  let teamList = []; // [{key, name, role, boards:[{key, name}]}], from the last boards()
 
   async function boards() {
     known.clear();
-    const out = [];
+    const out = [], teamsSeen = [];
     const add = (b, label) => { const key = keyOf(b); known.set(key, b); out.push({ key, label, kind: b.kind }); };
     let mine = null;
     try {
@@ -31,14 +32,21 @@ function createSessionBoards({ hubs, clientFor, userOf, local, getRoutes, routeK
       if (!r?.ok || !Array.isArray(r.teams)) continue;
       for (const t of r.teams.slice(0, 32)) {
         if (!ID.test(t?.id ?? '') || !['owner', 'admin', 'member', 'viewer'].includes(t.role)) continue;
+        const team = { key: keyOf({ kind: 'team-of', hub, team_id: t.id }), name: String(t.name ?? 'Team').slice(0, 60), role: t.role, boards: [] };
+        known.set(team.key, { kind: 'team-of', hub, team_id: t.id, role: t.role });
+        teamsSeen.push(team);
         for (const b of (Array.isArray(t.boards) ? t.boards : []).slice(0, 32)) {
           if (!ID.test(b?.id ?? '')) continue;
+          team.boards.push({ key: keyOf({ kind: 'team', hub, team_id: t.id, board_id: b.id }), name: String(b.name ?? 'Board').slice(0, 60) });
           add({ kind: 'team', hub, team_id: t.id, board_id: b.id, role: t.role, user_id: userOf(hub)?.id ?? null }, `${String(t.name ?? 'Team').slice(0, 60)} / ${String(b.name ?? 'Board').slice(0, 60)}${t.role === 'viewer' ? ' (read only)' : ''}`);
         }
       }
     }
+    teamList = teamsSeen;
     return out;
   }
+  // Each signed-in team with the person's role and its boards' keys (the Link form's keys): for the routing strip.
+  async function teams() { await boards(); return teamList.map((t) => ({ ...t, boards: t.boards.map((b) => ({ ...b })) })); }
   const lookup = async (key) => { if (!known.has(key)) await boards(); return known.get(key) ?? null; };
 
   // Link a repository (its canonical name, e.g. github.com/org/app) to a board.
@@ -109,7 +117,7 @@ function createSessionBoards({ hubs, clientFor, userOf, local, getRoutes, routeK
 
   const destinationOf = (key) => { const b = known.get(key); return b?.kind === 'team' ? { kind: 'team', hub: b.hub, team_id: b.team_id, board_id: b.board_id } : { kind: 'local' }; };
 
-  return { boards, linkRepo, captureKey, searchCards, destinationOf, lookup };
+  return { boards, teams, linkRepo, captureKey, searchCards, destinationOf, lookup };
 }
 
 module.exports = { createSessionBoards, FORBIDDEN };
