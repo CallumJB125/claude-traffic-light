@@ -20,8 +20,10 @@
 
   const state = {
     list: null, index: [], categories: {}, catalogSha: null, error: null, writes: null,
-    query: '', filters: { category: '', source: '', tools: '', mine: false },
+    query: '', filters: { category: '', source: '', tools: '', works: '' },
     shown: PAGE, results: [], added: new Map(), opener: null,
+    // PR 4: 'all' (the catalogue) or 'mine' (Added by me: manage, update, undo).
+    view: 'all', mine: null, adoptable: null, note: null,
   };
 
   function el(tag, props = {}, ...kids) {
@@ -53,6 +55,7 @@
     state.index = Search.buildIndex(r.agents);
     await refreshStatus();
     run();
+    if (r.show === 'mine') await showMine();
   }
 
   async function refreshStatus() {
@@ -63,8 +66,7 @@
 
   function run() {
     const f = state.filters;
-    const only = f.mine ? new Set(state.added.keys()) : null;
-    state.results = Search.search(state.index, state.query, { category: f.category || null, source: f.source || null, tools: f.tools || null, only });
+    state.results = Search.search(state.index, state.query, { category: f.category || null, source: f.source || null, tools: f.tools || null, works: f.works || null });
     state.shown = PAGE;
     render();
   }
@@ -76,8 +78,23 @@
     if (state.error) { $page.append(el('p', { class: 'af-empty', role: 'alert', text: state.error })); return; }
     if (!state.list) { $page.append(el('p', { class: 'af-empty', text: 'Loading agents…' })); return; }
     if (state.writes && !state.writes.ok) $page.append(el('p', { class: 'af-notice', role: 'status', text: state.writes.reason }));
+    $page.append(tabs());
+    if (state.view === 'mine') { $page.append(mineView()); return; }
     $page.append(controls(), el('p', { class: 'af-count', id: 'af-count', 'aria-live': 'polite', text: countText() }), grid());
   }
+
+  function tabs() {
+    const n = state.added.size;
+    const tab = (view, text) => el('button', { type: 'button', role: 'tab', class: 'af-tab', id: `af-tab-${view}`, 'aria-selected': String(state.view === view), tabindex: state.view === view ? '0' : '-1', onclick: () => (view === 'mine' ? showMine() : showAll()), text });
+    const bar = el('div', { class: 'af-tabs', role: 'tablist', 'aria-label': 'Find agents views' }, tab('all', 'All agents'), tab('mine', n ? `Added by me (${n})` : 'Added by me'));
+    bar.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      void (state.view === 'mine' ? showAll() : showMine()).then(() => document.getElementById(`af-tab-${state.view}`)?.focus());
+    });
+    return bar;
+  }
+  async function showAll() { state.view = 'all'; state.note = null; render(); }
 
   function header() {
     const n = state.list?.count;
@@ -96,12 +113,13 @@
     input.addEventListener('keydown', (e) => { if (e.key === 'Escape' && input.value) { e.preventDefault(); input.value = ''; state.query = ''; run(); focusSearch(); } });
     const cats = Object.keys(state.categories).sort((a, b) => categoryLabel(a).localeCompare(categoryLabel(b)));
     const sources = (state.list.builtFrom || []).map((s) => s.source);
+    const worksTools = (Array.isArray(state.list.tools) ? state.list.tools : []).filter((t) => t && typeof t.platform === 'string' && typeof t.label === 'string');
     return el('div', { class: 'af-controls', role: 'search' },
       input,
       select('af-category', 'Category', 'All categories', cats.map((c) => [c, categoryLabel(c)]), 'category'),
       select('af-source', 'Source', 'All sources', sources.map((s) => [s, sourceLabel(s)]), 'source'),
       select('af-tools', 'Tools it gets', 'Any tools', [['every', 'Every tool'], ['limited', 'Limited tools']], 'tools'),
-      el('button', { type: 'button', class: 'af-chip', 'aria-pressed': String(state.filters.mine), onclick: () => { state.filters.mine = !state.filters.mine; run(); }, text: 'Added by me' }));
+      worksTools.length ? select('af-works', 'Works with', 'Works with any tool', worksTools.map((t) => [t.platform, `Works with ${t.label}`]), 'works') : null);
   }
 
   function select(id, label, any, options, key) {
@@ -126,8 +144,8 @@
   function grid() {
     if (!state.results.length) {
       return el('div', { class: 'af-empty' },
-        el('p', { text: state.filters.mine && !state.added.size ? 'You haven\'t added any agents yet.' : 'No agents match. Try "react", "security" or a category.' }),
-        el('button', { type: 'button', class: 'af-btn', onclick: () => { state.query = ''; state.filters = { category: '', source: '', tools: '', mine: false }; run(); focusSearch(); }, text: 'Clear search' }));
+        el('p', { text: 'No agents match. Try "react", "security" or a category.' }),
+        el('button', { type: 'button', class: 'af-btn', onclick: () => { state.query = ''; state.filters = { category: '', source: '', tools: '', works: '', mine: false }; run(); focusSearch(); }, text: 'Clear search' }));
     }
     const list = el('ul', { class: 'af-grid', id: 'af-grid', 'aria-label': 'Agents' });
     for (const a of state.results.slice(0, state.shown)) list.append(card(a));
@@ -434,6 +452,139 @@
       $pop.querySelector('.af-pop-actions').prepend(undo);
     }
   }
+
+  // ── Added by me (PR 4) ────────────────────────────────────────────────────
+  const PLATFORM = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', copilot: 'Copilot CLI', opencode: 'OpenCode', cursor: 'Cursor' };
+  const STATE = { current: 'Current', modified: 'Changed by you', missing: 'Gone', 'update-available': 'Update available', broken: 'Can\'t be read' };
+  const KIND = { add: 'Added', adopt: 'Adopted', update: 'Updated', remove: 'Removed from all', release: 'Stopped managing', 'add-project': 'Added to a project' };
+  const when = (at) => (typeof at === 'string' ? new Date(at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '');
+
+  async function loadMine() {
+    const [m, a] = await Promise.all([api.mine().catch(() => null), api.adoptable().catch(() => null)]);
+    state.mine = m && m.ok ? m : { ok: false, error: m?.error || 'Plexiform couldn\'t read what it added.', agents: [], ops: [], backups: [] };
+    state.adoptable = a && a.ok ? a : { matches: [], userOwned: 0 };
+    await refreshStatus();
+  }
+  async function showMine() {
+    state.view = 'mine';
+    if (!state.mine) render();
+    await loadMine();
+    render();
+  }
+  async function reloadMine(note) {
+    state.note = note;
+    await loadMine();
+    render();
+    document.getElementById('af-note')?.focus();
+  }
+
+  function mineView() {
+    const m = state.mine;
+    if (!m) return el('p', { class: 'af-empty', text: 'Loading what you added…' });
+    const blocked = state.writes && !state.writes.ok;
+    const matches = state.adoptable?.matches || [];
+    const adopted = m.agents.reduce((n, a) => n + a.platforms.filter((p) => p.how === 'adopted').length, 0);
+    const wrap = el('section', { class: 'af-mine', 'aria-labelledby': 'af-tab-mine' });
+    const bar = el('div', { class: 'af-mine-bar' },
+      matches.length ? el('button', { type: 'button', class: 'af-btn primary', disabled: blocked, onclick: (e) => doAdopt(matches, e.currentTarget), text: `Adopt existing agents (${matches.length})` }) : null,
+      adopted ? el('button', { type: 'button', class: 'af-btn', disabled: blocked, onclick: (e) => doStopManaging(e.currentTarget), text: `Stop managing adopted (${adopted})` }) : null);
+    if (bar.childNodes.length) wrap.append(bar);
+    if (matches.length) wrap.append(el('p', { class: 'af-muted', text: `${plural(matches.length, 'file')} in ~/.claude/agents ${matches.length === 1 ? 'is' : 'are'} exactly a catalogue agent. Adopting lets Plexiform update ${matches.length === 1 ? 'it' : 'them'}; it backs up the folder first and changes no file now.` }));
+    if (state.note) wrap.append(noteView(state.note));
+    if (!m.ok) wrap.append(el('p', { class: 'af-empty', role: 'alert', text: m.error }));
+    else if (!m.agents.length) wrap.append(el('p', { class: 'af-empty', text: matches.length ? 'Nothing is managed by Plexiform yet.' : 'You haven\'t added any agents yet. Use + on an agent to add it.' }));
+    else wrap.append(el('ul', { class: 'af-mine-list' }, m.agents.map((a) => mineRow(a, blocked))));
+    if (m.ops.length) wrap.append(el('h2', { class: 'af-mine-h', text: 'Recent changes' }), el('ul', { class: 'af-ops' }, m.ops.map((o) => opRow(o, blocked))));
+    if (m.backups.length) wrap.append(el('h2', { class: 'af-mine-h', text: 'Backups of ~/.claude/agents' }), backupsView(m.backups));
+    return wrap;
+  }
+
+  function mineRow(a, blocked) {
+    const update = a.inCatalogue && a.platforms.some((p) => p.state === 'update-available');
+    return el('li', { class: 'af-mine-row' },
+      el('div', { class: 'af-mine-name' }, el('strong', { text: a.name }),
+        el('ul', { class: 'af-states' }, a.platforms.map((p) => el('li', { class: `st-${p.state}` },
+          el('span', { text: PLATFORM[p.platform] || p.platform }), ' · ', el('span', { text: STATE[p.state] || p.state }), p.how === 'adopted' ? el('span', { class: 'af-muted', text: ' · Adopted' }) : null)))),
+      el('div', { class: 'af-mine-actions' },
+        update ? el('button', { type: 'button', class: 'af-btn primary', disabled: blocked, onclick: (e) => confirmUpdate(a, e.currentTarget), text: 'Update' }) : null,
+        el('button', { type: 'button', class: 'af-btn', disabled: blocked, onclick: (e) => doRemove(a, e.currentTarget), text: 'Remove from all' })));
+  }
+
+  function opRow(o, blocked) {
+    const what = `${KIND[o.kind] || o.kind}${o.name ? ` ${o.name}` : ''}`;
+    return el('li', {}, el('span', {}, el('strong', { text: what }), el('span', { class: 'af-muted', text: ` · ${when(o.at)} · ${plural(o.files, 'file')}` })),
+      el('button', { type: 'button', class: 'af-btn', disabled: blocked, 'aria-label': `Undo: ${what}`, onclick: (e) => doUndoOp(o, e.currentTarget), text: 'Undo' }));
+  }
+
+  function backupsView(list) {
+    const first = list[0];
+    return el('div', { class: 'af-backups' },
+      el('ul', {}, list.map((b) => el('li', {}, el('span', { text: `${when(b.at)} · ${plural(b.files, 'entry', 'entries')}` }),
+        el('button', { type: 'button', class: 'af-btn', onclick: () => api.showBackup(b.id), text: 'Show backup' })))),
+      restoreHelp(first.restore));
+  }
+  // Never "this puts it back exactly": restoring over the live folder would
+  // merge, keeping files added since. Restore beside it, then swap by hand.
+  function restoreHelp(cmd) {
+    return el('details', { class: 'af-restore' }, el('summary', { text: 'Restore a backup by hand' }),
+      el('p', { text: 'Plexiform never restores a whole folder for you, since that would overwrite anything you changed since. To go back to a backup, run the first line to copy it next to your agents folder, check the copy, then run the second line to swap the two folders. Each line stops without changing anything if its folder is already there.' }),
+      cmd ? el('pre', { class: 'af-code' }, el('code', { text: cmd }))
+        : el('p', { class: 'af-muted', text: 'Use Show backup to find the folder, copy it next to ~/.claude/agents under a new name, check it, then swap the folders.' }),
+      el('p', { class: 'af-muted', text: 'Undo is the safer way back for one click: it restores only files that are still as Plexiform left them.' }));
+  }
+
+  function noteView(n) {
+    const box = el('div', { class: 'af-note', id: 'af-note', role: 'status', tabindex: '-1' }, el('p', { text: n.text }));
+    if (n.list?.length) box.append(el('ul', {}, n.list.map((x) => el('li', {}, el('code', { text: x.path }), x.reason ? el('span', { class: 'af-muted', text: ` ${x.reason}` }) : null))));
+    if (n.backup) box.append(el('div', { class: 'af-pop-actions' }, el('button', { type: 'button', class: 'af-btn', onclick: () => api.showBackup(n.backup), text: 'Show backup' })));
+    return box;
+  }
+  // A confirm Cancel (and the short pause after it) says nothing.
+  const quiet = (r) => r?.code === 'cancelled';
+  const errText = (r, fallback) => r?.error || fallback;
+
+  async function doAdopt(matches, btn) {
+    btn.disabled = true;
+    const names = matches.map((m) => m.name);
+    const r = await api.adopt(names).catch(() => null);
+    if (quiet(r)) { btn.disabled = false; return; }
+    if (!r?.ok) return reloadMine({ text: errText(r, 'Nothing was adopted.') });
+    const skipped = r.skipped ? ` ${plural(r.skipped, 'file')} changed in the meantime, so ${r.skipped === 1 ? 'it was' : 'they were'} left alone.` : '';
+    return reloadMine({ text: `Plexiform now manages ${plural(r.adopted, 'agent')} you installed yourself. It backed up ~/.claude/agents first; no file was changed.${skipped}`, backup: r.backup });
+  }
+  async function doStopManaging(btn) {
+    btn.disabled = true;
+    const r = await api.stopManaging().catch(() => null);
+    if (quiet(r)) { btn.disabled = false; return; }
+    return reloadMine({ text: r?.ok ? `Plexiform stopped managing ${plural(r.released, 'agent')}. The files are unchanged.` : errText(r, 'Nothing changed.') });
+  }
+  function confirmUpdate(a, opener) {
+    state.popOpener = opener;
+    showPop(a, el('p', { text: 'Plexiform replaces its own unchanged copies with the newer version from the catalogue. Copies you changed are left alone. Undo puts the old version back.' }), [
+      el('button', { type: 'button', class: 'af-btn', onclick: closePop, text: 'Cancel' }),
+      el('button', { type: 'button', class: 'af-btn primary', 'data-confirm': '', onclick: async (e) => { e.currentTarget.disabled = true; closePop(); await doUpdate(a); }, text: 'Update' })]);
+    $pop.querySelector('h2').textContent = `Update ${a.name}?`;
+  }
+  const OUT = { updated: 'Updated', current: 'Already current', skipped: 'Skipped', removed: 'Removed', released: 'Kept (you installed it)', 'already-gone': 'Already gone' };
+  const outcomes = (r) => (r.results || []).map((x) => ({ path: x.path || PLATFORM[x.platform] || x.platform, reason: `${OUT[x.status] || x.status}${x.reason ? `. ${x.reason}` : ''}` }));
+  async function doUpdate(a) {
+    const r = await api.update(a.agentId, state.catalogSha).catch(() => null);
+    return reloadMine(r?.ok ? { text: `${a.name}: ${r.results.some((x) => x.status === 'updated') ? 'updated.' : 'nothing to update.'}`, list: outcomes(r) } : { text: errText(r, 'Nothing was updated.') });
+  }
+  async function doRemove(a, btn) {
+    btn.disabled = true;
+    const r = await api.remove(a.agentId).catch(() => null);
+    if (quiet(r)) { btn.disabled = false; return; }
+    return reloadMine(r?.ok ? { text: `${a.name}: removed from all your AI tools.`, list: outcomes(r) } : { text: errText(r, 'Nothing was removed.') });
+  }
+  async function doUndoOp(o, btn) {
+    btn.disabled = true;
+    // This run's adds keep PR 3's quick Undo; anything else asks first, in main.
+    const r = await (o.kind === 'add-project' ? (o.thisRun ? api.undoProject(o.opId) : api.undoProjectOp(o.opId)) : o.thisRun && o.kind === 'add' ? api.undo(o.opId) : api.undoOp(o.opId)).catch(() => null);
+    if (quiet(r)) { btn.disabled = false; return; }
+    return reloadMine(r?.ok ? { text: r.conflicts?.length ? 'Undone, except for these:' : 'Undone.', list: r.conflicts || [] } : { text: errText(r, 'Undo didn\'t work.') });
+  }
+  api?.onShow?.(() => { void showMine(); });
 
   // ── keys ──────────────────────────────────────────────────────────────────
   document.addEventListener('keydown', (e) => {

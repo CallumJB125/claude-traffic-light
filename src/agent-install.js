@@ -19,7 +19,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, createHmac, randomUUID, timingSafeEqual } = require('node:crypto');
-const { createHomeFiles, NOFOLLOW } = require('./home-files.js');
+const { createHomeFiles, NOFOLLOW, NONBLOCK } = require('./home-files.js');
 const { TARGETS, UNSUPPORTED } = require('./agent-install/targets/index.js');
 const { parseFrontmatter, ALLOWED_KEYS } = require('./agent-frontmatter.js');
 
@@ -29,10 +29,22 @@ const BACKUPS_DIR = 'agent-backups';
 const MAX_OPS = 500;
 const MAX_ADOPT_SCAN = 2000;
 const MAX_BACKUPS = 5;
+// A backup larger than this is refused rather than half made (review PR 4 change 3).
+const MAX_BACKUP_ENTRIES = 5000;
+const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
 const BACKUP_NAME = /^claude-agents-\d{8}T\d{9}Z-[0-9a-f]{8}$/;
+// A backup being built (review #54 M4): never listed, and cleared next time.
+const STAGING = '.tmp-';
+const STAGED_NAME = /^\.tmp-claude-agents-\d{8}T\d{9}Z-[0-9a-f]{8}$/;
 const sha = (text) => createHash('sha256').update(text).digest('hex');
 const refuse = (status, error, extra = {}) => ({ ok: false, status, error, ...extra });
 const tilde = (rel) => `~/${rel}`;
+const BACKUP_REFUSED = Object.freeze({
+  'too-many': `~/.claude/agents has more than ${MAX_BACKUP_ENTRIES} entries, so Plexiform won't back it up or adopt from it.`,
+  'too-big': 'The files in ~/.claude/agents add up to more than 64 MB, so Plexiform won\'t back it up or adopt from it.',
+  special: '~/.claude/agents holds something that isn\'t a file, folder or link (such as a pipe), so Plexiform won\'t back it up or adopt from it.',
+  default: 'Could not back up ~/.claude/agents first, so nothing was adopted.',
+});
 const UNDO_KINDS = new Set(['add', 'adopt', 'update', 'remove', 'release']);
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
@@ -72,7 +84,7 @@ function ledgerValidator(targets, home) {
     && hexOrNull(c.before) && hexOrNull(c.after) && (c.prevFileSha256 === undefined || HEX64.test(c.prevFileSha256))
     && (c.owned === undefined || ownedOk(keyOfRel(c.platform, c.rel), c.owned));
   const opOk = (op) => isObject(op) && typeof op.id === 'string' && /^[\w-]{1,64}$/.test(op.id) && OP_KINDS.has(op.kind)
-    && Array.isArray(op.changes) && op.changes.length <= 64 && op.changes.every((c) => changeOk(op.kind, c))
+    && Array.isArray(op.changes) && op.changes.length <= maxChanges(op.kind) && op.changes.every((c) => changeOk(op.kind, c))
     && (op.kind !== 'add-project' || (op.changes.length === 1 && projectOk(op.project)));
   return {
     ownedOk, opOk, projectOk,
@@ -84,6 +96,10 @@ function ledgerValidator(targets, home) {
   };
 }
 const keyOfRel = (platform, rel) => `${platform}:${rel}`;
+// An add, update or remove touches one file per platform. Adopt and its
+// release cover a whole ~/.claude/agents folder, so a cap of 64 there dropped
+// the op on the next read and its Undo with it (PR 4 fixture: 122 matches).
+const maxChanges = (kind) => (kind === 'adopt' || kind === 'release' ? MAX_ADOPT_SCAN : 64);
 
 // Every owned entry and op carries an HMAC-SHA256 under a per-install key that
 // main keeps sealed by safeStorage (src/agent-install-key.js), so a program
@@ -111,7 +127,7 @@ function verifiedLedger(l, key) {
   return { ...l, owned, ops: l.ops.filter((op) => macOk(key, 'op', '', op)).map(withoutMac) };
 }
 
-function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, now = Date.now, targets = TARGETS, enableCursorProject = false, failAfterWrites = null } = {}) {
+function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, now = Date.now, targets = TARGETS, enableCursorProject = false, failAfterWrites = null, platform = process.platform } = {}) {
   if (typeof home !== 'string' || !path.isAbsolute(home) || typeof dataRoot !== 'string' || !path.isAbsolute(dataRoot)) throw new Error('agent installs need an absolute home and data folder');
   if (!catalog?.ok) throw new Error('agent installs need a verified catalogue');
   if (!keyOk(ledgerKey)) throw new Error('agent installs need a ledger key of at least 32 bytes');
@@ -186,7 +202,7 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
   }
 
   function current(rel) {
-    try { const r = files.readTarget(rel); return { ok: true, text: r.text, sha: r.text == null ? null : sha(r.text) }; } catch (e) { return { ok: false, reason: e.message === 'link' ? 'The folder or file is a link, so Plexiform leaves it alone.' : 'Not a regular file Plexiform can change safely.' }; }
+    try { const r = files.readTarget(rel); return { ok: true, text: r.text, sha: r.text == null ? null : sha(r.text), bytesSha: r.bytesSha256 ?? null, utf8: r.utf8 !== false }; } catch (e) { return { ok: false, reason: e.message === 'link' ? 'The folder or file is a link, so Plexiform leaves it alone.' : 'Not a regular file Plexiform can change safely.' }; }
   }
   function write(rel, text, opts) {
     if (failAfterWrites !== null && writesDone >= failAfterWrites) throw new Error('simulated write failure');
@@ -317,6 +333,20 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     }
   }
 
+  // Puts back what undo() changed, newest first, only where the file is still
+  // exactly what undo left (null: undo removed it, so it must still be gone).
+  function undoSwaps(done) {
+    for (const d of [...done].reverse()) {
+      const cur = current(d.rel);
+      if (!cur.ok) continue;
+      try {
+        if (d.after === null ? cur.text != null : cur.sha !== d.after) continue;
+        if (d.before === null) files.removeTarget(d.rel);
+        else files.writeTarget(d.rel, original(d.before, d.platform), 0o644);
+      } catch { /* left as it is; the file shows as modified */ }
+    }
+  }
+
   // ── update an owned copy to the current catalogue version ─────────────────
   function update(agentId) {
     const agent = catalog.get(agentId);
@@ -395,11 +425,24 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
 
   // ── adoption of agents already in ~/.claude/agents ───────────────────────
   const CLAUDE_DIR = '.claude/agents';
+  // ~/.claude and ~/.claude/agents themselves: 'ok' (real folders),
+  // 'missing', or 'bad' (a link or not a folder). Checked directly, so an
+  // entry of yours inside, whatever its name, never decides it.
+  function agentsFolder() {
+    let cur = HOME;
+    for (const part of CLAUDE_DIR.split('/')) {
+      cur = path.join(cur, part);
+      let st;
+      try { st = fsApi.lstatSync(cur); } catch (e) { if (e.code === 'ENOENT') return 'missing'; return 'bad'; }
+      if (st.isSymbolicLink() || !st.isDirectory()) return 'bad';
+    }
+    return 'ok';
+  }
   /** Files in ~/.claude/agents whose bytes match a catalogue entry exactly. Reads only. */
   function adoptable() {
     const ledger = readLedger();
     const dir = path.join(HOME, CLAUDE_DIR);
-    try { files.locate(`${CLAUDE_DIR}/x`); } catch { return { ok: true, matches: [], userOwned: 0, reason: 'The agents folder is a link or not a folder, so Plexiform leaves it alone.' }; }
+    if (agentsFolder() === 'bad') return { ok: true, matches: [], userOwned: 0, reason: 'The agents folder is a link or not a folder, so Plexiform leaves it alone.' };
     let names = [];
     try { names = fsApi.readdirSync(dir).filter((n) => n.endsWith('.md') && FILE_NAME.test(n) && !n.includes('..')).sort().slice(0, MAX_ADOPT_SCAN); } catch { return { ok: true, matches: [], userOwned: 0 }; }
     const byHash = new Map();
@@ -411,7 +454,9 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
       if (ledger.owned[keyOf('claude', rel)]) continue;
       const cur = current(rel);
       if (!cur.ok || cur.text == null) continue;
-      const a = byHash.get(cur.sha);
+      // Matched on the file's bytes, and only if they are valid UTF-8, so
+      // the kept original and an undo put back exactly those bytes (change 5).
+      const a = cur.utf8 && cur.bytesSha === cur.sha ? byHash.get(cur.bytesSha) : null;
       if (a) matches.push({ rel, path: tilde(rel), agentId: a.id, name: a.name, sha: cur.sha });
       else userOwned++;
     }
@@ -433,36 +478,207 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     walk(dir, '');
     return out.join('\n');
   }
+  // Backups by name, oldest first. A name dated after now (a clock once set
+  // wrong, or planted) is never reused, counted or pruned (review PR 4 P1).
   function backupsIn(root) {
-    return fsApi.readdirSync(root).filter((n) => BACKUP_NAME.test(n) && fsApi.lstatSync(path.join(root, n)).isDirectory()).sort();
+    const nowName = `claude-agents-${stamp(now()).replace(/Z$/, '999Z')}`;
+    return fsApi.readdirSync(root).filter((n) => BACKUP_NAME.test(n) && n.slice(0, nowName.length) <= nowName && fsApi.lstatSync(path.join(root, n)).isDirectory()).sort();
   }
 
   // Copies ~/.claude/agents to a dated folder in the data folder, keeping links
   // as links, and checks every regular file's bytes in the copy. An unchanged
   // folder reuses its newest backup, and only the newest MAX_BACKUPS are kept.
-  function backupClaudeAgents() {
+  // keep: backup names that must survive pruning (those of adopts not undone).
+  function backupClaudeAgents(keep = new Set()) {
     const src = path.join(HOME, CLAUDE_DIR);
     const root = path.join(DATA, BACKUPS_DIR);
+    // ~/.claude and ~/.claude/agents must be real folders, and the same folder
+    // after the copy as before it: one swapped for a link mid-copy would make
+    // the "backup" a copy of somewhere else (review PR 4 P2).
+    const pin = () => {
+      const c = fsApi.lstatSync(path.join(HOME, '.claude')), a = fsApi.lstatSync(src);
+      if (c.isSymbolicLink() || !c.isDirectory() || a.isSymbolicLink() || !a.isDirectory()) throw new Error('link');
+      return `${a.dev}:${a.ino}`;
+    };
+    const pinned = pin();
+    // The data folder as a link would put the backup somewhere else (change 8).
+    if (fsApi.lstatSync(DATA, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error('link');
     fsApi.mkdirSync(root, { recursive: true, mode: 0o700 });
-    if (fsApi.lstatSync(root).isSymbolicLink()) throw new Error('link');
+    if (!realDir(root)) throw new Error('link');
+    for (const n of fsApi.readdirSync(root)) {
+      if (STAGED_NAME.test(n)) { try { removeBackup(path.join(root, n)); } catch { /* next time */ } }
+    }
     const newest = backupsIn(root).at(-1);
-    if (newest && fingerprint(path.join(root, newest)) === fingerprint(src)) return path.join(root, newest);
+    if (newest && fingerprint(path.join(root, newest)) === fingerprint(src) && pin() === pinned) return path.join(root, newest);
+    // Counted before anything is copied: too many entries, too many bytes, or
+    // anything but files, folders and links (a FIFO, a socket) is refused.
+    // A hard-linked file is copied as its bytes into the 0700 backup, which
+    // is fine: the backup is a snapshot, never written back by Plexiform.
+    let entries = 0, bytes = 0;
+    const scan = (d) => {
+      for (const n of fsApi.readdirSync(d)) {
+        const st = fsApi.lstatSync(path.join(d, n));
+        if (++entries > MAX_BACKUP_ENTRIES) throw Object.assign(new Error('too many'), { code: 'too-many' });
+        if (st.isSymbolicLink()) continue;
+        if (st.isDirectory()) scan(path.join(d, n));
+        else if (st.isFile()) { if ((bytes += st.size) > MAX_BACKUP_BYTES) throw Object.assign(new Error('too big'), { code: 'too-big' }); }
+        else throw Object.assign(new Error('special'), { code: 'special' });
+      }
+    };
+    scan(src);
     const ms = String(new Date(now()).getUTCMilliseconds()).padStart(3, '0');
-    const dest = path.join(root, `claude-agents-${stamp(now()).replace(/Z$/, `${ms}Z`)}-${randomUUID().slice(0, 8)}`);
-    fsApi.cpSync(src, dest, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true, verbatimSymlinks: true, dereference: false });
+    const name = `claude-agents-${stamp(now()).replace(/Z$/, `${ms}Z`)}-${randomUUID().slice(0, 8)}`;
+    // Built under a staging name BACKUP_NAME rejects, and renamed to its own
+    // name only once it's verified: a crash part way leaves a folder that is
+    // never listed, reused or offered, and the next backup clears it (M4).
+    const dest = path.join(root, `${STAGING}${name}`), final = path.join(root, name);
+    // Plexiform makes the folder itself (0700, so nothing needs a chmod that
+    // could follow a link) and copies the entries into it.
+    fsApi.mkdirSync(dest, { mode: 0o700 });
     const walk = (a, b) => {
+      // The same names on both sides: a copy with an extra entry is not the folder.
+      if (fsApi.readdirSync(a).sort().join('\0') !== fsApi.readdirSync(b).sort().join('\0')) throw new Error('backup mismatch');
       for (const e of fsApi.readdirSync(a, { withFileTypes: true })) {
         const pa = path.join(a, e.name), pb = path.join(b, e.name);
         const sa = fsApi.lstatSync(pa), sb = fsApi.lstatSync(pb);
+        if ((sa.mode & 0o7777) !== (sb.mode & 0o7777) && !sa.isSymbolicLink()) throw new Error('backup mismatch');
         if (sa.isSymbolicLink()) { if (!sb.isSymbolicLink() || fsApi.readlinkSync(pa) !== fsApi.readlinkSync(pb)) throw new Error('backup mismatch'); }
-        else if (sa.isDirectory()) walk(pa, pb);
-        else if (sa.isFile() && sha(fsApi.readFileSync(pa)) !== sha(fsApi.readFileSync(pb))) throw new Error('backup mismatch');
+        else if (sa.isDirectory()) { if (sb.isSymbolicLink() || !sb.isDirectory()) throw new Error('backup mismatch'); walk(pa, pb); }
+        else if (sa.isFile()) { if (sb.isSymbolicLink() || !sb.isFile() || sha(fsApi.readFileSync(pa)) !== sha(fsApi.readFileSync(pb))) throw new Error('backup mismatch'); }
       }
     };
-    walk(src, dest);
-    fsApi.chmodSync(dest, 0o700);
-    for (const old of backupsIn(root).slice(0, -MAX_BACKUPS)) fsApi.rmSync(path.join(root, old), { recursive: true, force: true });
-    return dest;
+    // The copy has new times on everything (and a folder's change as it
+    // fills); set every entry's from the source, deepest first, so the
+    // copy is the folder exactly (scripts/agents-fingerprint.js). Like
+    // dirModes, this walks the backup's own side and enters only entries
+    // lstat shows are real folders there, so lutimes never reaches through a
+    // copied link. A source entry of another kind than its copy (a link
+    // swapped for a folder after the verify) is refused (review #54 M3).
+    const kind = (st) => (st.isSymbolicLink() ? 'L' : st.isDirectory() ? 'D' : st.isFile() ? 'F' : 'O');
+    const times = (a, b) => {
+      for (const n of fsApi.readdirSync(b).sort()) {
+        const pa = path.join(a, n), pb = path.join(b, n), sb = fsApi.lstatSync(pb), sa = fsApi.lstatSync(pa);
+        if (kind(sa) !== kind(sb)) throw new Error('backup mismatch');
+        if (kind(sb) === 'D') times(pa, pb);
+        fsApi.lutimesSync(pb, sa.atimeMs / 1000, sa.mtimeMs / 1000);
+      }
+    };
+    // The copy makes every folder 0700, so each folder in the backup is set
+    // to its source's mode, deepest first (review #54 M1).
+    // The walk goes down the backup's side: it enters only folders lstat
+    // shows are real folders in the backup, so every part of each path is a
+    // folder Plexiform made inside its 0700 backup, never a copied link
+    // (M2). The mode comes from the matching source entry only when that is
+    // a real folder too; otherwise it's skipped, and the walk below refuses.
+    const dirModes = (a, b) => {
+      for (const n of fsApi.readdirSync(b).sort()) {
+        const pa = path.join(a, n), pb = path.join(b, n), sb = fsApi.lstatSync(pb);
+        if (!sb.isDirectory() || sb.isSymbolicLink()) continue;
+        let sa = null;
+        try { sa = fsApi.lstatSync(pa); } catch { /* gone: the walk refuses */ }
+        if (!sa || !sa.isDirectory() || sa.isSymbolicLink()) continue;
+        dirModes(pa, pb);
+        setDirMode(dest, pb, sa.mode & 0o7777);
+      }
+    };
+    // Plexiform's own copy, not cpSync: Node's native cpSync aborts the
+    // process when a folder vanishes mid-copy (M4). Every entry is lstat'd;
+    // each new entry is made by Plexiform inside the backup, never over one
+    // that exists: folders 0700 (dirModes sets them later), links as links,
+    // files read with O_NOFOLLOW|O_NONBLOCK (only a regular file, within the
+    // size cap) and written with O_EXCL|O_NOFOLLOW. Anything else, or any
+    // change under it, is an ordinary error and the backup is refused.
+    let copied = 0;
+    const copyFile = (a, b) => {
+      const fi = fsApi.openSync(a, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+      try {
+        const st = fsApi.fstatSync(fi);
+        if (!st.isFile()) throw Object.assign(new Error('special'), { code: 'special' });
+        if ((copied += st.size) > MAX_BACKUP_BYTES) throw Object.assign(new Error('too big'), { code: 'too-big' });
+        const fo = fsApi.openSync(b, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | NOFOLLOW, 0o600);
+        try {
+          const buf = Buffer.alloc(Math.min(st.size, 1 << 20) || 1);
+          let at = 0;
+          while (at < st.size) {
+            const n = fsApi.readSync(fi, buf, 0, Math.min(buf.length, st.size - at), at);
+            if (n < 1) break;
+            let w = 0;
+            while (w < n) w += fsApi.writeSync(fo, buf, w, n - w, at + w);
+            at += n;
+          }
+          fsApi.fchmodSync(fo, st.mode & 0o7777);
+        } finally { fsApi.closeSync(fo); }
+      } finally { fsApi.closeSync(fi); }
+    };
+    const copyTree = (a, b) => {
+      for (const n of fsApi.readdirSync(a).sort()) {
+        const pa = path.join(a, n), pb = path.join(b, n), st = fsApi.lstatSync(pa);
+        if (st.isSymbolicLink()) fsApi.symlinkSync(fsApi.readlinkSync(pa), pb);
+        else if (st.isDirectory()) { fsApi.mkdirSync(pb, { mode: 0o700 }); copyTree(pa, pb); }
+        else if (st.isFile()) copyFile(pa, pb);
+        else throw Object.assign(new Error('special'), { code: 'special' });
+      }
+    };
+    try {
+      copyTree(src, dest);
+      if (pin() !== pinned || !realDir(dest)) throw new Error('moved');
+      dirModes(src, dest);
+      walk(src, dest);
+      times(src, dest);
+      // Again, after the times: anything that changed during the copy is
+      // refused rather than recorded as a backup of the folder (M3).
+      walk(src, dest);
+      if (pin() !== pinned) throw new Error('moved');
+      if (fsApi.lstatSync(final, { throwIfNoEntry: false })) throw new Error('name taken');
+      fsApi.renameSync(dest, final);
+    } catch (err) {
+      try { removeBackup(dest); } catch { /* left; never listed as reused (fingerprint differs) */ }
+      throw err;
+    }
+    // A backup that can't be pruned is left for next time; the adopt goes on.
+    try { prune(root, new Set([...keep, name])); } catch { /* kept */ }
+    if (!realDir(final)) throw new Error('backup gone');
+    return final;
+  }
+  // chmod without following a link: the path must open as a folder with
+  // O_NOFOLLOW, be the same folder lstat sees, and sit inside `within`.
+  function setDirMode(within, p, mode) {
+    if (!p.startsWith(within + path.sep)) throw new Error('outside the backup');
+    const st = fsApi.lstatSync(p);
+    if (st.isSymbolicLink() || !st.isDirectory()) throw new Error('not a folder');
+    const fd = fsApi.openSync(p, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | NOFOLLOW);
+    try {
+      const f = fsApi.fstatSync(fd);
+      if (!f.isDirectory() || f.dev !== st.dev || f.ino !== st.ino) throw new Error('moved');
+      fsApi.fchmodSync(fd, mode);
+    } finally { fsApi.closeSync(fd); }
+  }
+  // A backup can hold 0555 folders, which block deleting what's in them:
+  // u+w on each real folder inside it first (links never followed).
+  function removeBackup(dir) {
+    if (!realDir(dir)) return;
+    const open = (d) => {
+      for (const n of fsApi.readdirSync(d)) {
+        const p = path.join(d, n), st = fsApi.lstatSync(p);
+        if (st.isDirectory() && !st.isSymbolicLink()) { if (!(st.mode & 0o200)) setDirMode(dir, p, (st.mode & 0o7777) | 0o700); open(p); }
+      }
+    };
+    open(dir);
+    fsApi.rmSync(dir, { recursive: true, force: true });
+  }
+  function realDir(p) { try { const st = fsApi.lstatSync(p); return st.isDirectory() && !st.isSymbolicLink(); } catch { return false; } }
+  // Keeps at most MAX_BACKUPS, never deleting the oldest (the folder before
+  // Plexiform managed anything), the current one, or any in `keep`.
+  function prune(root, keep) {
+    const all = backupsIn(root);
+    if (all.length) keep.add(all[0]);
+    let extra = all.length - MAX_BACKUPS;
+    for (const n of all) {
+      if (extra <= 0) break;
+      if (keep.has(n)) continue;
+      try { removeBackup(path.join(root, n)); } catch { /* left for next time */ }
+      extra--;
+    }
   }
 
   /**
@@ -473,30 +689,112 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     const found = adoptable();
     const chosen = rels === null ? found.matches : found.matches.filter((m) => Array.isArray(rels) && rels.includes(m.rel));
     if (!chosen.length) return { ok: true, opId: null, adopted: [], backup: null };
-    let backup;
-    try { backup = backupClaudeAgents(); } catch { return refuse('backup', 'Could not back up ~/.claude/agents first, so nothing was adopted.'); }
     const ledger = readLedger();
+    const inUse = new Set(ledger.ops.filter((o) => o.kind === 'adopt' && !o.undone && typeof o.backup === 'string').map((o) => path.basename(o.backup)));
+    let backup;
+    try { backup = backupClaudeAgents(inUse); } catch (e) { return refuse('backup', BACKUP_REFUSED[e.code] ?? BACKUP_REFUSED.default); }
     const at = new Date(now()).toISOString();
     const changes = [];
     for (const m of chosen) {
       const cur = current(m.rel);
-      if (!cur.ok || cur.sha !== m.sha) continue;
+      if (!cur.ok || cur.sha !== m.sha || cur.bytesSha !== m.sha || !cur.utf8) continue;
+      // "Backed up first" is literal: the backup's copy of this file has
+      // exactly the bytes being adopted, or the file is skipped (change 3).
+      if (!backedUp(backup, m.rel, m.sha)) continue;
       const agent = catalog.get(m.agentId);
       keepOriginal(cur.text);
       ledger.owned[keyOf('claude', m.rel)] = { platform: 'claude', rel: m.rel, agentId: m.agentId, how: 'adopted', sha: m.sha, original: m.sha, fileSha256: agent.fileSha256, since: at };
       changes.push({ platform: 'claude', rel: m.rel, before: m.sha, after: m.sha });
     }
+    // Every file changed since it was listed: nothing adopted, so no op.
+    if (!changes.length) return { ok: true, opId: null, adopted: [], backup: null };
     const op = { id: randomUUID(), kind: 'adopt', at, backup: path.relative(DATA, backup), changes };
     ledger.ops.push(op);
     writeLedger(ledger);
-    return { ok: true, opId: op.id, adopted: changes.map((c) => tilde(c.rel)), backup };
+    return { ok: true, opId: op.id, adopted: changes.map((c) => tilde(c.rel)), backup: path.basename(backup) };
+  }
+  function backedUp(backup, rel, want) {
+    try {
+      const p = path.join(backup, path.basename(rel)), st = fsApi.lstatSync(p);
+      return st.isFile() && !st.isSymbolicLink() && sha(fsApi.readFileSync(p)) === want;
+    } catch { return false; }
+  }
+
+  // ── backups, for main only ────────────────────────────────────────────────
+  /** The backups Plexiform made: id (the folder name), when, how many entries. */
+  function backups() {
+    const root = path.join(DATA, BACKUPS_DIR);
+    try { if (!fsApi.lstatSync(root).isDirectory() || fsApi.lstatSync(root).isSymbolicLink()) return []; } catch { return []; }
+    return backupsIn(root).map((id) => {
+      const m = /^claude-agents-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})Z/.exec(id);
+      let files = 0; try { files = fsApi.readdirSync(path.join(root, id)).length; } catch { /* counted as 0 */ }
+      return { id, at: m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}.${m[7]}Z` : null, files };
+    });
+  }
+  /** The absolute folder of a listed backup, or null: a real folder under a real backup root. */
+  function backupPath(id) {
+    if (typeof id !== 'string' || !BACKUP_NAME.test(id)) return null;
+    const root = path.join(DATA, BACKUPS_DIR);
+    try {
+      const r = fsApi.lstatSync(root), d = fsApi.lstatSync(path.join(root, id));
+      if (r.isSymbolicLink() || !r.isDirectory() || d.isSymbolicLink() || !d.isDirectory()) return null;
+    } catch { return null; }
+    return backupsIn(root).includes(id) ? path.join(root, id) : null;
+  }
+  /**
+   * The manual restore, in $HOME form, or null when the data folder isn't
+   * under home or there's no copy tool we know (then only "Show backup" is
+   * offered). Two lines: copy the backup into a new folder, then (after you
+   * check it) swap. Copying into the live folder would merge, keeping files
+   * added since, and write through a link if agents became one (change 4).
+   * Both names carry the backup's stamp, and each line stops, changing
+   * nothing, if its folder is already there (review #54 L2).
+   */
+  function restoreCommand(id) {
+    const dir = backupPath(id);
+    if (!dir || !dir.startsWith(HOME + path.sep)) return null;
+    const rel = path.relative(HOME, dir).split(path.sep).join('/');
+    if (!/^[A-Za-z0-9._/ -]+$/.test(rel)) return null;
+    const copy = platform === 'darwin' ? 'ditto' : platform === 'linux' ? 'cp -Rp' : null;
+    if (!copy) return null;
+    const tag = id.replace(/^claude-agents-/, '');
+    const R = `.claude/agents-restored-${tag}`, O = `.claude/agents-old-${tag}`;
+    return [
+      `if [ -e "$HOME/${R}" ] || [ -L "$HOME/${R}" ]; then echo "~/${R} already exists, so nothing was copied."; else ${copy} "$HOME/${rel}" "$HOME/${R}"; fi`,
+      `if [ -e "$HOME/${O}" ] || [ -L "$HOME/${O}" ] || [ ! -d "$HOME/${R}" ]; then echo "~/${O} already exists or there's nothing to swap in, so nothing was moved."; else mv "$HOME/.claude/agents" "$HOME/${O}" && mv "$HOME/${R}" "$HOME/.claude/agents"; fi`,
+    ].join('\n');
+  }
+  /**
+   * What restoring a backup by hand would change in ~/.claude/agents, per
+   * top-level name: 'same', 'differs', 'gone-now' (in the backup only) or
+   * 'added-since' (only in the folder now). Names and states only, never
+   * bytes; the folder is read only through readTarget (no links, nlink 1).
+   */
+  function restoreBackupPlan(id) {
+    const dir = backupPath(id);
+    if (!dir) return refuse('unavailable', 'That backup is gone.');
+    const inBackup = new Map();
+    for (const n of fsApi.readdirSync(dir).sort()) {
+      const st = fsApi.lstatSync(path.join(dir, n));
+      inBackup.set(n, st.isFile() && !st.isSymbolicLink() ? sha(fsApi.readFileSync(path.join(dir, n))) : null);
+    }
+    let here = [];
+    try { if (agentsFolder() === 'ok') here = fsApi.readdirSync(path.join(HOME, CLAUDE_DIR)).sort(); } catch { here = []; }
+    const out = [];
+    for (const [n, h] of inBackup) {
+      if (!here.includes(n)) { out.push({ path: tilde(`${CLAUDE_DIR}/${n}`), state: 'gone-now' }); continue; }
+      let cur; try { cur = files.readTarget(`${CLAUDE_DIR}/${n}`); } catch { cur = null; }
+      out.push({ path: tilde(`${CLAUDE_DIR}/${n}`), state: h !== null && cur?.text != null && cur.bytesSha256 === h ? 'same' : 'differs' });
+    }
+    for (const n of here) if (!inBackup.has(n)) out.push({ path: tilde(`${CLAUDE_DIR}/${n}`), state: 'added-since' });
+    return { ok: true, items: out };
   }
 
   /** Releases every adopted file: the files stay exactly as they are. */
   function stopManaging() {
     const ledger = readLedger();
     const changes = [];
-    for (const [k, o] of Object.entries(ledger.owned)) if (o.how === 'adopted') { delete ledger.owned[k]; changes.push({ platform: o.platform, rel: o.rel, before: o.sha, after: o.sha, owned: o }); }
+    for (const [k, o] of Object.entries(ledger.owned)) if (o.how === 'adopted' && changes.length < MAX_ADOPT_SCAN) { delete ledger.owned[k]; changes.push({ platform: o.platform, rel: o.rel, before: o.sha, after: o.sha, owned: o }); }
     if (!changes.length) return { ok: true, opId: null, released: [] };
     const op = { id: randomUUID(), kind: 'release', at: new Date(now()).toISOString(), changes };
     ledger.ops.push(op);
@@ -514,6 +812,10 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     // refused before anything is marked undone, so it stays undoable.
     if (!UNDO_KINDS.has(op.kind)) return refuse('unavailable', 'Nothing to undo for this click.');
     const restored = [], conflicts = [];
+    // Every file this undo changes, so a failed ledger save can put them back
+    // (review PR 4 change 6): prev is the kept copy of what was there.
+    const done = [];
+    const swap = (c, next, fn) => { const cur = current(c.rel); const prev = cur.text == null ? null : keepOriginal(cur.text); fn(); done.push({ platform: c.platform, rel: c.rel, before: prev, after: next }); };
     for (const c of op.changes) {
       const k = keyOf(c.platform, c.rel);
       const cur = current(c.rel);
@@ -527,7 +829,7 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
           if (cur.text == null) { if (ours) delete ledger.owned[k]; restored.push(label); continue; }
           if (!ours) { conflicts.push({ path: label, reason: 'Plexiform no longer manages this file, so it is kept.' }); continue; }
           if (cur.sha !== c.after) { conflicts.push({ path: label, reason: 'Changed since it was added, so it is kept.' }); continue; }
-          files.removeTarget(c.rel);
+          swap(c, null, () => files.removeTarget(c.rel));
           delete ledger.owned[k];
         } else if (op.kind === 'adopt') {
           // Never deletes: puts the original bytes back if Plexiform changed them.
@@ -537,18 +839,18 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
             // Only bytes that were a catalogue agent can have been adopted: this
             // catalogue's, or the original the adoption itself recorded (signed, R1b).
             if (!catalogHashes.has(c.before) && !(o?.how === 'adopted' && o.original === c.before)) { conflicts.push({ path: label, reason: 'The kept copy is not a catalogue agent, so it is not put back.' }); delete ledger.owned[k]; continue; }
-            write(c.rel, original(c.before, c.platform));
+            swap(c, c.before, () => write(c.rel, original(c.before, c.platform)));
           }
           delete ledger.owned[k];
         } else if (op.kind === 'update') {
           if (!o || o.sha !== c.after) { conflicts.push({ path: label, reason: 'Plexiform no longer manages this file as updated, so it is kept.' }); continue; }
           if (cur.sha !== c.after) { conflicts.push({ path: label, reason: 'Changed since the update, so it is kept.' }); continue; }
-          write(c.rel, original(c.before, c.platform));
+          swap(c, c.before, () => write(c.rel, original(c.before, c.platform)));
           Object.assign(o, { sha: c.before, fileSha256: c.prevFileSha256 });
         } else if (op.kind === 'remove' || op.kind === 'release') {
           if (c.after === null && c.before !== null) {
             if (cur.text != null) { conflicts.push({ path: label, reason: 'A file is there again, so it is kept.' }); continue; }
-            write(c.rel, original(c.before, c.platform), { exclusive: true });
+            swap(c, c.before, () => write(c.rel, original(c.before, c.platform), { exclusive: true }));
           } else if (c.before !== null && cur.sha !== c.before) { conflicts.push({ path: label, reason: 'Changed since, so Plexiform does not manage it again.' }); continue; }
           if (c.owned && (c.before !== null || c.after !== null)) ledger.owned[k] = c.owned;
         }
@@ -556,7 +858,10 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
       } catch { conflicts.push({ path: label, reason: 'Could not be changed safely.' }); }
     }
     op.undone = new Date(now()).toISOString();
-    writeLedger(ledger);
+    try { writeLedger(ledger); } catch {
+      undoSwaps(done);
+      return refuse('ledger', 'Couldn\'t save Plexiform\'s record of added agents, so the undo was put back.');
+    }
     return { ok: true, restored, conflicts };
   }
 
@@ -620,8 +925,26 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     return { ok: true, restored: [path.join(op.project, c.rel)], conflicts: [] };
   }
 
-  return { platformsFor, preview, add, update, remove, adoptable, adopt, stopManaging, undo, status, addToProject, undoProject, ledgerPath };
+  return { platformsFor, preview, add, update, remove, adoptable, adopt, stopManaging, undo, status, addToProject, undoProject, backups, backupPath, restoreBackupPlan, restoreCommand, ledgerPath };
 }
+
+/**
+ * The user-scope platforms an agent can be added to at all: its settings pass
+ * frontmatterAllowed and the platform's renderer accepts it. Pure: reads no
+ * file, so the page can filter by it before anything is installed.
+ */
+function worksWith(agent, targets = TARGETS) {
+  if (!frontmatterAllowed(agent.raw)) return [];
+  const out = [];
+  for (const t of targets) {
+    if (t.id === 'cursor-project' || !t.verified) continue;
+    try { if (t.render(agent, {}).ok) out.push(t.id); } catch { /* a renderer that throws counts as "no" */ }
+  }
+  return out;
+}
+
+// Health's fix button opens Find agents on Added by me (main.js health-fix).
+const REVIEW = Object.freeze({ fix: 'agents-review', fixLabel: 'Review on Find agents' });
 
 // For Health: what the ledger says Plexiform manages, checked against disk.
 // Needs no catalogue. null when Find agents was never used.
@@ -632,11 +955,11 @@ function ledgerHealth({ home, dataRoot, ledgerKey, fsApi = fs }) {
   let ledger;
   try {
     const st = fsApi.lstatSync(file);
-    if (st.isSymbolicLink() || !st.isFile()) return { status: 'fail', detail: 'Plexiform\'s record of added agents is not a regular file.', next: 'Review on Find agents.' };
+    if (st.isSymbolicLink() || !st.isFile()) return { status: 'fail', detail: 'Plexiform\'s record of added agents is not a regular file.', next: 'Review on Find agents.', ...REVIEW };
     ledger = JSON.parse(fsApi.readFileSync(file, 'utf8'));
   } catch (e) {
     if (e.code === 'ENOENT') return null;
-    return { status: 'fail', detail: 'Plexiform\'s record of added agents can\'t be read.', next: 'Review on Find agents.' };
+    return { status: 'fail', detail: 'Plexiform\'s record of added agents can\'t be read.', next: 'Review on Find agents.', ...REVIEW };
   }
   const v = ledgerValidator(TARGETS, home);
   const owned = Object.entries(isObject(ledger?.owned) ? ledger.owned : {}).filter(([k, o]) => macOk(ledgerKey, 'owned', k, o) && v.ownedOk(k, withoutMac(o))).map(([, o]) => o);
@@ -651,7 +974,7 @@ function ledgerHealth({ home, dataRoot, ledgerKey, fsApi = fs }) {
   if (modified) parts.push(`${modified} changed outside Plexiform`);
   if (missing) parts.push(`${missing} missing`);
   if (broken) parts.push(`${broken} now a link or not a regular file`);
-  return { status: broken ? 'fail' : modified || missing ? 'warn' : 'ok', detail: `${parts.join('; ')}.`, next: modified || missing || broken ? 'Review on Find agents.' : undefined };
+  return { status: broken ? 'fail' : modified || missing ? 'warn' : 'ok', detail: `${parts.join('; ')}.`, next: modified || missing || broken ? 'Review on Find agents.' : undefined, ...(modified || missing || broken ? REVIEW : {}) };
 }
 
-module.exports = { createAgentInstaller, ledgerHealth, signLedger, LEDGER_FILE };
+module.exports = { createAgentInstaller, ledgerHealth, signLedger, worksWith, LEDGER_FILE };

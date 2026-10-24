@@ -9,6 +9,7 @@
 // and then renamed into place (or, with `exclusive`, linked into place so an
 // existing file is never replaced).
 const fs = require('node:fs');
+const { createHash } = require('node:crypto');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
@@ -49,7 +50,10 @@ function createHomeFiles({ home, fsApi = fs, maxBytes = 16 * 1024 * 1024 }) {
       const buf = Buffer.alloc(st.size);
       let at = 0;
       while (at < buf.length) { const n = fsApi.readSync(fd, buf, at, buf.length - at, at); if (n < 1) break; at += n; }
-      return { full, text: buf.subarray(0, at).toString('utf8'), mode: st.mode & 0o777 };
+      const bytes = buf.subarray(0, at), text = bytes.toString('utf8');
+      // utf8: false when the bytes don't survive decoding (invalid UTF-8 reads
+      // as U+FFFD), so a hash of `text` would not be a hash of the file.
+      return { full, text, mode: st.mode & 0o777, bytesSha256: createHash('sha256').update(bytes).digest('hex'), utf8: Buffer.from(text, 'utf8').equals(bytes) };
     } finally { if (fd !== undefined) fsApi.closeSync(fd); }
   }
   function writeTarget(file, text, mode, { exclusive = false } = {}) {

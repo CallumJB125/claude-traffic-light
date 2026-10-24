@@ -35,6 +35,7 @@ const FIXES = {
   'open-burst-console': 'Open Burst console',
   'burst-console-restart': 'Restart Burst',
   'burst-console-diagnose': 'Diagnose Burst',
+  'agents-review': 'Review on Find agents',
 };
 // Claude Code reads hooks once, when a session starts.
 const RESTART_SESSIONS = 'Then restart your Claude sessions.';

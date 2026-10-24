@@ -27,15 +27,42 @@ const TARGETS = {
   ],
 };
 
+// "Added by me" with an adopted agent, an update available, a changed copy,
+// earlier clicks and a backup; and three agents adoptable. Answered by the
+// spec, so it never adopts or makes a key; the real handlers are in
+// test/agents-find-main.test.js and test/agent-adopt-safety.test.js.
+const MINE = {
+  ok: true, demo: false,
+  agents: [
+    { agentId: 'agency/frontend-developer', name: 'Frontend Developer', inCatalogue: true, platforms: [{ platform: 'claude', state: 'update-available', how: 'added', path: '~/.claude/agents/frontend-developer.md' }, { platform: 'codex', state: 'current', how: 'added', path: '~/.codex/agents/frontend-developer.toml' }] },
+    { agentId: 'voltagent/code-reviewer', name: 'code-reviewer', inCatalogue: true, platforms: [{ platform: 'claude', state: 'current', how: 'adopted', path: '~/.claude/agents/code-reviewer.md' }] },
+    { agentId: 'wshobson/security-auditor', name: 'security-auditor', inCatalogue: true, platforms: [{ platform: 'claude', state: 'modified', how: 'added', path: '~/.claude/agents/security-auditor.md' }] },
+  ],
+  ops: [
+    { opId: '11111111-1111-4111-8111-111111111111', kind: 'adopt', agentId: null, name: null, at: '2026-10-22T09:15:00.000Z', files: 1, thisRun: false },
+    { opId: '22222222-2222-4222-8222-222222222222', kind: 'add', agentId: 'agency/frontend-developer', name: 'Frontend Developer', at: '2026-10-21T16:40:00.000Z', files: 2, thisRun: false },
+  ],
+  backups: [{ id: 'claude-agents-20261022T091500000Z-0a1b2c3d', at: '2026-10-22T09:15:00.000Z', files: 171, restore: [
+    'if [ -e "$HOME/.claude/agents-restored-20261022T091500000Z-0a1b2c3d" ] || [ -L "$HOME/.claude/agents-restored-20261022T091500000Z-0a1b2c3d" ]; then echo "~/.claude/agents-restored-20261022T091500000Z-0a1b2c3d already exists, so nothing was copied."; else ditto "$HOME/Library/Application Support/Plexiform/agent-backups/claude-agents-20261022T091500000Z-0a1b2c3d" "$HOME/.claude/agents-restored-20261022T091500000Z-0a1b2c3d"; fi',
+    'if [ -e "$HOME/.claude/agents-old-20261022T091500000Z-0a1b2c3d" ] || [ -L "$HOME/.claude/agents-old-20261022T091500000Z-0a1b2c3d" ] || [ ! -d "$HOME/.claude/agents-restored-20261022T091500000Z-0a1b2c3d" ]; then echo "~/.claude/agents-old-20261022T091500000Z-0a1b2c3d already exists or there\'s nothing to swap in, so nothing was moved."; else mv "$HOME/.claude/agents" "$HOME/.claude/agents-old-20261022T091500000Z-0a1b2c3d" && mv "$HOME/.claude/agents-restored-20261022T091500000Z-0a1b2c3d" "$HOME/.claude/agents"; fi',
+  ].join('\n') }],
+};
+const ADOPTABLE = { ok: true, demo: false, userOwned: 40, reason: null, matches: ['ai-engineer.md', 'backend-architect.md', 'devops-automator.md'].map((n) => ({ name: n, path: `~/.claude/agents/${n}`, agentId: 'x/y', agentName: n.replace('.md', '') })) };
+
 async function open(theme, { noKey = false } = {}) {
   const agentsHome = fs.mkdtempSync(path.join(os.tmpdir(), 'af-visual-home-'));
   const agentsData = fs.mkdtempSync(path.join(os.tmpdir(), 'af-visual-data-'));
   const h = await launchApp({ env: { PLEXIFORM_AGENTS_HOME: fs.realpathSync(agentsHome), PLEXIFORM_AGENTS_DATA: fs.realpathSync(agentsData) } });
-  await h.app.evaluate(({ ipcMain, safeStorage }, { noKey, targets }) => {
-    if (noKey) safeStorage.isEncryptionAvailable = () => false;
+  await h.app.evaluate(({ ipcMain, safeStorage }, { noKey, targets, mine, adoptable }) => {
+    // Stubbed both ways so no automated run asks the real safeStorage (L1).
+    safeStorage.isEncryptionAvailable = () => !noKey;
     ipcMain.removeHandler('agents:targets');
     ipcMain.handle('agents:targets', () => ({ ...targets, catalogSha: null }));
-  }, { noKey, targets: TARGETS });
+    ipcMain.removeHandler('agents:mine');
+    ipcMain.handle('agents:mine', () => mine);
+    ipcMain.removeHandler('agents:adoptable');
+    ipcMain.handle('agents:adoptable', () => adoptable);
+  }, { noKey, targets: TARGETS, mine: MINE, adoptable: ADOPTABLE });
   const page = await embedded(h.app, 'agents-find', 'agents-find.html');
   await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
   await page.waitForSelector('.af-card');
@@ -83,6 +110,29 @@ for (const theme of ['light', 'dark']) {
       await expect(page).toHaveScreenshot(`find-agents-confirm-${theme}.png`, SHOT);
       await page.keyboard.press('Escape');
       await expect(page.locator('.af-pop')).toBeHidden();
+
+      // Works with: the tools found differ per machine, so pick the first offered.
+      await page.fill('#af-search', '');
+      const works = await page.$$eval('#af-works option', (o) => o.map((x) => x.value).filter(Boolean));
+      if (works.length) {
+        await page.selectOption('#af-works', works[0]);
+        expect(Number((await page.textContent('.af-count')).match(/^(\d+)/)[1])).toBeLessThanOrEqual(647);
+        await page.selectOption('#af-works', '');
+      }
+
+      // Added by me (stubbed answers): rows, states, Update, Undo, backups.
+      await page.click('#af-tab-mine');
+      await page.waitForSelector('.af-mine-row');
+      expect(await page.textContent('#af-tab-mine')).toMatch(/^Added by me/);
+      expect(await page.locator('.af-mine-bar .af-btn').allTextContents()).toEqual(['Adopt existing agents (3)', 'Stop managing adopted (1)']);
+      expect(await page.locator('.af-states li').allTextContents()).toEqual(['Claude Code · Update available', 'Codex · Current', 'Claude Code · Current · Adopted', 'Claude Code · Changed by you']);
+      expect(await page.locator('.af-ops .af-btn').count()).toBe(2);
+      expect(await page.evaluate(() => document.querySelectorAll('a, [href]:not(link)').length)).toBe(0);
+      await page.click('.af-restore summary');
+      // Exactly the two lines main gave, named with the backup's stamp (L2).
+      expect(await page.textContent('.af-restore code')).toBe(MINE.backups[0].restore);
+      expect(await page.textContent('.af-restore code')).not.toMatch(/agents-(old|restored)(\s|"|$)/);
+      await expect(page).toHaveScreenshot(`find-agents-mine-${theme}.png`, { ...SHOT, fullPage: true });
     } finally { await done(); }
   });
 }

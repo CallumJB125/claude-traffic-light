@@ -107,3 +107,27 @@ body.agents-find { margin: 0; height: 100vh; overflow: hidden; background: var(-
 @media (prefers-reduced-motion: no-preference) {
   .af-plus, .af-card { transition: border-color var(--t-fast, 120ms), color var(--t-fast, 120ms); }
 }
+
+/* Added by me (PR 4) */
+.af-tabs { display: flex; gap: 2px; margin-top: 14px; border-bottom: 1px solid var(--line); }
+.af-tab { font: inherit; font-size: var(--text-sm); padding: 6px 12px; margin-bottom: -1px; border: 1px solid transparent; border-bottom: 0; border-radius: var(--radius) var(--radius) 0 0; background: none; color: var(--muted); cursor: pointer; }
+.af-tab[aria-selected="true"] { border-color: var(--line); background: var(--bg); color: var(--text); font-weight: 600; }
+.af-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.af-mine { padding-top: 12px; }
+.af-mine-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.af-mine-list, .af-ops, .af-backups ul { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.af-mine-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+.af-mine-name { min-width: 0; display: grid; gap: 4px; }
+.af-mine-actions { display: flex; gap: 6px; }
+.af-states { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: var(--text-sm); color: var(--muted); }
+.af-states .st-modified, .af-states .st-missing, .af-states .st-broken { color: var(--amber); }
+.af-states .st-update-available { color: var(--text); font-weight: 600; }
+.af-mine-h { margin: 18px 0 0; font-size: var(--text-base); font-weight: 600; }
+.af-ops li, .af-backups li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: var(--text-sm); }
+.af-note { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel); }
+.af-note p { margin: 0; }
+.af-note ul { margin: 6px 0 0; padding-left: 18px; font-size: var(--text-sm); }
+.af-note:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.af-restore { margin-top: 10px; font-size: var(--text-sm); }
+.af-restore summary { cursor: pointer; }
+.af-restore pre { overflow-x: auto; }

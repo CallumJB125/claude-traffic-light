@@ -369,10 +369,12 @@ test('adoption: backs up first, adopts exact matches only, undo restores bytes a
   assert.equal(found.userOwned, 2);
   const a = inst.adopt();
   assert.deepEqual(a.adopted, ['~/.claude/agents/frontend-dev-old-name.md']);
-  assert.ok(a.backup.startsWith(path.join(data, 'agent-backups', 'claude-agents-')));
-  assert.deepEqual(fs.readdirSync(a.backup).sort(), ['frontend-dev-old-name.md', 'link.md', 'reviewer.md', 'unrelated.md']);
-  assert.ok(fs.lstatSync(path.join(a.backup, 'link.md')).isSymbolicLink(), 'links are backed up as links');
-  assert.equal(fs.readFileSync(path.join(a.backup, 'reviewer.md'), 'utf8'), `${RO.raw}\nmy tweak\n`);
+  assert.match(a.backup, /^claude-agents-\d{8}T\d{9}Z-[0-9a-f]{8}$/, 'an id, never a path (PR 4 change 4)');
+  const bdir = inst.backupPath(a.backup);
+  assert.equal(bdir, path.join(data, 'agent-backups', a.backup));
+  assert.deepEqual(fs.readdirSync(bdir).sort(), ['frontend-dev-old-name.md', 'link.md', 'reviewer.md', 'unrelated.md']);
+  assert.ok(fs.lstatSync(path.join(bdir, 'link.md')).isSymbolicLink(), 'links are backed up as links');
+  assert.equal(fs.readFileSync(path.join(bdir, 'reviewer.md'), 'utf8'), `${RO.raw}\nmy tweak\n`);
   assert.equal(read(home, '.claude/agents/frontend-dev-old-name.md'), FE.raw, 'adoption changes no bytes');
   assert.equal(read(home, '.claude/agents/reviewer.md'), `${RO.raw}\nmy tweak\n`);
   assert.deepEqual(inst.adoptable().matches, [], 'already adopted');
@@ -412,6 +414,93 @@ test('adoption refuses a linked agents folder and never backs one up', () => {
   assert.deepEqual(inst.adoptable().matches, []);
   assert.equal(inst.adopt().adopted.length, 0);
   assert.ok(!fs.existsSync(path.join(data, 'agent-backups')));
+});
+
+// Security review PR 4 P1 (poc8): pruning by name removed the backup it had
+// just made when future-dated names were there, so the op named a gone folder.
+test('PR4 P1: future-dated backup names never cost the new backup, and an adopt\'s backup outlives later ones', () => {
+  const { home, data, inst } = setup();
+  const dir = path.join(home, '.claude/agents');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'frontend-developer.md'), FE.raw);
+  const root = path.join(data, 'agent-backups');
+  fs.mkdirSync(root, { recursive: true });
+  const future = [0, 1, 2, 3, 4].map((i) => `claude-agents-2099010${i}T000000000Z-0000000${i}`);
+  for (const n of future) fs.mkdirSync(path.join(root, n));
+  const a = inst.adopt();
+  assert.equal(a.ok, true);
+  const op = JSON.parse(fs.readFileSync(inst.ledgerPath, 'utf8')).ops.at(-1);
+  assert.ok(fs.statSync(path.join(data, op.backup)).isDirectory(), 'the backup the op names exists');
+  for (const n of future) assert.ok(fs.existsSync(path.join(root, n)), 'future-dated names are left alone, not pruned or reused');
+
+  // Seven adopt clicks, each with a changed folder: the first adopt's backup
+  // stays while that adopt is not undone, and so does the oldest.
+  const agents = [0, 1, 2, 3, 4, 5, 6].map((i) => agentOf(`agency/a${i}`, { name: `Agent ${i}` }));
+  const t = setup({ agents });
+  const tdir = path.join(t.home, '.claude/agents');
+  fs.mkdirSync(tdir, { recursive: true });
+  let clock = Date.parse('2026-10-23T10:00:00Z');
+  const it = createAgentInstaller({ ledgerKey: KEY, home: t.home, dataRoot: t.data, catalog: catalogOf(agents), now: () => (clock += 1000) });
+  const firsts = [];
+  for (const [i, ag] of agents.entries()) {
+    fs.writeFileSync(path.join(tdir, `${ag.slug}.md`), ag.raw);
+    const r = it.adopt([`.claude/agents/${ag.slug}.md`]);
+    assert.equal(r.ok, true, `adopt ${i}`);
+    firsts.push(JSON.parse(fs.readFileSync(it.ledgerPath, 'utf8')).ops.at(-1).backup);
+  }
+  for (const b of firsts) assert.ok(fs.existsSync(path.join(t.data, b)), `${b} is kept while its adopt stands`);
+  // Undo them all but the first; the next adopt prunes back down, keeping the first.
+  const ops = JSON.parse(fs.readFileSync(it.ledgerPath, 'utf8')).ops;
+  for (const o of ops.slice(1)) assert.equal(it.undo(o.id).ok, true);
+  fs.writeFileSync(path.join(tdir, 'mine.md'), 'mine\n');
+  const last = it.adopt([`.claude/agents/${agents[3].slug}.md`]);
+  assert.equal(last.ok, true);
+  const left = fs.readdirSync(path.join(t.data, 'agent-backups'));
+  assert.ok(left.length <= 5, `${left.length} kept`);
+  assert.ok(left.includes(path.basename(firsts[0])), 'the first (oldest, still adopted) backup is kept');
+  const newest = JSON.parse(fs.readFileSync(it.ledgerPath, 'utf8')).ops.at(-1).backup;
+  assert.ok(left.includes(path.basename(newest)), 'the backup just made is kept');
+});
+
+// Security review PR 4 P2 (poc8): the agents folder swapped for a link during
+// the copy made the "backup" a link, passed the verify, and chmod changed the
+// mode of the folder the link pointed at.
+test('PR4 P2: an agents folder swapped for a link during the backup is refused, and no outside folder changes', () => {
+  const { home, data } = setup();
+  const dir = path.join(home, '.claude/agents');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'frontend-developer.md'), FE.raw);
+  const victim = tmp();
+  fs.writeFileSync(path.join(victim, 'secret'), 'S');
+  fs.writeFileSync(path.join(victim, 'frontend-developer.md'), FE.raw);
+  fs.chmodSync(victim, 0o755);
+  let swapped = false;
+  // Swapped as the copy starts: once the backup folder is made.
+  const fsApi = { ...fs, mkdirSync: (p, o) => { const out = fs.mkdirSync(p, o); if (!swapped && /\/agent-backups\/(\.tmp-)?claude-agents-[^/]+$/.test(String(p))) { swapped = true; fs.renameSync(dir, `${dir}.real`); fs.symlinkSync(victim, dir); } return out; } };
+  const inst = createAgentInstaller({ ledgerKey: KEY, home, dataRoot: data, catalog: catalogOf([FE, RO]), fsApi });
+  const r = inst.adopt();
+  assert.equal(swapped, true);
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 'backup');
+  assert.equal((fs.statSync(victim).mode & 0o777).toString(8), '755', 'the other folder\'s mode is unchanged');
+  assert.deepEqual(fs.readdirSync(victim).sort(), ['frontend-developer.md', 'secret']);
+  const root = path.join(data, 'agent-backups');
+  for (const n of fs.existsSync(root) ? fs.readdirSync(root) : []) assert.ok(!fs.lstatSync(path.join(root, n)).isSymbolicLink(), 'no backup is a link');
+  assert.equal(fs.existsSync(inst.ledgerPath), false, 'nothing recorded, not even an empty op');
+});
+
+test('PR4 P2: ~/.claude itself as a link is refused before any copy', () => {
+  const { home, data } = setup();
+  const real = tmp();
+  fs.mkdirSync(path.join(real, 'agents'));
+  fs.writeFileSync(path.join(real, 'agents', 'frontend-developer.md'), FE.raw);
+  fs.chmodSync(real, 0o755);
+  fs.symlinkSync(real, path.join(home, '.claude'));
+  const inst = createAgentInstaller({ ledgerKey: KEY, home, dataRoot: data, catalog: catalogOf([FE, RO]) });
+  assert.deepEqual(inst.adoptable().matches, []);
+  assert.equal(inst.adopt().opId, null);
+  assert.ok(!fs.existsSync(path.join(data, 'agent-backups')));
+  assert.equal((fs.statSync(real).mode & 0o777).toString(8), '755');
 });
 
 test('Cursor "Add to a project…" is off by default; when on it writes one .mdc and undoes', () => {
@@ -638,14 +727,23 @@ test('security L3: backups are reused when nothing changed and capped at the new
   assert.equal(again.backup, first.backup, 'an unchanged folder reuses its last backup');
   const backups = () => fs.readdirSync(path.join(data, 'agent-backups')).sort();
   assert.equal(backups().length, 1);
+  // Undone adopts free their backups for pruning (PR 4 P1: a backup an adopt
+  // still relies on, the oldest and the newest are never pruned).
+  let prev = again;
   for (let i = 0; i < 7; i++) {
-    inst.stopManaging();
+    inst.undo(prev.opId);
     fs.writeFileSync(path.join(dir, `mine-${i}.md`), `mine ${i}\n`);
     const a = inst.adopt();
-    assert.deepEqual(fs.readdirSync(a.backup).sort(), ['frontend-developer.md', ...Array.from({ length: i + 1 }, (_, j) => `mine-${j}.md`)].sort());
+    assert.deepEqual(fs.readdirSync(inst.backupPath(a.backup)).sort(), ['frontend-developer.md', ...Array.from({ length: i + 1 }, (_, j) => `mine-${j}.md`)].sort());
+    prev = a;
   }
   assert.equal(backups().length, 5);
   assert.ok(fs.existsSync(path.join(data, 'agent-backups', backups().at(-1), 'mine-6.md')), 'the newest is kept');
+  assert.equal(backups()[0], first.backup, 'the oldest is kept');
+  // An adopt that stands keeps its backup however many come after.
+  inst.stopManaging();
+  for (let i = 7; i < 14; i++) { fs.writeFileSync(path.join(dir, `mine-${i}.md`), 'x'); inst.stopManaging(); inst.adopt(); }
+  assert.ok(backups().includes(prev.backup), 'still adopted, so kept');
 });
 
 test('security L3: PRIVACY.md lists the local files Find agents keeps and the folders it writes', () => {
@@ -876,4 +974,18 @@ test('PR3 review 6: peek() and cached() never make a key or touch safeStorage wi
   assert.equal(again.cached(), null, 'a new run has nothing cached until it loads');
   assert.deepEqual(again.peek(), made, 'peek loads an existing key');
   assert.deepEqual(again.cached(), made);
+});
+
+test('PR3 review L1: available() asks safeStorage once per run, however often the page lists', () => {
+  const { createLedgerKeyStore } = require('../src/agent-install-key.js');
+  let asked = 0;
+  const safe = { isEncryptionAvailable: () => { asked++; return true; }, encryptString: (t) => Buffer.from(`sealed:${t}`), decryptString: (b) => b.toString().slice(7) };
+  const k = createLedgerKeyStore({ file: path.join(tmp(), 'agent-installs.key'), safeStorage: safe });
+  for (let i = 0; i < 3; i++) assert.equal(k.available(), true);
+  assert.equal(k().length, 32, 'making the key reuses the cached answer');
+  assert.equal(asked, 1);
+  let no = 0;
+  const off = createLedgerKeyStore({ file: path.join(tmp(), 'k'), safeStorage: { isEncryptionAvailable: () => { no++; return false; } } });
+  for (let i = 0; i < 3; i++) assert.equal(off.available(), false);
+  assert.equal(no, 1);
 });
