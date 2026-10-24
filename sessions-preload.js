@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('sessionsApi', {
   linkRepo: (folder, board) => ipcRenderer.invoke('sessions:link-repo', { folder, board }),
   routing: () => ipcRenderer.invoke('sessions:routing'),
   routeChoose: (repo, key) => ipcRenderer.invoke('sessions:route-choose', String(repo), String(key)),
+  routeAsk: (repo, team) => ipcRenderer.invoke('sessions:route-ask', String(repo), String(team)),
   routeLink: (repo, board) => ipcRenderer.invoke('sessions:route-link', String(repo), String(board)),
   linkFromSession: (handle) => ipcRenderer.invoke('sessions:link-from-session', handle),
   start: (folder, ai, prompt) => ipcRenderer.invoke('sessions:start', { folder, ai, prompt }),

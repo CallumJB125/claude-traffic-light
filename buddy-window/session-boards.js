@@ -80,6 +80,17 @@ function createSessionBoards({ hubs, clientFor, userOf, local, getRoutes, routeK
     } catch (e) { log('[session-boards] link failed', e && e.code); return { ok: false, error: 'Could not reach the board. Try again.' }; }
   }
 
+  // "Ask an admin" (organised views PR 7): the team's owners and admins are asked to link the repository. Only its
+  // short name is sent, only to a team the person is a plain member of (an admin links it; a viewer cannot ask).
+  async function askAdmin(teamKey, repoShort) {
+    const t = known.get(teamKey) ?? (await boards(), known.get(teamKey));
+    if (t?.kind !== 'team-of' || t.role !== 'member' || typeof repoShort !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(repoShort)) return { ok: false, error: 'Refresh, then ask again.' };
+    try {
+      const r = await clientFor(t.hub).linkRequest(t.team_id, repoShort);
+      return r?.ok ? { ok: true, sent: Number(r.sent) || 0, ...(r.duplicate ? { duplicate: true } : {}) } : { ok: false, error: r?.error || 'Could not ask the team. Try again.' };
+    } catch (e) { log('[session-boards] link request failed', e && e.code); return { ok: false, error: 'Could not reach the team. Try again.' }; }
+  }
+
   // The work-capture route key for (board, repo): present only when the repo is linked to that team board.
   async function captureKey(key, canonical) {
     const b = await lookup(key);
@@ -117,7 +128,7 @@ function createSessionBoards({ hubs, clientFor, userOf, local, getRoutes, routeK
 
   const destinationOf = (key) => { const b = known.get(key); return b?.kind === 'team' ? { kind: 'team', hub: b.hub, team_id: b.team_id, board_id: b.board_id } : { kind: 'local' }; };
 
-  return { boards, teams, linkRepo, captureKey, searchCards, destinationOf, lookup };
+  return { boards, teams, askAdmin, linkRepo, captureKey, searchCards, destinationOf, lookup };
 }
 
 module.exports = { createSessionBoards, FORBIDDEN };

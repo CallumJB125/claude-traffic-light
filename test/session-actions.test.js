@@ -155,3 +155,33 @@ test('PR 7 board broker: teams() lists each signed-in team with its role and its
   assert.equal(teams[0].boards[0].key, boards.find((b) => b.label === 'Acme / Main').key, 'a team board key is the Link form\'s board key');
   assert.ok(!JSON.stringify(teams).match(/h\.test|"t1"|"b1"/), 'opaque keys only');
 });
+test('PR 7 Ask an admin: only a listed project, the short name only, and the answer in words', async () => {
+  const asked = [];
+  const answers = [{ ok: true, sent: 2 }, { ok: true, sent: 0, duplicate: true }, { ok: true, sent: 0 }, { ok: false, error: 'Too many requests. Try again later.' }];
+  const { a } = rig({
+    boards: { boards: async () => [], teams: async () => [{ key: 't1', name: 'Acme', role: 'member', boards: [] }], askAdmin: async (t, s) => { asked.push([t, s]); return answers.shift(); }, linkRepo: async () => ({ ok: true }) },
+    capture: { captureOnce: async () => ({ ok: true }), routing: async () => [{ repo: 'github.com/org/app', short: 'app', state: 'unlinked', destination: { kind: 'local' }, matches: [] }] },
+  });
+  const out = await a.routing();
+  assert.deepEqual(out.rows[0].ask, [{ key: 't1', label: 'Acme' }]);
+  const first = await a.routeAsk('github.com/org/app', 't1');
+  assert.equal(first.ok, true); assert.match(first.text, /Asked Acme’s admins to put app on a team board\. They see your name and “app”, nothing else\./);
+  assert.deepEqual(asked, [['t1', 'app']], 'the short name only');
+  assert.match((await a.routeAsk('github.com/org/app', 't1')).text, /already asked/);
+  assert.match((await a.routeAsk('github.com/org/app', 't1')).text, /no other owner or admin/);
+  assert.deepEqual(await a.routeAsk('github.com/org/app', 't1'), { ok: false, text: 'Too many requests. Try again later.' });
+  assert.equal((await a.routeAsk('github.com/org/other', 't1')).ok, false);
+  assert.equal(asked.length, 4);
+});
+test('PR 7 board broker: askAdmin sends the short name to a team the person is a member of, and nothing for an admin, viewer or unknown team', async () => {
+  const sent = [];
+  const client = { me: async () => ({ ok: true, teams: [{ id: 't1', name: 'Acme', role: 'member', boards: [] }, { id: 't2', name: 'Own', role: 'admin', boards: [] }, { id: 't3', name: 'Ro', role: 'viewer', boards: [] }] }),
+    linkRequest: async (team, short) => { sent.push([team, short]); return { ok: true, sent: 1 }; } };
+  const sb = createSessionBoards({ hubs: () => ['https://h.test'], clientFor: () => client, userOf: () => ({ id: 'u' }), local: { localRequest: async () => ({ ok: false }) }, getRoutes: async () => ({ routes: [], complete: true }), routeKey: () => 'k' });
+  const [member, admin, viewer] = await sb.teams();
+  assert.deepEqual(await sb.askAdmin(member.key, 'app'), { ok: true, sent: 1 });
+  assert.deepEqual(sent, [['t1', 'app']]);
+  for (const k of [admin.key, viewer.key, 'nope']) assert.equal((await sb.askAdmin(k, 'app')).ok, false);
+  assert.equal((await sb.askAdmin(member.key, 'org/app')).ok, false, 'a short name only');
+  assert.equal(sent.length, 1);
+});

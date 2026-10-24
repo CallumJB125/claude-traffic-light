@@ -43,3 +43,12 @@ test('inbox text: names the member from the board list or the ref, never echoes 
   assert.equal(inboxText({ kind: 'input_answered', ref: { by_name: 'x'.repeat(121) } }, members), "A teammate · Answered your session's question");
   assert.equal(inboxText({ kind: 'weird', ref: { title: 42 } }, []), 'A teammate · needs you to look');
 });
+
+test('inbox bell: a board link request names who asked and the project, with no Open (there is no card)', () => {
+  const ask = { id: 'i9', org_id: 'o', kind: 'board_link_request', ref: { requester_name: 'Sam', repo_short: 'claude-traffic-light', team_id: 'o', by: 'm-sam' }, created_at: new Date(NOW - 60_000).toISOString(), read_at: null };
+  assert.equal(inboxText(ask, members), 'Sam · Asked you to put a project on a team board: claude-traffic-light');
+  const tree = inboxBell(model([], { inbox: { items: [ask], open: true }, members, now: NOW }));
+  const actions = byAttr(tree, 'data-action').map((b) => b.props['data-action']);
+  assert.ok(!actions.includes('inbox-open'));
+  assert.ok(actions.includes('inbox-read'));
+});

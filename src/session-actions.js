@@ -193,9 +193,20 @@ function create({ sessions, repoOf, rootOf, boards, capture, links, tickets = nu
     return r.ok ? { ok: true } : { ok: false, needsAdmin: !!r.needsAdmin, text: r.error };
   }
 
+  async function routeAsk(repo, team) {
+    if (!listed.has(repo) || typeof boards.askAdmin !== 'function') return { ok: false, text: 'Refresh, then try again.' };
+    const short = repo.split('/').pop();
+    const name = (await boards.teams().catch(() => [])).find((t) => t.key === team)?.name ?? 'the team';
+    const r = await boards.askAdmin(team, short);
+    if (!r.ok) return { ok: false, text: r.error };
+    if (r.duplicate) return { ok: true, text: `You already asked ${name}’s admins about ${short}; they haven’t seen it yet.` };
+    if (!r.sent) return { ok: true, text: `${name} has no other owner or admin to ask.` };
+    return { ok: true, text: `Asked ${name}’s admins to put ${short} on a team board. They see your name and “${short}”, nothing else.` };
+  }
+
   const connect = () => openPage(pageExists(AI_TOOLS_PAGE_ID) ? AI_TOOLS_PAGE_ID : FALLBACK_PAGE_ID);
 
-  return { routing, routeChoose, routeLink, rowInfo, ticketDraft, ticketCreate, setup, chooseFolder, linkRepo, startSession, makeCard, searchCards, attach, shareHandover, linkFromSession, connect };
+  return { routing, routeChoose, routeLink, routeAsk, rowInfo, ticketDraft, ticketCreate, setup, chooseFolder, linkRepo, startSession, makeCard, searchCards, attach, shareHandover, linkFromSession, connect };
 }
 
 module.exports = { create, SCOPE_RULE, AI_TOOLS_PAGE_ID, providerOf };

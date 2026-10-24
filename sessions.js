@@ -347,6 +347,21 @@ async function loadRouting() {
       if (row.note) pick.hidden = false; else actions.append(button('Put on a team board…', () => { pick.hidden = !pick.hidden; }));
       actions.append(pick);
     }
+    // Ask an admin (a plain member): the team to ask, then one button; main says what was sent.
+    if (row.ask?.length) {
+      const team = select(row.ask.map(t => ({ value: t.key, label: t.label })), 'No team');
+      const wrap = node('div', '', 'routing-pick routing-ask'); wrap.hidden = !row.note;
+      const go = button('Ask an admin', async () => {
+        for (const b of box.querySelectorAll('button, select')) b.disabled = true;
+        let r = null; try { r = await api.routeAsk(row.repo, team.value); } catch { r = null; }
+        for (const b of box.querySelectorAll('button, select')) b.disabled = false;
+        say(out, r?.text || 'Could not ask. Try again.', !!r?.ok);
+      });
+      if (row.ask.length > 1) wrap.append(field('Team', team));
+      wrap.append(go);
+      if (!row.note) actions.append(button('Ask an admin…', () => { wrap.hidden = !wrap.hidden; }));
+      actions.append(wrap);
+    }
     if (actions.childNodes.length) li.append(actions);
     list.append(li);
   }

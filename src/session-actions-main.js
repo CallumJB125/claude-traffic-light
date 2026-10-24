@@ -41,6 +41,7 @@ function register({ ipcMain, sessionsAllowed, sessions, bridge, capture, tasks, 
   handle('sessions:ticket-create', (r, t, d) => str(r, 100) && str(t, 200) && str(d, 8000), (a, r, t, d) => a.ticketCreate(r, t, d));
   handle('sessions:routing', () => true, (a) => a.routing());
   handle('sessions:route-choose', (r, k) => str(r, 300) && str(k, 100), (a, r, k) => a.routeChoose(r, k));
+  handle('sessions:route-ask', (r, t) => str(r, 300) && str(t, 100), (a, r, t) => a.routeAsk(r, t));
   handle('sessions:route-link', (r, b) => str(r, 300) && str(b, 100), (a, r, b) => a.routeLink(r, b));
   handle('sessions:connect', () => true, async (a) => { a.connect(); return { ok: true }; });
   return { rowInfo: (row) => get()?.rowInfo(row) ?? null };

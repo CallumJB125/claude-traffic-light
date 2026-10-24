@@ -401,3 +401,16 @@ test('PR 7 routing strip: hidden with no rows; a question\'s buttons save the pi
     assert.match(linking.document.getElementById('routing-status').textContent, /Only a team owner or admin/);
   } finally { linking.dom.window.close(); }
 });
+test('PR 7 routing strip: Ask an admin sends the chosen team and says what happened', async () => {
+  const calls = [];
+  const fixture = setup({ state: async () => state(), routing: async () => ({ rows: [{ repo: 'github.com/org/new', short: 'new', state: 'unlinked', text: 'new → My board (private)', note: 'Put it on a team board? Only a team admin can link it, so Plexiform can ask them for you.', choices: [{ key: 'local', label: 'Keep on My board' }], change: [], link: null, ask: [{ key: 't1', label: 'Acme' }, { key: 't2', label: 'Beta' }] }] }),
+    routeAsk: async (repo, team) => { calls.push([repo, team]); return { ok: true, text: 'Asked Beta’s admins to put new on a team board.' }; } });
+  try {
+    await tick(); await tick();
+    const row = fixture.document.querySelector('.routing-row');
+    row.querySelector('.routing-ask select').value = 't2';
+    [...row.querySelectorAll('button')].find(b => b.textContent === 'Ask an admin').click(); await tick(); await tick();
+    assert.deepEqual(calls, [['github.com/org/new', 't2']]);
+    assert.match(fixture.document.getElementById('routing-status').textContent, /Asked Beta’s admins/);
+  } finally { fixture.dom.window.close(); }
+});

@@ -8,9 +8,9 @@
   // A finished piece of work is "Check it", the same word every view uses (src/work-organise.js).
   const Organise = typeof module === 'object' && module.exports && typeof require === 'function' ? require('./work-organise') : root.PlexiformWorkOrganise;
   const CHECK = Organise.BUCKETS.find(b => b.id === 'check').label;
-  const SEVERITY = Object.freeze({ approval: 0, question: 0, blocker: 1, burst: 1, failed: 2, handoff: 3, mention: 3, review: 4, reply: 4, setup: 4, waiting: 5, moment: 5, finished: 6 });
-  const LABEL = Object.freeze({ approval: 'Approval', question: 'Question', blocker: 'Blocked', burst: 'Burst', failed: 'Failed', handoff: 'Handoff', mention: 'Mention', review: CHECK, reply: 'Reply', waiting: 'Waiting on', moment: 'Moment', setup: 'Plexiform', finished: 'Finished' });
-  const TEAM_KINDS = Object.freeze(['mention', 'reply', 'moment', 'handoff']);
+  const SEVERITY = Object.freeze({ approval: 0, question: 0, blocker: 1, burst: 1, failed: 2, handoff: 3, mention: 3, link: 4, review: 4, reply: 4, setup: 4, waiting: 5, moment: 5, finished: 6 });
+  const LABEL = Object.freeze({ approval: 'Approval', question: 'Question', blocker: 'Blocked', burst: 'Burst', failed: 'Failed', handoff: 'Handoff', mention: 'Mention', review: CHECK, reply: 'Reply', waiting: 'Waiting on', moment: 'Moment', link: 'Link request', setup: 'Plexiform', finished: 'Finished' });
+  const TEAM_KINDS = Object.freeze(['mention', 'reply', 'moment', 'handoff', 'link']);
   const MAX = 30;
   const OPTIONS_MAX = 4;
   const str = (v, max) => typeof v === 'string' && v.length <= max ? v : '';
