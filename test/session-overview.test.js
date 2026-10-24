@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Overview = require('../src/session-overview');
+const Organise = require('../src/work-organise');
 const now = Date.parse('2026-10-02T06:00:00Z');
 const at = age => new Date(now - age).toISOString();
 const codex = extra => ({ source: 'codex', sessionId: 'local', cwd: '/private/work/project', signal: 'tool-use', codexLifecycle: 1, codexHookAt: at(1000), updatedAt: at(1000), ...extra });
@@ -11,7 +12,7 @@ test('projection carries only fixed metadata, never IDs, paths, tools, task titl
   const row = codex({ sessionId: secret, host: secret, tool: secret, taskTitle: secret, prompt: secret, provider: secret,
     codexAgents: [{ id: secret, name: secret, turnId: secret, status: 'working', prompt: secret }] });
   const result = Overview.snapshot({ sessions: [row], activity: { configured: true, private: secret }, now });
-  assert.deepEqual(result.sessions, [{ provider: 'Codex', project: 'project', bucket: 'working', status: 'Working on it', freshness: 'recent', age_ms: 1000, lifecycle: true,
+  assert.deepEqual(result.sessions, [{ provider: 'Codex', project: 'project', group: { key: Organise.projectOf({ cwd: '/private/work/project' }).key, heading: 'project', sub: null }, bucket: 'working', status: 'Working on it', freshness: 'recent', age_ms: 1000, lifecycle: true,
     children: [{ label: 'Codex subagent 1', status: 'Working on it' }] }]);
   assert.equal(JSON.stringify(result).includes(secret), false);
   assert.equal(JSON.stringify(result).includes('/private'), false);
@@ -134,4 +135,32 @@ test('status words are the five bucket headings; a detail says more only where i
     ['needs', null], ['needs', 'Limit reached'], ['stuck', 'Turn failed'], ['idle', 'Ended'], ['idle', null], ['stuck', 'Stuck'], ['idle', null],
   ]);
   assert.equal(Overview.snapshot({ sessions: [row({ cwd: null, signal: 'idle' })], now }).sessions[0].project, W.FALLBACK);
+});
+
+// Organised views PR 3: each row's group is {key, heading, sub} and nothing else; a path never gets in,
+// whatever the resolver or the folder looks like.
+test('group: only key, heading and sub; no path, home or separator; pending passes through; a bad answer falls back pending', () => {
+  const home = '/Users/sam';
+  const dirs = ['/private/tmp/x', `${home}/code/claude-traffic-light`, `${home}/w/awareness-p4`, '/Volumes/Ünïcödé 名前/app', 'C:\\Users\\sam\\proj', `${home}`, '/'];
+  const resolver = (row) => Organise.projectOf({ cwd: row.cwd, home, commonDir: row.cwd.includes('awareness') ? `${home}/code/claude-traffic-light/.git` : null, toplevel: row.cwd, branch: 'feat/a/b' });
+  for (const group of [null, resolver]) {
+    const out = Overview.snapshot({ sessions: dirs.map((cwd, i) => codex({ sessionId: `s${i}`, cwd })), now, group });
+    for (const row of out.sessions) {
+      assert.deepEqual(Object.keys(row.group).sort(), ['heading', 'key', 'sub']);
+      assert.match(row.group.key, /^(?:(?:repo|git|dir)-[0-9a-z]{1,7}|other)$/);
+      for (const v of [row.group.key, row.group.heading, row.group.sub ?? '']) {
+        assert.equal(/[\\/]/.test(v), false, v);
+        assert.equal(v.includes(home), false, v);
+        assert.equal(v.includes('Users'), false, v);
+      }
+    }
+  }
+  const pending = Overview.snapshot({ sessions: [codex({})], now, group: () => ({ key: 'dir-abc', heading: 'project', sub: null, pending: true }) });
+  assert.deepEqual([pending.sessions[0].group.key, pending.sessions[0].groupPending], ['dir-abc', true]);
+  const settled = Overview.snapshot({ sessions: [codex({})], now, group: () => ({ key: 'repo-abc', heading: 'project', sub: 'views', pending: false }) });
+  assert.equal('groupPending' in settled.sessions[0], false);
+  for (const bad of [() => { throw new Error('x'); }, () => ({ key: '/etc', heading: 'x' }), () => ({ key: 'repo-1', heading: '' }), () => ({ key: 'repo-1', heading: 'x', sub: 'y'.repeat(61) })]) {
+    const r = Overview.snapshot({ sessions: [codex({})], now, group: bad }).sessions[0];
+    assert.deepEqual([r.group.heading, r.groupPending], ['project', true], 'a bad answer: the folder, and never saved');
+  }
 });

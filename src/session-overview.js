@@ -70,6 +70,19 @@ function sharedOf(fn, rows) {
     }));
   } catch { return []; }
 }
+// The row's project group (organised views PR 3): {key, heading, sub} only, never a path. group(row) is main's
+// synchronous resolver answer (work-organise groupOf); pending means git has not answered yet, so the page keeps
+// any collapse toggle for it in memory only. Without a resolver the group is the folder, which is not pending.
+const GROUP_KEY = /^(?:(?:repo|git|dir)-[0-9a-z]{1,7}|other)$/;
+function groupOf(fn, row) {
+  let g = null;
+  try { g = fn ? fn(row) : null; } catch { g = null; }
+  if (!object(g) || !GROUP_KEY.test(g.key) || typeof g.heading !== 'string' || !g.heading || g.heading.length > 100 || !(g.sub == null || (typeof g.sub === 'string' && g.sub.length <= 60))) {
+    const p = Organise.projectOf({ cwd: typeof row.cwd === 'string' ? row.cwd : null });
+    return { group: { key: p.key, heading: p.heading, sub: p.sub ?? null }, ...(fn ? { groupPending: true } : {}) };
+  }
+  return { group: { key: g.key, heading: g.heading, sub: g.sub ?? null }, ...(g.pending === true ? { groupPending: true } : {}) };
+}
 // The policy pack the row's repo is under and its latest refusal (src/policy.js rowInfo).
 function policyOf(fn, row) {
   try {
@@ -79,7 +92,7 @@ function policyOf(fn, row) {
     return { policy: { name: text(p.name, 80), source: p.source === 'repo' || p.source === 'default' ? p.source : null, warning: text(p.warning, 300), blocked: object(p.blocked) && text(p.blocked.text, 400) ? { text: text(p.blocked.text, 400), tool: text(p.blocked.tool, 80), at: Number.isFinite(p.blocked.at) ? p.blocked.at : null } : null } };
   } catch { return {}; }
 }
-function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null, handover = null, info = null, sharedTrees = null, collisions = null, policy = null } = {}) {
+function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null, handover = null, info = null, sharedTrees = null, collisions = null, policy = null, group = null } = {}) {
   const time = Number.isFinite(now) && now >= 0 ? now : Date.now();
   let latest = null, omitted = 0;
   const rows = [];
@@ -105,6 +118,7 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
       // Claude Code's own hook (set-status.js) writes no source field.
       provider: row.source == null ? PROVIDERS.claude : typeof row.source === 'string' && Object.hasOwn(PROVIDERS, row.source) ? PROVIDERS[row.source] : 'Local AI',
       project: projectName(row.cwd),
+      ...groupOf(group, row),
       ...sessionStatus(row, presented, stuck, time),
       ...(stuck ? { stuck: { tool: stuck.tool || null, since_ms: stuck.sinceMs } } : {}),
       freshness: available === false || age === null ? 'unknown' : age <= RECENT_MS ? 'recent' : 'stale', age_ms: age, lifecycle, children,

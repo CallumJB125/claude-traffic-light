@@ -154,7 +154,9 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   // is a process's start in the runner's form (ps lstart, TZ=UTC, C locale), compared with the engine's record.
   wrappedRuns = () => [], utcStart = null,
   // bus_card_add: addAgentCard(session, args) files the card (src/work-capture.js); sessionFacts(session) are its hook facts.
-  addAgentCard = async () => ({ reason: 'UNAVAILABLE', message: 'Plexiform cannot add cards here.' }), sessionFacts = () => null, cardTimeoutMs = CARD_TIMEOUT_MS }) {
+  addAgentCard = async () => ({ reason: 'UNAVAILABLE', message: 'Plexiform cannot add cards here.' }), sessionFacts = () => null, cardTimeoutMs = CARD_TIMEOUT_MS,
+  // Organised views PR 3: the repository's canonical origin for gitInfo (work-capture.js repoFor).
+  repoFor = async () => null }) {
   const rosterDir = path.join(rootDir, 'awareness');
   const rosterFile = path.join(rosterDir, 'roster.json');
   const run = (file, args, timeout = EXEC_TIMEOUT_MS) => new Promise((resolve, reject) => {
@@ -163,6 +165,10 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   const git = (dir, args) => run('git', ['-C', dir, ...args]);
   const realpath = (p) => fsp.realpath(p);
   const realOr = (p) => fsp.realpath(p).catch(() => p);
+  // Which project a folder belongs to, for the Sessions page's groups (organised views PR 3). The same git
+  // runner as the roster, one cache for main. It is not an awareness feature: it answers with awareness off
+  // and never reads or writes the roster.
+  const gitInfo = require('./work-organise.js').createGitInfoResolver({ git, repoFor, realpath });
 
   const classified = new Map(); // cwd → { at, key, value: Promise }
   const procs = new Map();      // `${pid}` → { start, value }
@@ -1232,7 +1238,7 @@ function boardAnswer(board) {
   // GET /status and other AI-facing listings: is this session's folder shown? Unresolved is not.
   const visible = (s) => !!s && verdicts.get(`${String(s.source || 'claude')}|${s.sessionId}`) === true;
 
-  return { build, refresh, schedule, start, stop, invalidate, visible, rosterFile, classify, bindCaller, busOp, relay, syncNotes, peersForTask, ackNotices: () => ackNotices(lastRoster ? lastRoster.self : {}) };
+  return { gitInfo, build, refresh, schedule, start, stop, invalidate, visible, rosterFile, classify, bindCaller, busOp, relay, syncNotes, peersForTask, ackNotices: () => ackNotices(lastRoster ? lastRoster.self : {}) };
 }
 
 module.exports = { create, CARD_LIMITS, REAL_WORK_MS, normalize, handleFor, allowedExe, parseLsof, lsofFiles, statusOf, interactiveOf, DEFAULTS, SESSION_FIELDS, HEARTBEAT_MS, DEBOUNCE_MS, BUILD_TIMEOUT_MS, BURST_WINDOW_MS, GROUP_BUMP_MS };
