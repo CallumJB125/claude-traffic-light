@@ -30,6 +30,10 @@ function rowFor(r, teams) {
     out.choices = [...writable.map((m) => ({ key: m.key, label: shared(m) ? `${m.team} · ${m.board}` : m.board })), { key: 'local', label: 'Keep on My board' }];
   } else if (r.state === 'single') {
     out.note = 'Its only team board, so new work goes there.';
+  } else if (r.state === 'set' && current === 'local' && writable.length) {
+    // Kept on My board, but a team board is there now (say an admin linked it after Ask an admin): say so plainly.
+    const boardsNow = writable.map((m) => `${m.team} · ${m.board}`);
+    out.note = `Kept on My board. ${list(boardsNow)} ${boardsNow.length > 1 ? 'are' : 'is'} available: use Change to send new work there.`;
   } else if (r.state === 'read_only') {
     const ro = (r.matches || []).find((m) => m.read_only);
     out.note = ro ? `Your role on ${named(ro)} is read-only, so its work stays on My board.` : null;

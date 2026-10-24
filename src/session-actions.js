@@ -94,7 +94,21 @@ function create({ sessions, repoOf, rootOf, boards, capture, links, tickets = nu
     const canonical = await repoOf(dir).catch(() => null);
     if (!canonical) return { ok: false, text: 'That folder has no network git remote (origin), so it can’t be linked to a board.' };
     const r = await boards.linkRepo(board, canonical);
-    return r.ok ? { ok: true, canonical, text: `Linked ${canonical}. ${SCOPE_RULE}` } : { ok: false, needsAdmin: !!r.needsAdmin, canonical, text: r.error };
+    if (!r.ok) return { ok: false, needsAdmin: !!r.needsAdmin, canonical, text: r.error };
+    const kept = await afterLink(canonical, board);
+    return { ok: true, canonical, text: `Linked ${canonical}. ${SCOPE_RULE}${kept ? ` ${kept}` : ''}` };
+  }
+
+  // Every link this page makes ends here (#62 review B1/B1b): a link to a team board drops "Keep on My board", which
+  // would otherwise still win over it. No silent skip: a capture that can't clear it is logged and the words say so.
+  // Linking to My board itself leaves the pin alone. Returns null when nothing more needs saying.
+  async function afterLink(canonical, board) {
+    if (boards.destinationOf?.(board)?.kind === 'local') return null;
+    let cleared = false;
+    try { cleared = (await capture.clearLocal(canonical)) === true; } catch { cleared = false; }
+    if (cleared) return null;
+    console.warn('[session-actions] linked, but Keep on My board could not be cleared');
+    return `${canonical.split('/').pop()} is still kept on My board, so use Change to send its new work to the team board.`;
   }
 
   async function startSession({ folder: handle, ai, prompt }) {
@@ -191,14 +205,8 @@ function create({ sessions, repoOf, rootOf, boards, capture, links, tickets = nu
     if (!listed.has(repo)) return { ok: false, text: 'Refresh, then try again.' };
     const r = await boards.linkRepo(board, repo);
     if (!r.ok) return { ok: false, needsAdmin: !!r.needsAdmin, text: r.error };
-    // Linked: a "Keep on My board" pin would still win over the new board (#62 review B1). No silent skip: a capture
-    // that can't clear it is logged and said, so the person knows to use Change.
-    let cleared = false;
-    try { cleared = (await capture.clearLocal(repo)) === true; } catch { cleared = false; }
-    if (cleared) return { ok: true };
-    console.warn('[session-actions] linked, but Keep on My board could not be cleared');
-    const short = repo.split('/').pop();
-    return { ok: true, text: `Linked. ${short} is still kept on My board, so use Change to send its new work to the team board.` };
+    const kept = await afterLink(repo, board);
+    return kept ? { ok: true, text: `Linked. ${kept}` } : { ok: true };
   }
 
   async function routeAsk(repo, team) {

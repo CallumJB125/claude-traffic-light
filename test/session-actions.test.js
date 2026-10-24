@@ -124,7 +124,7 @@ test('PR 7 routing strip: rows for the live sessions\' projects, words from work
   const routingRows = [{ repo: 'github.com/org/app', short: 'app', state: 'ask', destination: { kind: 'local' }, matches: [{ key: 'k1', team: 'Acme', board: 'Main', read_only: false }, { key: 'k2', team: 'Acme', board: 'Web', read_only: false }] }];
   const asked = [];
   const { a } = rig({
-    boards: { boards: async () => [], teams: async () => teams, linkRepo: async (b, c) => { linked.push([b, c]); return linkOk ? { ok: true } : { ok: false, error: 'No.' }; }, captureKey: async () => null, searchCards: async () => [], destinationOf: () => ({ kind: 'local' }) },
+    boards: { boards: async () => [], teams: async () => teams, linkRepo: async (b, c) => { linked.push([b, c]); return linkOk ? { ok: true } : { ok: false, error: 'No.' }; }, captureKey: async () => null, searchCards: async () => [], destinationOf: (k) => ({ kind: k === 'b1' ? 'team' : 'local' }) },
     capture: { captureOnce: async () => ({ ok: true }), routing: async (repos) => { asked.push(repos); return routingRows; }, choose: async (r, k) => { chosen.push([r, k]); return true; }, clearLocal: async (r) => { cleared.push(r); return true; } },
   });
   const out = await a.routing();
@@ -212,9 +212,9 @@ test('PR 7 routing, as wired in the app: Keep on My board, then Link through ses
     captureClearLocal: (repo) => captureEnabled && workCapture.clearLocal(repo),
   };
   const handlers = {};
-  const bridge = { gitRoot: async (c) => c, boards: { boards: async () => [], teams: async () => [{ key: 't', name: 'T', role: 'admin', boards: [{ key: 'b', name: 'Later' }] }], linkRepo: async () => { routes = [L]; return { ok: true }; } }, links: {}, rows: () => [] };
+  const bridge = { gitRoot: async (c) => c, boards: { boards: async () => [], teams: async () => [{ key: 't', name: 'T', role: 'admin', boards: [{ key: 'b', name: 'Later' }] }], linkRepo: async (b) => { if (b === 'b') routes = [L]; return { ok: true }; }, destinationOf: (b) => (b === 'mine' ? { kind: 'local' } : { kind: 'team' }) }, links: {}, rows: () => [] };
   require('../src/session-actions-main.js').register({ ipcMain: { handle: (c, f) => { handlers[c] = f; } }, sessionsAllowed: () => true, sessions: () => [{ cwd: '/w/none', host: 'local', source: 'claude', sessionId: 's1' }],
-    bridge: () => bridge, capture: () => buddy, tasks: {}, clipboard: {}, pickFolder: () => {}, openPage: () => {}, pageExists: () => true });
+    bridge: () => bridge, capture: () => buddy, tasks: {}, clipboard: {}, pickFolder: async () => '/w/none', openPage: () => {}, pageExists: () => true });
   const e = {};
   const first = await handlers['sessions:routing'](e);
   assert.deepEqual(first.rows.map((r) => [r.short, r.state]), [['none', 'unlinked']]);
@@ -224,6 +224,18 @@ test('PR 7 routing, as wired in the app: Keep on My board, then Link through ses
   assert.equal(JSON.parse(fs.readFileSync(file)).local_choices, undefined, 'the pin is gone');
   const [after] = (await handlers['sessions:routing'](e)).rows;
   assert.deepEqual([after.state, after.goesTo], ['single', 'T / Later']);
+  // The Add/Link panel's path (sessions:link-repo) clears it too (#62 review, round 3, B1b); linking to My board
+  // itself leaves the pin alone.
+  assert.deepEqual(await handlers['sessions:route-choose'](e, 'github.com/org/none', 'local'), { ok: true });
+  const picked = await handlers['sessions:pick-folder'](e);
+  assert.equal(picked.remote, 'github.com/org/none');
+  const toMine = await handlers['sessions:link-repo'](e, { folder: picked.handle, board: 'mine' });
+  assert.equal(toMine.ok, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)).local_choices, { 'github.com/org/none': true }, 'linked to My board: still kept there');
+  const toTeam = await handlers['sessions:link-repo'](e, { folder: picked.handle, board: 'b' });
+  assert.equal(toTeam.ok, true); assert.doesNotMatch(toTeam.text, /still kept/);
+  assert.equal(JSON.parse(fs.readFileSync(file)).local_choices, undefined, 'linked from the Add/Link panel: the pin is gone');
+  assert.equal((await handlers['sessions:routing'](e)).rows[0].state, 'single');
 });
 test('PR 7 routing: a Link that cannot clear "Keep on My board" says so instead of reporting plain success', async () => {
   const warned = [];
@@ -240,5 +252,10 @@ test('PR 7 routing: a Link that cannot clear "Keep on My board" says so instead 
       assert.match(r.text, /still kept on My board/);
     }
     assert.equal(warned.length, 3);
+    // The Add/Link panel's linkRepo says the same, after its own sentence.
+    const { a } = mk(async () => false); const f = await a.chooseFolder();
+    const r = await a.linkRepo({ folder: f.handle, board: 'b1' });
+    assert.equal(r.ok, true); assert.match(r.text, /^Linked github\.com\/org\/app\. .*still kept on My board/s);
+    assert.equal(warned.length, 4);
   } finally { console.warn = orig; }
 });
