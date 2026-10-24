@@ -270,10 +270,11 @@ function scrub(text, { home = null, user = null, hostname = null, names = [], sa
   };
 
   // Invisible and compatibility characters go first, as in scrubText (#58 review).
-  let out = plainText(String(text == null ? '' : text), { max: Infinity });
+  // Long lines are cut before and after, since NFKC can lengthen a line.
+  let out = plainText(cutLongLines(String(text == null ? '' : text)), { max: Infinity });
   if (fold) out = foldSpaces(out);
   out = out.replace(/\\\\/g, '\\').replace(/\\\//g, '/');
-  out = out.replace(P.LONG_LINE, (m) => `[long line omitted: ${m.length} chars]`);
+  out = cutLongLines(out);
   out = cleanJsonError(out);
   out = redactSecretsPass(out);
 
@@ -373,11 +374,29 @@ const MARK_RUN = /\p{M}+/gu;
 const ASCII = /[\x20-\x7e]/;
 const nearAscii = (m, at, all) => (ASCII.test(all[at - 1] ?? '') || ASCII.test(all[at + m.length] ?? '') ? '' : m);
 const afterAscii = (m, at, all) => (ASCII.test(all[at - 1] ?? '') ? '' : m);
-//   max: the cap before and after NFKC (Infinity for scrub(), which takes whole files)
+// NFKC grows a few characters a lot (U+FDFA is 18 characters, the squared katakana words
+// 5), so a page of them would bury the patterns. Those 28, none of which can hide a
+// number or name, are left as they are; everything else grows at most 4 times, and the
+// result is cut at twice the input (64K at least): only text that is mostly
+// compatibility characters grows that much. Characters that grow into digits and dots
+// ("⒑" is "10.") still fold.
+const NFKC_BOMB = /[\u3307\u3315-\u3317\u3319\u331a\u3320\u332b\u332e\u3332\u3334\u3336\u3347\u334a\u3356\u33ae\u33af\ufdfa\ufdfb\u{1d160}-\u{1d164}\u{1d1bd}-\u{1d1c0}]/u;
+const NFKC_SAFE_RUN = new RegExp(`[^${NFKC_BOMB.source.slice(1, -1)}]+`, 'gu');
+const nfkc = (t) => (NFKC_BOMB.test(t) ? t.replace(NFKC_SAFE_RUN, (r) => r.normalize('NFKC')) : t.normalize('NFKC'));
+//   max: the cap before and after NFKC (Infinity for scrub(), which takes whole files and
+//        cuts long lines first)
+const GREW_CUT = '\n[cut: the text grew past twice its size]';
 function plainText(text, { max = TEXT_MAX } = {}) {
   const strip = (t) => t.replace(ALWAYS_INVISIBLE, '').replace(FORMAT_RUN, nearAscii);
-  return strip(strip(text.slice(0, max)).normalize('NFKC').slice(0, max)).replace(MARK_RUN, afterAscii);
+  const input = strip(text.slice(0, max));
+  const grown = Math.min(max, Math.max(TEXT_MAX, 2 * input.length));
+  let folded = nfkc(input);
+  if (folded.length > grown) folded = `${folded.slice(0, grown - GREW_CUT.length)}${GREW_CUT}`;
+  return strip(folded).replace(MARK_RUN, afterAscii);
 }
+// A line longer than MAX_LINE is omitted. Split, not a regex: a regex over one line of
+// millions of characters overflows the stack.
+const cutLongLines = (t) => (t.length <= MAX_LINE ? t : t.split('\n').map((l) => (l.length > MAX_LINE ? `[long line omitted: ${l.length} chars]` : l)).join('\n'));
 // Runs of spaces inside a line fold before the patterns run ("+27 82  555 0199");
 // indentation at the start of a line stays.
 const foldSpaces = (t) => t.replace(/(?<=\S)[ \t]{2,}/g, ' ');

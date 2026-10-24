@@ -295,3 +295,26 @@ test('scrubText: variation selectors, combining marks, fillers and doubled space
   const { scrubText } = require('../src/scrub.js');
   assert.equal(scrubText('Done:\n    call +27 82  555 0199\n    ok'), 'Done:\n    call [phone]\n    ok');
 });
+
+test('scrub: compatibility bombs and very long lines stay bounded and never throw (#58 review, round 2)', () => {
+  const four = String.fromCodePoint([...Array(0x100)].map((_, i) => 0x3300 + i).find((c) => String.fromCodePoint(c).normalize('NFKC').length === 4));
+  for (const [name, bomb] of [['U+FDFA', '\ufdfa'.repeat(100000)], ['U+3315', '\u3315'.repeat(100000)], ['lines of U+FDFA', ('\ufdfa'.repeat(3000) + '\n').repeat(40)],
+    ['4x grower', four.repeat(100000)], ['lines of a 4x grower', (four.repeat(900) + '\n').repeat(120)], ['U+2491 (10.)', '\u2491'.repeat(100000)]]) {
+    const t = performance.now();
+    const out = scrub(bomb, opts);
+    const ms = performance.now() - t;
+    assert.ok(out.length <= 2 * bomb.length && ms < 500, `${name}: ${out.length} chars from ${bomb.length} in ${Math.round(ms)} ms`);
+  }
+  const { scrubTitle } = require('../src/scrub.js');
+  assert.ok(scrubTitle('ﷺ'.repeat(100000)).length <= 2 * 64 * 1024);
+  // The characters NFKC grows past 4 are left as they are; the list matches this Node's NFKC.
+  const grows = [];
+  for (let c = 0; c < 0x30000; c++) if ((c < 0xd800 || c > 0xdfff) && String.fromCodePoint(c).normalize('NFKC').length > 4) grows.push(c);
+  for (const c of grows) assert.equal(scrub(`x ${String.fromCodePoint(c)} y`, opts), `x ${String.fromCodePoint(c)} y`, c.toString(16));
+  // A character that grows into digits still folds, so it cannot rebuild an address.
+  assert.equal(scrub('ping \u24910.0.5', opts), 'ping [ip]');
+  assert.match(scrub((four.repeat(900) + '\n').repeat(120), opts), /\[cut: the text grew past twice its size\]$/);
+  // A 6M-character line is cut, not a RangeError.
+  assert.match(scrub('a'.repeat(6e6), opts), /^\[long line omitted: 6000000 chars\]$/);
+  assert.equal(scrub(`ok\n${'b'.repeat(5e6)}\ncall +27 82 555 0199`, opts), 'ok\n[long line omitted: 5000000 chars]\ncall [phone]');
+});
