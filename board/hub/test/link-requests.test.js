@@ -8,6 +8,7 @@ import { INBOX_KINDS } from '../api.js';
 import { DEFAULT_LIMITS } from '../ratelimit.js';
 import { DatabaseSync } from 'node:sqlite';
 import { migrate, loadMigrations } from '../../shared/migrate.js';
+import { tenancy } from './tenancy/fixture.js';
 
 const rows = (h, id) => h.db.all("SELECT kind, ref_json, read_at FROM inbox WHERE member_id = ? AND kind = 'board_link_request' ORDER BY created_at, id", id)
   .map((r) => ({ ...r, ref: JSON.parse(r.ref_json) }));
@@ -97,4 +98,22 @@ test('migration 080 keeps every inbox row and the cross-team guard, and accepts 
   assert.throws(() => db.exec(`INSERT INTO inbox VALUES ('i4','o1','m2','mention','{}','${NOW}',NULL)`), /cross-team reference/);
   assert.throws(() => db.exec(`INSERT INTO inbox VALUES ('i5','o1','m1','other','{}','${NOW}',NULL)`), /CHECK constraint/);
   assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'inbox_by_member_read'").get());
+});
+
+test('board_link_request: an ask reaches only the asking team\'s owners and admins, never another team\'s (#62 hub review)', async () => {
+  const fx = await tenancy();
+  try {
+    const { db, users, A, B, as } = fx;
+    const asks = (id) => db.all("SELECT org_id, ref_json FROM inbox WHERE member_id = ? AND kind = 'board_link_request'", id);
+    const before = fx.snapshotB();
+    // A plain member of A, then S (in both teams) naming A: A's owner and admin get it, B's owner nothing.
+    const m = await as(users.amember, 'POST', '/api/link-requests', { repo_short: 'alpha-secret' });
+    assert.equal(m.status, 200, m.text);
+    assert.equal(m.body.sent, db.all("SELECT id FROM members WHERE org_id = ? AND removed_at IS NULL AND role IN ('owner', 'admin')", A.team).length);
+    const s = await as(users.s, 'POST', '/api/link-requests', { repo_short: 'alpha-shared' }, { 'x-board-team': A.team });
+    assert.equal(s.status, 200, s.text); assert.equal(s.body.sent, 2);
+    assert.deepEqual(asks(B.owner), [], 'B\'s owner gets nothing from A');
+    assert.equal(fx.snapshotB(), before, 'team B\'s rows, inbox included, are untouched');
+    for (const id of [A.owner, A.admin]) assert.deepEqual(asks(id).map((r) => [r.org_id, JSON.parse(r.ref_json).repo_short]).sort(), [[A.team, 'alpha-secret'], [A.team, 'alpha-shared']]);
+  } finally { await fx.h.destroy(); }
 });
