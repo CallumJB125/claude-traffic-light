@@ -1034,5 +1034,12 @@
     ta.focus();
   }
   api.onVoiceDraft?.(() => { void takeVoiceDraft(); });
+  // New task… from the menu bar when Home's task box is hidden: an empty composer, nothing started.
+  api.onCompose?.(() => { void openComposer(); });
+  // Home's "Open in Tasks": select that task once it is in the list.
+  api.onReveal?.((id) => {
+    if (!id || id.length > 128 || view === 'composer') return;
+    if (byId(id)) void selectTask(id); else { selectedId = id; pendingSelect = id; renderList(); }
+  });
   void takeVoiceDraft();
 })();

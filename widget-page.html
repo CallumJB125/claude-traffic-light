@@ -88,6 +88,12 @@
           <input type="text" id="shortcut" placeholder="e.g. CmdOrCtrl+Shift+Space" spellcheck="false" autocomplete="off" aria-describedby="shortcut-hint" />
           <button type="button" id="shortcut-save">Save</button></div>
         <p class="hint" id="shortcut-hint">Leave empty to turn the shortcut off.</p>
+        <div class="row"><label for="compose-shortcut">Open the task box from anywhere</label>
+          <input type="text" id="compose-shortcut" placeholder="Off" spellcheck="false" autocomplete="off" aria-describedby="compose-shortcut-hint compose-shortcut-note" />
+          <button type="button" id="compose-shortcut-save">Save</button>
+          <button type="button" id="compose-shortcut-on">Turn on ⇧⌘Space</button></div>
+        <p class="hint" id="compose-shortcut-hint">This takes ⇧⌘Space from every app, including Parameter Hints in VS Code and Cursor. Clear the field to give it back. Home and the menu bar's New task… work without it.</p>
+        <p class="note" id="compose-shortcut-note" role="status"></p>
         <p class="note" id="where-note" role="status"></p>
       </section>
 

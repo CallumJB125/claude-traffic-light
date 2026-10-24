@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('tasksApi', {
   // A task offered by voice (agent mode) and started from the widget: its words, once.
   voiceDraft: () => ipcRenderer.invoke('tasks:voice-draft'),
   onVoiceDraft: (cb) => ipcRenderer.on('tasks:voice-draft-ready', () => cb()),
+  // Main's own: the menu bar's New task… with Home's task box hidden, and Home's "Open in Tasks". Listeners only.
+  onCompose: (cb) => ipcRenderer.on('tasks:compose', () => cb()),
+  onReveal: (cb) => ipcRenderer.on('tasks:reveal', (_e, id) => cb(typeof id === 'string' ? id : null)),
 });
 contextBridge.exposeInMainWorld('recipesApi', {
   list: () => ipcRenderer.invoke('recipes:list'),

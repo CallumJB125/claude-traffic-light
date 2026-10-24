@@ -19,7 +19,7 @@ function createTasksWindowAuthority({ service, confirm }) {
   const events = buddySource.slice(buddySource.indexOf("      if(page.id==='tasks'){"), buddySource.indexOf("      v.webContents.on('did-finish-load'", buddySource.indexOf("      if(page.id==='tasks'){")));
   const blur = buddySource.slice(buddySource.indexOf("    win.on('blur',()=>{if(!tasksModalTicket)"), buddySource.indexOf("    win.on('closed'", buddySource.indexOf("    win.on('blur',()=>{if(!tasksModalTicket)")));
   if (!methods || !events || !blur) throw Error('shipped Tasks authority wiring missing');
-  vm.runInNewContext('let tasksDocument=0,tasksGeneration=0,tasksModalTicket=null,setupModalTicket=null,setupSourcesGeneration=0;globalThis.api={' + methods + '};' + events + blur
+  vm.runInNewContext('let tasksDocument=0,tasksGeneration=0,tasksModalTicket=null,setupModalTicket=null,setupSourcesGeneration=0,homeModalTicket=null,homeGeneration=0;globalThis.api={' + methods + '};' + events + blur
     + 'globalThis.retireAccount=()=>{setupSourcesGeneration++;};globalThis.navigate=()=>{tasksGeneration++;selected="other";};', context);
   const handlers = new Map(), dialogs = [];
   const registration = mainSource.match(/^require\('\.\/src\/tasks-main'\)\.register\([^\n]+\);$/m)?.[0];

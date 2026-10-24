@@ -15,7 +15,7 @@ function fixture(){
  const factory=source.slice(source.indexOf('  async function setupSources()'),source.indexOf('  const myDayBroker'));
  const methods=source.slice(source.indexOf('    setupsActorCurrent(actor)'),source.indexOf('    onSetupsIdentityChange(listener)'));
  const retire=source.slice(source.indexOf('  function retireSetupDocument()'),source.indexOf('  // Before anything that can call forgetHub.'));
- const code='let setupSourcesGeneration=0,setupLocalGeneration=0,setupCurrentSources=[],setupModalTicket=null;const setupIdentityListeners=new Set();'+retire+factory+'const api={setupSources,'+methods+'};globalThis.api=api;globalThis.retireDocument=retireSetupDocument;globalThis.blur=()=>{if(!setupModalTicket)setupLocalGeneration++;};globalThis.navigate=()=>{setupLocalGeneration++;selected="other";};';
+ const code='let setupSourcesGeneration=0,setupLocalGeneration=0,setupCurrentSources=[],setupModalTicket=null,homeModalTicket=null;const setupIdentityListeners=new Set();'+retire+factory+'const api={setupSources,'+methods+'};globalThis.api=api;globalThis.retireDocument=retireSetupDocument;globalThis.blur=()=>{if(!setupModalTicket)setupLocalGeneration++;};globalThis.navigate=()=>{setupLocalGeneration++;selected="other";};';
  vm.runInNewContext(code,context);return {api:context.api,context,state,marker,principal,wc,win};
 }
 test('actual sealed device and marker bind setup actor; token/identity never appear in sharing row',async()=>{

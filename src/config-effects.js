@@ -11,12 +11,18 @@ function applyConfigSideEffects(prev, next, d, touched) {
   if (hit('remoteTailscale')) d.syncTailnetListener();
   if (hit('remoteInteractionHost') || hit('teamSessionSharing')) d.syncInteractionHost?.();
   if (hit('menuBarMode') || hit('showWidget')) d.createTray();
+  // The task box's shortcut first whenever any of the three keys changes (review R5): the widget and voice keys
+  // win, so compose lets go of a key before either of them takes it.
+  const composeHit = hit('composeShortcut') || hit('widgetShortcut') || hit('voice');
+  if (composeHit) d.composeShortcut?.(next);
   if (hit('voice')) d.applyVoiceHotkey();
   if (hit('lowPower')) d.applyLowPower?.();
   if (hit('fastHook')) d.syncFastHook?.();
   if (hit('agentMailInbox')) d.syncAgentMail?.();
   if (hit('agentBus')) d.syncAgentBus?.();
   if (hit('widgetShortcut') || hit('widgetSize')) d.widgetPolish?.(prev, next);
+  // Then once more if it was taken: clearing the widget's key gives the task box the key it was waiting for.
+  if (composeHit) d.composeShortcutSettle?.(next);
   d.broadcastStatus();
 }
 

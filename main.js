@@ -1579,6 +1579,9 @@ function getBuddy() {
     buddyWin = createBuddyWindow({
       isConstrained: () => lowPowerOn,
       simpleMode: () => loadConfig().simpleMode === true,
+      // O4: Home stays alive while a task its box started is live; its retired document drops that task's slot.
+      homeBusy: () => Compose.busy(),
+      onHomeRetired: (wcId) => Compose.retire(wcId),
       onOverviewRetired: () => { InteractionMain.retireDocuments().catch(() => {}); retireClaudeChannels(); },
       openWindow: (which) => {
         if (which === 'lights') createLightsWindow();
@@ -2191,10 +2194,11 @@ function getTasks() {
     ...(IS_MAC ? { launchTerminal: (descriptor, current, appName) => { const T = require('./src/tasks-terminal'); return T.launchTaskTerminal(descriptor, { current, ...(appName === GhosttyDock.APP ? { launch: T.ghosttyDockLauncher() } : {}) }); } } : {}),
     onChange: (snap) => {
       for (const wc of tasksPages()) wc.send('tasks:changed', snap);
+      Compose.onChange(snap);
       for (const id of AgentMail.acceptedTasks()) { const t = (snap?.tasks || []).find((x) => x && String(x.id) === id); if (t && ['done', 'in_review', 'failed'].includes(t.state)) AgentMail.taskEnded(id, t.state, t.reason || '').catch(() => {}); }
       try { keepAwakeMain?.hold(require('./src/morning-report.js').queueActive(snap)); } catch { /* the blocker is best-effort */ }
     },
-    onEvent: (wcId, id, event) => { const wc = tasksPages().find((w) => w.id === wcId); if (wc) wc.send('tasks:event', { id, event }); },
+    onEvent: (wcId, id, event) => { if (Compose.onEvent(wcId, id, event)) return; const wc = tasksPages().find((w) => w.id === wcId); if (wc) wc.send('tasks:event', { id, event }); },
     // The confirmation for the risky actions is main's: a native dialog, Cancel the default, the page's click never counts.
     confirmDialog: async (info, wcId) => {
       const wc = tasksPages().find((w) => w.id === wcId);
@@ -2204,6 +2208,9 @@ function getTasks() {
         message: `${info.label}?`,
         detail: [`Task: ${info.title}`, info.where ? `Runs in: ${info.where}` : '', info.detail].filter(Boolean).join('\n'),
       });
+      // Home's task box (O4): only its create (Run anyway over the cap) gets a dialog, through Home's own ticket; anything else is refused.
+      const homeWc = !wc && wcId ? buddyWin?.pageWebContents?.('home') : null;
+      if (homeWc && homeWc.id === wcId) return info.action === 'create' ? (await buddyWin?.homeConfirm?.(show))?.response === 1 : false;
       const r = ['merge', 'switchAi', 'openPr', 'takeover', 'openTerminal'].includes(info.action) || info.action === 'create' && wc ? await buddyWin?.tasksConfirm?.(show) : await show(parent);
       return r?.response === 1;
     },
@@ -2237,6 +2244,28 @@ ipcMain.handle('tasks:pick-folder', async (e) => {
   return getTasks().registerFolder(dir);
 });
 onQuit(app, () => tasksSvc?.stop());
+// O4: Home's task box (src/compose-main.js), its shortcut (src/compose-shortcut.js) and the tray's "New task…".
+// The shortcut is off until the person turns it on (it would take Parameter Hints from VS Code and Cursor).
+const ComposeShortcut = require('./src/compose-shortcut.js').install({ globalShortcut, config: loadConfig, onPress: () => openCompose(), enabled: !IS_DEV_RUN, log: console.log });
+const Compose = require('./src/compose-main.js').register({
+  ipcMain, buddy: () => buddyWin, service: getTasks, config: loadConfig, homeDir: os.homedir(),
+  sessions: () => localSessions(aggregateState().sessions || []),
+  isDir: (p) => fs.promises.stat(p).then((st) => st.isDirectory(), () => false),
+  muted: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd),
+  pickFolder: async (e) => {
+    if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_PICK) return process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_PICK;
+    const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Choose the folder the task works in', properties: ['openDirectory', 'createDirectory'] });
+    return r.canceled ? null : r.filePaths[0];
+  },
+  openInTasks: (id) => { if (!devMockReady) return false; openBuddy('tasks'); return buddyWin?.tasksReveal?.(id) ?? false; },
+  shortcut: () => ComposeShortcut.view(),
+});
+// Tray and shortcut: focus Home's box, or with the box hidden ("Show the task box on Home" off) the Tasks composer.
+// Either only focuses an empty or kept draft; nothing starts until Run.
+function openCompose() {
+  return require('./src/compose-main.js').openCompose({ ready: () => devMockReady, config: loadConfig, openPage: (id) => openBuddy(id), buddy: () => buddyWin });
+}
+if (IS_DEV_RUN && !app.isPackaged) global.__plexiformCompose = { press: () => openCompose(), shortcut: () => ComposeShortcut.view() };
 // Recipes on the Tasks page (src/recipes.js): built from the recipe file in main, asked with a native dialog, run by the Tasks engine.
 // Repeating recipes (src/recipe-schedules.js): their schedules sit beside the recipes; a
 // due run starts through the Tasks engine with no dialog (the person confirmed when scheduling).
@@ -3534,6 +3563,7 @@ function createTray() {
       ...scopeItem(),
       ...BurstIpc.trayItems(),
       ...UsagePopOut.items(usageToday(), () => openBuddy('usage')),
+      { label: 'New task…', ...(ComposeShortcut.held ? { accelerator: ComposeShortcut.held, registerAccelerator: false } : {}), click: () => { openCompose(); } },
       ...AppMenu.appItems({ pages: sectionItems(), groups: [{ id: 'sections' }, { id: 'more', submenu: 'More' }], open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => openBuddy('usage') } }),
       { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
       ...quietItems(), ...WidgetPolish.menuItems(),
@@ -3822,6 +3852,8 @@ function applyConfigEffects(prev, next, touched) {
     installHooks,
     enableCalendar: () => BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message)),
     applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, applyLowPower, syncFastHook, broadcastStatus, syncInteractionHost, widgetPolish: (p, n) => WidgetPolish.configChanged(p, n),
+    composeShortcut: (n) => { ComposeShortcut.apply(n); },
+    composeShortcutSettle: (n) => { ComposeShortcut.settle(n); refreshTrayMenu?.(); },
     syncAgentMail: () => AgentMail.sync(),
     syncAgentBus: () => AgentBusMain.sync(),
   }, touched);
@@ -4705,7 +4737,7 @@ const BUBBLE_MIN_W = 230;
 const WidgetStrip = require('./src/widget-strip.js');
 let strip = WidgetStrip.NONE;
 let applyingStrip = false;
-require('./src/widget-page.js').register({ utilityHandle, allowed: (e) => fromUtilityPage(e, 'widget'), loadConfig, commitConfig, widget: () => win, strip: () => strip, ensureWidget: () => { if (!win) createWindow(); applyWidgetVisibility(); }, resizeBy, busy: () => roamState.busy || !!gardenRun, stopGlide, saveBounds, screen, limits: { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }, openPage: (id) => { openBuddy(id); if (id === 'settings') buddyWin?.sendToPage('settings', 'show-section', 'widget'); }, platform: process.platform });
+require('./src/widget-page.js').register({ utilityHandle, allowed: (e) => fromUtilityPage(e, 'widget'), loadConfig, commitConfig, widget: () => win, strip: () => strip, ensureWidget: () => { if (!win) createWindow(); applyWidgetVisibility(); }, resizeBy, busy: () => roamState.busy || !!gardenRun, stopGlide, saveBounds, screen, limits: { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }, openPage: (id) => { openBuddy(id); if (id === 'settings') buddyWin?.sendToPage('settings', 'show-section', 'widget'); }, platform: process.platform, composeShortcut: () => ComposeShortcut.view() });
 spendSafety = require('./src/spend-safety-main.js').install({ Notification, handle: utilityHandle, allowed: (e) => analyticsSender(e) || settingsOnly(e), rootDir: ROOT_DIR, projectsDir: PROJECTS_DIR, home: os.homedir(), env: process.env, config: loadConfig, turns: () => getUsageTurns(), spend: () => spendSnapshot(loadConfig()), silent: IS_DEV_RUN, log: console.log });
 require('./src/rule-notify-main.js').install({ Notification, busy: () => BusyWatch.holding(), paused: (id) => spendSafety?.nudgesPaused(id), handle: utilityHandle, allowed: widgetConfigSender, config: loadConfig, sessions: () => aggregateState({ ignoreTravel: true }).sessions || [], env: () => { const c = loadConfig(); return { offline: !online, ...BusyWatch.env(), git: gitEvents(c), spend: spendSnapshot(c) }; }, log: console.log });
 const WidgetPolish = require('./src/widget-polish-main.js').install({ ipcMain, globalShortcut, utilityHandle, config: loadConfig, commitConfig, widgetWindow: () => win, quiet: Quiet, widgetAllowed: (e) => widgetOnly(e), pageAllowed: (e) => fromUtilityPage(e, 'widget'), sessions: () => localSessions(aggregateState().sessions || []), strip: () => strip, saveBounds, stopGlide, screen, sizing: { aspect: WIDGET_ASPECT, minWidth: MIN_WIDTH }, log: console.log });
@@ -5608,6 +5640,7 @@ app.whenReady().then(() => {
   BusyWatch.start();
   powerMonitor.on('resume', checkOnline);
   initVoice();
+  ComposeShortcut.apply(); // after the voice key; the widget's key is read from config, so its lazy apply needs no order
   // Other agents live on disk, not in hooks: poll for them.
   if (!DEMO) { syncAgents(); every(OMC_POLL_MS, syncAgents, 'omc-agents'); onQuit(app, () => agentsSync.stop()); }
 
