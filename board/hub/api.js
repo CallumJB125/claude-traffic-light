@@ -26,9 +26,10 @@ import { WorkflowExecutor } from './workflow-executor.js';
 import { requireStorage } from './storage-watch.js';
 import { observationContext, validObservation, sentryStatus } from './integrations/sentry/observation.js';
 import { cardSeed } from './activity-handoff.js';
+import untrustedFrame from '../shared/untrusted-frame.cjs';
 
 // Team depth (step 0): hub inbox kinds and bounds, shared by lanes A, B and D.
-export const INBOX_KINDS = new Set(['mention', 'reply', 'moment', 'handoff_request', 'handoff_answer', 'input_answered']);
+export const INBOX_KINDS = new Set(['mention', 'reply', 'moment', 'handoff_request', 'handoff_answer', 'input_answered', 'board_link_request']);
 export const INBOX_MAX = 500;
 const INBOX_REF_MAX = 2048;
 const INBOX_READ_TAIL = 50;
@@ -1047,6 +1048,31 @@ export class Api {
       this.hub.log?.warn?.('inbox notify dropped', { member_id: memberId, kind, error: e.message });
       return null;
     }
+  }
+
+  // ── "Ask an admin" (organised views PR 7) ─────────────────────────────────
+  // A member whose repository is on no team board asks the team's owners and admins to link it
+  // (CONTRACT "Board link requests"). The body is the repo's short name and nothing else; the hub
+  // keeps only one inbox row per owner or admin: {requester_name, repo_short, team_id, by}. The
+  // name is the member's own display name, folded and labelled (untrusted-frame.cjs), so it cannot
+  // carry markup or direction marks into an admin's inbox. One unread ask per (member, repo).
+  linkRequest(member, body) {
+    // request_id is the replay cache's (D8) and is never stored.
+    if (!body || typeof body !== 'object' || Object.keys(body).some((k) => k !== 'repo_short' && k !== 'request_id')) throw new HubError('VALIDATION', 'send repo_short only');
+    const short = body.repo_short;
+    if (typeof short !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(short) || /^\.+$/.test(short)) throw new HubError('VALIDATION', 'repo_short: the repository\'s short name, up to 80 letters, digits, . _ or -');
+    if (this.hub.isAdmin(member)) throw new HubError('VALIDATION', 'you can link it yourself: Sessions → Where your projects\' work goes → Link');
+    if (member.role !== 'member') throw new HubError('FORBIDDEN', 'only a team member can ask an admin to link a repository');
+    const open = this.db.get("SELECT 1 AS n FROM inbox WHERE org_id = ? AND kind = 'board_link_request' AND read_at IS NULL AND json_extract(ref_json, '$.by') = ? AND json_extract(ref_json, '$.repo_short') = ? LIMIT 1", member.org_id, member.id, short);
+    if (open) return { ok: true, sent: 0, duplicate: true };
+    const { fold, label } = untrustedFrame;
+    const ref = { requester_name: label(fold(String(this.hub.memberName(member.id) ?? '')), 'A teammate'), repo_short: short, team_id: member.org_id, by: member.id };
+    const admins = this.db.all("SELECT id FROM members WHERE org_id = ? AND removed_at IS NULL AND role IN ('owner', 'admin') AND id != ?", member.org_id, member.id);
+    const sent = [];
+    for (const a of admins) { const id = this.notify(a.id, 'board_link_request', ref); if (id) sent.push([a.id, id]); }
+    this.audit(member.id, 'board.link_request', short);
+    this.hub.later(() => { for (const [to, id] of sent) { const item = this.inboxItem(id); if (item) this.hub.broadcastMember(to, 'inbox.item', { item }); } });
+    return { ok: true, sent: sent.length };
   }
 
   // ── hand-offs (team depth, lane D) ────────────────────────────────────────
