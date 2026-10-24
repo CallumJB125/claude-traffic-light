@@ -292,6 +292,7 @@ const MATRIX = {
   'POST /api/cards/:card_id/archive': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/archive` },
   'POST /api/cards/:card_id/restore': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/restore` },
   'POST /api/boards/:board_id/repos': { kind: 'cross', path: (fx) => `/api/boards/${fx.B.board}/repos`, body: (fx) => ({ repo_id: fx.B.repo }) },
+  'POST /api/link-requests': { kind: 'team', body: { repo_short: 'app' } },
   'GET /api/cards/:card_id': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}` },
   'POST /api/cards/:card_id/work-capture/stop': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}/work-capture/stop`, body: {} },
   'PATCH /api/cards/:card_id': { kind: 'cross', path: (fx) => `/api/cards/${fx.B.card}`, body: { title: 'pwned', version: 0 } },

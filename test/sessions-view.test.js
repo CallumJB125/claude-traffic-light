@@ -352,3 +352,70 @@ test('session management filters local reports and the start shortcut only prepa
     d.getElementById('start-session-shortcut').click(); await tick(); await tick(); assert.equal(d.getElementById('panel-start').hidden,false); assert.ok(d.querySelector('#panel-start textarea')); assert.equal(starts,0);
   } finally { f.dom.window.close(); }
 });
+test('PR 7 routing strip: hidden with no rows; a question\'s buttons save the pick and reload; Change and Link reveal a picker', async () => {
+  const empty = setup({ state: async () => state(), routing: async () => ({ rows: [] }) });
+  try { await tick(); assert.equal(empty.document.getElementById('routing').hidden, true); } finally { empty.dom.window.close(); }
+  const older = setup({ state: async () => state() });
+  try { await tick(); assert.equal(older.document.getElementById('routing').hidden, true, 'a preload without routing shows nothing'); } finally { older.dom.window.close(); }
+
+  const calls = [];
+  let rows = [
+    { repo: 'github.com/org/app', short: 'app', state: 'ask', text: 'app is linked to A / Core and A / Web. Where should its new work go?', note: null, choices: [{ key: 'k1', label: 'Core' }, { key: 'local', label: 'Keep on My board' }], change: [{ key: 'k1', label: 'A / Core', current: false }, { key: 'local', label: 'My board (private)', current: true }], link: null, ask: null },
+    { repo: 'github.com/org/site', short: 'site', state: 'single', text: 'site → A / Core <img src=x onerror=alert(1)>', note: 'Its only team board, so new work goes there.', choices: null, change: [{ key: 'k2', label: 'A / Core', current: true }, { key: 'local', label: 'My board (private)', current: false }], link: null, ask: null },
+    { repo: 'github.com/org/new', short: 'new', state: 'unlinked', text: 'new → My board (private)', note: 'Put it on a team board?', choices: [{ key: 'local', label: 'Keep on My board' }], change: [], link: [{ key: 'b1', label: 'A / Core' }], ask: null },
+  ];
+  const fixture = setup({ state: async () => state(), routing: async () => { calls.push(['routing']); return { rows }; },
+    routeChoose: async (repo, key) => { calls.push(['choose', repo, key]); return { ok: true }; }, routeLink: async (repo, board) => { calls.push(['link', repo, board]); return { ok: false, text: 'Only a team owner or admin can link a repository.' }; } });
+  try {
+    await tick(); await tick();
+    const box = fixture.document.getElementById('routing');
+    assert.equal(box.hidden, false);
+    const items = [...box.querySelectorAll('.routing-row')];
+    assert.equal(items.length, 3);
+    assert.match(items[0].textContent, /Where should its new work go\?/);
+    assert.equal(box.querySelectorAll('img').length, 0, 'text only');
+    // The question: one button per board plus Keep on My board.
+    const keep = [...items[0].querySelectorAll('button')].find(b => b.textContent === 'Keep on My board');
+    rows = [{ ...rows[0], state: 'set', text: 'app → My board (private)', choices: null }];
+    keep.click(); await tick(); await tick();
+    assert.deepEqual(calls.filter(c => c[0] === 'choose'), [['choose', 'github.com/org/app', 'local']]);
+    assert.equal(calls.filter(c => c[0] === 'routing').length, 2, 'reloads after a save');
+    assert.equal(box.querySelectorAll('.routing-row').length, 1);
+    // A set row: Change reveals the picker with the current board selected.
+    const row = box.querySelector('.routing-row'), pick = row.querySelector('.routing-pick');
+    assert.equal(pick.hidden, true);
+    [...row.querySelectorAll('button')].find(b => b.textContent === 'Change').click();
+    assert.equal(pick.hidden, false); assert.equal(pick.querySelector('select').value, 'local');
+  } finally { fixture.dom.window.close(); }
+
+  // Link on an unlinked row: the picker shows at once; a refusal is said, not hidden.
+  const linkCalls = [];
+  const linking = setup({ state: async () => state(), routing: async () => ({ rows: [rows[0] && { repo: 'github.com/org/new', short: 'new', state: 'unlinked', text: 'new → My board (private)', label: 'new goes to My board (private)', note: 'Put it on a team board?', choices: [{ key: 'local', label: 'Keep on My board' }], change: [], link: [{ key: 'b1', label: 'A / Core' }], ask: null }] }),
+    routeLink: async (repo, board) => { linkCalls.push([repo, board]); return { ok: false, text: 'Only a team owner or admin can link a repository.' }; } });
+  try {
+    await tick(); await tick();
+    const row = linking.document.querySelector('.routing-row');
+    assert.equal(row.querySelector('.routing-pick').hidden, false);
+    // #62 review: the Link picker comes before "Keep on My board"; the arrow is read as "goes to".
+    assert.deepEqual([...row.querySelectorAll('button')].map(b => b.textContent), ['Link', 'Keep on My board']);
+    const said = row.querySelector('.routing-text');
+    assert.equal(said.querySelector('[aria-hidden="true"]').textContent, 'new → My board (private)');
+    assert.equal(said.querySelector('.sr-only').textContent, 'new goes to My board (private)');
+    [...row.querySelectorAll('button')].find(b => b.textContent === 'Link').click(); await tick(); await tick();
+    assert.deepEqual(linkCalls, [['github.com/org/new', 'b1']]);
+    assert.match(linking.document.getElementById('routing-status').textContent, /Only a team owner or admin/);
+  } finally { linking.dom.window.close(); }
+});
+test('PR 7 routing strip: Ask an admin sends the chosen team and says what happened', async () => {
+  const calls = [];
+  const fixture = setup({ state: async () => state(), routing: async () => ({ rows: [{ repo: 'github.com/org/new', short: 'new', state: 'unlinked', text: 'new → My board (private)', note: 'Put it on a team board? Only a team admin can link it, so Plexiform can ask them for you.', choices: [{ key: 'local', label: 'Keep on My board' }], change: [], link: null, ask: [{ key: 't1', label: 'Acme' }, { key: 't2', label: 'Beta' }] }] }),
+    routeAsk: async (repo, team) => { calls.push([repo, team]); return { ok: true, text: 'Asked Beta’s admins to put new on a team board.' }; } });
+  try {
+    await tick(); await tick();
+    const row = fixture.document.querySelector('.routing-row');
+    row.querySelector('.routing-ask select').value = 't2';
+    [...row.querySelectorAll('button')].find(b => b.textContent === 'Ask an admin').click(); await tick(); await tick();
+    assert.deepEqual(calls, [['github.com/org/new', 't2']]);
+    assert.match(fixture.document.getElementById('routing-status').textContent, /Asked Beta’s admins/);
+  } finally { fixture.dom.window.close(); }
+});

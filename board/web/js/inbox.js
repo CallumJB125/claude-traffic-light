@@ -5,7 +5,7 @@
 import { h } from './h.js';
 import { icon } from './icons.js';
 
-export const INBOX_LABEL = Object.freeze({ mention: 'Mentioned you', reply: 'Replied to you', moment: 'Marked a moment', handoff_request: 'Handed you a card', handoff_answer: 'Answered your hand-off', input_answered: 'Answered your session\'s question' });
+export const INBOX_LABEL = Object.freeze({ mention: 'Mentioned you', reply: 'Replied to you', moment: 'Marked a moment', handoff_request: 'Handed you a card', handoff_answer: 'Answered your hand-off', input_answered: 'Answered your session\'s question', board_link_request: 'Asked you to put a project on a team board' });
 const str = (v, max) => (typeof v === 'string' && v.length <= max ? v : '');
 const ago = (ms) => (!Number.isFinite(ms) || ms < 0 ? '' : ms < 60_000 ? 'just now' : ms < 3_600_000 ? `${Math.floor(ms / 60_000)} min ago` : ms < 86_400_000 ? `${Math.floor(ms / 3_600_000)} h ago` : `${Math.floor(ms / 86_400_000)} d ago`);
 
@@ -14,8 +14,8 @@ export function inboxText(item, members = []) {
   const id = str(item.ref?.by, 100);
   const list = Array.isArray(members) ? members : members instanceof Map ? [...members.values()] : [];
   const by = id ? list.find((m) => m.id === id || m.member_id === id) : null;
-  const who = str(item.ref?.by_name, 120) || str(by?.display_name ?? by?.name, 120) || 'A teammate';
-  const thing = str(item.ref?.title, 200) || str(item.ref?.label, 120) || str(item.ref?.excerpt, 200);
+  const who = str(item.ref?.by_name, 120) || str(item.ref?.requester_name, 120) || str(by?.display_name ?? by?.name, 120) || 'A teammate';
+  const thing = str(item.ref?.title, 200) || str(item.ref?.label, 120) || str(item.ref?.excerpt, 200) || str(item.ref?.repo_short, 80);
   return `${who} · ${INBOX_LABEL[item.kind] ?? 'needs you to look'}${thing ? `: ${thing}` : ''}`;
 }
 

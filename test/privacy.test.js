@@ -377,3 +377,9 @@ test('PRIVACY.md documents the agent awareness roster: metadata only, local only
   assert.match(entry, /only when it calls `bus_notes` itself/);
   assert.match(entry, /log records counts and states, never the text/);
 });
+
+test('PR 7: PRIVACY.md says what "Ask an admin" sends, to whom, and what it never sends', () => {
+  const line = privacy.split('\n').find((l) => l.includes('Ask an admin'));
+  assert.ok(line, 'the Ask an admin line is present');
+  assert.match(line, /short name/); assert.match(line, /owners and admins only/); assert.match(line, /No repository address, folder path, session or card text is sent/);
+});

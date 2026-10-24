@@ -167,6 +167,7 @@ export async function tenancy({ config = {}, ...opts } = {}) {
       q('SELECT id, org_id, role, removed_at, display_name FROM members WHERE org_id = ?', B.team),
       q('SELECT c.* FROM cards c JOIN boards b ON b.id = c.board_id WHERE b.org_id = ?', B.team),
       q('SELECT * FROM comments WHERE card_id = ?', B.card),
+      q('SELECT * FROM inbox WHERE org_id = ? ORDER BY id', B.team),
       q('SELECT * FROM build_logs WHERE org_id = ?', B.team),
       q('SELECT * FROM workflow_recipes WHERE org_id = ?', B.team),
       q('SELECT v.* FROM workflow_versions v JOIN workflow_recipes r ON r.id = v.recipe_id WHERE r.org_id = ?', B.team),

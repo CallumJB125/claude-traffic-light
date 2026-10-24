@@ -88,3 +88,15 @@ test('ingest validates: no origin, unknown kinds, missing ids and non-arrays are
   assert.deepEqual(inbox.merge().items.length, 200);
   assert.equal(inbox.merge().total, 200);
 });
+
+test('PR 7: a board link request is a "Link request" row that opens Sessions, titled with who asked and the project', () => {
+  const inbox = createTeamInbox({ now: () => NOW });
+  inbox.ingest(HUB, [{ id: 'l1', org_id: 'o', kind: 'board_link_request', ref: { requester_name: 'Sam', repo_short: 'claude-traffic-light', team_id: 'o', by: 'm-sam' }, created_at: iso(1), read_at: null }]);
+  const [row] = inbox.items();
+  assert.equal(row.kind, 'link');
+  assert.equal(row.title, 'Sam asked you to put claude-traffic-light on a team board');
+  assert.equal(row.action.destination, 'sessions');
+  assert.equal(notifyPolicy({ kind: 'board_link_request' }, null, NOW), false, 'badge and Inbox only, no notification');
+  const { compose, LABEL, TEAM_KINDS } = require('../src/attention-inbox.js');
+  assert.equal(LABEL.link, 'Link request'); assert.ok(TEAM_KINDS.includes('link'));
+});

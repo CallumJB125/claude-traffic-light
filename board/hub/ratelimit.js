@@ -33,6 +33,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   memory_read_user: { capacity: 60, per_ms: 60_000 },      // GET /api/teams/:id/memory/v1/*, per user, including invalid queries
   label_rewrite_board: { capacity: 10, per_ms: 3_600_000 },  // label rename / delete with strip: each rewrites up to 2,000 cards (D91), per board
   agent_card_member: { capacity: 20, per_ms: 3_600_000 },    // board_create_card, per member the runs are for
+  link_request_member: { capacity: 5, per_ms: 3_600_000 },   // POST /api/link-requests ("Ask an admin"), per member
   agent_lesson_member: { capacity: 30, per_ms: 3_600_000 },  // board_add_lesson, per member the runs are for
   // BOARD_AUTH=accounts (ACCOUNTS-API.md "Rate limits"; design §9.1)
   // Per address AND requesting network (/24, /64): a third party exhausting

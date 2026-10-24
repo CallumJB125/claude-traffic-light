@@ -1055,7 +1055,9 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       if (args.length !== types.length || args.some((a, i) => typeof a !== types[i] || (typeof a === 'string' && a.length > 2048))) return { ok: false, error: 'Not allowed.' };
       try {
         const result = await fn(...args);
-        return op === 'state' && result?.screen === 'thismac' ? { ...result, workCapture: { enabled: captureEnabled && workCapture.enabled(), notice: workCapture.notice(), tasks: workCapture.snapshot().slice(-100), choices: workCapture.choices() } } : result;
+        // projects: one row per repository with a team board, worded like the Sessions strip (src/work-routing-view.js).
+        return op === 'state' && result?.screen === 'thismac' ? { ...result, workCapture: { enabled: captureEnabled && workCapture.enabled(), notice: workCapture.notice(), tasks: workCapture.snapshot().slice(-100),
+          projects: captureEnabled ? require('../src/work-routing-view.js').rowsFor(await workCapture.routing().catch(() => [])).map(({ repo, short, goesTo, note, change }) => ({ repo, short, goesTo, note, change })) : [] } } : result;
       } catch (err) { log('account action failed', op, err.message); return { ok: false, error: 'Something went wrong. Try again.' }; }
     });
   }
@@ -1298,6 +1300,11 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     // as sessions (flow, session bridge).
     wrappedWorkChanged(records) { wrappedWork = Array.isArray(records) ? records : []; if (captureEnabled) void workCapture.observe(lastSessions, { wrapped: wrappedWork }); },
     sessionBridge, captureOnce: (row, key) => workCapture.captureOnce(row, key),
+    /** Organised views PR 7: where each project's new work goes, and the person's pick (Sessions strip). */
+    captureRouting: (repos) => (captureEnabled ? workCapture.routing(repos) : []),
+    captureChoose: (repo, key) => captureEnabled && workCapture.choose(repo, key),
+    /** After a Link: drop "Keep on My board" so the linked board takes the project's new work (#62 review B1). */
+    captureClearLocal: (repo) => captureEnabled && workCapture.clearLocal(repo),
     /** The tray's automatic-cards item: null where capture is off for this run (the demo). */
     captureState: () => (captureEnabled ? { enabled: workCapture.enabled() } : null),
     /** Main-only: captured sessions' cards and work records, for Usage & cost's cost by work. */
