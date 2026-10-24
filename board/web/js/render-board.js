@@ -207,7 +207,10 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
   observed ? captureBadge(view, elapsed_ms, model.conn?.status === 'lost') : pill(chips.some((c) => c.id === 'proof' || (c.id === 'pr' && face.state === 'in_review')) ? { ...face, reason: null } : face),
   workPhase ? h('p', { class: 'card-work-phase' }, workPhase) : null,
   observed ? captureRecord(view) : null,
-  observed ? h('p', { class: 'card-foot' }, 'Existing session · details only. Stop it in your AI tool before starting elsewhere.') : null,
+  // Organised views PR 7: which project the routed work came from, by the repo short name the card already has.
+  observed ? h('p', { class: 'card-foot' }, typeof view.repo?.short_name === 'string' && view.repo.short_name
+    ? `From ${view.repo.short_name.slice(0, 80)} · existing session, details only. Stop it in your AI tool before starting elsewhere.`
+    : 'Existing session · details only. Stop it in your AI tool before starting elsewhere.') : null,
   (sponsor || req || face.activity_line) ? h('div', { class: 'card-meta' },
     sponsor ? h('span', { class: 'card-sponsor' }, sponsor) : null,
     face.activity_line && face.state !== 'done' ? h('span', { class: 'card-activity' }, face.activity_line) : null,
