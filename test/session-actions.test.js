@@ -190,3 +190,55 @@ test('PR 7 board broker: askAdmin sends the short name to a team the person is a
   assert.equal((await sb.askAdmin(member.key, 'org/app')).ok, false, 'a short name only');
   assert.equal(sent.length, 1);
 });
+test('PR 7 routing, as wired in the app: Keep on My board, then Link through sessions:route-link clears the pin (#62 review, round 2)', async (t) => {
+  // The buddy window's capture surface, line for line as buddy-window/index.js gives it to register().
+  const idx = fs.readFileSync(path.join(__dirname, '../buddy-window/index.js'), 'utf8');
+  assert.match(idx, /captureRouting: \(repos\) => \(captureEnabled \? workCapture\.routing\(repos\) : \[\]\),/);
+  assert.match(idx, /captureChoose: \(repo, key\) => captureEnabled && workCapture\.choose\(repo, key\),/);
+  assert.match(idx, /captureClearLocal: \(repo\) => captureEnabled && workCapture\.clearLocal\(repo\),/);
+  const { createWorkCapture } = require('../src/work-capture.js');
+  const WC = require('../src/work-capture.js'), repoFor = WC.repoFor;
+  WC.repoFor = async () => 'github.com/org/none'; t.after(() => { WC.repoFor = repoFor; });
+  const dir = testTempDir('sact-wired-'), file = path.join(dir, 'capture.json');
+  const L = { hub: 'https://hub.example.test', user_id: 'u', team_id: 'team', board_id: 'board-l', repo_id: 'r', canonical_url: 'github.com/org/none', role: 'admin', team_name: 'T', board_name: 'Later' };
+  let routes = [];
+  const workCapture = createWorkCapture({ file, host: 'mac', startEnabled: true, getRoutes: async () => ({ routes, complete: true }), resolveRepo: async () => L.canonical_url, sendLocal: async () => ({ ok: true, card: { id: 'l' } }), sendTeam: async () => ({ ok: true, card: { id: 't' } }) });
+  t.after(() => workCapture.stop());
+  const captureEnabled = true;
+  const buddy = {
+    captureOnce: async () => ({ ok: true }),
+    captureRouting: (repos) => (captureEnabled ? workCapture.routing(repos) : []),
+    captureChoose: (repo, key) => captureEnabled && workCapture.choose(repo, key),
+    captureClearLocal: (repo) => captureEnabled && workCapture.clearLocal(repo),
+  };
+  const handlers = {};
+  const bridge = { gitRoot: async (c) => c, boards: { boards: async () => [], teams: async () => [{ key: 't', name: 'T', role: 'admin', boards: [{ key: 'b', name: 'Later' }] }], linkRepo: async () => { routes = [L]; return { ok: true }; } }, links: {}, rows: () => [] };
+  require('../src/session-actions-main.js').register({ ipcMain: { handle: (c, f) => { handlers[c] = f; } }, sessionsAllowed: () => true, sessions: () => [{ cwd: '/w/none', host: 'local', source: 'claude', sessionId: 's1' }],
+    bridge: () => bridge, capture: () => buddy, tasks: {}, clipboard: {}, pickFolder: () => {}, openPage: () => {}, pageExists: () => true });
+  const e = {};
+  const first = await handlers['sessions:routing'](e);
+  assert.deepEqual(first.rows.map((r) => [r.short, r.state]), [['none', 'unlinked']]);
+  assert.deepEqual(await handlers['sessions:route-choose'](e, 'github.com/org/none', 'local'), { ok: true });
+  assert.equal((await handlers['sessions:routing'](e)).rows[0].state, 'set');
+  assert.equal((await handlers['sessions:route-link'](e, 'github.com/org/none', 'b')).ok, true);
+  assert.equal(JSON.parse(fs.readFileSync(file)).local_choices, undefined, 'the pin is gone');
+  const [after] = (await handlers['sessions:routing'](e)).rows;
+  assert.deepEqual([after.state, after.goesTo], ['single', 'T / Later']);
+});
+test('PR 7 routing: a Link that cannot clear "Keep on My board" says so instead of reporting plain success', async () => {
+  const warned = [];
+  const teams = [{ key: 't1', name: 'Acme', role: 'admin', boards: [{ key: 'b1', name: 'Main' }] }];
+  const row1 = { repo: 'github.com/org/app', short: 'app', state: 'set', destination: { kind: 'local' }, matches: [] };
+  const mk = (clear) => rig({ boards: { boards: async () => [], teams: async () => teams, linkRepo: async () => ({ ok: true }) },
+    capture: { captureOnce: async () => ({ ok: true }), routing: async () => [row1], ...(clear ? { clearLocal: clear } : {}) } });
+  const orig = console.warn; console.warn = (...a) => warned.push(a.join(' '));
+  try {
+    for (const clear of [null, async () => false, async () => { throw new Error('x'); }]) {
+      const { a } = mk(clear); await a.routing();
+      const r = await a.routeLink('github.com/org/app', 'b1');
+      assert.equal(r.ok, true, 'the link itself was made');
+      assert.match(r.text, /still kept on My board/);
+    }
+    assert.equal(warned.length, 3);
+  } finally { console.warn = orig; }
+});

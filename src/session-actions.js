@@ -191,9 +191,14 @@ function create({ sessions, repoOf, rootOf, boards, capture, links, tickets = nu
     if (!listed.has(repo)) return { ok: false, text: 'Refresh, then try again.' };
     const r = await boards.linkRepo(board, repo);
     if (!r.ok) return { ok: false, needsAdmin: !!r.needsAdmin, text: r.error };
-    // Linked: a "Keep on My board" pin would still win over the new board (#62 review B1).
-    if (typeof capture.clearLocal === 'function') await capture.clearLocal(repo).catch(() => false);
-    return { ok: true };
+    // Linked: a "Keep on My board" pin would still win over the new board (#62 review B1). No silent skip: a capture
+    // that can't clear it is logged and said, so the person knows to use Change.
+    let cleared = false;
+    try { cleared = (await capture.clearLocal(repo)) === true; } catch { cleared = false; }
+    if (cleared) return { ok: true };
+    console.warn('[session-actions] linked, but Keep on My board could not be cleared');
+    const short = repo.split('/').pop();
+    return { ok: true, text: `Linked. ${short} is still kept on My board, so use Change to send its new work to the team board.` };
   }
 
   async function routeAsk(repo, team) {

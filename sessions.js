@@ -321,7 +321,7 @@ async function loadRouting() {
   const act = async (run) => {
     for (const b of box.querySelectorAll('button, select')) b.disabled = true;
     let r = null; try { r = await run(); } catch { r = null; }
-    if (r?.ok) { out.textContent = ''; await loadRouting(); }
+    if (r?.ok) { out.textContent = ''; await loadRouting(); if (r.text) say(out, r.text, true); }
     else { for (const b of box.querySelectorAll('button, select')) b.disabled = false; say(out, r?.text || 'Could not save. Try again.', false); }
   };
   for (const row of rows) {

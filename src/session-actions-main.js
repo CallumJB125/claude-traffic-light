@@ -13,7 +13,8 @@ function register({ ipcMain, sessionsAllowed, sessions, bridge, capture, tasks, 
     if (!actions || forBridge !== b) {
       forBridge = b;
       actions = SessionActions.create({
-        sessions, repoOf: require('./work-capture.js').repoFor, rootOf: b.gitRoot, boards: b.boards, capture: { captureOnce: (r, k) => capture().captureOnce(r, k), routing: async (repos) => (await capture().captureRouting?.(repos)) ?? [], choose: async (repo, key) => (await capture().captureChoose?.(repo, key)) === true },
+        sessions, repoOf: require('./work-capture.js').repoFor, rootOf: b.gitRoot, boards: b.boards, capture: { captureOnce: (r, k) => capture().captureOnce(r, k), routing: async (repos) => (await capture().captureRouting?.(repos)) ?? [], choose: async (repo, key) => (await capture().captureChoose?.(repo, key)) === true,
+          clearLocal: async (repo) => (await capture().captureClearLocal?.(repo)) === true },
         links: b.links, tickets: b.tickets ?? null, captured: () => b.rows(), tasks, clipboard, pickFolder, openPage, pageExists,
       });
     }

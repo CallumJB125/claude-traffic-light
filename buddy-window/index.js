@@ -1303,6 +1303,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     /** Organised views PR 7: where each project's new work goes, and the person's pick (Sessions strip). */
     captureRouting: (repos) => (captureEnabled ? workCapture.routing(repos) : []),
     captureChoose: (repo, key) => captureEnabled && workCapture.choose(repo, key),
+    /** After a Link: drop "Keep on My board" so the linked board takes the project's new work (#62 review B1). */
+    captureClearLocal: (repo) => captureEnabled && workCapture.clearLocal(repo),
     /** The tray's automatic-cards item: null where capture is off for this run (the demo). */
     captureState: () => (captureEnabled ? { enabled: workCapture.enabled() } : null),
     /** Main-only: captured sessions' cards and work records, for Usage & cost's cost by work. */
