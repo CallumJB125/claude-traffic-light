@@ -2,8 +2,11 @@ const { test, expect, chromium } = require('@playwright/test');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
-// The month view opens on today's month; plans sit mid-month (around today, clamped to days 2..26) so every date is in it.
-const day = (n) => { const t = new Date(); const d = new Date(t.getFullYear(), t.getMonth(), Math.min(26, Math.max(2, t.getDate())) + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+// The month view opens on the browser's today. Both it and the plan's dates are pinned to a Wednesday mid-month: with
+// the real clock, a late-month today put the drop day in the grid's last row, below the 860 px viewport, so the drop
+// never landed (it failed from about the 22nd of each month).
+const TODAY = new Date(2026, 9, 14, 12, 0, 0); // local noon, Wed 14 Oct 2026
+const day = (n) => { const d = new Date(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
 test('actual Chromium calendar pointer drag persists its full date range', async () => {
   const { tenancy } = await import('../board/hub/test/tenancy/fixture.js');
@@ -18,6 +21,7 @@ test('actual Chromium calendar pointer drag persists its full date range', async
     browser=await chromium.launch({channel:'chrome',headless:true});
     const context=await browser.newContext({viewport:{width:1104,height:860},extraHTTPHeaders:{Authorization:`Bearer ${u.token}`}});
     const page=await context.newPage();
+    await page.clock.setFixedTime(TODAY);
     // Calendar is behind the planner flag (a84e1d1d) and sits in the Advanced views group, so open it by deep link.
     await page.goto(`${f.h.base}/?board=${f.A.board}&planner=1&view=calendar`);
     await expect(page.locator('.calendar-grid')).toBeVisible();

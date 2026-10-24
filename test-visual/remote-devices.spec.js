@@ -37,8 +37,13 @@ test('a signed remote event shows as a namespaced session', async () => {
   h = await seeded();
   await windowByFile(h.app, 'index.html');
   expect((await postEvent(h.remotePort)).status).toBe(200);
-  await expect.poll(async () => (await status(h.port)).sessions).toEqual([expect.objectContaining({ signal: 'tool-use', cwd: '/srv/api' })]);
-  expect(fs.readdirSync(path.join(h.home, 'remote', DEVICE.id)).filter((f) => f.endsWith('.json'))).toHaveLength(1);
+  // GET /status leaves out the folder of a session whose folder can't be resolved on this Mac (agent awareness,
+  // f2a5b164): a remote device's /srv/api is one, so it is listed with cwd null. The folder is still recorded, in the
+  // device's own namespace.
+  await expect.poll(async () => (await status(h.port)).sessions).toEqual([expect.objectContaining({ source: 'claude', signal: 'tool-use', cwd: null })]);
+  const files = fs.readdirSync(path.join(h.home, 'remote', DEVICE.id)).filter((f) => f.endsWith('.json'));
+  expect(files).toHaveLength(1);
+  expect(JSON.parse(fs.readFileSync(path.join(h.home, 'remote', DEVICE.id, files[0]), 'utf8'))).toEqual(expect.objectContaining({ cwd: '/srv/api', signal: 'tool-use' }));
 });
 
 test('settings: remote devices section lists the paired device', async () => {

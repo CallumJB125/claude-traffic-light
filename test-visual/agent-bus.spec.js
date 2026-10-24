@@ -28,9 +28,13 @@ test('agent bus: Preferences section, refusal on the Sessions panel, stop and re
     await expect(settings.locator('#agentBusAutoAccept')).toBeChecked();
     await expect(settings.locator('#agentBusCaps')).not.toBeChecked();
     await expect(settings.locator('#agentBusWallClock')).toHaveValue('20');
-    // Above the page's sticky footer, so nothing overlaps the shot.
+    // Since #30 (5e815e02) the section is taller than the window, so the page's sticky footer (.actions) sat over its
+    // last lines in the shot. Hidden for the shot only, then put back.
     await section.evaluate((el) => el.scrollIntoView({ block: 'start' }));
+    const footer = settings.locator('.actions:has(#feedback-open)');
+    await footer.evaluate((el) => { el.style.visibility = 'hidden'; });
     await expect(await snapToPixels(section)).toHaveScreenshot('agent-bus-preferences.png');
+    await footer.evaluate((el) => { el.style.visibility = ''; });
     await settings.locator('#agentBusWallClock').fill('15');
     await settings.locator('#agentBusWallClock').dispatchEvent('change');
     await expect.poll(() => JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).agentBus?.wallClockMin).toBe(15);
