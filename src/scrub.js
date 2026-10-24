@@ -36,6 +36,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { TLDS } = require('./iana-tlds.js');
 
 const R = '[redacted]';
 const MAX_LINE = 4000;
@@ -355,16 +356,17 @@ const FILE_EXTS = new Set(['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'md',
 // id whose first label is a common TLD (com.anthropic.claude), and a last label that is
 // a version or architecture (Dockerfile.prod.arm64, api.acme.v1, api.v1.core). File
 // names are caught by FILE_EXTS. A private suffix is a host whatever the shape.
-const REVERSE_DNS_FIRST = new Set(['com', 'org', 'net', 'io', 'dev', 'app', 'edu', 'gov', 'co', 'me', 'uk', 'de', 'fr', 'nl', 'ch', 'se', 'za', 'au', 'ca', 'jp', 'cn', 'ru', 'br', 'in']);
-const TLD_LIKE = /^(?:[a-z]{2}|com|net|org|io|dev|app|ai|co|me|info|biz|xyz|cloud|tech|site|online)$/;
+// Only these start a reverse-DNS id: dev., app., me., uk. are common first labels of
+// real hosts. And an id never ends in a real TLD (IANA's list, src/iana-tlds.js), since
+// a public host always does: com.anthropic.claude is an id, com.acme.shop a host.
+const REVERSE_DNS_FIRST = new Set(['com', 'org', 'net', 'io']);
+const realTld = (label) => /^[a-z]{2}$/.test(label) || label.startsWith('xn--') || TLDS.has(label);
 const CODE_LAST = /^(?:v\d+|arm64|aarch64|amd64|x64|x86|i386|i686|armv\d+l?|core)$/;
 const codeShape = (h) => {
   if (PRIVATE_SUFFIX.test(h)) return false;
   const labels = h.split('.');
-  const last = labels[labels.length - 1];
-  // A reverse-DNS id ends in a product name, never a TLD: dev.acme.com and me.acme.io
-  // are hosts that happen to start with a TLD.
-  return (REVERSE_DNS_FIRST.has(labels[0]) && !TLD_LIKE.test(last)) || CODE_LAST.test(last);
+  const last = labels[labels.length - 1].toLowerCase().replace(/\.$/, '');
+  return (REVERSE_DNS_FIRST.has(labels[0]) && !realTld(last)) || CODE_LAST.test(last);
 };
 // Public developer sites: the registrable domain and a few well-known service names under
 // it stay. Any other name under it (secret-project.anthropic.com, callum.github.com) can

@@ -381,7 +381,7 @@ test('scrubTitle: three or more labels stay a host unless clearly code; internal
     'db.consul', 'ci.test', 'nas.localdomain', 'api.private', 'git.intra', 'redis.k8s', 'srv.office', 'db.loc', 'gw.vpn', 'api.prod', 'api.staging',
     'mon.cluster', 'nas.home', 'web.docker', 'api.example', 'x.invalid']) assert.equal(scrubTitle(`ssh ${h}`), 'ssh [host]', h);
   // Clear code shapes stay: reverse-DNS ids, file names, a version or architecture last.
-  for (const keep of ['com.anthropic.claude', 'org.foo.bar', 'io.github.acme', 'Dockerfile.prod.arm64', 'build.linux.x64', 'pkg.v2', 'api.acme.v1',
+  for (const keep of ['com.anthropic.claude', 'io.github.acme', 'Dockerfile.prod.arm64', 'build.linux.x64', 'pkg.v2', 'api.acme.v1',
     'index.d.mts', 'jest.config.cts', 'app.config.prod.json', 'src/app.config.ts', 'api.v1.core', 'docs.python.org']) assert.equal(scrubTitle(keep), keep, keep);
 });
 
@@ -402,5 +402,31 @@ test('scrubTitle: a reverse-DNS exemption needs a last label that is no TLD (#59
   for (const h of ['dev.acme.com', 'app.secret-project.com', 'dev.internal-tool.acme.io', 'app.acme.ai', 'me.acme.com', 'co.acme.io', 'ca.acme.com',
     'in.acme.com', 'uk.acme.co.uk', 'de.acme.de', 'net.acme.org', 'org.acme.io', 'io.acme.io', 'com.acme.cloud', 'org.acme.xyz']) assert.equal(scrubTitle(`ssh ${h}`), 'ssh [host]', h);
   assert.equal(scrubTitle('see dev.acme.com.'), 'see [host].');
-  for (const keep of ['com.anthropic.claude', 'org.mozilla.firefox', 'io.github.acme', 'com.apple.Safari', 'org.foo.bar']) assert.equal(scrubTitle(keep), keep, keep);
+  for (const keep of ['com.anthropic.claude', 'org.mozilla.firefox', 'io.github.acme', 'com.apple.Safari']) assert.equal(scrubTitle(keep), keep, keep);
+  // .bar is a real TLD, so org.foo.bar reads as a host (B3).
+  assert.equal(scrubTitle('org.foo.bar'), '[host]');
+});
+
+test('scrubTitle: reverse-DNS ids are exempt only when they end in no real TLD (#59 review, B3)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  const ends = ['store', 'tools', 'team', 'live', 'studio', 'health', 'cafe', 'software', 'games', 'group', 'network', 'systems', 'design', 'blog', 'club', 'world',
+    'email', 'digital', 'solutions', 'money', 'bank', 'global', 'company', 'today', 'services', 'academy', 'pro', 'name', 'mobi', 'asia', 'travel', 'jobs', 'museum',
+    'aero', 'coop', 'tel', 'cat'];
+  const hosts = ['dev.cs.stanford.edu', 'app.agency.gov', 'dev.army.mil', 'dev.acme.int', 'com.acme.shop', 'org.acme.page', 'io.acme.zone', 'co.acme.agency',
+    'uk.acme.london', 'de.acme.berlin', 'dev.acme.xn--p1ai', 'COM.ACME.COM', 'Dev.Acme.Com', ...ends.map((e) => `dev.acme.${e}`), ...ends.map((e) => `com.acme.${e}`)];
+  for (const h of hosts) assert.equal(scrubTitle(`ssh ${h}`), 'ssh [host]', h);
+  assert.equal(scrubTitle('branch fix/dev.acme.shop'), 'branch fix/[host]');
+  assert.equal(scrubTitle('see dev.acme.shop.'), 'see [host].');
+  // Real ids end in a product name, not a TLD.
+  for (const keep of ['com.anthropic.claude', 'org.mozilla.firefox', 'io.github.acme', 'com.apple.Safari', 'com.google.android.gms', 'org.apache.commons', 'net.sourceforge.pmd',
+    'io.flutter.embedding']) assert.equal(scrubTitle(keep), keep, keep);
+  // Only com, org, net and io start an id: dev.flutter.plugins reads as a host (the safe direction).
+  assert.equal(scrubTitle('dev.flutter.plugins'), '[host]');
+  // The private suffix always wins.
+  for (const h of ['com.acme.local', 'com.acme.internal', 'net.acme.lan', 'com.acme.prod', 'io.acme.consul']) assert.equal(scrubTitle(h), '[host]', h);
+  for (const s of ['corp', 'home', 'lan', 'local', 'internal', 'intranet', 'private', 'localdomain']) assert.equal(scrubTitle(`nas.${s}`), '[host]', s);
+  const { TLDS } = require('../src/iana-tlds.js');
+  assert.ok(TLDS.size > 1000, `${TLDS.size}`);
+  for (const t of ['shop', 'edu', 'gov', 'mil', 'int', 'museum', 'xn--p1ai', 'com', 'io']) assert.ok(TLDS.has(t), t);
+  for (const t of ['claude', 'firefox', 'safari', 'gms', 'commons', 'pmd', 'acme', 'embedding']) assert.ok(!TLDS.has(t), t);
 });
