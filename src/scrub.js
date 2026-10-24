@@ -385,13 +385,21 @@ const NFKC_SAFE_RUN = new RegExp(`[^${NFKC_BOMB.source.slice(1, -1)}]+`, 'gu');
 const nfkc = (t) => (NFKC_BOMB.test(t) ? t.replace(NFKC_SAFE_RUN, (r) => r.normalize('NFKC')) : t.normalize('NFKC'));
 //   max: the cap before and after NFKC (Infinity for scrub(), which takes whole files and
 //        cuts long lines first)
-const GREW_CUT = '\n[cut: the text grew past twice its size]';
+// A cut drops whole lines, as the long-line cut does: cutting inside a line could leave
+// part of a number or name ("+27 82 555") that no pattern then matches. With no line
+// break before the limit only the marker is left (fail closed).
+const TOO_LONG = '[cut: the text was too long]';
+const GREW_CUT = '[cut: the text grew past twice its size]';
+const cutLines = (t, limit, marker) => {
+  if (t.length <= limit) return t;
+  const at = t.lastIndexOf('\n', limit - marker.length - 1);
+  return at > 0 ? `${t.slice(0, at)}\n${marker}` : marker;
+};
 function plainText(text, { max = TEXT_MAX } = {}) {
   const strip = (t) => t.replace(ALWAYS_INVISIBLE, '').replace(FORMAT_RUN, nearAscii);
-  const input = strip(text.slice(0, max));
+  const input = strip(cutLines(text, max, TOO_LONG));
   const grown = Math.min(max, Math.max(TEXT_MAX, 2 * input.length));
-  let folded = nfkc(input);
-  if (folded.length > grown) folded = `${folded.slice(0, grown - GREW_CUT.length)}${GREW_CUT}`;
+  const folded = cutLines(nfkc(input), grown, GREW_CUT);
   return strip(folded).replace(MARK_RUN, afterAscii);
 }
 // A line longer than MAX_LINE is omitted. Split, not a regex: a regex over one line of

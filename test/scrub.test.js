@@ -318,3 +318,29 @@ test('scrub: compatibility bombs and very long lines stay bounded and never thro
   assert.match(scrub('a'.repeat(6e6), opts), /^\[long line omitted: 6000000 chars\]$/);
   assert.equal(scrub(`ok\n${'b'.repeat(5e6)}\ncall +27 82 555 0199`, opts), 'ok\n[long line omitted: 5000000 chars]\ncall [phone]');
 });
+
+test('scrubText and scrub: a cut drops whole lines, so nothing straddling it leaves a fragment (#58 review, round 3)', () => {
+  const { scrubText } = require('../src/scrub.js');
+  const pii = ['+27 82 555 0199', 'dana.smith@acme-corp.example', '10.20.30.40', 'jenkins.corp.acme.com', '415-555-0100'];
+  // Any 5 characters of the value in the output is a fragment.
+  const fragment = (out, v) => { for (let i = 0; i + 5 <= v.length; i++) if (out.includes(v.slice(i, i + 5))) return v.slice(i, i + 5); return null; };
+  const sweep = (label, run, make, from, to) => {
+    for (const v of pii) for (let f = from; f <= to; f++) {
+      const out = run(make(f, v));
+      const bit = fragment(out, v);
+      assert.equal(bit, null, `${label} ${v} at ${f}: "${bit}" left in ...${JSON.stringify(out.slice(-80))}`);
+    }
+  };
+  // The tail keeps the text past the limit while the value straddles the cut.
+  const tail = ` after ${'y'.repeat(300)}`;
+  // scrubText: the folded text (a 15000-char line of \u247d folds to 60000) is cut at 64K.
+  sweep('scrubText grown', (t) => scrubText(t), (f, v) => `${'\u247d'.repeat(15000)}\n${'z'.repeat(f)} ${v}${tail}`, 5460, 5500);
+  // scrubText: the raw text is cut at 64K before folding.
+  sweep('scrubText raw', (t) => scrubText(t), (f, v) => `${'z'.repeat(f)} ${v}${tail}`, 65505, 65535);
+  // scrub(): the folded text is cut at twice the input. Lines stay under MAX_LINE, or
+  // the long-line cut would drop them first.
+  const bomb = `${'\u247d'.repeat(1000)}\n`.repeat(15);
+  sweep('scrub grown', (t) => scrub(t, opts), (f, v) => `${bomb}${'zz\n'.repeat(Math.floor(f / 3))}${'z'.repeat(f % 3)} ${v}${tail}`, 29340, 29410);
+  // A cut with no newline before it leaves only the marker.
+  assert.match(scrubText('⑽'.repeat(20000)), /^\[cut: [^\]]+\]$/);
+});
