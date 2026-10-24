@@ -595,17 +595,26 @@ const SCREENS = {
           el('span', { class: 'acct-mail' }, 'Work in a linked team repository goes to that team’s board. Other work goes to My board. Only task details and reported progress are sent; transcripts stay private. Finished reports move to Review for you to check.')),
         toggle(s.workCapture.enabled, 'Create cards automatically from reported AI work', async on => { const r = await api.captureEnabled(on); if (r?.ok) render(); return r; })));
       if (s.workCapture.notice) sec.append(el('p', { class: 'acct-hint', role: 'status' }, s.workCapture.notice));
+      // Organised views PR 7: one row per project with a team board, the same words as the Sessions page strip.
+      const projects = s.workCapture.projects || [];
+      if (projects.length) {
+        sec.append(el('h3', { class: 'acct-subhead' }, 'Where each project’s new work goes'));
+        sec.append(el('table', { class: 'acct-table acct-routing' },
+          el('thead', {}, el('tr', {}, el('th', { scope: 'col' }, 'Project'), el('th', { scope: 'col' }, 'New work goes to'), el('th', { scope: 'col' }, el('span', { class: 'sr-only' }, 'Change')))),
+          el('tbody', {}, projects.map(p => el('tr', {},
+            el('th', { scope: 'row' }, p.short),
+            el('td', {}, p.goesTo, p.note ? el('small', { class: 'acct-mail' }, p.note) : null),
+            el('td', {}, p.change.length ? form({
+              fields: field(`Change where ${p.short}’s new work goes`, el('select', { name: 'destination', class: 'input' }, p.change.map(c => el('option', { value: c.key, selected: c.current || undefined }, c.label)))),
+              submit: 'Change', busy: 'Checking…', fn: async v => { const r = await api.captureDefault(p.repo, v.destination); if (r?.ok) render(); return r; },
+            }) : null))))));
+      }
       for (const t of s.workCapture.tasks) {
         const d = t.destination, destination = d.kind === 'team' ? `${d.team_name || 'Team'} · ${d.board_name || 'Board'}` : 'My board (this Mac)';
         const status = t.untracked ? 'Tracking stopped' : !t.card_id ? 'Waiting to sync' : (STATUS[t.status] ?? 'Active');
         const row = el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' },
           el('span', { class: 'acct-name' }, t.title), el('span', { class: 'acct-mail' }, `${destination} · ${status}`),
-          d.needs_routing ? el('span', { class: 'acct-mail' }, d.reason === 'team_read_only' ? 'Your team role is read-only, so this card stays personal.' : 'This repository is linked to multiple boards. Choose a default for future tasks; this card stays on My board.') : null));
-        const choices = (s.workCapture.choices || []).filter(c => c.repo === t.repo);
-        if (d.needs_routing && choices.length) row.append(form({
-          fields: field('Board for future tasks in this repository', el('select', { name: 'destination', class: 'input' }, choices.map(c => el('option', { value: c.key }, `${c.team_name} · ${c.board_name}`)))),
-          submit: 'Save default', busy: 'Checking…', fn: async v => { const r = await api.captureDefault(t.repo, v.destination); if (r?.ok) render(); return r; },
-        }));
+          d.needs_routing ? el('span', { class: 'acct-mail' }, d.reason === 'team_read_only' ? 'Your team role is read-only, so this card stays personal.' : 'This repository is linked to more than one board. Choose where its new work goes in the table above; this card stays on My board.') : null));
         sec.append(row);
       }
       if (!s.workCapture.tasks.length) sec.append(el('p', { class: 'acct-hint' }, 'Cards appear when a connected AI reports work.'));

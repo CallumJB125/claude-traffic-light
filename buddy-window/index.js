@@ -1055,7 +1055,9 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       if (args.length !== types.length || args.some((a, i) => typeof a !== types[i] || (typeof a === 'string' && a.length > 2048))) return { ok: false, error: 'Not allowed.' };
       try {
         const result = await fn(...args);
-        return op === 'state' && result?.screen === 'thismac' ? { ...result, workCapture: { enabled: captureEnabled && workCapture.enabled(), notice: workCapture.notice(), tasks: workCapture.snapshot().slice(-100), choices: workCapture.choices() } } : result;
+        // projects: one row per repository with a team board, worded like the Sessions strip (src/work-routing-view.js).
+        return op === 'state' && result?.screen === 'thismac' ? { ...result, workCapture: { enabled: captureEnabled && workCapture.enabled(), notice: workCapture.notice(), tasks: workCapture.snapshot().slice(-100),
+          projects: captureEnabled ? require('../src/work-routing-view.js').rowsFor(await workCapture.routing().catch(() => [])).map(({ repo, short, goesTo, note, change }) => ({ repo, short, goesTo, note, change })) : [] } } : result;
       } catch (err) { log('account action failed', op, err.message); return { ok: false, error: 'Something went wrong. Try again.' }; }
     });
   }
