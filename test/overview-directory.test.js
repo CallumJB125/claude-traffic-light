@@ -437,3 +437,55 @@ test('Team sessions: a teammate with an 80-unit name who needs input still rende
     } finally { s.close(); }
   }
 });
+
+// Organised views PR 3: My sessions grouped by project, then status. Entries carry the project as a name, so a
+// group's key is keyOf('name', name) — the same name on two folders or devices is one group (until N7).
+test('My sessions PR 3: grouped by project name with bucket counts; one name in two folders is one group', async () => {
+  const W = require('../src/work-organise.js');
+  const s = stack({ scripts: ['src/session-pins.js'] });
+  try {
+    const at = new Date().toISOString();
+    s.raw.push({ sessionId: 'c-2', source: 'codex', signal: 'permission-ask', updatedAt: at, cwd: '/Users/me/elsewhere/checkout' });
+    s.raw.push({ sessionId: 'c-3', source: 'codex', signal: 'idle', updatedAt: at, cwd: '/Users/me/app' });
+    await s.ready(); await s.poll();
+    const groups = [...s.$('mine-list').querySelectorAll('.mine-group')];
+    assert.deepEqual(groups.map((g) => g.querySelector('.group-name').textContent), ['app', 'checkout']);
+    const checkout = groups[1];
+    assert.equal(checkout.dataset.groupKey, W.keyOf('name', 'checkout'));
+    assert.match(checkout.dataset.groupKey, /^name-[0-9a-z]{1,7}$/);
+    assert.equal(checkout.querySelectorAll('.dir-entry').length, 2, 'two folders named checkout share one group');
+    assert.equal(checkout.querySelector('.group-counts').textContent, 'Needs you 1, · Working on it 1');
+    assert.deepEqual([...checkout.querySelectorAll('details.bucket')].map((d) => [d.dataset.bucket, d.querySelector('summary').textContent]), [['needs', 'Needs you (1)'], ['working', 'Working on it (1)']]);
+    const app = groups[0];
+    assert.equal(app.querySelector('details.bucket[data-bucket="idle"]').open, false, 'Idle starts folded');
+    assert.ok(app.querySelector('h3 > button.group-toggle'));
+    assert.equal(app.querySelector('h3').querySelectorAll('[aria-label]').length + Number(app.querySelector('h3').hasAttribute('aria-label')), 0, 'no aria-label on the heading, its button or a span');
+    for (const g of groups) assert.equal(/[\\/]/.test(g.dataset.groupKey), false);
+  } finally { s.close(); }
+});
+
+test('My sessions PR 3: a fold is saved only in Project mode; Status and AI tool write nothing; the choice and folds come back', async () => {
+  const STORE = 'plexiform.overview.mine.groups.v1';
+  const s = stack({ scripts: ['src/session-pins.js'] });
+  let saved;
+  try {
+    await s.ready(); await s.poll();
+    const ls = s.dom.window.localStorage;
+    assert.equal(ls.getItem(STORE), null);
+    s.$('mine-list').querySelector('.mine-group .group-toggle').click();
+    saved = ls.getItem(STORE);
+    assert.deepEqual(Object.values(JSON.parse(saved).closed), [true]);
+    for (const by of ['bucket', 'provider']) {
+      s.change('mine-group', by); await tick();
+      for (const b of s.$('mine-list').querySelectorAll('.group-toggle')) b.click();
+      for (const x of s.$('mine-list').querySelectorAll('summary')) x.click();
+      assert.equal(ls.getItem(STORE), saved, `${by}: nothing written`);
+    }
+    assert.deepEqual([...s.$('mine-list').querySelectorAll('.group-name')].map((n) => n.textContent), ['Codex']);
+    s.change('mine-group', 'bucket'); await tick();
+    assert.equal(s.$('mine-list').querySelector('.group-name').textContent, 'Working on it');
+    assert.equal(ls.getItem('plexiform.overview.mine.groupBy.v1'), 'bucket');
+    s.change('mine-group', 'project'); await tick();
+    assert.equal(s.$('mine-list').querySelector('.group-body').hidden, true, 'the saved fold');
+  } finally { s.close(); }
+});

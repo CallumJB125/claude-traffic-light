@@ -546,6 +546,86 @@
     for (const n of nodes) { const want = prev ? prev.nextSibling : container.firstChild; if (want !== n) container.insertBefore(n, want); prev = n; }
     while (prev ? prev.nextSibling : container.firstChild) (prev ? prev.nextSibling : container.firstChild).remove();
   }
+  // ── Organised views PR 3: My sessions grouped by project, then status ──
+  // An entry's project is a name (the folder, for now: worktrees join their repo in a later step, N7), so its key is
+  // 'name-' + a hash of that name; the same name on another device joins it, and two repos with one name share it.
+  const MINE_BY = ['project', 'bucket', 'provider'], MINE_STORE = 'plexiform.overview.mine.groups.v1', MINE_BY_STORE = 'plexiform.overview.mine.groupBy.v1', MINE_MAX = 200;
+  const MINE_KEY = /^(?:(repo|git|dir|name)-[0-9a-z]{1,7}|other)(?:\/(needs|working|check|stuck|idle))?$/;
+  const mineSaved = store.read(MINE_STORE, raw => { const out = new Map(); let o = null; try { o = JSON.parse(raw || 'null'); } catch { o = null; } if (o && typeof o.closed === 'object' && o.closed) for (const [k, v] of Object.entries(o.closed)) if (MINE_KEY.test(k) && typeof v === 'boolean' && out.size < MINE_MAX) out.set(k, v); return out; });
+  let mineBy = store.read(MINE_BY_STORE, v => (MINE_BY.includes(v) ? v : 'project'));
+  const mineMem = new Map(), mineNodes = new Map();
+  const mineProject = e => { const h = typeof e.project === 'string' ? e.project.trim() : ''; return h && h !== W.FALLBACK ? { key: W.keyOf('name', h.toLowerCase()), heading: h, sub: null } : { key: 'other', heading: W.FALLBACK, sub: null }; };
+  const mineClosed = (key, fallback) => { const m = mineMem.get(`${mineBy}|${key}`); if (m !== undefined) return m; return mineBy === 'project' && mineSaved.has(key) ? mineSaved.get(key) : fallback; };
+  // Saved only in Project mode, and only a person's toggle; Status and AI tool keep theirs for the page.
+  function mineToggle(key, closed) {
+    mineMem.set(`${mineBy}|${key}`, closed);
+    if (mineBy !== 'project' || !MINE_KEY.test(key)) return;
+    mineSaved.delete(key); mineSaved.set(key, closed);
+    while (mineSaved.size > MINE_MAX) mineSaved.delete(mineSaved.keys().next().value);
+    store.write(MINE_STORE, JSON.stringify({ v: 1, closed: Object.fromEntries(mineSaved) }));
+  }
+  const domKey = key => key.replace(/[^\w-]/g, '_');
+  function mineGroupNode(key) {
+    let g = mineNodes.get(key); if (g) return g;
+    const id = `mine-grp-${domKey(key)}`;
+    const box = el('section', '', 'dir-group mine-group'), head = el('h3', '', 'group-head'), btn = el('button', '', 'group-toggle'), name = el('span', '', 'group-name'), counts = el('span', '', 'group-counts'), body = el('div', '', 'group-body');
+    box.dataset.groupKey = key; box.setAttribute('aria-labelledby', `${id}-title`); head.id = `${id}-title`; body.id = id;
+    btn.type = 'button'; btn.setAttribute('aria-controls', id); btn.append(name, el('span', ': ', 'sr-only'), counts); head.append(btn); box.append(head, body);
+    btn.addEventListener('click', () => { const closed = !body.hidden; body.hidden = closed; btn.setAttribute('aria-expanded', String(!closed)); mineToggle(key, closed); });
+    g = { key, box, btn, name, counts, body, buckets: new Map(), list: null };
+    mineNodes.set(key, g); return g;
+  }
+  function mineBucketNode(g, id) {
+    let b = g.buckets.get(id); if (b) return b;
+    const details = el('details', '', 'bucket'), summary = el('summary', '', 'bucket-head'), list = el('ul', '', 'dir-list');
+    details.id = `mine-grp-${domKey(g.key)}-${id}`; details.dataset.bucket = id;
+    summary.addEventListener('click', () => mineToggle(`${g.key}/${id}`, details.open));
+    details.append(summary, list); b = { details, summary, list }; g.buckets.set(id, b); return b;
+  }
+  function mineCounts(host, counts) {
+    host.replaceChildren();
+    W.BUCKETS.filter(b => counts[b.id] > 0).forEach((b, i) => {
+      if (i) { host.append(el('span', ',', 'sr-only')); const dot = el('span', ' · '); dot.setAttribute('aria-hidden', 'true'); host.append(dot); }
+      host.append(document.createTextNode(`${b.heading} ${counts[b.id]}`));
+    });
+  }
+  // views (pin order kept) → the group sections, a group holding a pinned row first.
+  function mineGroups(views) {
+    const rows = views.map(v => ({ v, project: mineProject(v.entry), bucket: v.entry.bucket || W.bucketOf(v.entry.state), provider: v.entry.provider?.id }));
+    let groups = mineBy === 'bucket' ? W.group(rows, 'bucket') : W.group(rows, mineBy, { then: 'bucket' });
+    if (Pins) { const pinned = gr => gr.rows.some(r => !r.v.gone && Pins.pinned(pins, r.v.entry)); groups = groups.map((gr, i) => [gr, i]).sort((a, b) => Number(pinned(b[0])) - Number(pinned(a[0])) || a[1] - b[1]).map(([gr]) => gr); }
+    const out = [];
+    for (const gr of groups) {
+      const g = mineGroupNode(gr.key);
+      set(g.name, gr.heading);
+      const open = !mineClosed(gr.key, mineBy === 'bucket' ? !!gr.collapsed : false);
+      g.body.hidden = !open; g.btn.setAttribute('aria-expanded', String(open));
+      const counts = Object.fromEntries(W.BUCKETS.map(b => [b.id, 0]));
+      for (const r of gr.rows) if (Object.hasOwn(counts, r.bucket)) counts[r.bucket]++;
+      if (mineBy === 'bucket') {
+        set(g.counts, `${gr.rows.length} ${gr.rows.length === 1 ? 'session' : 'sessions'}`);
+        for (const b of g.buckets.values()) b.details.remove(); g.buckets.clear();
+        if (!g.list) { g.list = el('ul', '', 'dir-list'); }
+        g.list.setAttribute('aria-label', gr.heading);
+        place(g.list, gr.rows.map(r => r.v.li)); place(g.body, [g.list]);
+      } else {
+        mineCounts(g.counts, counts);
+        const seen = [];
+        for (const inner of gr.groups) {
+          const b = mineBucketNode(g, inner.key);
+          b.details.open = !mineClosed(`${gr.key}/${inner.key}`, !!inner.collapsed);
+          set(b.summary, `${W.headingOf(inner.key)} (${inner.rows.length})`);
+          b.list.setAttribute('aria-label', `${gr.heading}: ${W.headingOf(inner.key)}`);
+          place(b.list, inner.rows.map(r => r.v.li)); seen.push(b.details);
+        }
+        for (const [id, b] of g.buckets) if (!seen.includes(b.details)) { b.details.remove(); g.buckets.delete(id); }
+        place(g.body, seen);
+      }
+      out.push(g.box);
+    }
+    for (const [key, g] of mineNodes) if (!out.includes(g.box)) mineNodes.delete(key);
+    return out;
+  }
   function render(which) {
     const l = lists[which], data = l.data; if (!data) return;
     const seen = new Set();
@@ -554,7 +634,7 @@
     const all = [...l.rows.values()];
     if (which === 'mine') {
       $('mine-summary').replaceChildren(...renderSummary(data));
-      place($('mine-list'), (Pins ? Pins.order(pins, all.map(v => v.entry)).map(e => all.find(v => v.entry === e)) : all).map(v => v.li));
+      place($('mine-list'), mineGroups(Pins ? Pins.order(pins, all.map(v => v.entry)).map(e => all.find(v => v.entry === e)) : all));
       set($('mine-count'), `${data.entries.length} ${data.entries.length === 1 ? 'session' : 'sessions'}`);
       $('mine-empty').hidden = all.length > 0;
       return;
@@ -715,6 +795,7 @@
     $('views').addEventListener('keydown', ev => { if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') { const next = view === 'mine' ? 'team' : 'mine'; show(next); $(`tab-${next}`).focus(); } });
     $('team-pick').addEventListener('change', () => { clearActivity(); lists.team.rows.clear(); lists.team.groups?.clear(); $('team-list').replaceChildren(); team = hex($('team-pick').value, 32) ? $('team-pick').value : null; received = 0; void refresh(); });
     for (const id of ['team-group', ...TEAM_FILTERS.map(f => `team-${f}-filter`)]) $(id).addEventListener('change', () => { clearActivity(); render('team'); });
+    { const pick = $('mine-group'); pick.value = mineBy; pick.addEventListener('change', () => { if (!MINE_BY.includes(pick.value)) { pick.value = mineBy; return; } mineBy = pick.value; store.write(MINE_BY_STORE, mineBy); for (const g of mineNodes.values()) g.box.remove(); mineNodes.clear(); render('mine'); }); }
     $('team-search').addEventListener('input', () => { clearActivity(); render('team'); });
     for (const b of document.querySelectorAll('[data-team-focus]')) b.addEventListener('click', () => { teamFocus = b.dataset.teamFocus; clearActivity(); render('team'); });
     $('team-clear-filters').addEventListener('click', resetTeamFilters);
