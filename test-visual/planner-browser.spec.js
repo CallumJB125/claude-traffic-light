@@ -5,10 +5,17 @@ const { randomUUID } = require('node:crypto');
 // The month view opens on the browser's today. Both it and the plan's dates are pinned to a Wednesday mid-month: with
 // the real clock, a late-month today put the drop day in the grid's last row, below the 860 px viewport, so the drop
 // never landed (it failed from about the 22nd of each month).
-const TODAY = new Date(2026, 9, 14, 12, 0, 0); // local noon, Wed 14 Oct 2026
-const day = (n) => { const d = new Date(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const MID = new Date(2026, 9, 14, 12, 0, 0); // local noon, Wed 14 Oct 2026
+// A late-month today too (Sat 24 Oct: the drop day is in the last week row), with the target scrolled into view
+// first, as a person's wheel or Chrome's drag autoscroll would, so drops onto that row stay covered (#63 review).
+const LATE = new Date(2026, 9, 24, 12, 0, 0);
+const dayOf = (TODAY) => (n) => { const d = new Date(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
-test('actual Chromium calendar pointer drag persists its full date range', async () => {
+test('actual Chromium calendar pointer drag persists its full date range', () => dragRange(MID, false));
+test('a drag onto the last week row of the month (target scrolled into view first) persists too', () => dragRange(LATE, true));
+
+async function dragRange(TODAY, scrollFirst) {
+  const day = dayOf(TODAY);
   const { tenancy } = await import('../board/hub/test/tenancy/fixture.js');
   const f = await tenancy({ config: { webDir:path.resolve(__dirname,'../board/web') } });
   let browser;
@@ -25,10 +32,11 @@ test('actual Chromium calendar pointer drag persists its full date range', async
     // Calendar is behind the planner flag (a84e1d1d) and sits in the Advanced views group, so open it by deep link.
     await page.goto(`${f.h.base}/?board=${f.A.board}&planner=1&view=calendar`);
     await expect(page.locator('.calendar-grid')).toBeVisible();
+    if (scrollFirst) await page.locator(`[data-planning-day="${day(3)}"]`).scrollIntoViewIfNeeded();
     await page.locator(`[data-planning-card="${id}"]`).dragTo(page.locator(`[data-planning-day="${day(3)}"]`));
     await expect.poll(()=>f.h.hub.card(id).due_date).toBe(day(3));
     expect(f.h.hub.card(id).start_date).toBe(day(1));
     await page.reload();
     await expect(page.locator(`[data-planning-day="${day(3)}"]`)).toContainText('Pointer planner fixture');
   } finally { await browser?.close();await f.h.close(); }
-});
+}
