@@ -36,6 +36,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { TLDS } = require('./iana-tlds.js');
 
 const R = '[redacted]';
 const MAX_LINE = 4000;
@@ -334,24 +335,58 @@ function scrub(text, { home = null, user = null, hostname = null, names = [], sa
 // A number PATTERNS.PHONE found is a phone with 9-15 digits (E.164 allows 15). The shapes
 // already need a leading +, a leading 0 or a 3-3-4 North American grouping, so versions,
 // dates, times, ticket keys and counts never reach here.
+// A run that only climbs or only falls ("0123456789", "0123 4567 8901") is a test id.
 function phoneOk(m) {
-  const digits = m.replace(/\D/g, '').length;
-  return digits >= 9 && digits <= 15;
+  const d = m.replace(/\D/g, '');
+  if (d.length < 9 || d.length > 15) return false;
+  const step = (i) => (Number(d[i]) - Number(d[i - 1]) + 10) % 10;
+  const s1 = step(1);
+  return !((s1 === 1 || s1 === 9) && [...d].every((c, i) => i === 0 || step(i) === s1));
 }
 // Private names that need no third label: nas.local, jenkins.corp, api.internal.
-const PRIVATE_SUFFIX = /\.(?:local|lan|internal|corp|intranet|home\.arpa)$/;
+const PRIVATE_SUFFIX = /\.(?:local|lan|internal|corp|intranet|home\.arpa|home|svc|consul|test|localdomain|private|intra|k8s|office|loc|vpn|prod|staging|cluster|docker|example|invalid)$/;
 // A tailnet name is kept only when it is the hub the text is going to; with no hub
 // given (diagnostics) every tailnet name is kept, as before.
 const tailnetKept = (h, hubHost) => /\.ts\.net$/.test(h) && (hubHost === undefined || h === hubHost);
 // File names look like dotted host names (foo.test.js); a last label that is a code or
 // document extension is a file, not a host.
-const FILE_EXTS = new Set(['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'md', 'mdx', 'html', 'htm', 'css', 'scss', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'cs', 'php', 'sh', 'zsh', 'yml', 'yaml', 'toml', 'lock', 'txt', 'log', 'xml', 'svg', 'png', 'jpg', 'gif', 'sql', 'vue', 'svelte', 'map', 'snap', 'plist', 'env', 'ini', 'cfg', 'conf', 'pdf', 'csv', 'zip', 'gz', 'tar', 'wasm', 'dart', 'lua', 'ex', 'exs', 'erl', 'hs', 'ml', 'scala', 'gradle', 'mod', 'sum']);
-const privateHost = (host, port, hubHost = null) => {
+const FILE_EXTS = new Set(['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'md', 'mdx', 'html', 'htm', 'css', 'scss', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'cs', 'php', 'sh', 'zsh', 'yml', 'yaml', 'toml', 'lock', 'txt', 'log', 'xml', 'svg', 'png', 'jpg', 'gif', 'sql', 'vue', 'svelte', 'map', 'snap', 'plist', 'env', 'ini', 'cfg', 'conf', 'pdf', 'csv', 'zip', 'gz', 'tar', 'wasm', 'dart', 'lua', 'ex', 'exs', 'erl', 'hs', 'ml', 'scala', 'gradle', 'mod', 'sum', 'mts', 'cts', 'mdc']);
+// Three or more labels read as a host (fail closed: internal names use every suffix,
+// db.service.consul, postgres.prod.acme). Only clear code shapes are not: a reverse-DNS
+// id whose first label is a common TLD (com.anthropic.claude), and a last label that is
+// a version or architecture (Dockerfile.prod.arm64, api.acme.v1, api.v1.core). File
+// names are caught by FILE_EXTS. A private suffix is a host whatever the shape.
+// Only these start a reverse-DNS id: dev., app., me., uk. are common first labels of
+// real hosts. And an id never ends in a real TLD (IANA's list, src/iana-tlds.js), since
+// a public host always does: com.anthropic.claude is an id, com.acme.shop a host.
+const REVERSE_DNS_FIRST = new Set(['com', 'org', 'net', 'io']);
+const realTld = (label) => /^[a-z]{2}$/.test(label) || label.startsWith('xn--') || TLDS.has(label);
+const CODE_LAST = /^(?:v\d+|arm64|aarch64|amd64|x64|x86|i386|i686|armv\d+l?|core)$/;
+const codeShape = (h) => {
+  if (PRIVATE_SUFFIX.test(h)) return false;
+  const labels = h.split('.');
+  const last = labels[labels.length - 1].toLowerCase().replace(/\.$/, '');
+  return (REVERSE_DNS_FIRST.has(labels[0]) && !realTld(last)) || CODE_LAST.test(last);
+};
+// Public developer sites: the registrable domain and a few well-known service names under
+// it stay. Any other name under it (secret-project.anthropic.com, callum.github.com) can
+// name a private project or a person, so it goes.
+const KEEP_DOMAINS = new Set(['python.org', 'google.com', 'github.com', 'githubusercontent.com', 'gitlab.com', 'bitbucket.org', 'npmjs.com',
+  'npmjs.org', 'nodejs.org', 'mozilla.org', 'microsoft.com', 'apple.com', 'anthropic.com', 'claude.ai', 'stackoverflow.com', 'readthedocs.io']);
+const KEEP_SERVICES = new Set(['www', 'docs', 'api', 'raw', 'gist', 'cdn']);
+const publicName = (h) => {
+  if (KEEP_HOSTS.has(h)) return true;
+  const labels = h.split('.');
+  return KEEP_DOMAINS.has(labels.slice(-2).join('.')) && (labels.length === 2 || (labels.length === 3 && KEEP_SERVICES.has(labels[0])));
+};
+//   inUrl: the name came after a scheme, which already says it is a host
+const privateHost = (host, port, hubHost = null, { inUrl = false } = {}) => {
   const h = host.toLowerCase();
   const labels = h.split('.');
   if (labels.length < 3 && !port && !PRIVATE_SUFFIX.test(h)) return false;
   if (!/\.[a-z][a-z0-9-]{1,62}$/.test(h) || FILE_EXTS.has(labels[labels.length - 1])) return false;
-  return !KEEP_HOSTS.has(h) && h !== hubHost;
+  if (!inUrl && !port && codeShape(h)) return false;
+  return !publicName(h) && h !== hubHost;
 };
 
 // Invisible and compatibility characters can split a number or a name so no pattern sees
@@ -383,6 +418,16 @@ const afterAscii = (m, at, all) => (ASCII.test(all[at - 1] ?? '') ? '' : m);
 const NFKC_BOMB = /[\u3307\u3315-\u3317\u3319\u331a\u3320\u332b\u332e\u3332\u3334\u3336\u3347\u334a\u3356\u33ae\u33af\ufdfa\ufdfb\u{1d160}-\u{1d164}\u{1d1bd}-\u{1d1c0}]/u;
 const NFKC_SAFE_RUN = new RegExp(`[^${NFKC_BOMB.source.slice(1, -1)}]+`, 'gu');
 const nfkc = (t) => (NFKC_BOMB.test(t) ? t.replace(NFKC_SAFE_RUN, (r) => r.normalize('NFKC')) : t.normalize('NFKC'));
+// Cyrillic and Greek letters that look Latin ("n\u0430s.local" with a Cyrillic a) are
+// folded to Latin inside a word that mixes the scripts, so the name is seen. A word
+// that is all Cyrillic or all Greek is left alone.
+const LOOKALIKE = { 'а': 'a', 'в': 'b', 'е': 'e', 'ё': 'e', 'к': 'k', 'м': 'm', 'н': 'h', 'о': 'o', 'р': 'p', 'с': 'c', 'т': 't', 'у': 'y', 'х': 'x',
+  'і': 'i', 'ї': 'i', 'ј': 'j', 'ѕ': 's', 'ԁ': 'd', 'ӏ': 'l', 'ԛ': 'q', 'ԝ': 'w', 'һ': 'h', 'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H',
+  'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'Х': 'X', 'І': 'I', 'Ј': 'J', 'Ѕ': 'S', 'α': 'a', 'ο': 'o', 'ν': 'v', 'ρ': 'p', 'τ': 't', 'υ': 'u', 'ι': 'i',
+  'κ': 'k', 'χ': 'x', 'ε': 'e', 'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Ζ': 'Z', 'Η': 'H', 'Ι': 'I', 'Κ': 'K', 'Μ': 'M', 'Ν': 'N', 'Ο': 'O', 'Ρ': 'P', 'Τ': 'T',
+  'Υ': 'Y', 'Χ': 'X' };
+const LOOKALIKE_ANY = new RegExp(`[${Object.keys(LOOKALIKE).join('')}]`, 'g');
+const foldMixed = (word) => (/[A-Za-z0-9]/.test(word) && /[\u0370-\u03ff\u0400-\u052f]/.test(word) ? word.replace(LOOKALIKE_ANY, (c) => LOOKALIKE[c]) : word);
 //   max: the cap before and after NFKC (Infinity for scrub(), which takes whole files and
 //        cuts long lines first)
 // A cut drops whole lines, as the long-line cut does: cutting inside a line could leave
@@ -400,7 +445,7 @@ function plainText(text, { max = TEXT_MAX } = {}) {
   const input = strip(cutLines(text, max, TOO_LONG));
   const grown = Math.min(max, Math.max(TEXT_MAX, 2 * input.length));
   const folded = cutLines(nfkc(input), grown, GREW_CUT);
-  return strip(folded).replace(MARK_RUN, afterAscii);
+  return strip(folded).replace(MARK_RUN, afterAscii).replace(/\S+/g, foldMixed);
 }
 // A line longer than MAX_LINE is omitted. Split, not a regex: a regex over one line of
 // millions of characters overflows the stack.
@@ -409,21 +454,42 @@ const cutLongLines = (t) => (t.length <= MAX_LINE ? t : t.split('\n').map((l) =>
 // indentation at the start of a line stays.
 const foldSpaces = (t) => t.replace(/(?<=\S)[ \t]{2,}/g, ' ');
 
+// A full commit hash named as one ("commit 3f2c…", ".../commit/3f2c…") is no secret.
+// Elsewhere a 40-hex run stays redacted: legacy GitHub tokens look the same.
+// Only commit words count: "password hash <hex>" is a secret's hash, not a commit.
+const GIT_HASH = /(\b(?:commits?|sha(?:1|256)?|rev(?:ision)?|reverts?|reverted|cherry-pick(?:ed)?|merged?)\b\s*[:#]?\s*|\bcommit\/)([0-9a-f]{40}|[0-9a-f]{64})\b/gi;
+// A MAC address names a device.
+const MAC = /(?<![\w:.-])[0-9a-f]{2}([:-])(?:[0-9a-f]{2}\1){4}[0-9a-f]{2}(?![\w:.-])/gi;
+// After "/" a bare name is checked like any other (fix/db1.corp.acme.internal); file
+// paths stay because their last label is an extension or no real top-level domain.
+const TITLE_HOST = /(?<![\w.@:\\-])(?=([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8}))\1(?![\w-]|\.\w)(:\d{1,5}(?!\d))?/gi;
+// "version 1.2.3.4" is a version; a 4-part number elsewhere may be an address. The word
+// stands alone (not "ip_version", "subversion"), and "version=" is a setting, not prose.
+// A private, loopback, link-local or CGNAT (tailnet) address is never a version.
+const VERSION_WORD = /(?<![\w-])(?:version|ver)\.?\s*:?\s*$/i;
+const PRIVATE_V4 = /^(?:10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/;
+const versionNumber = (m, at, all) => !PRIVATE_V4.test(m) && VERSION_WORD.test(all.slice(Math.max(0, at - 24), at));
+
 // Text on its way to a team hub or a teammate (review L2): a title, a task's report.
 // Unlike scrub() it labels what it removes ([ip], [host], [phone], [email]) instead of
 // hashing, so the text still reads. Line breaks and spacing are kept.
 //   hubHost: the destination hub's host name, the one tailnet name the text may keep
 function scrubText(text, { hubHost = null } = {}) {
   const hub = typeof hubHost === 'string' && hubHost ? hubHost.toLowerCase() : null;
-  let out = redactSecretsPass(foldSpaces(plainText(String(text ?? ''))));
+  const parked = [];
+  let out = foldSpaces(plainText(String(text ?? ''))).replace(/[\u0001\u0002]/g, '');
+  out = out.replace(GIT_HASH, (m, lead, hash) => `${lead}\u0001${parked.push(hash) - 1}\u0002`);
+  out = redactSecretsPass(out);
   out = out.replace(PATTERNS.EMAIL, '[email]');
-  out = out.replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8})(:\d{1,5})?/gi, (m, scheme, host, port) => (privateHost(host, port, hub) ? `${scheme}[host]` : m));
+  out = out.replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8})(:\d{1,5})?/gi, (m, scheme, host, port) => (privateHost(host, port, hub, { inUrl: true }) ? `${scheme}[host]` : m));
+  out = out.replace(MAC, '[mac]');
   // "1.2.3.4-beta" is a version with a prerelease tag, not an address.
-  out = out.replace(PATTERNS.IPV4, (m, at, all) => (KEEP_IPS.has(m) || /^-[a-z]/i.test(all.slice(at + m.length)) ? m : '[ip]'));
+  out = out.replace(PATTERNS.IPV4, (m, at, all) => (KEEP_IPS.has(m) || /^-[a-z]/i.test(all.slice(at + m.length)) || versionNumber(m, at, all) ? m : '[ip]'));
   // IPv6 needs a digit: "a::b" and "std::vector" are code.
   out = out.replace(PATTERNS.IPV6, (m) => (KEEP_IPS.has(m) || !/\d/.test(m) ? m : '[ip]'));
-  out = out.replace(PATTERNS.BARE_HOST, (m, host, port) => (privateHost(host, port, hub) ? '[host]' : m));
-  return out.replace(PATTERNS.PHONE, (m) => (phoneOk(m) ? '[phone]' : m));
+  out = out.replace(TITLE_HOST, (m, host, port) => (privateHost(host, port, hub) ? '[host]' : m));
+  out = out.replace(PATTERNS.PHONE, (m) => (phoneOk(m) ? '[phone]' : m));
+  return out.replace(/\u0001(\d+)\u0002/g, (m, i) => parked[i]);
 }
 // scrubText for a one-line title: runs of spaces left by removals fold to one.
 const scrubTitle = (text, opts) => scrubText(text, opts).replace(/[ \t]{2,}/g, ' ');

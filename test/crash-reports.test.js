@@ -137,7 +137,7 @@ test('nothing leaves the process: the file loads no network module and calls no 
   const origFetch = globalThis.fetch;
   globalThis.fetch = () => { throw new Error('fetch called'); };
   try {
-    for (const k of Object.keys(require.cache)) if (/[\\/](?:src[\\/](?:crash-reports|scrub|secret-patterns)|brand)\.js$/.test(k)) delete require.cache[k];
+    for (const k of Object.keys(require.cache)) if (/[\\/](?:src[\\/](?:crash-reports|scrub|secret-patterns|iana-tlds)|brand)\.js$/.test(k)) delete require.cache[k];
     const fresh = require(SRC);
     const c = fresh.create({ dir: path.join(tmp(), 'cr'), app: APP, scrubWith });
     c.setOptIn(true);
@@ -150,7 +150,7 @@ test('nothing leaves the process: the file loads no network module and calls no 
   }
   const NET = /^(?:node:)?(?:https?|http2|net|tls|dgram|dns|undici|ws|electron|child_process)$/;
   assert.deepEqual(loaded.filter((m) => NET.test(m)), []);
-  assert.deepEqual([...new Set(loaded)].sort(), ['../board/shared/crash-report.cjs', '../brand.js', './scrub.js', './secret-patterns.js', 'crypto', 'fs', 'path', SRC].sort());
+  assert.deepEqual([...new Set(loaded)].sort(), ['../board/shared/crash-report.cjs', '../brand.js', './iana-tlds.js', './scrub.js', './secret-patterns.js', 'crypto', 'fs', 'path', SRC].sort());
 });
 
 test('Preferences: the switch starts off, shows the exact payload, saves on its own and describes the structural payload and renewed consent', async () => {

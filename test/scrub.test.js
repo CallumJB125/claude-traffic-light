@@ -344,3 +344,89 @@ test('scrubText and scrub: a cut drops whole lines, so nothing straddling it lea
   // A cut with no newline before it leaves only the marker.
   assert.match(scrubText('⑽'.repeat(20000)), /^\[cut: [^\]]+\]$/);
 });
+
+test('scrubTitle: Cyrillic and Greek lookalikes in a mixed word cannot hide a name; all-Cyrillic text stays (#52 follow-up)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  for (const [input, want] of [['mount nas.locаl', 'mount [host]'], ['mount nаs.local', 'mount [host]'], ['mail sаm@acme.com', 'mail [email]'],
+    ['ssh db1.cоrp.acme.internаl', 'ssh [host]'], ['ping jеnkins.corp', 'ping [host]'], ['ssh οps.lan', 'ssh [host]']]) assert.equal(scrubTitle(input), want, input);
+  for (const keep of ['сервер работает', 'Привет, мир', 'αβγ δοκιμή', 'Ошибка в модуле auth', 'test σ value']) assert.equal(scrubTitle(keep), keep, keep);
+});
+
+test('scrubTitle: a bare name is a host only with a real top-level domain; public sites keep only their own service names (#52 follow-up)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  for (const keep of ['read docs.python.org', 'www.google.com', 'raw.githubusercontent.com', 'gist.github.com', 'api.github.com', 'cdn.anthropic.com',
+    'com.anthropic.claude', 'api.v1.core', 'Dockerfile.prod.arm64', 'index.d.mts', 'jest.config.cts', 'src/app.config.ts', 'docs/index.d.mts',
+    'node_modules/lodash.merge/index.js', 'see a/b/c.test.js', 'github.com/acme/app']) assert.equal(scrubTitle(keep), keep, keep);
+  for (const [input, want] of [['ssh secret-project.anthropic.com', 'ssh [host]'], ['open callum.github.com', 'open [host]'], ['curl my-app.default.svc', 'curl [host]'],
+    ['ssh db1.internal.example.com', 'ssh [host]'], ['ssh build.acme.engineering', 'ssh [host]'], ['open https://build.acme.foo/x', 'open https://[host]/x'],
+    ['branch fix/db1.corp.acme.internal', 'branch fix/[host]'], ['tail logs/db1.corp.acme.com today', 'tail logs/[host] today'], ['nas.svc', '[host]']]) assert.equal(scrubTitle(input), want, input);
+});
+
+test('scrubTitle: named commit hashes, version numbers and test ids stay; a MAC address goes (#52 follow-up)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  const H = '3f2c9a0e4b1d8c7f6e5a4b3c2d1e0f9a8b7c6d5e';
+  for (const keep of [`commit ${H}`, `reverts ${H}`, `sha: ${H}`, `cherry-picked ${H}`, `see github.com/acme/app/commit/${H}`,
+    'version 1.2.3.4', 'ver. 0.9.0.101', 'IDs 0123 4567 8901', 'id 0123456789', 'id 01234567890', 'id 9876543210']) assert.equal(scrubTitle(keep), keep, keep);
+  // A bare 40-hex run may be a legacy GitHub token; an address after a non-version word stays [ip].
+  for (const [input, want] of [[`token ${H}`, 'token [redacted]'], [H, '[redacted]'], ['ssh root@10.0.0.5', 'ssh root@[ip]'], ['server=10.0.0.5', 'server=[ip]'],
+    ['driver 1.2.3.4', 'driver [ip]'], ['call 082 555 0199', 'call [phone]'], ['mac 00:1a:2b:3c:4d:5e', 'mac [mac]'], ['mac 00-1A-2B-3C-4D-5E', 'mac [mac]'],
+    ['ping fe80::1ff:fe23:4567:890a', 'ping [ip]'], ['x \u00010\u0002 y', 'x 0 y']]) assert.equal(scrubTitle(input), want, input);
+});
+
+test('scrubTitle: three or more labels stay a host unless clearly code; internal suffixes are private (#59 review)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  for (const h of ['db.service.consul', 'vault.service.dc1.consul', 'postgres.prod.acme', 'build.acme.test', 'db.acme.localdomain', 'api.acme.private',
+    'git.acme.intra', 'redis.cache.k8s', 'srv01.acme.office', 'db01.acme.loc', 'gw.acme.vpn', 'api.acme.prod', 'api.acme.staging', 'grafana.mon.cluster',
+    'notes.final.pt', 'build.acme.foo',
+    'db.consul', 'ci.test', 'nas.localdomain', 'api.private', 'git.intra', 'redis.k8s', 'srv.office', 'db.loc', 'gw.vpn', 'api.prod', 'api.staging',
+    'mon.cluster', 'nas.home', 'web.docker', 'api.example', 'x.invalid']) assert.equal(scrubTitle(`ssh ${h}`), 'ssh [host]', h);
+  // Clear code shapes stay: reverse-DNS ids, file names, a version or architecture last.
+  for (const keep of ['com.anthropic.claude', 'io.github.acme', 'Dockerfile.prod.arm64', 'build.linux.x64', 'pkg.v2', 'api.acme.v1',
+    'index.d.mts', 'jest.config.cts', 'app.config.prod.json', 'src/app.config.ts', 'api.v1.core', 'docs.python.org']) assert.equal(scrubTitle(keep), keep, keep);
+});
+
+test('scrubTitle: only commit words keep a hash; version words need a boundary and never keep a private address (#59 review)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  const H = '0d4fc953a1b2c3d4e5f60718293a4b5c6d7e8f90';
+  for (const keep of [`/commit/${H}`, `see commit/${H}`, `https://github.com/acme/app/commit/${H}`, `sha ${H}`, `sha1 ${H}`, `merged ${H}`, 'version 1.2.3.4', 'Version: 1.2.3.4']) {
+    assert.equal(scrubTitle(keep), keep, keep);
+  }
+  for (const [input, want] of [[`password hash ${H}`, 'password [redacted] [redacted]'], [`hash ${H}`, 'hash [redacted]'],
+    ['version=10.0.0.5', 'version=[ip]'], ['ip_version: 10.0.0.5', 'ip_version: [ip]'], ['Version: 192.168.1.10', 'Version: [ip]'],
+    ['version 127.0.0.2', 'version [ip]'], ['version 169.254.1.1', 'version [ip]'], ['version 172.16.0.9', 'version [ip]'], ['version 100.101.2.3', 'version [ip]'],
+    ['APP_VERSION=1.2.3.4', 'APP_VERSION=[ip]'], ['subversion 1.2.3.4', 'subversion [ip]']]) assert.equal(scrubTitle(input), want, input);
+});
+
+test('scrubTitle: a reverse-DNS exemption needs a last label that is no TLD (#59 review, B2)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  for (const h of ['dev.acme.com', 'app.secret-project.com', 'dev.internal-tool.acme.io', 'app.acme.ai', 'me.acme.com', 'co.acme.io', 'ca.acme.com',
+    'in.acme.com', 'uk.acme.co.uk', 'de.acme.de', 'net.acme.org', 'org.acme.io', 'io.acme.io', 'com.acme.cloud', 'org.acme.xyz']) assert.equal(scrubTitle(`ssh ${h}`), 'ssh [host]', h);
+  assert.equal(scrubTitle('see dev.acme.com.'), 'see [host].');
+  for (const keep of ['com.anthropic.claude', 'org.mozilla.firefox', 'io.github.acme', 'com.apple.Safari']) assert.equal(scrubTitle(keep), keep, keep);
+  // .bar is a real TLD, so org.foo.bar reads as a host (B3).
+  assert.equal(scrubTitle('org.foo.bar'), '[host]');
+});
+
+test('scrubTitle: reverse-DNS ids are exempt only when they end in no real TLD (#59 review, B3)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  const ends = ['store', 'tools', 'team', 'live', 'studio', 'health', 'cafe', 'software', 'games', 'group', 'network', 'systems', 'design', 'blog', 'club', 'world',
+    'email', 'digital', 'solutions', 'money', 'bank', 'global', 'company', 'today', 'services', 'academy', 'pro', 'name', 'mobi', 'asia', 'travel', 'jobs', 'museum',
+    'aero', 'coop', 'tel', 'cat'];
+  const hosts = ['dev.cs.stanford.edu', 'app.agency.gov', 'dev.army.mil', 'dev.acme.int', 'com.acme.shop', 'org.acme.page', 'io.acme.zone', 'co.acme.agency',
+    'uk.acme.london', 'de.acme.berlin', 'dev.acme.xn--p1ai', 'COM.ACME.COM', 'Dev.Acme.Com', ...ends.map((e) => `dev.acme.${e}`), ...ends.map((e) => `com.acme.${e}`)];
+  for (const h of hosts) assert.equal(scrubTitle(`ssh ${h}`), 'ssh [host]', h);
+  assert.equal(scrubTitle('branch fix/dev.acme.shop'), 'branch fix/[host]');
+  assert.equal(scrubTitle('see dev.acme.shop.'), 'see [host].');
+  // Real ids end in a product name, not a TLD.
+  for (const keep of ['com.anthropic.claude', 'org.mozilla.firefox', 'io.github.acme', 'com.apple.Safari', 'com.google.android.gms', 'org.apache.commons', 'net.sourceforge.pmd',
+    'io.flutter.embedding']) assert.equal(scrubTitle(keep), keep, keep);
+  // Only com, org, net and io start an id: dev.flutter.plugins reads as a host (the safe direction).
+  assert.equal(scrubTitle('dev.flutter.plugins'), '[host]');
+  // The private suffix always wins.
+  for (const h of ['com.acme.local', 'com.acme.internal', 'net.acme.lan', 'com.acme.prod', 'io.acme.consul']) assert.equal(scrubTitle(h), '[host]', h);
+  for (const s of ['corp', 'home', 'lan', 'local', 'internal', 'intranet', 'private', 'localdomain']) assert.equal(scrubTitle(`nas.${s}`), '[host]', s);
+  const { TLDS } = require('../src/iana-tlds.js');
+  assert.ok(TLDS.size > 1000, `${TLDS.size}`);
+  for (const t of ['shop', 'edu', 'gov', 'mil', 'int', 'museum', 'xn--p1ai', 'com', 'io']) assert.ok(TLDS.has(t), t);
+  for (const t of ['claude', 'firefox', 'safari', 'gms', 'commons', 'pmd', 'acme', 'embedding']) assert.ok(!TLDS.has(t), t);
+});
