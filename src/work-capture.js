@@ -86,6 +86,10 @@ function compactState(v) {
   for(const [repo,d]of Object.entries(v.choices))if(safeCanonical(repo)) {
     const pin=compactDestination({...d,kind:'team'});delete pin.kind;out.choices[repo]=pin;
   }
+  // "Keep on My board" (PR 7) is kept apart from team pins: an older build rebuilds every choices[] entry as a
+  // team destination and would pause automatic cards on any other shape, while it ignores (and drops) this key.
+  const local=v.local_choices!==null&&typeof v.local_choices==='object'&&!Array.isArray(v.local_choices)?Object.keys(v.local_choices).filter(r=>v.local_choices[r]===true&&safeCanonical(r)&&!out.choices[r]).slice(0,2000):[];
+  if(local.length)out.local_choices=Object.fromEntries(local.map(r=>[r,true]));
   return out;
 }
 function privateState(file,startEnabled=false) {
@@ -144,6 +148,7 @@ function observation(s,{ownedRoots=[],host=null}={}) {
 function routeFor(repo,routes,choice) {
   const matches=repo?routes.filter(r=>r.canonical_url===repo):[];
   if(!matches.length)return {kind:'local'};
+  if(choice?.kind==='local')return {kind:'local'};
   const current=choice&&matches.find(r=>r.hub===choice.hub&&r.user_id===choice.user_id&&r.team_id===choice.team_id&&r.board_id===choice.board_id&&r.repo_id===choice.repo_id);
   if(current)return current.role==='viewer'?{kind:'local',needs_routing:true,reason:'team_read_only'}:{kind:'team',...current};
   if(matches.length===1)return matches[0].role==='viewer'?{kind:'local',needs_routing:true,reason:'team_read_only'}:{kind:'team',...matches[0]};
@@ -213,7 +218,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     // would duplicate existing cards, and capture failure must not close Buddy.
     const notice='Automatic cards are paused because private capture storage is unavailable. Your saved identities have been kept.';
     log('automatic cards unavailable: private storage');
-    return {observe:()=>Promise.resolve(),boardFor:()=>({kind:'unknown'}),addAgentCard:async()=>({reason:'UNAVAILABLE',message:'Plexiform cannot save cards right now.'}),sessionFacts:()=>null,backfill:async()=>({updated:0,pending:0}),startBackfill:()=>{},captureOnce:async()=>({ok:false,reason:'storage'}),routes:async()=>({routes:[],complete:false}),enabled:()=>false,setEnabled:()=>false,choose:async()=>false,choices:()=>[],snapshot:()=>[],notice:()=>notice,stop:async()=>{},idle:()=>Promise.resolve()};
+    return {observe:()=>Promise.resolve(),boardFor:()=>({kind:'unknown'}),addAgentCard:async()=>({reason:'UNAVAILABLE',message:'Plexiform cannot save cards right now.'}),sessionFacts:()=>null,backfill:async()=>({updated:0,pending:0}),startBackfill:()=>{},captureOnce:async()=>({ok:false,reason:'storage'}),routes:async()=>({routes:[],complete:false}),routing:async()=>[],enabled:()=>false,setEnabled:()=>false,choose:async()=>false,choices:()=>[],snapshot:()=>[],notice:()=>notice,stop:async()=>{},idle:()=>Promise.resolve()};
   }
   const STALE_MS=7*24*3600*1000;
   for(const [key,e]of Object.entries(store.state.tasks)){
@@ -235,6 +240,9 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
   const shows=rec=>!!(rec&&(rec.goal||rec.summary||rec.files.edited.length));
   const placeless=cwd=>typeof cwd!=='string'||!path.isAbsolute(cwd)||path.resolve(cwd)===path.parse(path.resolve(cwd)).root||typeof home==='string'&&home!==''&&path.resolve(cwd)===path.resolve(home);
   const changed=()=>{try{onChange();}catch{/* UI updates do not affect capture */}};
+  // The remembered board for a repo: a team pin, an explicit "Keep on My board", or none.
+  const choiceOf=repo=>!repo?null:Object.hasOwn(state.choices,repo)?state.choices[repo]:state.local_choices?.[repo]===true?{kind:'local'}:null;
+  const pinCount=()=>Object.keys(state.choices).length+Object.keys(state.local_choices??{}).length;
   function commit(mutate,reserve=0) {
     // Publish memory only after the bounded private file commits. In particular
     // a new source's destination must be durable before its first HTTP request.
@@ -314,7 +322,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
         if(stopped||state.enabled===false)return;
         if(!fresh(raw))continue;
         if(!o.personal&&!catalog.complete){log('automatic card routing awaits a current team catalog');continue;}
-        const destination=compactDestination(o.personal?{kind:'local'}:routeFor(repo,catalog.routes??[],state.choices[repo]));
+        const destination=compactDestination(o.personal?{kind:'local'}:routeFor(repo,catalog.routes??[],choiceOf(repo)));
         if(!commit(next=>{next.tasks[key]={destination,repo,provider:o.provider,session_id:o.session_id,task_id:o.task_id,title:o.title,status:null,card_id:null,last_seen:now()};},ACK_RESERVE_BYTES))continue;
         entry=state.tasks[key];changed();}
       const currentRoute=routesByKey.get(routeKey(entry.destination));
@@ -424,13 +432,13 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     if(entry?.untracked)return {kind:'untracked'};
     let d=entry?.destination;
     // A card kept on My board while the repo had no default board stays there once one is picked.
-    if(d&&d.kind==='local'&&d.needs_routing&&!d.reason&&entry.repo&&Object.hasOwn(state.choices,entry.repo))return {kind:'personal'};
+    if(d&&d.kind==='local'&&d.needs_routing&&!d.reason&&entry.repo&&choiceOf(entry.repo))return {kind:'personal'};
     if(!d||d.kind==='team'){
       if(!lastCatalogAt||!catalog.complete)return unknown;
       if(!d){
         if(typeof o.cwd!=='string'||!path.isAbsolute(o.cwd))return unknown;
         const r=repoOf(o.cwd);if(!r)return unknown;
-        d=routeFor(r.repo,catalog.routes??[],r.repo?state.choices[r.repo]:null);
+        d=routeFor(r.repo,catalog.routes??[],choiceOf(r.repo));
       }
     }
     if(d.kind==='team'){const route=(catalog.routes??[]).find(x=>routeKey(x)===routeKey(d));return {kind:'team',name:typeof route?.board_name==='string'?route.board_name.slice(0,200):''};}
@@ -486,7 +494,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       if(prior.destination.kind==='team'&&!(fresh.routes??[]).some(x=>routeKey(x)===routeKey(prior.destination)&&['owner','admin','member'].includes(x.role)))return refuse('UNAVAILABLE');
       destination=prior.destination;cardTitle=prior.title;summary=typeof prior.summary==='string'?prior.summary:null;
     } else {
-      const d=routeFor(repo,fresh.routes??[],repo?state.choices[repo]:null);
+      const d=routeFor(repo,fresh.routes??[],choiceOf(repo));
       if(d.kind==='local'&&d.reason==='team_read_only')return refuse('READ_ONLY');
       if(d.kind==='local'&&d.needs_routing)return refuse('CHOOSE_BOARD');
       if(Object.keys(state.tasks).length>=2000)return refuse('UNAVAILABLE');
@@ -569,14 +577,41 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     enabled:()=>state.enabled!==false,
     notice:()=>notice,
     setEnabled(on){if(!commit(next=>{next.enabled=!!on;}))return false;if(!on)latest=null;changed();return true;},
+    // key: a route key from routing()/choices(), or 'local' for "Keep on My board". Either replaces the other.
     async choose(repo,key){
-      if(stopped||!safeCanonical(repo)||typeof key!=='string'||!HASH.test(key))return false;
+      if(stopped||!safeCanonical(repo)||typeof key!=='string'||key!=='local'&&!HASH.test(key))return false;
+      if(!choiceOf(repo)&&pinCount()>=2000)return false;
+      if(key==='local'){
+        if(!commit(next=>{delete next.choices[repo];next.local_choices={...(next.local_choices??{}),[repo]:true};}))return false;
+        changed();return true;
+      }
       const fresh=await getRoutes();if(!fresh.complete||stopped)return false;
       const destination=(fresh.routes??[]).find(r=>r.canonical_url===repo&&routeKey(r)===key&&['owner','admin','member'].includes(r.role));
-      if(!destination||!Object.hasOwn(state.choices,repo)&&Object.keys(state.choices).length>=2000)return false;
+      if(!destination)return false;
       const pin=compactDestination({kind:'team',hub:destination.hub,user_id:destination.user_id,team_id:destination.team_id,board_id:destination.board_id,repo_id:destination.repo_id});delete pin.kind;
-      if(!commit(next=>{next.choices[repo]=pin;}))return false;
+      if(!commit(next=>{next.choices[repo]=pin;if(next.local_choices){delete next.local_choices[repo];if(!Object.keys(next.local_choices).length)delete next.local_choices;}}))return false;
       catalog=fresh;lastCatalogAt=now();changed();return true;
+    },
+    // Where each project's new work goes (PR 7), for the Sessions strip and the This Mac table: names and opaque
+    // route keys only. repos: canonical names (the caller's live sessions); default, every repo this Mac remembers.
+    // state: set (a remembered pick), single (one team board, used without asking), ask (several, none picked yet),
+    // unlinked (no team board), read_only (the only board is read-only). An incomplete catalog gives no rows.
+    async routing(repos=null){
+      if(stopped)return [];
+      if(now()-lastCatalogAt>15000||!lastCatalogAt){try{catalog=await getRoutes();lastCatalogAt=now();}catch{return [];}}
+      if(!catalog.complete)return [];
+      const known=repos??[...Object.values(state.tasks).map(e=>e.repo),...Object.keys(state.choices),...Object.keys(state.local_choices??{})];
+      const list=[...new Set((Array.isArray(known)?known:[]).filter(r=>safeCanonical(r)))].slice(0,50);
+      const named=r=>({key:routeKey(r),team:clean(r.team_name??'Team',60),board:clean(r.board_name??'Board',60)});
+      return list.map(repo=>{
+        const matches=(catalog.routes??[]).filter(r=>r.canonical_url===repo);
+        const choice=choiceOf(repo);
+        const d=routeFor(repo,catalog.routes??[],choice);
+        const state=choice&&(choice.kind==='local'||d.kind==='team')?'set':!matches.length?'unlinked':d.reason==='team_read_only'?'read_only':d.kind==='team'?'single':'ask';
+        const route=d.kind==='team'?matches.find(r=>routeKey(r)===routeKey(d)):null;
+        return {repo,short:repo.split('/').pop().slice(0,80),state,destination:route?{kind:'team',...named(route)}:{kind:'local'},
+          matches:matches.map(r=>({...named(r),read_only:!['owner','admin','member'].includes(r.role)}))};
+      });
     },
     choices(){return !catalog.complete?[]:(catalog.routes??[]).filter(r=>safeCanonical(r.canonical_url)&&['owner','admin','member'].includes(r.role)).map(r=>({key:routeKey(r),repo:r.canonical_url,team_name:clean(r.team_name??'Team',60),board_name:clean(r.board_name??'Board',60)}));},
     // Main-only identity join for Overview; never forwarded to a renderer.

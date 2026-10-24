@@ -317,3 +317,49 @@ test('a team title keeps only its own hub tailnet name; any other tailnet host g
  await r.router.observe([event({taskTitle:'sync plexi.tail1234.ts.net with callums-mac.tail1234.ts.net'})]);
  assert.equal(r.calls[0].kind,'team');assert.equal(r.calls[0].body.title,'sync plexi.tail1234.ts.net with [host]');
 });
+test('PR 7: routing() gives one row per project (set, single, ask, unlinked, read_only); choose(repo, "local") keeps it on My board',async t=>{
+ const B={...R,team_id:'team-b',board_id:'board-b',repo_id:'repo-b',team_name:'Plexiform',board_name:'Website'};
+ const S={...R,canonical_url:'github.com/org/solo',repo_id:'repo-s',team_name:'Plexiform',board_name:'Core'};
+ const V={...R,canonical_url:'github.com/org/ro',repo_id:'repo-v',role:'viewer',team_name:'Ops',board_name:'Ops'};
+ const A={...R,team_name:'Plexiform',board_name:'Core'};
+ const repos=['github.com/org/app','github.com/org/solo','github.com/org/none','github.com/org/ro'];
+ const r=rig(t,{getRoutes:async()=>({routes:[A,B,S,V],complete:true})});
+ const rows=await r.router.routing(repos);
+ assert.deepEqual(rows.map(x=>[x.short,x.state,x.destination.kind]),[['app','ask','local'],['solo','single','team'],['none','unlinked','local'],['ro','read_only','local']]);
+ assert.deepEqual(rows[0].matches.map(m=>[m.team,m.board,m.read_only]),[['Plexiform','Core',false],['Plexiform','Website',false]]);
+ assert.equal(rows[1].destination.board,'Core');assert.equal(rows[1].destination.key,routeKey(S));
+ assert.ok(!/working|hub\.example|user-a|team-a|repo-a/.test(JSON.stringify(rows)),'rows carry names and opaque keys only');
+ // A pick is per project and shows as set.
+ assert.equal(await r.router.choose('github.com/org/app',routeKey(B)),true);
+ assert.deepEqual((await r.router.routing(['github.com/org/app']))[0].destination,{kind:'team',key:routeKey(B),team:'Plexiform',board:'Website'});
+ // "Keep on My board" is an explicit pin: new work goes to My board without asking again.
+ assert.equal(await r.router.choose('github.com/org/app','local'),true);
+ const [app]=await r.router.routing(['github.com/org/app']);assert.equal(app.state,'set');assert.deepEqual(app.destination,{kind:'local'});
+ await r.router.observe([event({taskTitle:'Fix route'})]);
+ assert.equal(r.calls.at(-1).kind,'local');assert.deepEqual(r.router.snapshot()[0].destination,{kind:'local'});
+ assert.equal(routeFor('github.com/org/app',[A,B],{kind:'local'}).kind,'local');assert.equal(routeFor('github.com/org/app',[A,B],{kind:'local'}).needs_routing,undefined);
+ // A single match can be kept on My board too, and a team pick replaces the local one.
+ assert.equal(await r.router.choose('github.com/org/solo','local'),true);assert.equal((await r.router.routing(['github.com/org/solo']))[0].destination.kind,'local');
+ assert.equal(await r.router.choose('github.com/org/solo',routeKey(S)),true);assert.equal((await r.router.routing(['github.com/org/solo']))[0].destination.kind,'team');
+ // Stored apart from team pins, so a file an older build reads has only the pin shape it knows (it rebuilds each
+ // choice as a team destination and would pause automatic cards on anything else).
+ const stored=JSON.parse(fs.readFileSync(r.setup.file));
+ assert.deepEqual(stored.local_choices,{'github.com/org/app':true});
+ assert.ok(Object.values(stored.choices).every(c=>typeof c.hub==='string'&&typeof c.board_id==='string'),JSON.stringify(stored.choices));
+ assert.equal(stored.choices['github.com/org/app'],undefined);
+ // A restart keeps the pin; a read-only or unknown key, or a malformed repo, is refused.
+ await r.router.stop();const again=createWorkCapture({...r.setup});t.after(()=>again.stop());
+ assert.deepEqual((await again.routing(['github.com/org/app']))[0].destination,{kind:'local'});
+ assert.equal(await again.choose('github.com/org/ro',routeKey(V)),false);assert.equal(await again.choose('../x','local'),false);assert.equal(await again.choose('github.com/org/app','nope'),false);
+ // An incomplete catalog gives no rows rather than a guess.
+ const off=createWorkCapture({...r.setup,file:path.join(r.dir,'off.json'),getRoutes:async()=>({routes:[A],complete:false})});t.after(()=>off.stop());
+ assert.deepEqual(await off.routing(repos),[]);
+});
+test('PR 7: a card kept on My board while the repo had no default stays personal once "Keep on My board" is picked',async t=>{
+ const B={...R,team_id:'team-b',board_id:'board-b',repo_id:'repo-b'};
+ const r=rig(t,{getRoutes:async()=>({routes:[R,B],complete:true})});
+ await r.router.observe([event()]);assert.equal(r.calls.at(-1).kind,'local');
+ assert.equal(r.router.boardFor(event()).kind,'choose');
+ assert.equal(await r.router.choose(R.canonical_url,'local'),true);
+ assert.equal(r.router.boardFor(event()).kind,'personal');
+});
