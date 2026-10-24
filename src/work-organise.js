@@ -442,48 +442,104 @@
    *   `fsp.realpath` (node:fs/promises). The default is the identity, so without it a session
    *   started from a symlinked folder (/tmp vs /private/tmp, a linked checkout) is not folded
    *   into the same project as its real path.
+   *
+   * Stale-while-revalidate (organised views PR 3): a view asks groupOf(cwd) synchronously on every
+   * render, so main never waits on git to draw a list. A good answer is kept until a new good one
+   * arrives; a lookup git could not finish (a spawn error, a timeout, a kill) never replaces it and
+   * is retried after a short backoff, not after the TTL. At most `concurrency` lookups run at once,
+   * one per cwd, and each answer's TTL is jittered so a cold start does not expire on one tick.
    */
-  function createGitInfoResolver({ git, repoFor = async () => null, realpath = async (p) => p, now = () => Date.now(), ttlMs = 60_000, max = 500 } = {}) {
+  function createGitInfoResolver({ git, repoFor = async () => null, realpath = async (p) => p, now = () => Date.now(), ttlMs = 60_000, max = 500, concurrency = 4, jitter = 0.2, random = Math.random, backoffMs = [5_000, 15_000, 30_000] } = {}) {
     if (typeof git !== 'function') throw new TypeError('git runner required');
-    const cache = new Map(); // cwd → { at, value: Promise }
+    const cache = new Map(); // cwd → { good, expires, fails, retryAt, suspect, pending }
     const empty = Object.freeze({ repoName: null, commonDir: null, toplevel: null, branch: null });
-    const call = (fn) => Promise.resolve().then(fn).catch(() => null);
-    const real = async (p) => { const v = await call(() => realpath(p)); return typeof v === 'string' && isAbs(v) && !v.includes('\0') ? v : p; };
+    // A plain non-zero exit is an answer ("not a repository", "no branch"); anything else is git not answering.
+    const broke = (e) => typeof e?.code !== 'number' || !!e.killed || !!e.signal;
+    const call = (fn) => Promise.resolve().then(fn).then((v) => ({ v, broken: false }), (e) => ({ v: null, broken: broke(e) }));
+    const real = async (p) => { const { v } = await call(() => realpath(p)); return typeof v === 'string' && isAbs(v) && !v.includes('\0') ? v : p; };
     async function look(cwd) {
       const dir = await real(cwd);
       // The branch is asked for on its own: rev-parse --abbrev-ref HEAD fails (128) in a repo
       // with no commits yet, and that must not make the whole repo unresolved.
-      const [out, ref, repoName] = await Promise.all([
+      const [top, ref, origin] = await Promise.all([
         call(() => git(dir, ['rev-parse', '--show-toplevel', '--git-common-dir'])),
         call(() => git(dir, ['symbolic-ref', '--short', '-q', 'HEAD'])),
         call(() => repoFor(dir)),
       ]);
+      const out = top.v, repoName = origin.v;
       const lines = typeof out === 'string' ? out.replace(/\n$/, '').split('\n') : null;
       // A path with a newline in it shifts every line after it: anything but two answers is unresolved.
       const ok = lines && lines.length === 2 && lines.every((l) => l && !l.includes('\0'));
-      const head = typeof ref === 'string' ? ref.replace(/\n$/, '') : '';
+      const head = typeof ref.v === 'string' ? ref.v.replace(/\n$/, '') : '';
       const [toplevel, commonDir] = ok ? await Promise.all([real(lines[0]), real(resolveFrom(dir, lines[1]))]) : [null, null];
-      return Object.freeze({
+      const value = Object.freeze({
         repoName: canonical(repoName) ? repoName : null,
         toplevel,
         commonDir,
         branch: ok && head && !head.includes('\n') && !head.includes('\0') ? head.slice(0, 200) : null,
       });
+      return { value, broken: top.broken || ref.broken };
     }
+
+    let active = 0;
+    const waiting = [];
+    const pump = () => { while (active < concurrency && waiting.length) { active++; const job = waiting.shift(); job().finally(() => { active--; pump(); }); } };
+    const queued = (fn) => new Promise((res) => { waiting.push(() => fn().then(res, () => res(null))); pump(); });
+
+    const life = () => Math.max(1, Math.round(ttlMs * (1 + jitter * (2 * random() - 1))));
+    // Losing what the last good answer had (its origin or its repository) is believed only when the
+    // next lookup says the same: one slow `git config` must not move a repo's sessions to a folder group.
+    const loses = (was, next) => (was.repoName && !next.repoName) || (was.commonDir && !next.commonDir);
+    function refresh(cwd, e) {
+      if (e.pending) return e.pending;
+      e.pending = queued(() => look(cwd)).then((r) => {
+        e.pending = null;
+        const t = now();
+        if (r && !r.broken && !(e.good && loses(e.good, r.value) && !e.suspect)) {
+          e.good = r.value; e.expires = t + life(); e.fails = 0; e.retryAt = 0; e.suspect = false;
+        } else {
+          if (r && !r.broken) e.suspect = true;
+          e.fails++;
+          e.retryAt = t + Math.min(ttlMs, backoffMs[Math.min(e.fails, backoffMs.length) - 1] ?? ttlMs);
+        }
+        return e.good ?? empty;
+      });
+      return e.pending;
+    }
+    const valid = (cwd) => typeof cwd === 'string' && isAbs(cwd) && cwd.length <= 2000 && !cwd.includes('\0');
+    function entry(cwd) {
+      let e = cache.get(cwd);
+      if (!e) {
+        e = { good: null, expires: 0, fails: 0, retryAt: 0, suspect: false, pending: null };
+        cache.set(cwd, e);
+        while (cache.size > max) cache.delete(cache.keys().next().value);
+      }
+      return e;
+    }
+    // Starts a lookup when the answer is missing or old and no retry is waiting; returns the entry.
+    function touch(cwd) {
+      const e = entry(cwd), t = now();
+      if ((!e.good || t >= e.expires) && t >= e.retryAt) refresh(cwd, e);
+      return e;
+    }
+    // → Promise<info>: the good answer at once when there is one (fresh or not); a cold cwd waits for its lookup.
     function resolve(cwd) {
-      if (typeof cwd !== 'string' || !isAbs(cwd) || cwd.length > 2000 || cwd.includes('\0')) return Promise.resolve(empty);
-      const hit = cache.get(cwd);
-      if (hit && now() - hit.at < ttlMs) return hit.value;
-      const value = look(cwd).catch(() => empty);
-      cache.delete(cwd);
-      cache.set(cwd, { at: now(), value });
-      while (cache.size > max) cache.delete(cache.keys().next().value);
-      return value;
+      if (!valid(cwd)) return Promise.resolve(empty);
+      const e = touch(cwd);
+      if (e.good) return Promise.resolve(e.good);
+      return e.pending ?? Promise.resolve(empty);
     }
-    return { resolve, clear: () => cache.clear(), size: () => cache.size };
+    // → {key, heading, sub, pending}, synchronously: the last good answer, or the folder while none is in yet.
+    function groupOf(cwd, extra = {}) {
+      if (!valid(cwd)) return { ...projectOf({}), pending: false };
+      const e = touch(cwd);
+      return { ...projectOf({ ...(e.good ?? {}), ...extra, cwd }), pending: !e.good };
+    }
+    const idle = () => Promise.all([...cache.values()].map((e) => e.pending).filter(Boolean)).then(() => (active || waiting.length ? idle() : undefined));
+    return { resolve, groupOf, idle, clear: () => cache.clear(), size: () => cache.size };
   }
 
-  const api = { BUCKETS, FALLBACK, SENTENCE_FALLBACK, headingOf, MAX_TITLE, bucketOf, knowsState, projectOf, titleOf, group, createGitInfoResolver, safeText, promptSummary, humaniseBranch };
+  const api = { BUCKETS, FALLBACK, SENTENCE_FALLBACK, headingOf, MAX_TITLE, bucketOf, knowsState, projectOf, keyOf, titleOf, group, createGitInfoResolver, safeText, promptSummary, humaniseBranch };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformWorkOrganise = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);
