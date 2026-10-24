@@ -9,6 +9,7 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const BurstHandover = require('./burst-handover.js');
 const WorkRoutingView = require('./work-routing-view.js');
+const Organise = require('./work-organise.js');
 
 // The same sentence the board's Team page shows (board/web/js/render-team.js SCOPE_RULE; a test keeps them equal).
 const SCOPE_RULE = 'A session only shows once it writes into a repo linked to this board. Personal repos and sessions marked “Personal — don’t track” never show.';
@@ -182,8 +183,11 @@ function create({ sessions, repoOf, rootOf, boards, capture, links, tickets = nu
   // Where each live session's project's new work goes (organised views PR 7). Only projects listed here can be
   // changed, linked or asked about, so the page cannot act on a repository it was not shown.
   let listed = new Set();
+  // Each row also carries its project's group key (work-organise projectOf over the canonical name), the same key
+  // the Sessions snapshot gives that repository's sessions, so the page puts the line in its project's header.
+  // reason says why there are no rows: the page keeps the last rows on 'error' and clears them otherwise.
   async function routing() {
-    if (typeof capture.routing !== 'function' || typeof boards.teams !== 'function') return { rows: [] };
+    if (typeof capture.routing !== 'function' || typeof boards.teams !== 'function') return { rows: [], reason: 'unavailable' };
     const repos = new Set();
     for (const r of rows().slice(0, 50)) {
       if (typeof r.cwd !== 'string' || !path.isAbsolute(r.cwd)) continue;
@@ -192,11 +196,15 @@ function create({ sessions, repoOf, rootOf, boards, capture, links, tickets = nu
       if (canonical) repos.add(canonical);
       if (repos.size >= 20) break;
     }
-    const teams = await boards.teams().catch(() => []);
-    if (!teams.length || !repos.size) { listed = new Set(); return { rows: [] }; }
-    const out = WorkRoutingView.rowsFor(await capture.routing([...repos]).catch(() => []), { teams });
+    let failed = false;
+    const teams = await boards.teams().catch(() => { failed = true; return []; });
+    if (failed) return { rows: [], reason: 'error' };
+    if (!teams.length || !repos.size) { listed = new Set(); return { rows: [], reason: teams.length ? 'no_repos' : 'no_teams' }; }
+    const answer = await capture.routing([...repos]).catch(() => { failed = true; return []; });
+    if (failed) return { rows: [], reason: 'error' };
+    const out = WorkRoutingView.rowsFor(answer, { teams }).map((r) => ({ ...r, key: Organise.projectOf({ repoName: r.repo }).key }));
     listed = new Set(out.map((r) => r.repo));
-    return { rows: out };
+    return out.length ? { rows: out } : { rows: [], reason: 'none' };
   }
   async function routeChoose(repo, key) {
     if (!listed.has(repo) || typeof capture.choose !== 'function') return { ok: false, text: 'Refresh, then choose again.' };

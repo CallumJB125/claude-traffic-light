@@ -133,6 +133,10 @@ test('PR 7 routing strip: rows for the live sessions\' projects, words from work
   assert.match(out.rows[0].text, /^app is linked to Acme \/ Main and Acme \/ Web/);
   assert.deepEqual(out.rows[0].choices.map((c) => c.key), ['k1', 'k2', 'local']);
   assert.equal(JSON.stringify(out).includes('/Users/me'), false);
+  // Organised views PR 3 (review C5): main keys the row with the same function the snapshot's groups use.
+  const Organise = require('../src/work-organise.js');
+  assert.equal(out.rows[0].key, Organise.projectOf({ repoName: 'github.com/org/app' }).key);
+  assert.equal(out.rows[0].key, Organise.projectOf({ repoName: 'github.com/org/app', commonDir: '/Users/me/app/.git', toplevel: '/Users/me/app-wt', cwd: '/Users/me/app-wt/src' }).key, 'a worktree session of the repo shares the key');
   assert.deepEqual(await a.routeChoose('github.com/org/app', 'k2'), { ok: true });
   assert.deepEqual(chosen, [['github.com/org/app', 'k2']]);
   assert.equal((await a.routeChoose('github.com/org/other', 'k2')).ok, false, 'a project not listed is refused');
@@ -147,9 +151,18 @@ test('PR 7 routing strip: rows for the live sessions\' projects, words from work
 });
 test('PR 7 routing strip: no team means no strip; a capture without routing gives none', async () => {
   const none = rig({ boards: { boards: async () => [], teams: async () => [], linkRepo: async () => ({ ok: true }) }, capture: { captureOnce: async () => ({ ok: true }), routing: async () => [{ repo: 'github.com/org/app', short: 'app', state: 'unlinked', destination: { kind: 'local' }, matches: [] }] } });
-  assert.deepEqual(await none.a.routing(), { rows: [] });
+  assert.deepEqual(await none.a.routing(), { rows: [], reason: 'no_teams' });
   const old = rig();
-  assert.deepEqual(await old.a.routing(), { rows: [] });
+  assert.deepEqual(await old.a.routing(), { rows: [], reason: 'unavailable' });
+  // Organised views PR 3 (review C5): a failed fetch says so, so the page keeps the lines it has.
+  const unit = { repo: 'github.com/org/app', short: 'app', state: 'unlinked', destination: { kind: 'local' }, matches: [] };
+  const teams = async () => [{ key: 't1', name: 'Acme', role: 'admin', boards: [{ key: 'b1', name: 'Main' }] }];
+  const down = rig({ boards: { boards: async () => [], teams: async () => { throw new Error('offline'); }, linkRepo: async () => ({ ok: true }) }, capture: { captureOnce: async () => ({ ok: true }), routing: async () => [unit] } });
+  assert.deepEqual(await down.a.routing(), { rows: [], reason: 'error' });
+  const broken = rig({ boards: { boards: async () => [], teams, linkRepo: async () => ({ ok: true }) }, capture: { captureOnce: async () => ({ ok: true }), routing: async () => { throw new Error('catalog'); } } });
+  assert.deepEqual(await broken.a.routing(), { rows: [], reason: 'error' });
+  const empty = rig({ boards: { boards: async () => [], teams, linkRepo: async () => ({ ok: true }) }, capture: { captureOnce: async () => ({ ok: true }), routing: async () => [] } });
+  assert.deepEqual(await empty.a.routing(), { rows: [], reason: 'none' });
 });
 test('PR 7 board broker: teams() lists each signed-in team with its role and its boards\' keys', async () => {
   const client = { me: async () => ({ ok: true, teams: [{ id: 't1', name: 'Acme', role: 'admin', boards: [{ id: 'b1', name: 'Main' }] }, { id: 't2', name: 'Ro', role: 'viewer', boards: [{ id: 'b2', name: 'Ro' }] }] }) };
