@@ -414,13 +414,16 @@ test('the person\'s own hand-off: teammates are the board\'s members; the confir
   assert.equal(await b.taskEnded('task-other', 'done'), false);
   assert.equal(await b.taskEnded('task-9', 'running'), false);
   assert.deepEqual(b.acceptedTasks(), ['task-9']);
-  assert.equal(await b.taskEnded('task-9', 'in_review', 'Export streams; see /Users/alice/notes'), true);
+  assert.equal(await b.taskEnded('task-9', 'in_review', 'Export streams; see /Users/alice/notes\nPinged ops on +27 82 555 0199, db at 10.0.0.5 and nas.local, mail sam@acme.co.za'), true);
   assert.deepEqual(b.acceptedTasks(), []);
   assert.equal(await b.taskEnded('task-9', 'done'), false, 'reported once');
   const after = (await a.list()).sent[0];
   assert.equal(after.state, 'done');
   assert.match(after.report, /Export streams/);
   assert.ok(!after.report.includes('/Users/alice'), after.report);
+  // The AI summary is scrubbed before it reaches the sender (#52 follow-up).
+  assert.doesNotMatch(after.report, /555 0199|10\.0\.0\.5|nas\.local|sam@acme/, after.report);
+  assert.match(after.report, /\[phone\].*\[ip\].*\[host\].*\[email\]/s, after.report);
   const ai = await a.op('mail', { ask_id: sent.id });
   assert.equal(ai.asks[0].handoff.state, 'done');
   assert.match(ai.asks[0].handoff.report, /Export streams/);

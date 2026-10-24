@@ -44,10 +44,16 @@ function hubPoster({ token, fetch = globalThis.fetch, timeoutMs = TIMEOUT_MS }) 
   };
 }
 
+const { scrubText } = require('./scrub.js');
+const hostOf = (u) => { try { return new URL(String(u)).hostname.toLowerCase(); } catch { return ''; } };
+
 /** The record as it may leave this Mac under `route`, or null when it may not. */
 function shareable(record, route) {
   if (!route || route.share_summaries !== true || !record || record.v !== 1 || typeof record.record_id !== 'string' || record.repo_id !== route.repo_id) return null;
   const out = { ...record };
+  // Its text leaves for the hub: no addresses, private hosts, numbers or other tailnet names.
+  const hubHost = hostOf(route.hub);
+  for (const k of ['folder', 'title', 'goal', 'summary', 'branch']) if (typeof out[k] === 'string') out[k] = scrubText(out[k], { hubHost });
   if (route.share_files !== true) out.files = { edited: [], read: [] };
   return out;
 }

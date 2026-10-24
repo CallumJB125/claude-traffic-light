@@ -72,6 +72,17 @@
 const crypto = require('node:crypto');
 const { createInteractionHub } = require('./session-interaction');
 const Envelope = require('./e2e/relay-envelope.js');
+const { scrubTitle } = require('./scrub.js');
+
+// A teammate's view of a shared session: the reported task and agent titles are the
+// owner's words and may name addresses, hosts or numbers; they read as [ip], [host]...
+const scrubbed = (v) => (typeof v === 'string' ? scrubTitle(v).trim() : v);
+function shareTitles(task, children) {
+  return {
+    task: task ? { ...task, title: scrubbed(task.title) } : null,
+    children: children.map((c) => ({ ...c, name: scrubbed(c.name), task_title: scrubbed(c.task_title) })),
+  };
+}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPS = ['capabilities', 'list', 'state', 'launch', 'send', 'interrupt', 'close', 'watch'];
@@ -225,9 +236,9 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     // an old child's later status must not reveal its private name/task.
     const at = clock();
     const visible = (r) => object(r) && Number.isSafeInteger(r.observed_at) && r.observed_at > sh.createdAt && r.observed_at <= at;
-    const task = visible(reporting?.task) ? reporting.task : null;
     const input = visible(reporting?.input) ? reporting.input : null;
-    const children = (Array.isArray(reporting?.children) ? reporting.children : []).filter((c) => visible(c) && Number.isSafeInteger(c.created_at) && c.created_at > sh.createdAt).slice(0, 20);
+    const { task, children } = shareTitles(visible(reporting?.task) ? reporting.task : null,
+      (Array.isArray(reporting?.children) ? reporting.children : []).filter((c) => visible(c) && Number.isSafeInteger(c.created_at) && c.created_at > sh.createdAt).slice(0, 20));
     return { ...rest, activity: visible(activity) ? activity : null, task_title: task?.title ?? null, input_needed: input_needed === true && input?.needed === true && input.observed_at >= 0 && at - input.observed_at <= 90_000, reporting: { task, input, children }, deliveries: after.map((d) => (d.mode === 'new-turn' || fresh.has(d.turn) ? d : { ...d, response: '' })) };
   }
   function sharedRead(t, sh) {
@@ -694,4 +705,4 @@ function createRemoteInteractionClient({ baseUrl, token, fetch = globalThis.fetc
   return { hosts, call, request };
 }
 
-module.exports = { createRemoteInteractionHost, createRemoteInteractionClient, resetRole, OPS };
+module.exports = { createRemoteInteractionHost, createRemoteInteractionClient, resetRole, OPS, shareTitles };

@@ -148,3 +148,13 @@ test('input-needed expires independently of state reads while its original last 
     f.ee.emit('event', { kind: 'closed', target: f.hub.targetOf(f.session.session) }); assert.equal(f.state().input_needed, false); assert.deepEqual(f.state().reporting.input, last);
   } finally { f.hub.stopAll(); }
 });
+
+test('a shared session shows a teammate scrubbed task and agent titles (#52 follow-up)', () => {
+  const { shareTitles } = require('../src/remote-interaction.js');
+  const out = shareTitles({ title: 'Restart db1.corp.acme.internal at 10.0.0.5', source: 'human', observed_at: 2 },
+    [{ name: 'call +27 82 555 0199', task_title: 'mount nas.local', created_at: 3 }, { name: 'Agent', task_title: '', created_at: 4 }]);
+  assert.equal(out.task.title, 'Restart [host] at [ip]');
+  assert.equal(out.task.source, 'human');
+  assert.deepEqual(out.children.map((c) => [c.name, c.task_title]), [['call [phone]', 'mount [host]'], ['Agent', '']]);
+  assert.equal(shareTitles(null, []).task, null);
+});

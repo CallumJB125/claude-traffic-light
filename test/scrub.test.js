@@ -260,3 +260,87 @@ test('scrubTitle and scrub: a North American number needs NANP area code and exc
   }
   for (const p of ['(415) 555-0100', '415-555-0100', '1-800-555-0100', '415.555.0100']) assert.equal(scrubTitle(`call ${p}`), 'call [phone]', p);
 });
+
+test('scrubText: zero-width, full-width and other compatibility forms cannot hide a match (#52 follow-up)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  const cases = [
+    ['call +27​82 555 0199', 'call [phone]'], ['call +27 82 555 0199', 'call [phone]'],
+    ['call ＋２７ ８２ ５５５ ０１９９', 'call [phone]'], ['ping 10​.0.0.5', 'ping [ip]'],
+    ['ping 10.0.0.5⁠', 'ping [ip]'], ['ssh db​.corp.acme.internal', 'ssh [host]'], ['mail sam＠acme.com', 'mail [email]'],
+    ['mail sam@acme‍.com', 'mail [email]'], ['ping 10.0.‮0.5', 'ping [ip]'], ['tag 10.0.0.5\u{E0041}\u{E0042}', 'tag [ip]'],
+    ['ssh nas͏.local', 'ssh [host]'],
+  ];
+  for (const [input, want] of cases) assert.equal(scrubTitle(input), want, JSON.stringify(input));
+  // Format characters that mean something between other letters stay.
+  for (const keep of ['family \u{1F468}‍\u{1F469}‍\u{1F467}', 'می‌خواهم', 'сервер работает']) assert.equal(scrubTitle(keep), keep, keep);
+  // NFKC growth is capped: ㌕ grows 5x, U+FDFA 18x.
+  for (const big of ['㌕'.repeat(20000), 'ﷺ'.repeat(20000), '​'.repeat(1e6)]) {
+    const t = performance.now(); const out = scrubTitle(big);
+    assert.ok(out.length <= 64 * 1024 && performance.now() - t < 500, `${out.length} chars in ${Math.round(performance.now() - t)} ms`);
+  }
+});
+
+test('scrubText: variation selectors, combining marks, fillers and doubled spaces cannot hide a match (#58 review)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  const cases = [['call +27️82 555 0199', 'call [phone]'], ['ping 10.0️.0.5', 'ping [ip]'], ['mail bob︀@acme.com', 'mail [email]'],
+    ['ping 10.0́.0.5', 'ping [ip]'], ['mail bob́@acme.com', 'mail [email]'], ['ping 10.0᠋.0.5', 'ping [ip]'], ['ping 10.0᠏.0.5', 'ping [ip]'],
+    ['ping 10.0឴.0.5', 'ping [ip]'], ['ping 10.0឵.0.5', 'ping [ip]'], ['ping 10.0⠀.0.5', 'ping [ip]'], ['ping 10.0\u{E0100}.0.5', 'ping [ip]'],
+    ['ping 10.0\u{E01EF}.0.5', 'ping [ip]'], ['call +27 82 ​ 555 0199', 'call [phone]'], ['call +27 82  555 0199', 'call [phone]'], ['call +27 82\t\t555 0199', 'call [phone]']];
+  for (const [input, want] of cases) assert.equal(scrubTitle(input), want, JSON.stringify(input));
+  // A variation selector or mark on a letter that is not ASCII is part of it.
+  for (const keep of ['❤️ done', 'ok \u{1F44D}️', '\u{1F469}‍\u{1F4BB} done', 'café', 'café au lait', 'tiếng Việt', 'नमस्ते']) {
+    assert.equal(scrubTitle(keep), keep.normalize('NFKC'), JSON.stringify(keep));
+  }
+  // A report keeps its indentation; only runs of spaces inside a line fold.
+  const { scrubText } = require('../src/scrub.js');
+  assert.equal(scrubText('Done:\n    call +27 82  555 0199\n    ok'), 'Done:\n    call [phone]\n    ok');
+});
+
+test('scrub: compatibility bombs and very long lines stay bounded and never throw (#58 review, round 2)', () => {
+  const four = String.fromCodePoint([...Array(0x100)].map((_, i) => 0x3300 + i).find((c) => String.fromCodePoint(c).normalize('NFKC').length === 4));
+  for (const [name, bomb] of [['U+FDFA', '\ufdfa'.repeat(100000)], ['U+3315', '\u3315'.repeat(100000)], ['lines of U+FDFA', ('\ufdfa'.repeat(3000) + '\n').repeat(40)],
+    ['4x grower', four.repeat(100000)], ['lines of a 4x grower', (four.repeat(900) + '\n').repeat(120)], ['U+2491 (10.)', '\u2491'.repeat(100000)]]) {
+    const t = performance.now();
+    const out = scrub(bomb, opts);
+    const ms = performance.now() - t;
+    assert.ok(out.length <= 2 * bomb.length && ms < 500, `${name}: ${out.length} chars from ${bomb.length} in ${Math.round(ms)} ms`);
+  }
+  const { scrubTitle } = require('../src/scrub.js');
+  assert.ok(scrubTitle('ﷺ'.repeat(100000)).length <= 2 * 64 * 1024);
+  // The characters NFKC grows past 4 are left as they are; the list matches this Node's NFKC.
+  const grows = [];
+  for (let c = 0; c < 0x30000; c++) if ((c < 0xd800 || c > 0xdfff) && String.fromCodePoint(c).normalize('NFKC').length > 4) grows.push(c);
+  for (const c of grows) assert.equal(scrub(`x ${String.fromCodePoint(c)} y`, opts), `x ${String.fromCodePoint(c)} y`, c.toString(16));
+  // A character that grows into digits still folds, so it cannot rebuild an address.
+  assert.equal(scrub('ping \u24910.0.5', opts), 'ping [ip]');
+  assert.match(scrub((four.repeat(900) + '\n').repeat(120), opts), /\[cut: the text grew past twice its size\]$/);
+  // A 6M-character line is cut, not a RangeError.
+  assert.match(scrub('a'.repeat(6e6), opts), /^\[long line omitted: 6000000 chars\]$/);
+  assert.equal(scrub(`ok\n${'b'.repeat(5e6)}\ncall +27 82 555 0199`, opts), 'ok\n[long line omitted: 5000000 chars]\ncall [phone]');
+});
+
+test('scrubText and scrub: a cut drops whole lines, so nothing straddling it leaves a fragment (#58 review, round 3)', () => {
+  const { scrubText } = require('../src/scrub.js');
+  const pii = ['+27 82 555 0199', 'dana.smith@acme-corp.example', '10.20.30.40', 'jenkins.corp.acme.com', '415-555-0100'];
+  // Any 5 characters of the value in the output is a fragment.
+  const fragment = (out, v) => { for (let i = 0; i + 5 <= v.length; i++) if (out.includes(v.slice(i, i + 5))) return v.slice(i, i + 5); return null; };
+  const sweep = (label, run, make, from, to) => {
+    for (const v of pii) for (let f = from; f <= to; f++) {
+      const out = run(make(f, v));
+      const bit = fragment(out, v);
+      assert.equal(bit, null, `${label} ${v} at ${f}: "${bit}" left in ...${JSON.stringify(out.slice(-80))}`);
+    }
+  };
+  // The tail keeps the text past the limit while the value straddles the cut.
+  const tail = ` after ${'y'.repeat(300)}`;
+  // scrubText: the folded text (a 15000-char line of \u247d folds to 60000) is cut at 64K.
+  sweep('scrubText grown', (t) => scrubText(t), (f, v) => `${'\u247d'.repeat(15000)}\n${'z'.repeat(f)} ${v}${tail}`, 5460, 5500);
+  // scrubText: the raw text is cut at 64K before folding.
+  sweep('scrubText raw', (t) => scrubText(t), (f, v) => `${'z'.repeat(f)} ${v}${tail}`, 65505, 65535);
+  // scrub(): the folded text is cut at twice the input. Lines stay under MAX_LINE, or
+  // the long-line cut would drop them first.
+  const bomb = `${'\u247d'.repeat(1000)}\n`.repeat(15);
+  sweep('scrub grown', (t) => scrub(t, opts), (f, v) => `${bomb}${'zz\n'.repeat(Math.floor(f / 3))}${'z'.repeat(f % 3)} ${v}${tail}`, 29340, 29410);
+  // A cut with no newline before it leaves only the marker.
+  assert.match(scrubText('⑽'.repeat(20000)), /^\[cut: [^\]]+\]$/);
+});

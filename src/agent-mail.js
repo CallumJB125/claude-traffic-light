@@ -378,7 +378,9 @@ function create({ identity, resolve, fetch, home = null, enabled = () => false, 
     accepted.delete(String(taskId));
     const id = identity();
     if (!id || keyOf(id) !== a.key) return false;
-    const report = typeof summary === 'string' && summary.trim() ? clean(summary, 2000) : (decision === 'done' ? 'Finished. The work is in its own git worktree, ready to review.' : 'The task failed before it finished.');
+    // The AI's summary goes to the teammate who sent the handoff: no addresses, hosts or
+    // numbers. Scrubbed before the cut, so a number at the limit cannot leave in part.
+    const report = typeof summary === 'string' && summary.trim() ? clean(Scrub.scrubText(summary.slice(0, 64 * 1024)), 2000) : (decision === 'done' ? 'Finished. The work is in its own git worktree, ready to review.' : 'The task failed before it finished.');
     const r = await msg(id, 'POST', `/messages/${encodeURIComponent(a.mid)}/handoff`, { decision, report });
     return r.status === 200;
   }

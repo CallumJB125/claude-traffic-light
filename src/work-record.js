@@ -108,7 +108,7 @@ const hostOf = (u) => { try { return new URL(String(u)).hostname.toLowerCase(); 
 function forShare(rec, route, { salt, home = null, user = null } = {}) {
   if (!rec || route?.share_summaries !== true || typeof salt !== 'string' || !salt) return null;
   const hubHost = hostOf(route.hub);
-  const s = (v, max) => clip(flat(scrub(String(v ?? ''), { home, user, salt, hubHost })), max);
+  const s = (v, max) => clip(flat(scrub(String(v ?? ''), { home, user, salt, hubHost, fold: true })), max);
   const files = route.share_files === true ? { edited: rec.files.edited.slice(0, CAP.files), read: rec.files.read.slice(0, CAP.files) } : { edited: [], read: [] };
   return { ...rec, repo_id: route.repo_id ?? rec.repo_id, folder: s(rec.folder, 120), title: s(rec.title, CAP.title), goal: s(rec.goal, CAP.goal), summary: s(rec.summary, CAP.summary),
     branch: rec.branch ? s(rec.branch, CAP.branch) : null, files };

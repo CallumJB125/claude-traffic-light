@@ -237,7 +237,8 @@ function cleanJsonError(message) {
 //             folder hashes the same everywhere in it
 //   keep:     path segments left readable (default: the app's own)
 //   hubHost:  text bound for this hub keeps only its tailnet name (default: all kept)
-function scrub(text, { home = null, user = null, hostname = null, names = [], salt = crypto.randomBytes(8).toString('hex'), keep = defaultKeep(), hubHost } = {}) {
+//   fold:     fold runs of spaces inside a line first (text that leaves as one line)
+function scrub(text, { home = null, user = null, hostname = null, names = [], salt = crypto.randomBytes(8).toString('hex'), keep = defaultKeep(), hubHost, fold = false } = {}) {
   const hub = typeof hubHost === 'string' ? hubHost.toLowerCase() : undefined;
   const P = PATTERNS;
   const hashWord = (w) => (!w.trim() || keep.has(w) || HASHED.test(w) || /^\d+$/.test(w) || w.length === 1 ? w : hashName(w, salt));
@@ -268,9 +269,12 @@ function scrub(text, { home = null, user = null, hostname = null, names = [], sa
     return `${scheme}://${hashHost(host)}${p}${tail}`;
   };
 
-  let out = String(text == null ? '' : text);
+  // Invisible and compatibility characters go first, as in scrubText (#58 review).
+  // Long lines are cut before and after, since NFKC can lengthen a line.
+  let out = plainText(cutLongLines(String(text == null ? '' : text)), { max: Infinity });
+  if (fold) out = foldSpaces(out);
   out = out.replace(/\\\\/g, '\\').replace(/\\\//g, '/');
-  out = out.replace(P.LONG_LINE, (m) => `[long line omitted: ${m.length} chars]`);
+  out = cutLongLines(out);
   out = cleanJsonError(out);
   out = redactSecretsPass(out);
 
@@ -350,12 +354,68 @@ const privateHost = (host, port, hubHost = null) => {
   return !KEEP_HOSTS.has(h) && h !== hubHost;
 };
 
-// A title on its way to a team hub (review L2). Unlike scrub() it labels what it removes
-// ([ip], [host], [phone], [email]) instead of hashing, so the title still reads.
-//   hubHost: the destination hub's host name, the one tailnet name a title may keep
-function scrubTitle(text, { hubHost = null } = {}) {
+// Invisible and compatibility characters can split a number or a name so no pattern sees
+// it ("+27\u200b82 555 0199", full-width "＋２７", "sam＠acme.com"). Tag characters (ASCII
+// smuggling), the combining grapheme joiner and Hangul fillers always go. Other format
+// characters (zero-width, bidi) go next to ASCII, where they could hide a match, and stay
+// between other letters, where they mean something (an emoji ZWJ sequence, Persian ZWNJ).
+// NFKC then folds full-width and other compatibility forms. NFKC can grow text up to 18
+// times, so the input is capped before it and the output after.
+// Mongolian free variation selectors, the Khmer inherent vowels and the braille blank
+// show nothing either, so they go too. After NFKC (which has already composed "e" and
+// U+0301 into "é"), a mark or variation selector left on an ASCII character hides it
+// ("10.0\u0301.0.5", "+27\ufe0f82"); on any other character (an emoji's U+FE0F, a
+// Devanagari vowel sign) it is part of the letter and stays. A space counts as ASCII.
+const TEXT_MAX = 64 * 1024;
+const ALWAYS_INVISIBLE = /[\u{E0000}-\u{E007F}\u034F\u115F\u1160\u3164\uFFA0\u180B-\u180D\u180F\u17B4\u17B5\u2800]/gu;
+// One pass over each run (a lookahead after \p{Cf}+ would backtrack through a long run).
+const FORMAT_RUN = /\p{Cf}+/gu;
+const MARK_RUN = /\p{M}+/gu;
+const ASCII = /[\x20-\x7e]/;
+const nearAscii = (m, at, all) => (ASCII.test(all[at - 1] ?? '') || ASCII.test(all[at + m.length] ?? '') ? '' : m);
+const afterAscii = (m, at, all) => (ASCII.test(all[at - 1] ?? '') ? '' : m);
+// NFKC grows a few characters a lot (U+FDFA is 18 characters, the squared katakana words
+// 5), so a page of them would bury the patterns. Those 28, none of which can hide a
+// number or name, are left as they are; everything else grows at most 4 times, and the
+// result is cut at twice the input (64K at least): only text that is mostly
+// compatibility characters grows that much. Characters that grow into digits and dots
+// ("⒑" is "10.") still fold.
+const NFKC_BOMB = /[\u3307\u3315-\u3317\u3319\u331a\u3320\u332b\u332e\u3332\u3334\u3336\u3347\u334a\u3356\u33ae\u33af\ufdfa\ufdfb\u{1d160}-\u{1d164}\u{1d1bd}-\u{1d1c0}]/u;
+const NFKC_SAFE_RUN = new RegExp(`[^${NFKC_BOMB.source.slice(1, -1)}]+`, 'gu');
+const nfkc = (t) => (NFKC_BOMB.test(t) ? t.replace(NFKC_SAFE_RUN, (r) => r.normalize('NFKC')) : t.normalize('NFKC'));
+//   max: the cap before and after NFKC (Infinity for scrub(), which takes whole files and
+//        cuts long lines first)
+// A cut drops whole lines, as the long-line cut does: cutting inside a line could leave
+// part of a number or name ("+27 82 555") that no pattern then matches. With no line
+// break before the limit only the marker is left (fail closed).
+const TOO_LONG = '[cut: the text was too long]';
+const GREW_CUT = '[cut: the text grew past twice its size]';
+const cutLines = (t, limit, marker) => {
+  if (t.length <= limit) return t;
+  const at = t.lastIndexOf('\n', limit - marker.length - 1);
+  return at > 0 ? `${t.slice(0, at)}\n${marker}` : marker;
+};
+function plainText(text, { max = TEXT_MAX } = {}) {
+  const strip = (t) => t.replace(ALWAYS_INVISIBLE, '').replace(FORMAT_RUN, nearAscii);
+  const input = strip(cutLines(text, max, TOO_LONG));
+  const grown = Math.min(max, Math.max(TEXT_MAX, 2 * input.length));
+  const folded = cutLines(nfkc(input), grown, GREW_CUT);
+  return strip(folded).replace(MARK_RUN, afterAscii);
+}
+// A line longer than MAX_LINE is omitted. Split, not a regex: a regex over one line of
+// millions of characters overflows the stack.
+const cutLongLines = (t) => (t.length <= MAX_LINE ? t : t.split('\n').map((l) => (l.length > MAX_LINE ? `[long line omitted: ${l.length} chars]` : l)).join('\n'));
+// Runs of spaces inside a line fold before the patterns run ("+27 82  555 0199");
+// indentation at the start of a line stays.
+const foldSpaces = (t) => t.replace(/(?<=\S)[ \t]{2,}/g, ' ');
+
+// Text on its way to a team hub or a teammate (review L2): a title, a task's report.
+// Unlike scrub() it labels what it removes ([ip], [host], [phone], [email]) instead of
+// hashing, so the text still reads. Line breaks and spacing are kept.
+//   hubHost: the destination hub's host name, the one tailnet name the text may keep
+function scrubText(text, { hubHost = null } = {}) {
   const hub = typeof hubHost === 'string' && hubHost ? hubHost.toLowerCase() : null;
-  let out = redactSecretsPass(String(text ?? ''));
+  let out = redactSecretsPass(foldSpaces(plainText(String(text ?? ''))));
   out = out.replace(PATTERNS.EMAIL, '[email]');
   out = out.replace(/\b([a-z][a-z0-9+.-]{0,30}:\/\/)([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63}){1,8})(:\d{1,5})?/gi, (m, scheme, host, port) => (privateHost(host, port, hub) ? `${scheme}[host]` : m));
   // "1.2.3.4-beta" is a version with a prerelease tag, not an address.
@@ -363,8 +423,9 @@ function scrubTitle(text, { hubHost = null } = {}) {
   // IPv6 needs a digit: "a::b" and "std::vector" are code.
   out = out.replace(PATTERNS.IPV6, (m) => (KEEP_IPS.has(m) || !/\d/.test(m) ? m : '[ip]'));
   out = out.replace(PATTERNS.BARE_HOST, (m, host, port) => (privateHost(host, port, hub) ? '[host]' : m));
-  out = out.replace(PATTERNS.PHONE, (m) => (phoneOk(m) ? '[phone]' : m));
-  return out.replace(/[ \t]{2,}/g, ' ');
+  return out.replace(PATTERNS.PHONE, (m) => (phoneOk(m) ? '[phone]' : m));
 }
+// scrubText for a one-line title: runs of spaces left by removals fold to one.
+const scrubTitle = (text, opts) => scrubText(text, opts).replace(/[ \t]{2,}/g, ' ');
 
-module.exports = { scrub, scrubTitle, redactSecretsPass, maskPii, hashName, cleanJsonError, PATTERNS, MAX_LINE };
+module.exports = { scrub, scrubText, scrubTitle, redactSecretsPass, maskPii, hashName, cleanJsonError, PATTERNS, MAX_LINE };
