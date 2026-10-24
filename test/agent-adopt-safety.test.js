@@ -722,10 +722,17 @@ test('M4a: a backup that stops part way (and is never cleaned up) is never liste
   const fresh = s.inst();
   assert.deepEqual(fresh.backups(), [], 'never listed as a backup');
   assert.equal(fresh.backupPath(left[0].replace(/^\.tmp-/, '')), null);
-  // The next backup clears it.
+  // A backup straight after leaves it (it may be another instance's, L4),
+  // still never listed; one more than 10 minutes later clears it.
   const a = fresh.adopt([`.claude/agents/${s.fx.exact[0].name}`]);
   assert.equal(a.ok, true, a.error);
-  assert.deepEqual(backupsOf(s), [a.backup]);
+  assert.deepEqual(backupsOf(s), [left[0], a.backup].sort());
+  assert.deepEqual(fresh.backups().map((x) => x.id), [a.backup]);
+  fs.appendFileSync(path.join(s.fx.dir, s.fx.own[0]), 'edit\n'); // so the next one isn't a reuse
+  const later = s.inst(shipped, { now: () => Date.now() + 11 * 60_000 });
+  const b = later.adopt([`.claude/agents/${s.fx.exact[1].name}`]);
+  assert.equal(b.ok, true, b.error);
+  assert.deepEqual(backupsOf(s), [a.backup, b.backup].sort(), 'the stale staged folder is gone');
 });
 
 test('M4b: a subfolder removed or replaced by a link while it is copied refuses the adopt, without crashing, and leaves nothing', () => {
