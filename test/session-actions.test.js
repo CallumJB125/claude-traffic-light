@@ -212,7 +212,7 @@ test('PR 7 routing, as wired in the app: Keep on My board, then Link through ses
     captureClearLocal: (repo) => captureEnabled && workCapture.clearLocal(repo),
   };
   const handlers = {};
-  const bridge = { gitRoot: async (c) => c, boards: { boards: async () => [], teams: async () => [{ key: 't', name: 'T', role: 'admin', boards: [{ key: 'b', name: 'Later' }] }], linkRepo: async (b) => { if (b === 'b') routes = [L]; return { ok: true }; }, destinationOf: (b) => (b === 'mine' ? { kind: 'local' } : { kind: 'team' }) }, links: {}, rows: () => [] };
+  const bridge = { gitRoot: async (c) => c, boards: { boards: async () => [], teams: async () => [{ key: 't', name: 'T', role: 'admin', boards: [{ key: 'b', name: 'Later' }] }], linkRepo: async (b) => { if (b === 'b') routes = [L]; return { ok: true, kind: b === 'mine' ? 'local' : 'team' }; } }, links: {}, rows: () => [] };
   require('../src/session-actions-main.js').register({ ipcMain: { handle: (c, f) => { handlers[c] = f; } }, sessionsAllowed: () => true, sessions: () => [{ cwd: '/w/none', host: 'local', source: 'claude', sessionId: 's1' }],
     bridge: () => bridge, capture: () => buddy, tasks: {}, clipboard: {}, pickFolder: async () => '/w/none', openPage: () => {}, pageExists: () => true });
   const e = {};
@@ -258,4 +258,37 @@ test('PR 7 routing: a Link that cannot clear "Keep on My board" says so instead 
     assert.equal(r.ok, true); assert.match(r.text, /^Linked github\.com\/org\/app\. .*still kept on My board/s);
     assert.equal(warned.length, 4);
   } finally { console.warn = orig; }
+});
+test('PR 7 routing: a team link made while the board list is refreshing still clears Keep on My board (#62 review, round 4, B1c)', async () => {
+  const HUB = 'https://hub.example.test';
+  let slow = null;
+  const local = { localRequest: async (m, p) => { if (p === '/api/me') { if (slow) await slow; return { ok: true, boards: [{ id: 'b0000000-0000-4000-8000-000000000000', name: 'My board' }] }; } return { ok: true, repo: { id: 'r-local' } }; } };
+  const team = { id: 't0000000-0000-4000-8000-000000000001', name: 'Plexiform', role: 'admin', boards: [{ id: 'b0000000-0000-4000-8000-000000000002', name: 'Core' }] };
+  const client = { me: async () => ({ ok: true, teams: [team] }), listRepos: async () => ({ ok: true, repos: [{ id: 'r0000000-0000-4000-8000-000000000003', canonical_url: 'github.com/org/app' }] }),
+    addBoardRepo: async () => { await new Promise((r) => setTimeout(r, 20)); return { ok: true }; } };
+  const sb = createSessionBoards({ hubs: () => [HUB], clientFor: () => client, userOf: () => ({ id: 'u' }), local, getRoutes: async () => ({ routes: [], complete: true }), routeKey: () => 'x' });
+  const cleared = [];
+  const row1 = { repo: 'github.com/org/app', short: 'app', state: 'set', destination: { kind: 'local' }, matches: [] };
+  const { a } = rig({ boards: sb, capture: { captureOnce: async () => ({ ok: true }), routing: async () => [row1], clearLocal: async (r) => { cleared.push(r); return true; } } });
+  const list = await sb.boards();
+  const teamKey = list.find((b) => b.kind === 'team').key, mineKey = list.find((b) => b.kind === 'local').key;
+  assert.equal((await a.routing()).rows.length, 1);
+  // A refresh starts while the link is on its way: the key is briefly unknown, which must not read as "My board".
+  let release; slow = new Promise((r) => { release = r; });
+  const link = a.routeLink('github.com/org/app', teamKey);
+  await new Promise((r) => setTimeout(r, 5)); const refresh = sb.boards();
+  const r = await link;
+  assert.equal(sb.destinationOf(teamKey).kind, 'local', 'the window the review found is real');
+  assert.deepEqual([r.ok, cleared], [true, ['github.com/org/app']], JSON.stringify(r));
+  release(); await refresh; slow = null;
+  // The same through the Add/Link panel; and a link to My board itself leaves the pin.
+  cleared.length = 0;
+  const f = await a.chooseFolder();
+  assert.equal((await a.linkRepo({ folder: f.handle, board: mineKey })).ok, true);
+  assert.deepEqual(cleared, [], 'linked to My board: kept');
+  slow = new Promise((res) => { release = res; });
+  const viaPanel = a.linkRepo({ folder: f.handle, board: teamKey });
+  await new Promise((res) => setTimeout(res, 5)); const again = sb.boards();
+  assert.equal((await viaPanel).ok, true); assert.deepEqual(cleared, ['github.com/org/app']);
+  release(); await again;
 });

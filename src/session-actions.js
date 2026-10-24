@@ -95,15 +95,16 @@ function create({ sessions, repoOf, rootOf, boards, capture, links, tickets = nu
     if (!canonical) return { ok: false, text: 'That folder has no network git remote (origin), so it can’t be linked to a board.' };
     const r = await boards.linkRepo(board, canonical);
     if (!r.ok) return { ok: false, needsAdmin: !!r.needsAdmin, canonical, text: r.error };
-    const kept = await afterLink(canonical, board);
+    const kept = await afterLink(canonical, r.kind);
     return { ok: true, canonical, text: `Linked ${canonical}. ${SCOPE_RULE}${kept ? ` ${kept}` : ''}` };
   }
 
   // Every link this page makes ends here (#62 review B1/B1b): a link to a team board drops "Keep on My board", which
   // would otherwise still win over it. No silent skip: a capture that can't clear it is logged and the words say so.
-  // Linking to My board itself leaves the pin alone. Returns null when nothing more needs saying.
-  async function afterLink(canonical, board) {
-    if (boards.destinationOf?.(board)?.kind === 'local') return null;
+  // Linking to My board itself leaves the pin alone. kind comes from the link's own answer (#62 review, round 4):
+  // only an explicit 'local' skips the clear. Returns null when nothing more needs saying.
+  async function afterLink(canonical, kind) {
+    if (kind === 'local') return null;
     let cleared = false;
     try { cleared = (await capture.clearLocal(canonical)) === true; } catch { cleared = false; }
     if (cleared) return null;
@@ -205,7 +206,7 @@ function create({ sessions, repoOf, rootOf, boards, capture, links, tickets = nu
     if (!listed.has(repo)) return { ok: false, text: 'Refresh, then try again.' };
     const r = await boards.linkRepo(board, repo);
     if (!r.ok) return { ok: false, needsAdmin: !!r.needsAdmin, text: r.error };
-    const kept = await afterLink(repo, board);
+    const kept = await afterLink(repo, r.kind);
     return kept ? { ok: true, text: `Linked. ${kept}` } : { ok: true };
   }
 

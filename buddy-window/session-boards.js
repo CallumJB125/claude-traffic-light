@@ -49,7 +49,8 @@ function createSessionBoards({ hubs, clientFor, userOf, local, getRoutes, routeK
   async function teams() { await boards(); return teamList.map((t) => ({ ...t, boards: t.boards.map((b) => ({ ...b })) })); }
   const lookup = async (key) => { if (!known.has(key)) await boards(); return known.get(key) ?? null; };
 
-  // Link a repository (its canonical name, e.g. github.com/org/app) to a board.
+  // Link a repository (its canonical name, e.g. github.com/org/app) to a board. A success says which kind of board
+  // it was, from the board the link used: the caller must not ask known later, as a refresh may have emptied it.
   async function linkRepo(key, canonical) {
     const b = await lookup(key);
     if (!b || typeof canonical !== 'string') return { ok: false, error: 'That board is no longer available. Try again.' };
@@ -62,7 +63,7 @@ function createSessionBoards({ hubs, clientFor, userOf, local, getRoutes, routeK
         if (!id) { const all = await local.localRequest('GET', '/api/repos'); id = (all.repos ?? []).find((r) => r.canonical_url === canonical)?.id ?? null; }
         if (!id) return { ok: false, error: 'Could not add this repository to My board.' };
         const added = await local.localRequest('POST', `/api/boards/${b.board_id}/repos`, { repo_id: id });
-        return added.ok ? { ok: true } : { ok: false, error: 'Could not link this repository to My board.' };
+        return added.ok ? { ok: true, kind: 'local' } : { ok: false, error: 'Could not link this repository to My board.' };
       }
       if (b.role === 'viewer') return { ok: false, needsAdmin: true, error: FORBIDDEN };
       const c = clientFor(b.hub);
@@ -76,7 +77,7 @@ function createSessionBoards({ hubs, clientFor, userOf, local, getRoutes, routeK
       }
       const added = await c.addBoardRepo(b.team_id, b.board_id, id);
       if (added.status === 403 || added.code === 'FORBIDDEN') return { ok: false, needsAdmin: true, error: FORBIDDEN };
-      return added.ok ? { ok: true } : { ok: false, error: added.error || 'Could not link this repository to the board.' };
+      return added.ok ? { ok: true, kind: 'team' } : { ok: false, error: added.error || 'Could not link this repository to the board.' };
     } catch (e) { log('[session-boards] link failed', e && e.code); return { ok: false, error: 'Could not reach the board. Try again.' }; }
   }
 
