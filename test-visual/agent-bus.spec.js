@@ -28,9 +28,16 @@ test('agent bus: Preferences section, refusal on the Sessions panel, stop and re
     await expect(settings.locator('#agentBusAutoAccept')).toBeChecked();
     await expect(settings.locator('#agentBusCaps')).not.toBeChecked();
     await expect(settings.locator('#agentBusWallClock')).toHaveValue('20');
-    // Above the page's sticky footer, so nothing overlaps the shot.
+    // Since #30 (5e815e02) the section is taller than the window, so the page's sticky footer (.actions) sat over its
+    // last lines in the shot. Hidden for the shot only, then put back.
+    // It is also the Advanced pane's last section, so without room below it the page can't scroll it to the top, and
+    // where it stopped followed the height of everything above it, Health included, which reads this machine's PATH
+    // (#63 review). A screen of padding below lets it reach the top whatever is above; both are put back after.
+    const footer = settings.locator('.actions:has(#feedback-open)');
+    await footer.evaluate((el) => { el.style.visibility = 'hidden'; document.body.style.paddingBottom = '100vh'; });
     await section.evaluate((el) => el.scrollIntoView({ block: 'start' }));
     await expect(await snapToPixels(section)).toHaveScreenshot('agent-bus-preferences.png');
+    await footer.evaluate((el) => { el.style.visibility = ''; document.body.style.paddingBottom = ''; });
     await settings.locator('#agentBusWallClock').fill('15');
     await settings.locator('#agentBusWallClock').dispatchEvent('change');
     await expect.poll(() => JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).agentBus?.wallClockMin).toBe(15);
