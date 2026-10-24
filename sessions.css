@@ -98,3 +98,20 @@ button:disabled { cursor: default; opacity: .55; }
 .routing-pick select { font: inherit; color: inherit; background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 8px; min-height: 44px; }
 .routing-pick.routing-ask { flex-basis: auto; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Organised views PR 3: project → bucket groups */
+.group { margin: 18px 0; }
+.group-head { margin: 0; font-size: var(--text-lg); }
+.group-toggle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; width: 100%; text-align: left; min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); font: inherit; }
+.group-toggle::before { content: "▾"; color: var(--muted); font-size: var(--text-sm); }
+.group-toggle[aria-expanded="false"]::before { content: "▸"; }
+.group-name { font-weight: 650; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.group-counts { color: var(--muted); font-size: var(--text-sm); font-weight: 450; }
+.group-sub { margin: 4px 12px 0; font-size: var(--text-sm); }
+.group-routing { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 8px; }
+.group-body { padding-left: 12px; }
+.bucket { margin: 10px 0 0; }
+.bucket-head { cursor: pointer; font-weight: 600; color: var(--muted); font-size: var(--text-sm); padding: 6px 0; }
+.bucket-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.bucket-body .session:first-child { margin-top: 6px; }
+.routing-status:empty { display: none; }
