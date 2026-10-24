@@ -97,3 +97,4 @@ button:disabled { cursor: default; opacity: .55; }
 .routing-pick label { display: grid; gap: 2px; font-size: var(--text-sm); color: var(--muted); }
 .routing-pick select { font: inherit; color: inherit; background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 8px; min-height: 44px; }
 .routing-pick.routing-ask { flex-basis: auto; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

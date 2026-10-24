@@ -218,7 +218,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     // would duplicate existing cards, and capture failure must not close Buddy.
     const notice='Automatic cards are paused because private capture storage is unavailable. Your saved identities have been kept.';
     log('automatic cards unavailable: private storage');
-    return {observe:()=>Promise.resolve(),boardFor:()=>({kind:'unknown'}),addAgentCard:async()=>({reason:'UNAVAILABLE',message:'Plexiform cannot save cards right now.'}),sessionFacts:()=>null,backfill:async()=>({updated:0,pending:0}),startBackfill:()=>{},captureOnce:async()=>({ok:false,reason:'storage'}),routes:async()=>({routes:[],complete:false}),routing:async()=>[],enabled:()=>false,setEnabled:()=>false,choose:async()=>false,choices:()=>[],snapshot:()=>[],notice:()=>notice,stop:async()=>{},idle:()=>Promise.resolve()};
+    return {observe:()=>Promise.resolve(),boardFor:()=>({kind:'unknown'}),addAgentCard:async()=>({reason:'UNAVAILABLE',message:'Plexiform cannot save cards right now.'}),sessionFacts:()=>null,backfill:async()=>({updated:0,pending:0}),startBackfill:()=>{},captureOnce:async()=>({ok:false,reason:'storage'}),routes:async()=>({routes:[],complete:false}),routing:async()=>[],clearLocal:async()=>false,enabled:()=>false,setEnabled:()=>false,choose:async()=>false,choices:()=>[],snapshot:()=>[],notice:()=>notice,stop:async()=>{},idle:()=>Promise.resolve()};
   }
   const STALE_MS=7*24*3600*1000;
   for(const [key,e]of Object.entries(store.state.tasks)){
@@ -592,6 +592,13 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       if(!commit(next=>{next.choices[repo]=pin;if(next.local_choices){delete next.local_choices[repo];if(!Object.keys(next.local_choices).length)delete next.local_choices;}}))return false;
       catalog=fresh;lastCatalogAt=now();changed();return true;
     },
+    // After an admin links the repo to a team board, "Keep on My board" would still win over the new route: drop it,
+    // and the cached catalog with it, so the next routing() and observe() see the linked board (#62 review B1).
+    async clearLocal(repo){
+      if(stopped||!safeCanonical(repo))return false;
+      if(state.local_choices?.[repo]===true&&!commit(next=>{delete next.local_choices[repo];if(!Object.keys(next.local_choices).length)delete next.local_choices;}))return false;
+      lastCatalogAt=0;changed();return true;
+    },
     // Where each project's new work goes (PR 7), for the Sessions strip and the This Mac table: names and opaque
     // route keys only. repos: canonical names (the caller's live sessions); default, every repo this Mac remembers.
     // state: set (a remembered pick), single (one team board, used without asking), ask (several, none picked yet),
@@ -600,8 +607,11 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       if(stopped)return [];
       if(now()-lastCatalogAt>15000||!lastCatalogAt){try{catalog=await getRoutes();lastCatalogAt=now();}catch{return [];}}
       if(!catalog.complete)return [];
+      // The default list (the This Mac table) is only projects with a team board or a pin, filtered before the cut so
+      // a run of unlinked task repos can't push a linked one out (#62 review S1).
       const known=repos??[...Object.values(state.tasks).map(e=>e.repo),...Object.keys(state.choices),...Object.keys(state.local_choices??{})];
-      const list=[...new Set((Array.isArray(known)?known:[]).filter(r=>safeCanonical(r)))].slice(0,50);
+      const linked=r=>!!choiceOf(r)||(catalog.routes??[]).some(x=>x.canonical_url===r);
+      const list=[...new Set((Array.isArray(known)?known:[]).filter(r=>safeCanonical(r)&&(repos||linked(r))))].slice(0,50);
       const named=r=>({key:routeKey(r),team:clean(r.team_name??'Team',60),board:clean(r.board_name??'Board',60)});
       return list.map(repo=>{
         const matches=(catalog.routes??[]).filter(r=>r.canonical_url===repo);

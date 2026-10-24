@@ -62,3 +62,14 @@ test('rowsFor: only names and keys come out, at most 20 rows; a read-only match 
   }
   assert.deepEqual(rowsFor(null), []);
 });
+
+test('#62 review: colliding board names say the team; the row label says "goes to", not the arrow', () => {
+  const other = { key: 'k-ops-core', team: 'Ops', board: 'Core' };
+  const [ask] = rowsFor([row('ask', { matches: [{ ...core, read_only: false }, { ...other, read_only: false }, { ...web, read_only: false }] })], { teams: teams.member });
+  assert.deepEqual(ask.choices.map((c) => c.label), ['Plexiform · Core', 'Ops · Core', 'Website', 'Keep on My board']);
+  const [single] = rowsFor([row('single', { destination: { kind: 'team', ...core }, matches: [{ ...core, read_only: false }] })], { teams: teams.member });
+  assert.equal(single.label, 'app goes to Plexiform / Core');
+  assert.equal(ask.label, ask.text, 'a question has no arrow to explain');
+  const [kept] = rowsFor([row('set')], { teams: teams.admin });
+  assert.equal(kept.label, `app goes to ${MY_BOARD}`);
+});

@@ -390,12 +390,17 @@ test('PR 7 routing strip: hidden with no rows; a question\'s buttons save the pi
 
   // Link on an unlinked row: the picker shows at once; a refusal is said, not hidden.
   const linkCalls = [];
-  const linking = setup({ state: async () => state(), routing: async () => ({ rows: [rows[0] && { repo: 'github.com/org/new', short: 'new', state: 'unlinked', text: 'new → My board (private)', note: 'Put it on a team board?', choices: [{ key: 'local', label: 'Keep on My board' }], change: [], link: [{ key: 'b1', label: 'A / Core' }], ask: null }] }),
+  const linking = setup({ state: async () => state(), routing: async () => ({ rows: [rows[0] && { repo: 'github.com/org/new', short: 'new', state: 'unlinked', text: 'new → My board (private)', label: 'new goes to My board (private)', note: 'Put it on a team board?', choices: [{ key: 'local', label: 'Keep on My board' }], change: [], link: [{ key: 'b1', label: 'A / Core' }], ask: null }] }),
     routeLink: async (repo, board) => { linkCalls.push([repo, board]); return { ok: false, text: 'Only a team owner or admin can link a repository.' }; } });
   try {
     await tick(); await tick();
     const row = linking.document.querySelector('.routing-row');
     assert.equal(row.querySelector('.routing-pick').hidden, false);
+    // #62 review: the Link picker comes before "Keep on My board"; the arrow is read as "goes to".
+    assert.deepEqual([...row.querySelectorAll('button')].map(b => b.textContent), ['Link', 'Keep on My board']);
+    const said = row.querySelector('.routing-text');
+    assert.equal(said.querySelector('[aria-hidden="true"]').textContent, 'new → My board (private)');
+    assert.equal(said.querySelector('.sr-only').textContent, 'new goes to My board (private)');
     [...row.querySelectorAll('button')].find(b => b.textContent === 'Link').click(); await tick(); await tick();
     assert.deepEqual(linkCalls, [['github.com/org/new', 'b1']]);
     assert.match(linking.document.getElementById('routing-status').textContent, /Only a team owner or admin/);

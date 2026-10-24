@@ -326,10 +326,15 @@ async function loadRouting() {
   };
   for (const row of rows) {
     const li = node('li', '', `routing-row routing-${row.state}`);
-    li.append(node('p', row.text, 'routing-text'));
+    // The sentence as shown, and as read out: "goes to" for the arrow (#62 review).
+    const text = node('p', '', 'routing-text'), seen = node('span', row.text), heard = node('span', row.label || row.text, 'sr-only');
+    seen.setAttribute('aria-hidden', 'true'); text.append(seen, heard); li.append(text);
     if (row.note) li.append(node('p', row.note, 'muted'));
     const actions = node('div', '', 'routing-actions');
-    for (const c of row.choices ?? []) actions.append(button(c.label, () => act(() => api.routeChoose(row.repo, c.key))));
+    const choices = (row.choices ?? []).map(c => button(c.label, () => act(() => api.routeChoose(row.repo, c.key))));
+    // An unlinked project an admin can link: the Link picker first, "Keep on My board" after it (#62 review).
+    const linkFirst = row.state === 'unlinked' && !!row.link?.length;
+    if (!linkFirst) actions.append(...choices);
     // A board picker revealed by one button: Change (new work goes elsewhere) or Link (admins: put it on a team board).
     const picker = (label, options, go, goLabel) => {
       const sel = select(options.map(o => ({ value: o.key, label: o.label })), 'Nothing to choose');
@@ -346,6 +351,7 @@ async function loadRouting() {
       const pick = picker('Team board', row.link, key => api.routeLink(row.repo, key), 'Link');
       if (row.note) pick.hidden = false; else actions.append(button('Put on a team board…', () => { pick.hidden = !pick.hidden; }));
       actions.append(pick);
+      if (linkFirst) actions.append(...choices);
     }
     // Ask an admin (a plain member): the team to ask, then one button; main says what was sent.
     if (row.ask?.length) {

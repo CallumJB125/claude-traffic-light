@@ -190,7 +190,10 @@ function create({ sessions, repoOf, rootOf, boards, capture, links, tickets = nu
   async function routeLink(repo, board) {
     if (!listed.has(repo)) return { ok: false, text: 'Refresh, then try again.' };
     const r = await boards.linkRepo(board, repo);
-    return r.ok ? { ok: true } : { ok: false, needsAdmin: !!r.needsAdmin, text: r.error };
+    if (!r.ok) return { ok: false, needsAdmin: !!r.needsAdmin, text: r.error };
+    // Linked: a "Keep on My board" pin would still win over the new board (#62 review B1).
+    if (typeof capture.clearLocal === 'function') await capture.clearLocal(repo).catch(() => false);
+    return { ok: true };
   }
 
   async function routeAsk(repo, team) {

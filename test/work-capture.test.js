@@ -363,3 +363,25 @@ test('PR 7: a card kept on My board while the repo had no default stays personal
  assert.equal(await r.router.choose(R.canonical_url,'local'),true);
  assert.equal(r.router.boardFor(event()).kind,'personal');
 });
+test('PR 7 review B1: "Keep on My board", then Link: clearLocal() lets the new team board take the work',async t=>{
+ const L={...R,canonical_url:'github.com/org/none',repo_id:'repo-n',team_name:'Plexiform',board_name:'Later'};
+ let routes=[R];const r=rig(t,{getRoutes:async()=>({routes,complete:true}),resolveRepo:async()=>L.canonical_url});
+ assert.equal(await r.router.choose(L.canonical_url,'local'),true);
+ assert.equal((await r.router.routing([L.canonical_url]))[0].state,'set');
+ routes=[R,L];
+ assert.equal(await r.router.clearLocal(L.canonical_url),true);
+ const [row]=await r.router.routing([L.canonical_url]);
+ assert.deepEqual([row.state,row.destination],['single',{kind:'team',key:routeKey(L),team:'Plexiform',board:'Later'}],'the row shows the linked board straight away, not a 15 s old catalog');
+ await r.router.observe([event({taskTitle:'After link'})]);
+ assert.equal(r.calls.at(-1).kind,'team');assert.equal(r.calls.at(-1).destination.board_id,L.board_id);
+ assert.equal(JSON.parse(fs.readFileSync(r.setup.file)).local_choices,undefined,'the pin is gone from the file');
+ assert.equal(await r.router.clearLocal(L.canonical_url),true,'nothing to clear is fine');assert.equal(await r.router.clearLocal('../x'),false);
+});
+test('PR 7 review S1: the default routing() list keeps every project with a team board or a pin, however many unlinked ones came first',async t=>{
+ const r=rig(t,{resolveRepo:async c=>'github.com/org/'+path.basename(c)});
+ for(let i=0;i<60;i++){r.advance(10);await r.router.observe([event({sessionId:'u'+i,cwd:'/w/p'+i,taskTitle:'t'+i})]);}
+ r.advance(10);await r.router.observe([event({sessionId:'z',cwd:'/w/app',taskTitle:'in app'})]);
+ assert.equal(await r.router.choose('github.com/org/kept','local'),true);
+ const rows=await r.router.routing();
+ assert.deepEqual(rows.map(x=>x.short).sort(),['app','kept']);
+});

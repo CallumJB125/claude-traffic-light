@@ -118,13 +118,14 @@ test('the hub page can only ask to show the Team page or a card\'s timeline: mai
 });
 
 test('PR 7 routing strip: rows for the live sessions\' projects, words from work-routing-view, actions only on a listed project', async () => {
-  const chosen = [], linked = [];
+  const chosen = [], linked = [], cleared = [];
+  let linkOk = true;
   const teams = [{ key: 't1', name: 'Acme', role: 'admin', boards: [{ key: 'b1', name: 'Main' }] }];
   const routingRows = [{ repo: 'github.com/org/app', short: 'app', state: 'ask', destination: { kind: 'local' }, matches: [{ key: 'k1', team: 'Acme', board: 'Main', read_only: false }, { key: 'k2', team: 'Acme', board: 'Web', read_only: false }] }];
   const asked = [];
   const { a } = rig({
-    boards: { boards: async () => [], teams: async () => teams, linkRepo: async (b, c) => { linked.push([b, c]); return { ok: true }; }, captureKey: async () => null, searchCards: async () => [], destinationOf: () => ({ kind: 'local' }) },
-    capture: { captureOnce: async () => ({ ok: true }), routing: async (repos) => { asked.push(repos); return routingRows; }, choose: async (r, k) => { chosen.push([r, k]); return true; } },
+    boards: { boards: async () => [], teams: async () => teams, linkRepo: async (b, c) => { linked.push([b, c]); return linkOk ? { ok: true } : { ok: false, error: 'No.' }; }, captureKey: async () => null, searchCards: async () => [], destinationOf: () => ({ kind: 'local' }) },
+    capture: { captureOnce: async () => ({ ok: true }), routing: async (repos) => { asked.push(repos); return routingRows; }, choose: async (r, k) => { chosen.push([r, k]); return true; }, clearLocal: async (r) => { cleared.push(r); return true; } },
   });
   const out = await a.routing();
   assert.deepEqual(asked, [['github.com/org/app']], 'the live sessions\' repos, resolved here');
@@ -137,8 +138,12 @@ test('PR 7 routing strip: rows for the live sessions\' projects, words from work
   assert.equal((await a.routeChoose('github.com/org/other', 'k2')).ok, false, 'a project not listed is refused');
   assert.equal((await a.routeLink('github.com/org/app', 'b1')).ok, true);
   assert.deepEqual(linked, [['b1', 'github.com/org/app']]);
+  assert.deepEqual(cleared, ['github.com/org/app'], 'a successful Link clears "Keep on My board" so the new board takes the work (#62 review B1)');
   assert.equal((await a.routeLink('github.com/org/other', 'b1')).ok, false);
   assert.equal(linked.length, 1);
+  linkOk = false;
+  assert.equal((await a.routeLink('github.com/org/app', 'b1')).ok, false);
+  assert.deepEqual(cleared, ['github.com/org/app'], 'a failed Link keeps the pin');
 });
 test('PR 7 routing strip: no team means no strip; a capture without routing gives none', async () => {
   const none = rig({ boards: { boards: async () => [], teams: async () => [], linkRepo: async () => ({ ok: true }) }, capture: { captureOnce: async () => ({ ok: true }), routing: async () => [{ repo: 'github.com/org/app', short: 'app', state: 'unlinked', destination: { kind: 'local' }, matches: [] }] } });

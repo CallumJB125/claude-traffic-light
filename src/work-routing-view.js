@@ -4,6 +4,7 @@
 // This Mac "Automatic work cards" table so both say the same thing. Pure: rows come from work-capture's routing()
 // and teams from session-boards' teams(); out come display strings and opaque keys, never a path or a hub id.
 //
+// Out: {repo, short, state, text, label (text without the arrow), goesTo, note, choices, change, link, ask}.
 // rows:  [{repo, short, state:'set'|'single'|'ask'|'unlinked'|'read_only', destination:{kind:'local'}|{kind:'team',key,team,board},
 //          matches:[{key, team, board, read_only}]}]
 // teams: [{key, name, role:'owner'|'admin'|'member'|'viewer', boards:[{key, name}]}]
@@ -19,11 +20,14 @@ function rowFor(r, teams) {
   const goesTo = r.destination?.kind === 'team' ? named(r.destination) : MY_BOARD;
   // Every board new work could go to, the current one marked: for the Change control and the This Mac table.
   const change = writable.length ? [...writable.map((m) => ({ key: m.key, label: named(m), current: m.key === current })), { key: 'local', label: MY_BOARD, current: current === 'local' }] : [];
-  const out = { repo: r.repo, short: r.short, state: r.state, text: `${r.short} → ${goesTo}`, goesTo, note: null, choices: null, change, link: null, ask: null };
+  // label: the same sentence for a screen reader, which would read the arrow glyph oddly or not at all.
+  const out = { repo: r.repo, short: r.short, state: r.state, text: `${r.short} → ${goesTo}`, label: `${r.short} goes to ${goesTo}`, goesTo, note: null, choices: null, change, link: null, ask: null };
   if (r.state === 'ask') {
-    out.text = `${r.short} is linked to ${list(r.matches.map(named))}. Where should its new work go?`;
+    out.text = out.label = `${r.short} is linked to ${list(r.matches.map(named))}. Where should its new work go?`;
     out.goesTo = 'Not chosen yet (My board until you pick)';
-    out.choices = [...writable.map((m) => ({ key: m.key, label: m.board })), { key: 'local', label: 'Keep on My board' }];
+    // A board name two teams share says which team's it is.
+    const shared = (m) => writable.some((o) => o !== m && o.board === m.board);
+    out.choices = [...writable.map((m) => ({ key: m.key, label: shared(m) ? `${m.team} · ${m.board}` : m.board })), { key: 'local', label: 'Keep on My board' }];
   } else if (r.state === 'single') {
     out.note = 'Its only team board, so new work goes there.';
   } else if (r.state === 'read_only') {
