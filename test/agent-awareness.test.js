@@ -700,7 +700,7 @@ test('gitInfo: resolves a repository with awareness off and never touches the ro
   const w = world(t);
   const repo = gitInit(path.join(w.dir, 'code', 'grouped'));
   w.state.config = { agentAwareness: { enabled: false }, agentBus: { exclude: [] } };
-  const a = w.make({ repoFor: async () => 'github.com/acme/grouped' });
+  const a = w.make({ gitInfoFrom: require('../src/work-organise.js').createGitInfoResolver, repoFor: async () => 'github.com/acme/grouped' });
   const info = await a.gitInfo.resolve(repo);
   assert.equal(info.repoName, 'github.com/acme/grouped');
   assert.equal(info.toplevel, fs.realpathSync(repo));
@@ -709,4 +709,5 @@ test('gitInfo: resolves a repository with awareness off and never touches the ro
   assert.match(g.key, /^repo-[0-9a-z]{1,7}$/);
   assert.equal(fs.existsSync(a.rosterFile), false, 'no roster written');
   assert.ok(w.calls.every((c) => c[0] === 'git'), 'only git ran');
+  assert.equal(w.make().gitInfo, null, 'no factory passed: no resolver, and the snapshot groups by folder');
 });

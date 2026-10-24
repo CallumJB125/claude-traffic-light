@@ -39,6 +39,8 @@ function handlers() {
     ipcMain: { handle: (channel, fn) => registered.set(channel, fn) },
     loadConfig: () => ({ fixture: 'config' }), Stats: { summary: () => ({ fixture: 'stats' }) }, stats: {},
     BurstIpc: { enrichSession: () => null },
+    // Organised views PR 3: sessionsState asks the shared git resolver for each row's project group.
+    AgentAwareness: { gitInfo: { resolve: async () => ({}), groupOf: () => ({ key: 'dir-abc', heading: 'synthetic', sub: null, pending: false }) } },
     clipboard: { writeText: () => {} },
     CollisionAlerts: require('../src/collision-alerts.js'), collisionAlerts: require('../src/collision-alerts.js').createCollisions(),
     SessionOverview: { snapshot: input => { observed.push(input); return { status: input.available === false ? 'unavailable' : 'complete' }; } },
@@ -83,6 +85,7 @@ test('actual Sessions refresh and AI tools IPC require current main-frame Sessio
   assert.equal(f.observed.length, 0); assert.equal(f.opened.length, 0);
   assert.equal((await refresh(event(f.pages.sessions))).status, 'complete');
   assert.equal(f.observed[0].activity.configured, true);
+  assert.equal(f.observed[0].group({ cwd: '/synthetic/app' }).heading, 'synthetic', 'rows are grouped by the shared resolver');
   assert.equal(preferences(event(f.pages.sessions)), true);
   assert.deepEqual(f.opened, ['aitools:codex']);
   const account = f.registered.get('sessions:open-account');
