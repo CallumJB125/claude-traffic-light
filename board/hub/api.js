@@ -1059,6 +1059,7 @@ export class Api {
   linkRequest(member, body) {
     // request_id is the replay cache's (D8) and is never stored.
     if (!body || typeof body !== 'object' || Object.keys(body).some((k) => k !== 'repo_short' && k !== 'request_id')) throw new HubError('VALIDATION', 'send repo_short only');
+    if (body.request_id !== undefined && typeof body.request_id !== 'string') throw new HubError('VALIDATION', 'request_id: a string');
     const short = body.repo_short;
     if (typeof short !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(short) || /^\.+$/.test(short)) throw new HubError('VALIDATION', 'repo_short: the repository\'s short name, up to 80 letters, digits, . _ or -');
     if (this.hub.isAdmin(member)) throw new HubError('VALIDATION', 'you can link it yourself: Sessions → Where your projects\' work goes → Link');

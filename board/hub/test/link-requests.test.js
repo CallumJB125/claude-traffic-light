@@ -52,7 +52,7 @@ test('board_link_request: the body is the repo short name and nothing else; owne
     const bob = await h.signIn('bob@dev.local');
     const ask = (body, token = bob.body.device_token) => h.call('POST', '/api/link-requests', { token, body });
     for (const body of [{}, { repo_short: '' }, { repo_short: 'a'.repeat(81) }, { repo_short: 'org/app' }, { repo_short: '../x' }, { repo_short: 'app name' }, { repo_short: 7 },
-      { repo_short: 'app', canonical_url: 'github.com/org/app' }, { repo_short: 'app', requester_name: 'Mallory' }, { repo_short: 'app', team_id: 'other' }]) {
+      { repo_short: 'app', canonical_url: 'github.com/org/app' }, { repo_short: 'app', requester_name: 'Mallory' }, { repo_short: 'app', team_id: 'other' }, { repo_short: '..' }, { repo_short: '...' }, { repo_short: 'app', request_id: 7 }]) {
       h.clock.advance(3_600_000); // a refused ask still spends the hourly allowance, like any limited route
       const r = await ask(body);
       assert.equal(r.status, 400, `${JSON.stringify(body)} → ${r.text}`);
