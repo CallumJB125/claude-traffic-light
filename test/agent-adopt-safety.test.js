@@ -722,10 +722,17 @@ test('M4a: a backup that stops part way (and is never cleaned up) is never liste
   const fresh = s.inst();
   assert.deepEqual(fresh.backups(), [], 'never listed as a backup');
   assert.equal(fresh.backupPath(left[0].replace(/^\.tmp-/, '')), null);
-  // The next backup clears it.
+  // A backup straight after leaves it (it may be another instance's, L4),
+  // still never listed; one more than 10 minutes later clears it.
   const a = fresh.adopt([`.claude/agents/${s.fx.exact[0].name}`]);
   assert.equal(a.ok, true, a.error);
-  assert.deepEqual(backupsOf(s), [a.backup]);
+  assert.deepEqual(backupsOf(s), [left[0], a.backup].sort());
+  assert.deepEqual(fresh.backups().map((x) => x.id), [a.backup]);
+  fs.appendFileSync(path.join(s.fx.dir, s.fx.own[0]), 'edit\n'); // so the next one isn't a reuse
+  const later = s.inst(shipped, { now: () => Date.now() + 11 * 60_000 });
+  const b = later.adopt([`.claude/agents/${s.fx.exact[1].name}`]);
+  assert.equal(b.ok, true, b.error);
+  assert.deepEqual(backupsOf(s), [a.backup, b.backup].sort(), 'the stale staged folder is gone');
 });
 
 test('M4b: a subfolder removed or replaced by a link while it is copied refuses the adopt, without crashing, and leaves nothing', () => {
@@ -766,4 +773,39 @@ test('M4b: the copy reads no FIFO swapped in for a file, and refuses it', () => 
   assert.ok(fired);
   assert.equal(r.ok, false);
   assert.deepEqual(backupsOf(s), []);
+});
+
+// Review #54 L4 (poc14 3b): a second Plexiform on the same data folder (a dev
+// build beside the app) swept this one's staged backup between its last
+// verify and its rename, so a half-deleted folder was recorded.
+test('L4: a second instance backing up mid-way through this one never sweeps its staged folder', () => {
+  const s = setup();
+  const before = s.fp();
+  let other = null;
+  const fsApi = new Proxy(fs, { get: (t, k) => (k === 'renameSync' ? (a, b) => {
+    if (!other && path.basename(String(a)).startsWith('.tmp-')) other = s.inst().adopt([`.claude/agents/${s.fx.exact[1].name}`]);
+    return t.renameSync(a, b);
+  } : t[k]) });
+  const r = s.inst(shipped, { fsApi }).adopt([`.claude/agents/${s.fx.exact[0].name}`]);
+  assert.ok(other, 'the other instance ran its backup, sweep included');
+  assert.equal(other.ok, true, other.error);
+  assert.equal(r.ok, true, r.error);
+  const b = s.it.backupPath(r.backup);
+  assert.ok(b, 'listed');
+  assert.deepEqual(FP.fingerprint(b), before, 'the whole folder, nothing swept out of it');
+  assert.ok(!backupsOf(s).some((n) => n.startsWith('.tmp-')));
+});
+
+test('L4: only staged folders more than 10 minutes old (or dated a day ahead) are swept', () => {
+  let t = Date.parse('2026-06-01T12:00:00Z');
+  const s = setup();
+  const root = path.join(s.data, 'agent-backups');
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const name = (ms) => { const d = new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.(\d{3})Z$/, '$1Z'); return `.tmp-claude-agents-${d}-0123abcd`; };
+  const stale = name(t - 11 * 60_000), fresh = name(t - 60_000), ahead = name(t + 2 * 86_400_000), soon = name(t + 60_000);
+  for (const n of [stale, fresh, ahead, soon]) { fs.mkdirSync(path.join(root, n), { mode: 0o700 }); fs.writeFileSync(path.join(root, n, 'part.md'), 'x'); }
+  const r = s.inst(shipped, { now: () => t }).adopt([`.claude/agents/${s.fx.exact[0].name}`]);
+  assert.equal(r.ok, true, r.error);
+  const left = fs.readdirSync(root).filter((n) => n.startsWith('.tmp-')).sort();
+  assert.deepEqual(left, [fresh, soon].sort(), 'stale and far-future staged folders swept; recent ones kept');
 });

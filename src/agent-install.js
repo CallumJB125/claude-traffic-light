@@ -36,6 +36,14 @@ const BACKUP_NAME = /^claude-agents-\d{8}T\d{9}Z-[0-9a-f]{8}$/;
 // A backup being built (review #54 M4): never listed, and cleared next time.
 const STAGING = '.tmp-';
 const STAGED_NAME = /^\.tmp-claude-agents-\d{8}T\d{9}Z-[0-9a-f]{8}$/;
+const STAGED_FRESH_MS = 10 * 60_000;
+/** A staged backup's time from its name, in ms, or null. */
+function stagedAt(n) {
+  const m = /^\.tmp-claude-agents-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})Z-/.exec(n);
+  if (!m) return null;
+  const t = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], +m[7]);
+  return Number.isFinite(t) ? t : null;
+}
 const sha = (text) => createHash('sha256').update(text).digest('hex');
 const refuse = (status, error, extra = {}) => ({ ok: false, status, error, ...extra });
 const tilde = (rel) => `~/${rel}`;
@@ -505,8 +513,14 @@ function createAgentInstaller({ home, dataRoot, catalog, ledgerKey, fsApi = fs, 
     if (fsApi.lstatSync(DATA, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error('link');
     fsApi.mkdirSync(root, { recursive: true, mode: 0o700 });
     if (!realDir(root)) throw new Error('link');
+    // Stale staged folders only: one made in the last 10 minutes may be
+    // another Plexiform's backup in progress (a dev build on the same data
+    // folder), so it's left alone (review #54 L4). One dated over a day
+    // ahead (a clock once wrong) is swept too, or it would stay for ever.
     for (const n of fsApi.readdirSync(root)) {
-      if (STAGED_NAME.test(n)) { try { removeBackup(path.join(root, n)); } catch { /* next time */ } }
+      const at = STAGED_NAME.test(n) ? stagedAt(n) : null;
+      if (at === null || (at > now() - STAGED_FRESH_MS && at < now() + 86_400_000)) continue;
+      try { removeBackup(path.join(root, n)); } catch { /* next time */ }
     }
     const newest = backupsIn(root).at(-1);
     if (newest && fingerprint(path.join(root, newest)) === fingerprint(src) && pin() === pinned) return path.join(root, newest);
