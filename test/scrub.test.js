@@ -396,3 +396,11 @@ test('scrubTitle: only commit words keep a hash; version words need a boundary a
     ['version 127.0.0.2', 'version [ip]'], ['version 169.254.1.1', 'version [ip]'], ['version 172.16.0.9', 'version [ip]'], ['version 100.101.2.3', 'version [ip]'],
     ['APP_VERSION=1.2.3.4', 'APP_VERSION=[ip]'], ['subversion 1.2.3.4', 'subversion [ip]']]) assert.equal(scrubTitle(input), want, input);
 });
+
+test('scrubTitle: a reverse-DNS exemption needs a last label that is no TLD (#59 review, B2)', () => {
+  const { scrubTitle } = require('../src/scrub.js');
+  for (const h of ['dev.acme.com', 'app.secret-project.com', 'dev.internal-tool.acme.io', 'app.acme.ai', 'me.acme.com', 'co.acme.io', 'ca.acme.com',
+    'in.acme.com', 'uk.acme.co.uk', 'de.acme.de', 'net.acme.org', 'org.acme.io', 'io.acme.io', 'com.acme.cloud', 'org.acme.xyz']) assert.equal(scrubTitle(`ssh ${h}`), 'ssh [host]', h);
+  assert.equal(scrubTitle('see dev.acme.com.'), 'see [host].');
+  for (const keep of ['com.anthropic.claude', 'org.mozilla.firefox', 'io.github.acme', 'com.apple.Safari', 'org.foo.bar']) assert.equal(scrubTitle(keep), keep, keep);
+});

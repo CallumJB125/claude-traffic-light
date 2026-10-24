@@ -356,11 +356,15 @@ const FILE_EXTS = new Set(['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'md',
 // a version or architecture (Dockerfile.prod.arm64, api.acme.v1, api.v1.core). File
 // names are caught by FILE_EXTS. A private suffix is a host whatever the shape.
 const REVERSE_DNS_FIRST = new Set(['com', 'org', 'net', 'io', 'dev', 'app', 'edu', 'gov', 'co', 'me', 'uk', 'de', 'fr', 'nl', 'ch', 'se', 'za', 'au', 'ca', 'jp', 'cn', 'ru', 'br', 'in']);
+const TLD_LIKE = /^(?:[a-z]{2}|com|net|org|io|dev|app|ai|co|me|info|biz|xyz|cloud|tech|site|online)$/;
 const CODE_LAST = /^(?:v\d+|arm64|aarch64|amd64|x64|x86|i386|i686|armv\d+l?|core)$/;
 const codeShape = (h) => {
   if (PRIVATE_SUFFIX.test(h)) return false;
   const labels = h.split('.');
-  return REVERSE_DNS_FIRST.has(labels[0]) || CODE_LAST.test(labels[labels.length - 1]);
+  const last = labels[labels.length - 1];
+  // A reverse-DNS id ends in a product name, never a TLD: dev.acme.com and me.acme.io
+  // are hosts that happen to start with a TLD.
+  return (REVERSE_DNS_FIRST.has(labels[0]) && !TLD_LIKE.test(last)) || CODE_LAST.test(last);
 };
 // Public developer sites: the registrable domain and a few well-known service names under
 // it stay. Any other name under it (secret-project.anthropic.com, callum.github.com) can
