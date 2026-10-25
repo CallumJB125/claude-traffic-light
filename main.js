@@ -3558,15 +3558,18 @@ function createTray() {
   };
   const buildMenu = (from = 'tray') => {
     const advanced = IS_DEV_RUN || from === 'widget';
+    // Also under the tray's More (outside the 20-item cap), so it stays reachable with the widget off.
+    const openClaude = { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') };
+    const appItems = AppMenu.appItems({ pages: sectionItems(), groups: [{ id: 'sections' }, { id: 'more', submenu: 'More' }], open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => openBuddy('usage') } });
+    appItems.find((i) => i.label === 'More')?.submenu.splice(-2, 0, openClaude);
     return Menu.buildFromTemplate([
       ...budgetItems(),
       ...scopeItem(),
       ...BurstIpc.trayItems(),
       ...UsagePopOut.items(usageToday(), () => openBuddy('usage')),
       { label: 'New task…', ...(ComposeShortcut.held ? { accelerator: ComposeShortcut.held, registerAccelerator: false } : {}), click: () => { openCompose(); } },
-      ...AppMenu.appItems({ pages: sectionItems(), groups: [{ id: 'sections' }, { id: 'more', submenu: 'More' }], open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => openBuddy('usage') } }),
-      // Only on the widget's own menu (and in dev): New task… took its place under the tray's 20-item cap.
-      ...(advanced ? [{ label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') }] : []),
+      ...appItems,
+      ...(advanced ? [openClaude] : []),
       ...quietItems(), ...WidgetPolish.menuItems(),
       ...captureItems(),
       ...AgentBusMain.trayItems(),
@@ -5642,6 +5645,7 @@ app.whenReady().then(() => {
   powerMonitor.on('resume', checkOnline);
   initVoice();
   ComposeShortcut.apply(); // after the voice key; the widget's key is read from config, so its lazy apply needs no order
+  refreshTrayMenu(); // createTray ran before the key was registered: show it on New task…
   // Other agents live on disk, not in hooks: poll for them.
   if (!DEMO) { syncAgents(); every(OMC_POLL_MS, syncAgents, 'omc-agents'); onQuit(app, () => agentsSync.stop()); }
 

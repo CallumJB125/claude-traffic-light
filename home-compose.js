@@ -68,6 +68,7 @@
       return;
     }
     if (r?.cancelled) return update();
+    if (r?.code === 'STARTED_ELSEWHERE') { s.text = ''; s.held = null; s.route = null; s.pick = null; s.preflight = null; s.ackPeers = false; s.error = ''; keepDraft(); render(); status(r.text); return; }
     if (r?.code === 'BUDGET_HELD') { s.held = { text: r.text || 'Your spend cap is reached.' }; return update(); }
     if (r?.code === 'PEERS_CHANGED' && r.preflight) { s.preflight = { folder: s.folder.handle, peers: r.preflight.peers, key: r.preflight.key }; s.ackPeers = false; s.error = r.text; return update(); }
     if (r?.code === 'CONFLICT' || r?.code === 'CONFIRM_REQUIRED') {

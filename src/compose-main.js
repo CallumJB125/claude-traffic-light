@@ -119,7 +119,7 @@ function register(deps) {
     const draft = { text: req.text, folder: req.folder, ai: req.ai, permissionLevel: req.permissionLevel, surface: 'background', when: 'now',
       ...(req.expectAi !== undefined ? { expectAi: req.expectAi } : {}), ...(typeof req.requestId === 'string' ? { requestId: req.requestId } : {}), overrideBudget: req.overrideBudget === true };
     const r = await s.create(draft, { wcId: e.sender.id, current: () => same(before) });
-    if (!same(before)) return refused('CONFLICT', r?.ok ? 'Home changed while the task was starting. It is in Tasks.' : MOVED);
+    if (!same(before)) return r?.ok ? { ok: false, code: 'STARTED_ELSEWHERE', id: r.id, text: "Started. It's in Tasks." } : refused('CONFLICT', MOVED);
     if (!r?.ok) return r;
     if (!started || started.wcId !== e.sender.id || started.doc !== before.document) started = { wcId: e.sender.id, doc: before.document, ids: new Set(), last: null, title: '' };
     started.ids.add(r.id); started.last = r.id; started.title = String(req.text).trim().slice(0, 200);

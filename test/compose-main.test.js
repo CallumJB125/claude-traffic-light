@@ -13,7 +13,7 @@ function harness(over = {}) {
   const frame = { url: 'file:///home.html' };
   const wc = { id: 41, mainFrame: frame, isDestroyed: () => false, sent: [], send(ch, m) { this.sent.push([ch, m]); } };
   const win = { isDestroyed: () => false };
-  const st = { foreground: true, document: 1, generation: 1, workspace: 'w1', hidden: false, conn: 'connected', rows: [], peers: [], preflightOk: true, preflightPeersAtRun: null, onPreflight: null };
+  const st = { foreground: true, document: 1, generation: 1, workspace: 'w1', hidden: false, conn: 'connected', rows: [], peers: [], preflightOk: true, preflightPeersAtRun: null, onPreflight: null, onCreate: null, onAct: null };
   const calls = { create: [], act: [], route: [], preflight: [], registerFolder: [], openTask: [], closeTask: [] };
   const buddy = {
     pageWebContents: (id) => (id === 'home' ? wc : null),
@@ -33,8 +33,8 @@ function harness(over = {}) {
       const peers = calls.preflight.length > 1 && st.preflightPeersAtRun ? st.preflightPeersAtRun : st.peers;
       return { ok: true, preflight: { checkedAt: 1, peers, note: 'n' } };
     },
-    create: async (draft, extra) => { calls.create.push({ draft, extra }); return { ok: true, id: `t${calls.create.length}` }; },
-    act: async (req, wcId, current) => { calls.act.push({ req, wcId, current: current() }); return { ok: true }; },
+    create: async (draft, extra) => { calls.create.push({ draft, extra }); if (st.onCreate) st.onCreate(); return { ok: true, id: `t${calls.create.length}` }; },
+    act: async (req, wcId, current) => { calls.act.push({ req, wcId, current: current() }); if (st.onAct) st.onAct(); return { ok: true }; },
     openTask: async (id, wcId) => { calls.openTask.push([id, wcId]); return { ok: true }; },
     closeTask: (wcId) => { calls.closeTask.push(wcId); },
   };
@@ -139,6 +139,28 @@ test('Run is bound to the foreground Home document across every await', async ()
   const h = harness(); h.st.foreground = false;
   assert.equal((await h.call('compose:run', draft())).code, 'ILLEGAL_TRANSITION');
   assert.equal(h.calls.create.length, 0);
+});
+
+test('finding 1: Home changing during create returns STARTED_ELSEWHERE with the id, never a retryable CONFLICT', async () => {
+  const h = harness();
+  h.st.onCreate = () => { h.st.document++; };
+  const r = await h.call('compose:run', draft());
+  assert.deepEqual(r, { ok: false, code: 'STARTED_ELSEWHERE', id: 't1', text: "Started. It's in Tasks." });
+  assert.equal(h.calls.create.length, 1);
+  assert.equal((await h.call('compose:stop', { id: 't1', confirmed: true })).code, 'NOT_FOUND', 'the new document does not own it');
+});
+
+test('R6: stop from a subframe after a successful Run does nothing; a document change during act is a CONFLICT', async () => {
+  const h = harness();
+  await h.call('compose:run', draft());
+  const sub = await h.handlers.get('compose:stop')({ sender: h.wc, senderFrame: {} }, { id: 't1', confirmed: true });
+  assert.equal(sub.ok, false);
+  assert.equal(h.calls.act.length, 0);
+  h.st.onAct = () => { h.st.document++; };
+  const r = await h.call('compose:stop', { id: 't1', confirmed: true });
+  assert.equal(h.calls.act.length, 1);
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'CONFLICT');
 });
 
 test('hidden box: info says hidden and every other channel refuses', async () => {
