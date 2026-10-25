@@ -619,7 +619,7 @@ function countGroups() {
     if (groupBy === 'bucket') g.counts.textContent = `${shown.length} ${shown.length === 1 ? 'session' : 'sessions'}`;
     else countParts(g.counts, counts);
     for (const [id, b] of g.buckets) { b.summary.textContent = `${bucketHeading(id)} (${counts[id]})`; b.details.hidden = !counts[id]; }
-    g.section.hidden = !shown.length;
+    g.section.hidden = !shown.length && !g.routing.contains(document.activeElement); // never hide the header holding a focused routing control
   }
 }
 // Keyed, in-place: an element moves only when its position must change.

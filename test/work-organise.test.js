@@ -334,6 +334,14 @@ test('work-organise: git resolver — in-flight calls share one lookup; bad inpu
   for (const d of ['/1', '/2', '/3', '/4', '/5']) await sync.resolve(d);
   assert.equal(sync.size(), 3);
   assert.equal((await sync.resolve('/5')).repoName, null, 'an origin that is not canonical is dropped');
+  let looks = 0;
+  const lru = createGitInfoResolver({ git: (d, args) => { looks++; return args[0] === 'rev-parse' ? `${d}\n.git` : 'main'; }, repoFor: () => null, max: 3 });
+  for (const d of ['/1', '/2', '/3']) await lru.resolve(d);
+  await lru.resolve('/1'); await lru.resolve('/4');
+  const seen = looks; await lru.resolve('/1');
+  assert.equal(looks, seen, 'a recently used entry survives eviction');
+  await lru.resolve('/2');
+  assert.ok(looks > seen, 'the least recently used one was evicted');
   const throwing = createGitInfoResolver({ git: () => { throw new Error('spawn failed'); }, repoFor: () => { throw new Error('x'); } });
   assert.deepEqual(await throwing.resolve('/x'), { repoName: null, commonDir: null, toplevel: null, branch: null });
   assert.throws(() => createGitInfoResolver({}), /git runner/);

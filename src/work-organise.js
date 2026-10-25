@@ -509,7 +509,8 @@
     const valid = (cwd) => typeof cwd === 'string' && isAbs(cwd) && cwd.length <= 2000 && !cwd.includes('\0');
     function entry(cwd) {
       let e = cache.get(cwd);
-      if (!e) {
+      if (e) { cache.delete(cwd); cache.set(cwd, e); } // least recently used goes first
+      else {
         e = { good: null, expires: 0, fails: 0, retryAt: 0, suspect: false, pending: null };
         cache.set(cwd, e);
         while (cache.size > max) cache.delete(cache.keys().next().value);

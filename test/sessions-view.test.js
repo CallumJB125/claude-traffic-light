@@ -585,6 +585,7 @@ test('PR 3 routing: focus in a header picker survives the 5 s refresh and a fail
     fail = true; f.intervals[0](); await tick(); await tick();
     assert.equal(d.activeElement, sel, 'and after a failed refresh'); assert.ok(groupOf(d, KEY.app).contains(sel));
     assert.equal(d.querySelectorAll('#content .session').length, 0, 'the failed refresh still clears the rows');
+    assert.equal(groupOf(d, KEY.app).hidden, false, 'the header holding the focused picker is not hidden');
     fail = false; sel.blur(); f.intervals[0](); await tick(); await tick();
     assert.equal(d.querySelectorAll('#content .session').length, MIXED.length);
     [...row.querySelectorAll('button')].find(b => b.textContent === 'Save').click(); await tick(); await tick();

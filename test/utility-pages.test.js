@@ -29,23 +29,23 @@ test('all ordinary utility menu routes target main pages except Widget rules', (
   for (const id of utilities.concat('lights')) assert.ok(opened.includes(id), id);
 });
 
-function handlers() {
+function handlers({ gitInfo, policy } = {}) {
   const registered = new Map();
   const pages = Object.fromEntries(['usage', 'stats', 'settings', 'sessions', 'hatch', 'help', 'feedback'].map(id => [id, wc()]));
   const widget = wc(); const popup = wc(); const observed = []; const opened = []; const messaged = [];
   const context = {
-    require: p => p === './src/utility-pages.js' ? { fromPage } : require(path.join(__dirname, '..', p)),
+    require: p => p === './src/utility-pages.js' ? { fromPage } : p === './src/policy.js' && policy ? policy : require(path.join(__dirname, '..', p)),
     buddyWin: { pageWebContents: id => pages[id] }, win: { webContents: widget }, lightsWin: { webContents: popup },
     ipcMain: { handle: (channel, fn) => registered.set(channel, fn) },
     loadConfig: () => ({ fixture: 'config' }), Stats: { summary: () => ({ fixture: 'stats' }) }, stats: {},
     BurstIpc: { enrichSession: () => null },
     // Organised views PR 3: sessionsState asks the shared git resolver for each row's project group.
-    AgentAwareness: { gitInfo: { resolve: async () => ({}), groupOf: () => ({ key: 'dir-abc', heading: 'synthetic', sub: null, pending: false }) } },
+    AgentAwareness: { gitInfo: gitInfo ?? { resolve: async () => ({}), groupOf: () => ({ key: 'dir-abc', heading: 'synthetic', sub: null, pending: false }) } },
     clipboard: { writeText: () => {} },
     CollisionAlerts: require('../src/collision-alerts.js'), collisionAlerts: require('../src/collision-alerts.js').createCollisions(),
     SessionOverview: { snapshot: input => { observed.push(input); return { status: input.available === false ? 'unavailable' : 'complete' }; } },
     localSessions: sessions => sessions, aggregateState: () => ({ sessions: [{ fixture: 'metadata' }] }),
-    IS_DEV_RUN: false, Adapters: { get: () => ({ isActivityInstalled: () => true }) }, os: { homedir: () => '/synthetic' }, HOOK_RUNTIME: {}, ROOT_DIR: '/synthetic/.claude-traffic-light',
+    setTimeout, clearTimeout, IS_DEV_RUN: false, Adapters: { get: () => ({ isActivityInstalled: () => true }) }, os: { homedir: () => '/synthetic' }, HOOK_RUNTIME: {}, ROOT_DIR: '/synthetic/.claude-traffic-light',
     createSettingsWindow: () => opened.push('settings'), aiToolsOpen: (d) => opened.push(d), openBuddy: (id) => opened.push(id), Date,
     InteractionMain: { sendLocal: async (session, text) => { messaged.push([session, text]); return { ok: true, status: 'acknowledged', error: null }; } },
   };
@@ -96,6 +96,14 @@ test('actual Sessions refresh and AI tools IPC require current main-frame Sessio
   assert.equal(refresh(event(old)), null);
   f.pages.sessions.isDestroyed = () => true;
   assert.equal(refresh(event(f.pages.sessions)), null);
+});
+
+test('actual Sessions refresh never waits on git for more than the one 300 ms cap, alongside the policy reads', async () => {
+  const f = handlers({ gitInfo: { resolve: () => new Promise(() => {}), groupOf: () => ({ key: 'dir-abc', heading: 'synthetic', sub: null, pending: true }) }, policy: { rowInfo: () => new Promise(res => setTimeout(() => res(null), 200)) } });
+  const t = Date.now();
+  await f.registered.get('sessions:state')(event(f.pages.sessions));
+  const took = Date.now() - t;
+  assert.ok(took >= 190 && took < 450, `${took} ms`);
 });
 
 test('actual Sessions Message IPC requires the Sessions owner and bounded text before the owned-session send', async () => {
