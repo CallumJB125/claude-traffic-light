@@ -211,7 +211,6 @@ test('the default tray menu is 20 items or fewer, with debug controls only in de
   assert.ok(labels.includes('New task…'), 'New task… is in the tray');
   assert.ok(!labels.includes('Open Claude'), 'Open Claude is not top-level in the tray');
   assert.ok(more[0].submenu.some((i) => i.label === 'Open Claude'), 'Open Claude is reachable under More even with the widget off');
-  assert.ok(build('widget').some((i) => i.label === 'Open Claude'), 'and stays on the widget menu');
   assert.deepEqual(more[0].submenu.at(-1).submenu.map((i) => [i.label.slice(2), i.enabled]), require('../src/colour-legend.js').LEGEND.map((e) => [`${e.label}: ${e.meaning}`, false]), 'the colour key sits at the foot of More');
   assert.equal(labels.filter(label => /^Open .+…$/.test(label) && label !== 'Open Plexiform…').length, 6, 'the tray keeps six primary sections');
   for (const kept of ['Open at Login', 'Quit', 'Floating Widget', 'What does this mean?…']) assert.ok(labels.includes(kept), kept);

@@ -43,4 +43,8 @@ test('task started but Home changed: the draft is cleared, Run stays off for tha
   assert.equal(doc.getElementById('compose-run').disabled, true);
   assert.equal(doc.getElementById('compose-status').textContent, "Started. It's in Tasks.");
   assert.equal(doc.getElementById('compose-card').hidden, true, 'no card: Home does not own the task');
+  ta.value = 'a second task'; ta.dispatchEvent(new w.Event('input'));
+  await tick(500);
+  assert.equal(doc.getElementById('compose-run').disabled, false, 'the next task can run');
+  assert.equal(runs.length, 1);
 });

@@ -3569,7 +3569,6 @@ function createTray() {
       ...UsagePopOut.items(usageToday(), () => openBuddy('usage')),
       { label: 'New task…', ...(ComposeShortcut.held ? { accelerator: ComposeShortcut.held, registerAccelerator: false } : {}), click: () => { openCompose(); } },
       ...appItems,
-      ...(advanced ? [openClaude] : []),
       ...quietItems(), ...WidgetPolish.menuItems(),
       ...captureItems(),
       ...AgentBusMain.trayItems(),
