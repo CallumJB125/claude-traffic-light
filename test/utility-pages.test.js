@@ -99,11 +99,11 @@ test('actual Sessions refresh and AI tools IPC require current main-frame Sessio
 });
 
 test('actual Sessions refresh never waits on git for more than the one 300 ms cap, alongside the policy reads', async () => {
-  const f = handlers({ gitInfo: { resolve: () => new Promise(() => {}), groupOf: () => ({ key: 'dir-abc', heading: 'synthetic', sub: null, pending: true }) }, policy: { rowInfo: () => new Promise(res => setTimeout(() => res(null), 200)) } });
+  const f = handlers({ gitInfo: { resolve: () => new Promise(() => {}), groupOf: () => ({ key: 'dir-abc', heading: 'synthetic', sub: null, pending: true }) }, policy: { rowInfo: () => new Promise(res => setTimeout(() => res(null), 300)) } });
   const t = Date.now();
   await f.registered.get('sessions:state')(event(f.pages.sessions));
   const took = Date.now() - t;
-  assert.ok(took >= 190 && took < 450, `${took} ms`);
+  assert.ok(took >= 290 && took < 520, `${took} ms`);
 });
 
 test('actual Sessions Message IPC requires the Sessions owner and bounded text before the owned-session send', async () => {
