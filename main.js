@@ -3565,7 +3565,8 @@ function createTray() {
       ...UsagePopOut.items(usageToday(), () => openBuddy('usage')),
       { label: 'New task…', ...(ComposeShortcut.held ? { accelerator: ComposeShortcut.held, registerAccelerator: false } : {}), click: () => { openCompose(); } },
       ...AppMenu.appItems({ pages: sectionItems(), groups: [{ id: 'sections' }, { id: 'more', submenu: 'More' }], open: openBuddy, openLabel: BRAND.OPEN_MENU_LABEL, feedback: { label: "Something's off / Idea…", click: createFeedbackWindow }, popOuts: { usage: () => openBuddy('usage') } }),
-      { label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') },
+      // Only on the widget's own menu (and in dev): New task… took its place under the tray's 20-item cap.
+      ...(advanced ? [{ label: 'Open Claude', click: () => shell.openExternal('https://claude.ai') }] : []),
       ...quietItems(), ...WidgetPolish.menuItems(),
       ...captureItems(),
       ...AgentBusMain.trayItems(),
