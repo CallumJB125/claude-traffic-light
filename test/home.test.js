@@ -141,13 +141,14 @@ test('a live session appears on Home within one refresh tick', async () => {
 
 test('needs you lists each wait once with an Answer that opens the Waiting page; team cards open by handle', async () => {
   const calls = [];
-  const state = { ...fresh, banner: null, needs: { total: 1, items: [{ kind: 'Permission', headline: 'Bash: npm test', project: 'app', age: 'waiting 6 min', late: true }] },
+  const state = { ...fresh, banner: null, needs: { total: 2, items: [{ kind: 'Permission', headline: 'Bash: npm test', project: 'app', age: 'waiting 6 min', late: true, action: 'answer' }, { kind: 'Question', headline: 'Pick one', project: 'web', age: 'waiting 1 min', late: false, action: 'go-to-terminal' }] },
     today: { spend: { spent: 4, budget: 0, level: null, unpriced: 0, equivalent: false }, longestWaitMs: 360000 },
     team: { unavailable: false, cards: [{ handle: 'h1', key: 'A-1', title: 'Fix', board: 'Dev', team: 'Acme', state: 'In progress', due_date: null }], decisions: [] } };
   const f = setup([state], calls);
   try {
     await tick();
-    assert.equal(f.section('needs').querySelectorAll('li').length, 1);
+    assert.equal(f.section('needs').querySelectorAll('li').length, 2);
+    assert.deepEqual([...f.section('needs').querySelectorAll('li button')].map((b) => b.textContent), ['Answer', 'Open'], 'Answer only where Plexiform can deliver it');
     f.section('needs').querySelector('li button').click();
     assert.deepEqual(calls.at(-1), ['navigate', 'waiting']);
     assert.match(f.section('today').textContent, /\$4\.00.*no daily limit/);

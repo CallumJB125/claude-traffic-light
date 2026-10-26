@@ -140,7 +140,7 @@ test('expired: the hook stopped waiting, so the bubble says "answer in terminal"
   await expect(widget.locator('.ib-age')).toHaveText('answer in terminal', { timeout: 10000 });
   await expect(widget.locator('.ib-expired')).toContainText('answer in terminal');
   await expect(widget.locator('.ib-body [data-option="allow"]')).toHaveCount(0);
-  await expect(widget.locator('.ib-open')).toHaveText('Open the terminal');
+  await expect(widget.locator('.ib-open')).toHaveText('Open in terminal');
 });
 
 test('blocked: "needs your decision" with the reason; "Add a rule" opens the rules prefilled and says why it can’t', async () => {
@@ -169,7 +169,7 @@ test('dialog: read off a real tmux pane, shown with its choices and "Open it" on
     F.ageSession(h, 'vis-dialog', 60000);
     await expect(widget.locator('.ib-item.kind-dialog')).toBeVisible({ timeout: 30000 });
     await expect(widget.locator('.ib-dialog-opts li')).toHaveText(['Yes, I trust this folder', 'No, exit']);
-    await expect(widget.locator('.ib-open')).toHaveText('Open it');
+    await expect(widget.locator('.ib-open')).toHaveText('Open in terminal');
     await expect(widget.locator('.ib-body [data-option]')).toHaveCount(0);
     await bubbleShot('bubble-dialog.png');
   } finally { t.kill(); }
@@ -261,5 +261,24 @@ test('with "answer from the widget" off, a request file still on disk cannot be 
     F.staleRequest(hh, { id: 'vis-off', tool: 'Bash', toolInput: { command: 'ls' }, createdAt: minsAgo(0.1), expiresAt: new Date(Date.now() + 40000).toISOString() });
     const r = await w.evaluate(() => window.trafficLight.answerInput('vis-off', 'allow', {}));
     expect(r).toEqual({ ok: false, error: 'off' });
+  } finally { await hh.cleanup(); }
+});
+
+// PR 5 (Q1): answering is off, so a permission wait is one honest sentence and Open in terminal, never chips.
+test('permission, answering off: says so in words, offers Open in terminal and a Turn it on link', async () => {
+  const hh = await launchApp({ config: { askFromWidget: false } });
+  try {
+    const w = await windowByFile(hh.app, 'index.html');
+    await w.emulateMedia({ reducedMotion: 'reduce' });
+    F.hookSync(hh, 'notification', { session_id: 'vis-off', cwd: '/visual/app', notification_type: 'permission_prompt', title: 'Permission needed', message: 'Claude needs your permission to use Bash' });
+    F.ageSession(hh, 'vis-off', 60000);
+    await expect(w.locator('.ib-item')).toBeVisible({ timeout: 15000 });
+    await expect(w.locator('.ib-body [data-option]')).toHaveCount(0);
+    await expect(w.locator('.ib-body')).toBeVisible();
+    await expect(w.locator('.ib-open')).toHaveText('Open in terminal');
+    await expect(w.locator('.ib-body .ib-hint')).toContainText('Answering here is off');
+    await expect(w.locator('.ib-body .ib-link')).toHaveText('Turn it on');
+    await w.waitForTimeout(900);
+    await expect(w).toHaveScreenshot('bubble-permission-off.png', SHOT);
   } finally { await hh.cleanup(); }
 });

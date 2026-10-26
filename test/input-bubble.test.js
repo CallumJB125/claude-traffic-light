@@ -13,7 +13,7 @@ function setup(opts = {}) {
   const dom = new JSDOM('<!doctype html><body><div id="b"></div></body>');
   global.document = dom.window.document;
   let clock = T0;
-  const calls = { answer: [], open: [], rule: [], waiting: 0, scope: [] };
+  const calls = { answer: [], open: [], rule: [], waiting: 0, settings: 0, scope: [] };
   let reply = opts.reply || (() => ({ ok: true }));
   const api = {
     answerInput: async (id, optionId, more) => { calls.answer.push([id, optionId, more]); return reply(id, optionId); },
@@ -21,6 +21,7 @@ function setup(opts = {}) {
     copyCommand: opts.copyCommand || (async () => ({ ok: true })),
     openAutoRule: (id) => calls.rule.push(id),
     openWaiting: () => { calls.waiting++; },
+    openWidgetSettings: () => { calls.settings++; },
     setSessionScope: async (id, mode) => { calls.scope.push(['session', id, mode]); return { ok: true }; },
     setRepoScope: async (url, mode) => { calls.scope.push(['repo', url, mode]); return { ok: true }; },
   };
@@ -304,8 +305,10 @@ test('questions: one click answers a single choice; free text and multi-select s
 
   const shown = setup();
   shown.show([{ ...q, id: 'ask-h-s', source: 'session', answerable: false, actions: ['open'], options: [], freeText: undefined, expires_at: null }]);
-  assert.deepEqual(shown.$$('.ib-readonly').map((n) => n.textContent), ['React', 'Vue'], 'not answerable here: shown, with Open it');
+  assert.equal(shown.$$('.ib-readonly, .ib-q .ib-opt').length, 0, 'not answerable here: no chips');
+  assert.match(shown.$('.ib-q .ib-hint').textContent, /^In the terminal: React or Vue\.$/);
   assert.ok(shown.$('.ib-open'));
+  assert.equal(shown.$('.ib-open').textContent, 'Open in terminal');
 });
 
 test('elicitation: a form from the schema; Submit sends typed content, a missing field says so', async () => {
@@ -492,4 +495,40 @@ test('Enter on a safe command that is not on the read-only list says why it skip
   await tick();
   assert.equal(t.calls.answer.length, 0);
   assert.match(t.$('.ib-err').textContent, /Enter skips this \(touch is not on the read-only list\): click Allow/);
+});
+
+test('PR 5: with answering off, a session-reported permission says so in words, with Open in terminal and a Turn it on link; no chips', async () => {
+  const t = setup();
+  const off = { id: 'ask-h-s', kind: 'permission', source: 'session', answerable: false, actions: ['open'], expires_at: null, answering: false, tool: 'Bash', cwd: '/w/app', title: 'Needs your permission', text: '', options: [], created_at: ago(1) };
+  t.show([off]);
+  assert.equal(t.$$('.ib-body .ib-opt').map((b) => b.textContent).join('|'), 'Open in terminal');
+  assert.match(t.$('.ib-body .ib-hint').textContent, /^Answering here is off · Turn it on$/);
+  t.$('.ib-body .ib-link').click();
+  assert.equal(t.calls.settings, 1);
+  t.$('.ib-open').click();
+  await tick();
+  assert.deepEqual(t.calls.open, ['ask-h-s']);
+  const on = setup();
+  on.show([{ ...off, answering: true }]);
+  assert.doesNotMatch(on.$('.ib-body').textContent, /Turn it on/, 'the setting is not the reason when it is on');
+  assert.match(on.$('.ib-body .ib-hint').textContent, /Answer it in the terminal/);
+});
+
+test('PR 5: a refused answer is shown in words, never as the raw code', async () => {
+  for (const [code, re] of [['off', /Answering from here is off/], ['not allowed', /can’t answer that/], ['invalid', /didn’t look right/]]) {
+    const t = setup({ reply: () => ({ ok: false, error: code }) });
+    t.show([perm()]);
+    t.$('[data-option="allow"]').click();
+    await tick();
+    assert.match(t.$('.ib-err').textContent, re);
+    assert.notEqual(t.$('.ib-err').textContent, code);
+  }
+});
+
+test('PR 5: when the jump to the terminal fails, its own `cant` is what is shown', async () => {
+  const t = setup({ openReply: { ok: false, cant: 'That session is on another computer.' } });
+  t.show([perm({ expires_at: ago(0.1) })]);
+  t.$('.ib-open').click();
+  await tick();
+  assert.equal(t.$('.ib-err').textContent, 'That session is on another computer.');
 });

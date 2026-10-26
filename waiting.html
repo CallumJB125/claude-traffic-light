@@ -16,6 +16,7 @@
   #off { display: none; margin: 12px 20px 0; padding: 8px 10px; border-radius: var(--radius); background: var(--panel-2); color: var(--muted); font-size: var(--text-xs); }
   body.answering-off #off { display: block; }
   #list { padding: 14px 20px 24px; }
+  #off .link { border: none; background: none; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
   #keys { padding: 0 20px 20px; color: var(--faint); font-size: var(--text-xs); }
   kbd { font: inherit; padding: 0 4px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); }
 </style>
@@ -25,11 +26,12 @@
     <h1 id="heading">Waiting on you</h1>
     <div id="sub" role="status" aria-live="polite"></div>
   </header>
-  <div id="off">Answering from here is off, so tool permissions show only in their terminal. Turn on “Answer permission prompts from the widget” in Preferences to answer them here too.</div>
+  <div id="off">Answering from here is off, so tool permissions show only in their terminal. <button type="button" id="turn-on-answering" class="link">Turn on “Answer permission prompts from the widget”</button> in Settings › Widget to answer them here too.</div>
   <main id="list"></main>
   <p id="keys"><kbd>↓</kbd>/<kbd>J</kbd> next and <kbd>↑</kbd>/<kbd>K</kbd> previous, longest wait first · <kbd>Enter</kbd> on the open item allows a read-only request, and only if you turned on one-key approval in Preferences; anything else needs a click · <kbd>⌘.</kbd> denies · <kbd>Esc</kbd> closes it</p>
   <script src="brand.js"></script>
   <script src="src/work-organise.js"></script>
+  <script src="src/answerability.js"></script>
   <script src="src/input-view.js"></script>
   <script src="src/work-scope-view.js"></script>
   <script src="input-bubble.js"></script>

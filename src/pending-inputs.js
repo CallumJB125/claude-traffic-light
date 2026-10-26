@@ -65,7 +65,7 @@ function answerFor(req, optionId, { answers, content, message } = {}) {
 
 function fromSession(s, { pendingSessionIds = new Set(), now = Date.now() } = {}) {
   const out = [];
-  const base = { v: 1, session: s.sessionId || null, host: s.host || null, cwd: s.cwd || null, source: 'session', answerable: false, actions: ['open'], expires_at: null };
+  const base = { v: 1, session: s.sessionId || null, host: s.host || null, cwd: s.cwd || null, source: 'session', answerable: false, actions: ['open'], expires_at: null, ...(s.source && s.source !== 'claude' ? { provider: s.source } : {}) };
   const ask = s.ask && typeof s.ask === 'object' ? s.ask : null;
   if (s.signal === 'permission-ask' && ask && !pendingSessionIds.has(s.sessionId)) {
     if (ask.kind === 'question') {

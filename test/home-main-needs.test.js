@@ -32,3 +32,12 @@ test('needs: no options for dialogs, session asks, expired or unanswerable reque
   ];
   for (const n of Home.needs(cases, NOW).items) assert.deepEqual(n.options, []);
 });
+
+test('PR 5: Home says Answer only for a request Plexiform can deliver an answer to; everything else is Open', () => {
+  const actions = (cases) => Home.needs(cases, NOW).items.map((n) => n.action);
+  assert.deepEqual(actions([hook()]), ['answer']);
+  assert.deepEqual(actions([hook({ answering: false })]), ['open'], 'answering off');
+  assert.deepEqual(actions([hook({ expires_at: iso(1000) })]), ['open'], 'the hook stopped waiting');
+  assert.deepEqual(actions([hook({ source: 'session', answerable: false, actions: ['open'] })]), ['go-to-terminal']);
+  assert.deepEqual(actions([hook({ source: 'tmux', kind: 'dialog', answerable: false, actions: ['open'] })]), ['go-to-terminal']);
+});
