@@ -577,6 +577,8 @@ function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
   if (!(askMs > 0) || !registerKey(id, key.toString('hex'))) finish();
   fs.mkdirSync(REQUESTS_DIR, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(REQUESTS_DIR, 0o700); } catch {}
+  // Claude Code kills this hook when the terminal answers No (and at its timeout): a watcher removes the request then.
+  try { require('child_process').spawn(process.execPath, ['-e', AskPolicy.REAPER_SOURCE, reqFile, ansFile, id, String(process.pid)], { detached: true, stdio: 'ignore' }).unref(); } catch { /* the 60 s request expiry still clears it */ } // privacy-flow: hook-request-cleanup
   // Complete before its name appears: readers never see half a request.
   try { if (!Answer.createExclusive(reqFile, JSON.stringify(request, null, 2))) finish(); } catch { finish(); }
   // An answer that doesn't fit this request (wrong kind, missing answers) is
@@ -585,8 +587,6 @@ function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
   let answer = null;
   let answered = false;
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
-  // Claude Code kills this hook when the terminal answers No (and at its timeout): a watcher removes the request then.
-  try { require('child_process').spawn(process.execPath, ['-e', AskPolicy.REAPER_SOURCE, reqFile, ansFile, id, String(process.pid)], { detached: true, stdio: 'ignore' }).unref(); } catch { /* the 60 s request expiry still clears it */ } // privacy-flow: hook-request-cleanup
   // The terminal answered Yes: Claude Code does not kill the hook, but the tool's PostToolUse takes this tool call's
   // entry out of the session file. Only watched when the payload names the call and the entry is there to begin with.
   const watchId = typeof data?.tool_use_id === 'string' ? data.tool_use_id : null;
