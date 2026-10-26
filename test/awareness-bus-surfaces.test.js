@@ -87,3 +87,16 @@ test('Health: one row per bus registration and one for the Codex hook; none from
   assert.deepEqual(rows({ claude: { state: 'unknown' }, codex: { state: 'unknown' }, codexHook: { state: 'unknown' } }), []);
   assert.deepEqual(rows({ claude: { state: 'full' }, codex: { state: 'missing' }, codexHook: { state: 'approved' } }).map((r) => r.slice(0, 2)), [['bus-mcp-claude', 'ok'], ['bus-mcp-codex', 'info'], ['bus-codex-hook', 'ok']]);
 });
+
+test('9a: off macOS no surface claims the bus tools were added', async (t) => {
+  const McpAuto = require('../src/mcp-auto.js');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { testTempDir } = require('./helpers/tmp');
+  const dir = testTempDir('pf-bussurf-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const auto = McpAuto.create({ rootDir: path.join(dir, 'root'), home: dir, platform: 'linux', config: () => ({ agentAwareness: { enabled: true }, agentBus: { enabled: true } }), launch: { packaged: true, execPath: '/x/Plexiform', appPath: '/x/app.asar', dir: '/x' }, codexBin: () => null });
+  const s = await auto.sync();
+  assert.deepEqual(auto.notices(), []);
+  assert.doesNotMatch(JSON.stringify(s), /Registered|Plexiform added its agent bus/);
+});

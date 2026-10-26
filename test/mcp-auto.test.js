@@ -352,3 +352,38 @@ test('T1/9a: on a platform that cannot bind the caller nothing is added, no noti
     assert.deepEqual(auto.notices(), [], 'no Inbox "added" item');
   }
 });
+
+test('9a: off macOS, turning the bus off or pressing Undo still removes what an earlier version added', async (t) => {
+  const w = world(t);
+  await w.make().sync(); // as an older build did on this machine
+  assert.ok('plexiform-bus' in w.claudeJson().mcpServers);
+  const lin = w.make({ extra: { platform: 'linux' } });
+  assert.equal((await lin.sync()).claude.state, 'unsupported');
+  assert.ok('plexiform-bus' in w.claudeJson().mcpServers, 'still on: the person has not turned it off');
+  w.state.config = { ...w.state.config, mcpBusUserOff: true };
+  const s = await lin.sync();
+  assert.equal(s.claude.state, 'off');
+  assert.ok(!('plexiform-bus' in w.claudeJson().mcpServers));
+  assert.ok(!('plexiform-bus' in w.codexServers()));
+  assert.ok(!Codex.isBusHookInstalled({ home: w.home }));
+  // Undo
+  const w2 = world(t);
+  await w2.make().sync();
+  const lin2 = w2.make({ extra: { platform: 'linux' } });
+  await lin2.sync();
+  const r = await lin2.act('bus-added', 'undo', { undo: async () => { w2.state.config = { ...w2.state.config, mcpBusUserOff: true }; } });
+  assert.equal(r.ok, true);
+  await lin2.sync();
+  assert.ok(!('plexiform-bus' in w2.claudeJson().mcpServers));
+  assert.deepEqual(lin2.notices(), []);
+});
+
+test('9a: off macOS the full server entry in ~/.claude.json is left byte-identical (no re-registration)', async (t) => {
+  const w = world(t);
+  const old = { ...McpInstall.launch(PACKAGED) };
+  old.args = old.args.filter((a) => !McpInstall.NODE_FLAGS.includes(a));
+  fs.writeFileSync(path.join(w.home, '.claude.json'), JSON.stringify({ mcpServers: { [McpInstall.NAME]: old } }, null, 2));
+  const before = fs.readFileSync(path.join(w.home, '.claude.json'));
+  await w.make({ extra: { platform: 'linux' } }).sync();
+  assert.deepEqual(fs.readFileSync(path.join(w.home, '.claude.json')), before);
+});

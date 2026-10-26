@@ -175,13 +175,18 @@ function create({ rootDir, home, config, launch, codexBin, platform = process.pl
     const had = !!(rec.claude || rec.codex);
     const c = config();
     // Whatever the bus switches: it is the person's own Claude integration, only made safe to bind.
-    if (c && c.mcpUserOff !== true) {
+    if (c && c.mcpUserOff !== true && platform === 'darwin') {
       try { if (upgradeFull()) log('[mcp-auto] the full server re-registered with --disable-sigusr1'); } catch { /* unreadable or changing: next start */ }
     }
-    if (platform !== 'darwin') {
-      // No caller binding here (src/peer-pid.js): tools that could not tell their caller are not added, and nothing is announced.
+    if (!effective(c)) {
+      await removeAll(rec);
+      state = { claude: { state: 'off' }, codex: { state: 'off' }, codexHook: { state: 'off' } };
+    } else if (platform !== 'darwin') {
+      // No caller binding here (src/peer-pid.js; its reason is UNSUPPORTED, this one UNSUPPORTED_PLATFORM): tools that
+      // could not tell their caller are not added and nothing is announced, but turning the bus off still removes what an earlier version added.
+      if (!claudeOn(c)) removeClaude(rec);
       state = { claude: UNSUPPORTED_PLATFORM, codex: UNSUPPORTED_PLATFORM, codexHook: UNSUPPORTED_PLATFORM };
-    } else if (effective(c)) {
+    } else {
       let claude;
       if (claudeOn(c)) {
         try { claude = addClaude(rec); } catch { claude = { state: 'error' }; }
@@ -194,9 +199,6 @@ function create({ rootDir, home, config, launch, codexBin, platform = process.pl
       state = { claude, codex, codexHook };
       // The first automatic add, ever: one Home notice with Undo (AW15). Earlier opt-outs left no record, so this is how they get honoured.
       if (!had && (rec.claude || rec.codex) && !rec.notice) rec.notice = { added_at: new Date(now()).toISOString(), dismissed: false };
-    } else {
-      await removeAll(rec);
-      state = { claude: { state: 'off' }, codex: { state: 'off' }, codexHook: { state: 'off' } };
     }
     record = rec;
     await writeRecord(rec);
