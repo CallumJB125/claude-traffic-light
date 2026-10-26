@@ -12,12 +12,12 @@ const tick = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise((r
 const NOW = Date.UTC(2026, 9, 18, 12);
 const state = { observed_at: NOW, banner: null, needs: { total: 1, items: [{ headline: 'Allow git push?', kind: 'permission', project: 'app', age: '2 min', late: false }] }, running: { quiet: 0, items: [] }, today: { spend: null, longestWaitMs: null }, team: null, morning: { count: 1, costUsd: 0, items: [{ title: 'Nightly tests', state: 'failed', summary: 'exit 1' }], asks: [], more: 0 } };
 
-function setup({ calls = [], storage = {}, st = state, answerInput = null, teamInbox = null, inboxRead = null } = {}) {
+function setup({ calls = [], storage = {}, st = state, answerInput = null, teamInbox = null, inboxRead = null, resumeCap = null } = {}) {
   const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'http://plexiform.test/home.html' });
   for (const [k, v] of Object.entries(storage)) dom.window.localStorage.setItem(k, v);
   const intervals = []; dom.window.setInterval = (fn) => { intervals.push(fn); return intervals.length; };
   dom.window.homeApi = {
-    ...(answerInput ? { answerInput } : {}), ...(teamInbox ? { teamInbox } : {}), ...(inboxRead ? { inboxRead } : {}),
+    ...(answerInput ? { answerInput } : {}), ...(teamInbox ? { teamInbox } : {}), ...(inboxRead ? { inboxRead } : {}), ...(resumeCap ? { resumeCap } : {}),
     state: async () => st, navigate: async (d) => { calls.push(['navigate', d]); return true; }, openCard: async () => true,
     alerts: async () => ({ stuck: [{ handle: 'h-stuck', title: 'Stuck: app silent for 12 min', meta: 'Codex', canOpen: true, canHand: true }], limits: [], mail: [] }),
     alertAct: async (kind, op, handle) => { calls.push(['alert', kind, op, handle]); return { ok: true }; },
@@ -148,5 +148,42 @@ test('Home Inbox: hub inbox rows render with Open and Mark read; Mark read sends
     assert.doesNotMatch(s.$('inbox').textContent, /Ana mentioned you/);
     assert.equal(s.$('inbox-count').textContent, '5 items');
     assert.equal([...s.$('inbox').querySelectorAll('li')].find((r) => /Ana handed/.test(r.textContent)).querySelectorAll('button').length, 1, 'team-today handoffs have no Mark read');
+  } finally { s.close(); }
+});
+
+test('Home Inbox: the cost-guard pause is the first blocker row, with Resume (home:resume-cap) and Raise limit (Usage)', async () => {
+  const calls = [];
+  const paused = { ...state, needs: { total: 0, items: [], paused: { text: 'Paused at your $5 daily limit', note: 'Claude Code tool calls are refused.', resumable: true } } };
+  const s = setup({ calls, st: paused, resumeCap: async () => { calls.push(['resume-cap']); return { ok: true }; } });
+  try {
+    await tick(12);
+    const row = s.$('inbox').querySelector('li[data-kind="blocker"]');
+    assert.match(row.textContent, /Paused at your \$5 daily limit/);
+    const labels = [...row.querySelectorAll('button')].map((b) => b.textContent);
+    assert.deepEqual(labels, ['Resume', 'Raise limit']);
+    row.querySelectorAll('button')[0].click(); await tick(8);
+    assert.deepEqual(calls.find((c) => c[0] === 'resume-cap'), ['resume-cap']);
+    row.querySelectorAll('button')[1].click(); await tick();
+    assert.deepEqual(calls.at(-1), ['navigate', 'usage']);
+  } finally { s.close(); }
+});
+
+test('Home Inbox: a pause that cannot be resumed offers only Raise limit', async () => {
+  const st = { ...state, needs: { total: 0, items: [], paused: { text: 'Paused at your $5 daily limit', note: '', resumable: false } } };
+  const s = setup({ st, resumeCap: async () => ({ ok: true }) });
+  try {
+    await tick(12);
+    assert.deepEqual([...s.$('inbox').querySelector('li[data-kind="blocker"]').querySelectorAll('button')].map((b) => b.textContent), ['Raise limit']);
+  } finally { s.close(); }
+});
+
+test('Home Inbox in simple mode stays visible and lists only approvals, questions and blockers', async () => {
+  const s = setup({ st: { ...state, simple: true } });
+  try {
+    await tick(12);
+    assert.equal(s.doc.body.classList.contains('simple'), true);
+    assert.equal(s.$('inbox').hidden, false);
+    assert.deepEqual([...s.$('inbox').querySelectorAll('li')].map((r) => r.dataset.kind), ['approval', 'blocker']);
+    assert.equal(s.$('inbox-count').textContent, '2 items');
   } finally { s.close(); }
 });

@@ -10,10 +10,11 @@ test.afterAll(async () => { await h?.cleanup(); });
 
 const shot = (name) => (process.env.PLEXIFORM_VIEW_DIR ? { path: path.join(process.env.PLEXIFORM_VIEW_DIR, name) } : {});
 
-test('Home shows only what needs you, what is running and today', async () => {
+test('Home shows the Inbox, what is running and today', async () => {
   const home = await embedded(h.app, 'home', 'home.html');
   await expect(home.locator('body')).toHaveClass(/simple/);
   await expect(home.locator('#needs')).toHaveCount(0);
+  await expect(home.locator('#inbox')).toBeVisible();
   await expect(home.locator('#running')).toBeVisible();
   await expect(home.locator('#today')).toBeVisible();
   for (const id of ['#digest', '#teamwork', '#cards', '#costs', '#open-tasks']) await expect(home.locator(id)).toBeHidden();
@@ -108,3 +109,17 @@ for (const forcedColors of ['none', 'active']) {
     }
   });
 }
+
+// Q3 review M1: with #needs gone, the Inbox is simple mode's list of waits.
+test('simple mode Home shows a waiting permission request in the Inbox', async () => {
+  const F = require('./inputs-fixtures');
+  const g = await launchApp({ config: { persona: 'simple', simpleMode: true, askFromWidget: true, tourState: { status: 'skipped', step: 0, at: null } } });
+  try {
+    F.blockingHook(g, 'permission-request', { session_id: 'vis-simple', cwd: '/visual/app', tool_name: 'Bash', tool_input: { command: 'npm run build' } });
+    const home = await embedded(g.app, 'home', 'home.html');
+    await expect(home.locator('body')).toHaveClass(/simple/);
+    await expect(home.locator('#inbox')).toBeVisible();
+    await expect(home.locator('#inbox li[data-kind="approval"]')).toHaveCount(1, { timeout: 20000 });
+    await expect(home.locator('#inbox li button').first()).toBeVisible();
+  } finally { await g.cleanup(); }
+});

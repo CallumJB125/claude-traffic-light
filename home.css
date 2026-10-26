@@ -94,5 +94,5 @@ button.row-link:active { transform: none; }
 .tour-steps { font-size: var(--text-sm); }
 @keyframes tour-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .tour-dialog { animation: none; } }
-/* Simple mode (src/simple-mode.js HOME_ESSENTIALS): only what is running and today (what needs you is the Inbox). */
-body.simple .home-actions, body.simple #starter, body.simple #morning, body.simple #inbox, body.simple #teamtoday, body.simple #digest, body.simple #costs, body.simple #teamwork, body.simple #cards { display: none !important; }
+/* Simple mode (src/simple-mode.js HOME_ESSENTIALS): the Inbox (approvals, questions, blockers only), what is running and today. */
+body.simple .home-actions, body.simple #starter, body.simple #morning, body.simple #teamtoday, body.simple #digest, body.simple #costs, body.simple #teamwork, body.simple #cards { display: none !important; }
