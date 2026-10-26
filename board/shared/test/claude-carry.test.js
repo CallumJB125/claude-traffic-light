@@ -272,3 +272,18 @@ test('the recorded CLI fixtures hold no secret', () => {
   const dir = new URL('./fixtures/claude-cli/', import.meta.url);
   for (const f of fs.readdirSync(dir)) assert.deepEqual(findSecrets(fs.readFileSync(new URL(f, dir), 'utf8'), { classes: ['credential'] }), [], `${f}: no credential (the only keyed hit is the literal KEY=REDACTED in the recorded command)`);
 });
+
+test('the default readers: a 1 MB .claude.json is read whole (CLAUDE_JSON_MAX_BYTES), a missing managed-settings.d is not an error', (t) => {
+  const home = testTempDir('carry-home-', t);
+  const filler = Object.fromEntries(Array.from({ length: 12000 }, (_, i) => [`/work/project-${i}`, { allowedTools: [], history: ['x'.repeat(60)] }]));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ projects: filler, customApiKeyResponses: { approved: [], rejected: [KEY.slice(-20)] } }));
+  assert.ok(fs.statSync(path.join(home, '.claude.json')).size > 1024 * 1024);
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: { ...gateway, ANTHROPIC_API_KEY: KEY } }));
+  const carry = createClaudeCarry({ env: {}, home, platform: 'linux', credentialsExist: () => true });
+  return carry.prepare({ mode: 'notool' }).then((c) => {
+    assert.equal(c.failure, null, 'the big file was not reported unreadable');
+    assert.ok(!JSON.stringify(c.childEnv).includes(KEY), 'its rejection list was read and honoured');
+    assert.equal(c.childEnv.ANTHROPIC_BASE_URL, gateway.ANTHROPIC_BASE_URL);
+  });
+});

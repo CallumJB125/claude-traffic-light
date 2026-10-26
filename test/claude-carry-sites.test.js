@@ -144,3 +144,21 @@ test('voice-screen (L9b): the screen question passes the carry to askClaude and 
   assert.equal(at(seen.args, '--model'), 'haiku', 'the args keep the haiku default; askClaude swaps it');
   assert.equal(VoiceScreen.claudeArgs('/tmp/x/screen.png').includes('--settings'), false);
 });
+
+test('main-process wiring: only the app\'s own env carries; Burst is named only for its installed binary and default port', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const Carry = require('../src/claude-carry.js');
+  assert.equal(Carry.carryFor({ HOME: '/fx/home' }), null, 'a fixture env carries nothing unless a carry is injected');
+  assert.equal(Carry.carryFor(process.env), null, 'under the no-real-cli guard even the app env never reads the developer\'s Claude files');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'plx-burst-'));
+  try {
+    assert.equal(await Carry.burstOwnsPort(7777, { home, platform: 'darwin' }), false, 'Burst not installed');
+    fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.local', 'bin', 'claude-burst'), '#!/bin/sh\n', { mode: 0o755 });
+    assert.equal(await Carry.burstOwnsPort(7777, { home, platform: 'darwin' }), true);
+    assert.equal(await Carry.burstOwnsPort(4001, { home, platform: 'darwin' }), false, 'not Burst\'s port');
+    assert.equal(await Carry.burstOwnsPort(7777, { home, platform: 'linux' }), false, 'Burst is macOS only');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
