@@ -155,6 +155,8 @@ function reasonFor(view, state, live) {
         case 'budget': return view.run?.budget_stop === 'device' ? 'machine budget limit reached' : `budget${view.budget?.cap_usd != null ? ` $${fmtUsd(view.budget.cap_usd)}` : ''} reached`;
         case 'stopped': return `stopped by ${view.stopped_by_name ?? 'someone'}`;
         case 'released': return `released by ${BACKEND_LABEL[view.run?.backend] ?? 'Claude'}${view.fail_reason ? `: ${view.fail_reason}` : ''}`;
+        case 'provider': return `${view.fail_reason ?? "the AI provider didn't answer"} · check your provider settings, then retry`;
+        case 'error': return view.fail_reason ? `${view.fail_reason} · retry, or take over in a terminal` : 'CLI exited';
         default: return view.fail_reason ?? 'CLI exited';
       }
     }

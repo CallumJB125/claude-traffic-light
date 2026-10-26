@@ -11,6 +11,7 @@ import { confine, globBase, realish } from './paths.js';
 import { answererAllowed, runAllowKey } from './policy.js';
 import { snapshot as gitSnapshot, pushRef, gitFacts } from './git.js';
 import { clip } from './util.js';
+import { classifyFailure, KIND_SENTENCE } from '../shared/failure.js';
 import { randomBytes } from 'node:crypto';
 import { untrusted } from '../shared/untrusted.js';
 
@@ -346,7 +347,7 @@ export class Run {
       this.sup.onBudgetReached?.(this);
       return this.fail('budget', 'budget cap reached (including Burst overflow spend)', this.budgetScope ? { budget_scope: this.budgetScope } : {});
     }
-    if (r.subtype === 'success') {
+    if (r.subtype === 'success' && r.is_error !== true) {
       this.turnSucceeded = true;
       this.limitRetries = 0;
       this.networkRetries = 0;
@@ -384,7 +385,10 @@ export class Run {
     }
     const resetsAt = this.rateLimited?.resetsAt ? this.rateLimited.resetsAt * 1000 : null;
     const extra = kind === 'limit' && resetsAt ? { resets_in_ms: Math.max(0, Math.round(resetsAt - this.clock.wall())) } : {};
-    this.fail(kind, clip(text, 180), extra);
+    // The hub, its feed and the web board get the kind's fixed sentence, never the CLI's own text.
+    const cls = kind === 'limit' ? 'limit' : classifyFailure(text);
+    const finalKind = kind === 'error' && cls === 'provider' ? 'provider' : kind;
+    this.fail(finalKind, KIND_SENTENCE[finalKind === 'error' ? cls : finalKind] ?? KIND_SENTENCE[cls], extra);
   }
 
   async #onExit(info) {
@@ -404,7 +408,7 @@ export class Run {
     // Unexpected death: report before anything slow (exit b: < 1 s).
     this.backend?.reap?.();
     const provider = this.backend?.oneTurn ? this.backend.constructor.describe?.().label ?? 'Codex' : 'claude';
-    const why = info.error ? `${provider} failed to start: ${info.error}` : `${provider} exited (code ${info.code ?? '-'}${info.signal ? `, ${info.signal}` : ''})${info.sawResult ? '' : ' without a result'}`;
+    const why = info.error ? `${provider} failed to start` : `${provider} exited (code ${info.code ?? '-'}${info.signal ? `, ${info.signal}` : ''})${info.sawResult ? '' : ' without a result'}`;
     this.emit({ kind: 'run.failed', fail_kind: 'error', reason: redact(why, this.worktree) });
     this.endReason = 'failed';
     this.ending = true;
@@ -801,7 +805,7 @@ export class Run {
         return PROCEED;
       case 'stop': return this.#hookStop(payload);
       case 'stopfail':
-        this.fact('error', { first_line: clip(redact(String(payload.error ?? payload.error_details ?? 'stop failure').split('\n')[0], this.worktree), 300) });
+        this.fact('error', { first_line: KIND_SENTENCE[classifyFailure(String(payload.error ?? payload.error_details ?? ''))] });
         return PROCEED;
       case 'substop':
         if (payload.last_assistant_message) this.fact('subagent', { summary: clip(redact(String(payload.last_assistant_message), this.worktree), 500) });

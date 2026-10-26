@@ -38,7 +38,7 @@ export const isReservedLabel = (name) => typeof name === 'string'
 export const BLOCKED_KINDS = Object.freeze(['permission', 'question', 'clarify', 'decision', 'plan', 'conflict', 'loop']);
 export const FAIL_KINDS = Object.freeze(['network', 'limit', 'error', 'budget', 'stopped', 'released', 'provider']);
 // What a runner may report through run_failed; stopped/released have their own events.
-export const RUNNER_FAIL_KINDS = Object.freeze(['network', 'limit', 'error', 'budget']);
+export const RUNNER_FAIL_KINDS = Object.freeze(['network', 'limit', 'error', 'budget', 'provider']);
 export const RESUME_TO = Object.freeze(['quiet', 'blocked', 'claimed']);
 
 export const COLUMNS = Object.freeze(['todo', 'in_progress', 'in_review', 'done']);

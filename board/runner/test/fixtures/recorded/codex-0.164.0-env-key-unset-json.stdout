@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"<UUID-32>"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `glm-5.3-flash` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"Missing environment variable: `PLEXLAB_KEY`."}
+{"type":"turn.failed","error":{"message":"Missing environment variable: `PLEXLAB_KEY`."}}

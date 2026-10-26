@@ -187,6 +187,9 @@ export class CodexBackend extends EventEmitter {
     }
   }
   onEvent(e) {
+    // Any turn or item event is a sign of life (reasoning, plans, searches); the engine's no-progress timer reads it.
+    // Top-level `error` is not: Reconnecting… retries arrive there while the provider is unreachable.
+    if (e.type === 'turn.started' || (typeof e.type === 'string' && e.type.startsWith('item.'))) this.emit('progress');
     if (e.type === 'thread.started' && UUID.test(e.thread_id ?? '')) { this.sessionId = e.thread_id; this.emit('init', { session_id: e.thread_id, tools: [], mcp_servers: [] }); }
     else if (e.type === 'turn.started') this.turnActive = true;
     else if (e.type === 'item.started' && e.item?.type === 'command_execution') this.emit('tool_start', { id: e.item.id, name: 'Bash', input: { command: e.item.command } });

@@ -81,3 +81,10 @@ test('Overview a run stopped at a usage limit or its budget is Needs you, other 
  const x=fixture({sessions:()=>[]});x.row.card.run_state='failed';
  for(const [fail_kind,bucket] of [['limit','needs'],['budget','needs'],['network','stuck'],[undefined,'stuck']]){x.row.card.fail_kind=fail_kind;assert.equal((await x.svc.snapshot()).sessions[0].bucket,bucket,String(fail_kind));}
 });
+
+test('Overview the share of a failed run carries its kind, never the reason text (C9)',async()=>{
+ const REASON='API Error: 400 No connected db. TOPSECRETDETAIL';
+ const snap=await createOverviewService({now:()=>time,managed:()=>({conn:{status:'connected'},tasks:[{id:'t1',title:'Managed task',ai:{id:'claude'},green:false,actions:[],state:'failed',failKind:'provider',failReason:REASON,reason:REASON,label:'Stopped'}]})}).snapshot();
+ assert.equal(snap.sessions[0].status,'Stopped');
+ assert.ok(!JSON.stringify(snap).includes('TOPSECRETDETAIL'));
+});

@@ -206,7 +206,7 @@ test('a provider gateway that does not answer fails with failKind provider, nami
     const { id } = await h.client.createTask({ text: 'Say ok', cwd: h.repo.checkout, ai: 'codex', permissionLevel: 'auto-edits' });
     const d = await waitFor(async () => { const x = await getTask(h, id); return x.state === 'failed' ? x : null; });
     assert.equal(d.failKind, 'provider');
-    assert.equal(d.reason, "the gateway at 10.0.0.5:4001 isn't answering");
+    assert.equal(d.reason, "the gateway at 10.0.0.5:4001 isn't answering · check your provider settings, then retry");
     assert.equal(h.log().filter((x) => x.kind === 'start').length, 0);
   } finally { await h.cleanup(); }
 });

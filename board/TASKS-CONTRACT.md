@@ -267,6 +267,8 @@ Local tasks use board states and rows; `todo` and `reconnecting` are unused loca
 | done, review the changes | `in_review` | `evidence` | Ready to review |
 | merged / PR opened / discarded | `done` | `outcome` | Done |
 | failed (by kind) | `failed` | `failKind` ∈ network, error, budget, released, provider | Failed |
+
+`failReason` for a CLI failure is the redacted first line of the CLI's result (`board/shared/failure.js` `reasonLine`: secrets, URL userinfo and query, `Bearer` and `x-api-key` values removed, `$HOME` → `~`, at most 200 characters). It is local to the Tasks UI. `bus_wait`, the overview share, hub reports, diagnostics and crash reports carry only `failKind` plus the fixed sentence for that kind (`KIND_SENTENCE`); `app.log` gets `task failed` with the kind. A result with `is_error:true` is a failure whatever its subtype (Claude Code reports a logged-out run as `subtype:"success"`). Auth parks (`parkReason:'auth'`) and rate limits park (`limit`); unreachable provider, unknown model or sandbox failure is `failKind:'provider'`. A Codex run with no sign of life for 10 minutes (`opts.noProgressMs`) is stopped and fails as `provider`.
 | stopped | `failed` | `failKind:'stopped'` | Failed |
 | orphaned | `unresponsive` → `orphaned` | | No signal → Orphaned |
 
