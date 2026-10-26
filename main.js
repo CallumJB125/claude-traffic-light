@@ -2215,7 +2215,7 @@ function getTasks() {
     onChange: (snap) => {
       for (const wc of tasksPages()) wc.send('tasks:changed', snap);
       Compose.onChange(snap);
-      for (const id of AgentMail.acceptedTasks()) { const t = (snap?.tasks || []).find((x) => x && String(x.id) === id); if (t && ['done', 'in_review', 'failed'].includes(t.state)) AgentMail.taskEnded(id, t.state, t.reason || '').catch(() => {}); }
+      for (const id of AgentMail.acceptedTasks()) { const t = (snap?.tasks || []).find((x) => x && String(x.id) === id); if (t && ['done', 'in_review', 'failed'].includes(t.state)) AgentMail.taskEnded(id, t.state, t.state === 'failed' ? '' : t.reason || '').catch(() => {}); }
       try { keepAwakeMain?.hold(require('./src/morning-report.js').queueActive(snap)); } catch { /* the blocker is best-effort */ }
     },
     onEvent: (wcId, id, event) => { if (Compose.onEvent(wcId, id, event)) return; const wc = tasksPages().find((w) => w.id === wcId); if (wc) wc.send('tasks:event', { id, event }); },

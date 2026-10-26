@@ -347,7 +347,7 @@ export class Run {
       this.sup.onBudgetReached?.(this);
       return this.fail('budget', 'budget cap reached (including Burst overflow spend)', this.budgetScope ? { budget_scope: this.budgetScope } : {});
     }
-    if (r.subtype === 'success') {
+    if (r.subtype === 'success' && r.is_error !== true) {
       this.turnSucceeded = true;
       this.limitRetries = 0;
       this.networkRetries = 0;
@@ -387,7 +387,8 @@ export class Run {
     const extra = kind === 'limit' && resetsAt ? { resets_in_ms: Math.max(0, Math.round(resetsAt - this.clock.wall())) } : {};
     // The hub, its feed and the web board get the kind's fixed sentence, never the CLI's own text.
     const cls = kind === 'limit' ? 'limit' : classifyFailure(text);
-    this.fail(kind === 'error' && cls === 'provider' ? 'provider' : kind, KIND_SENTENCE[cls], extra);
+    const finalKind = kind === 'error' && cls === 'provider' ? 'provider' : kind;
+    this.fail(finalKind, KIND_SENTENCE[finalKind === 'error' ? cls : finalKind] ?? KIND_SENTENCE[cls], extra);
   }
 
   async #onExit(info) {
@@ -804,7 +805,7 @@ export class Run {
         return PROCEED;
       case 'stop': return this.#hookStop(payload);
       case 'stopfail':
-        this.fact('error', { first_line: clip(redact(String(payload.error ?? payload.error_details ?? 'stop failure').split('\n')[0], this.worktree), 300) });
+        this.fact('error', { first_line: KIND_SENTENCE[classifyFailure(String(payload.error ?? payload.error_details ?? ''))] });
         return PROCEED;
       case 'substop':
         if (payload.last_assistant_message) this.fact('subagent', { summary: clip(redact(String(payload.last_assistant_message), this.worktree), 500) });

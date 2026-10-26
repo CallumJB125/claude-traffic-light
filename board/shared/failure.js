@@ -13,7 +13,7 @@ export const KIND_SENTENCE = Object.freeze({
 });
 
 const LIMIT = /usage limit|rate[ _-]?limit|\b429\b|overloaded/i;
-const AUTH = /\b401\b|unauthori[sz]ed|not logged in|log ?in again|please run \/login|invalid api key|authentication|missing environment variable/i;
+const AUTH = /\b401\b|unauthori[sz]ed|not logged in|log ?in again|please run \/login|invalid api key|incorrect api key|\b403\b|forbidden|authentication|missing environment variable/i;
 const REFUSED = /ECONNREFUSED|connection refused/i;
 const MODEL = /(?:model|deployment)\b.{0,60}(?:not found|does not exist|unknown|unrecogni[sz]ed|not supported|invalid)|model_not_found|not_found_error|invalid model/i;
 const GATEWAY = /\bAPI Error:? ?[45]\d\d\b|\b(?:400|403|404|408|500|502|503|504)\b.{0,40}(?:error|bad|not found|gateway|unavailable|forbidden|no connected)|no connected db|bad gateway|service unavailable|internal server error/i;
@@ -36,7 +36,7 @@ const MAX_REASON = 200;
 export function reasonLine(text, { home = os.homedir() } = {}) {
   let line = String(text ?? '').slice(0, 4000).split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? '';
   const msg = /"message"\s*:\s*"((?:[^"\\]|\\.){1,200})"/.exec(line);
-  if (msg) line = msg[1];
+  if (msg) { try { line = JSON.parse(`"${msg[1]}"`); } catch { line = msg[1]; } }
   line = line
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*@/gi, '$1')
     .replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s?#]*)[?#]\S*/gi, '$1')

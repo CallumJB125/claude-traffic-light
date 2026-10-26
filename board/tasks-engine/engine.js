@@ -54,7 +54,7 @@ const LEASED = new Set(['claimed', 'running', 'quiet', 'blocked', 'handing_over'
 // O3: a wrapped task is real work (gets a card) once it edits a file or has been working for a minute in total.
 const ACTIVE = new Set(['running', 'quiet']);
 const REAL_WORK_MS = 60_000;
-// A Codex run that shows no sign of life for this long is parked on its provider: with no reachable provider the
+// A Codex run that shows no sign of life for this long fails on its provider: with no reachable provider the
 // CLI retries the network forever and never exits (lab fixture 4, codex 0.164). Ten minutes is well past a long
 // reasoning turn on a slow model and well short of the hour-plus hang; opts.noProgressMs overrides it.
 const CODEX_NO_PROGRESS_MS = 10 * 60_000;
@@ -1383,6 +1383,7 @@ export class TasksEngine extends EventEmitter {
       this.#activity(task, run);
       this.#writeHandover(task, 'continuous');
     });
+    b.on('progress', () => { if (live()) run.progressAt = this.now(); });
     b.on('assistant', ({ text }) => {
       if (!live()) return;
       task.turn += 1;

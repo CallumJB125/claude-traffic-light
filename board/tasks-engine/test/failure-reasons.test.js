@@ -73,6 +73,9 @@ test('the reason line is the first line, redacted, home-relative and at most 200
   assert.ok(!/s3cr3tvalue/.test(reasonLine('sent x-api-key: s3cr3tvalue to the gateway')));
   assert.ok(!/s3cr3tvalue/.test(reasonLine('headers {"x-api-key":"s3cr3tvalue"}')));
   assert.ok(reasonLine('x'.repeat(5000)).length <= 200);
+  const esc = reasonLine('error {"error":{"message":"bad key \\"api_key\\":\\"Zq8vR2mN4pL7xK9wT3yB\\" given"}}', { home });
+  assert.ok(!esc.includes('Zq8vR2mN4pL7xK9wT3yB'), esc);
+  assert.ok(!esc.includes('\\"'), 'unescaped for the card');
   assert.ok(secret.text.length > 0);
 });
 
@@ -151,13 +154,14 @@ test('C9: a failed bus run tells the calling session the kind sentence, never th
   } finally { await b.cleanup(); }
 });
 
-test('the Codex no-provider hang parks on its provider after the no-progress limit (fake clock)', async () => {
+test('the Codex no-provider hang fails on its provider after the no-progress limit (fake clock)', async () => {
   let skew = 0;
   const b = await startBus({ hang: true }, { engineOpts: { now: () => Date.now() + skew } });
   try {
     const offer = await b.handoff({ request_id: rid('hang') });
     const t = await waitFor(() => ['running', 'quiet'].includes(b.taskOf(offer.handoff_id)?.state) && b.taskOf(offer.handoff_id), { label: 'running' });
     const pid = b.engine.runs.get(t.id).backend.pid;
+    await new Promise((r) => setTimeout(r, 500));   // turn.started also counts as progress; let it land first
     skew = 9 * 60_000;
     await new Promise((r) => setTimeout(r, 300));
     assert.ok(['running', 'quiet'].includes(t.state), 'not before ten minutes');
@@ -171,9 +175,28 @@ test('the Codex no-provider hang parks on its provider after the no-progress lim
   } finally { await b.cleanup(); }
 });
 
+test('a long reasoning-only Codex turn is not failed for lack of progress (fake clock)', async () => {
+  let skew = 0;
+  const b = await startBus({ hang: true, reasoningEveryMs: 100 }, { engineOpts: { now: () => Date.now() + skew } });
+  try {
+    const offer = await b.handoff({ request_id: rid('reason') });
+    const t = await waitFor(() => ['running', 'quiet'].includes(b.taskOf(offer.handoff_id)?.state) && b.taskOf(offer.handoff_id), { label: 'running' });
+    for (const min of [4, 8, 12, 16]) {
+      skew = min * 60_000;
+      await new Promise((r) => setTimeout(r, 1300));
+      assert.ok(['running', 'quiet'].includes(t.state), `still alive at ${min} minutes: ${t.state}`);
+    }
+  } finally { await b.cleanup(); }
+});
+
+test('S3: wrong-key and forbidden wordings read as auth', () => {
+  assert.equal(classifyFailure('Incorrect API key provided: sk-abc'), 'auth');
+  assert.equal(classifyFailure('API Error: 403 Forbidden'), 'auth');
+});
+
 test('C9: no surface that leaves the machine or reaches another AI reads failReason', () => {
   const root = fileURLToPath(new URL('../../../', import.meta.url));
-  for (const f of ['mcp-server.js', 'src/health.js', 'src/crash-reports.js', 'src/crash-report-sender.js', 'src/overview-service.js', 'board/runner/supervisor.js', 'board/runner/run.js']) {
+  for (const f of ['mcp-server.js', 'src/health.js', 'src/crash-reports.js', 'src/crash-report-sender.js', 'src/overview-service.js', 'src/agent-mail.js', 'board/runner/supervisor.js', 'board/runner/run.js']) {
     assert.ok(!/failReason|fail_reason/.test(fs.readFileSync(path.join(root, f), 'utf8')), `${f} must not read failReason`);
   }
 });

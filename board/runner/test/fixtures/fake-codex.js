@@ -23,6 +23,7 @@ if (scenario.wait && !(scenario.waitFirstOnly && process.argv.includes('resume')
  await new Promise((r) => setTimeout(r, 300000));
 }
 // hang: the CLI is alive and silent (no provider: it retries the network forever, lab fixture 4).
+if (scenario.hang && scenario.reasoningEveryMs) setInterval(() => emit({ type: 'item.completed', item: { id: 'r1', type: 'reasoning', text: 'thinking' } }), scenario.reasoningEveryMs);
 if (scenario.hang) await new Promise((r) => setTimeout(r, 300000));
 // delayMs: a short working turn, long enough for a test to call the run's task tools.
 if (scenario.delayMs) await new Promise((r) => setTimeout(r, scenario.delayMs));
