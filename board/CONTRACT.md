@@ -1259,7 +1259,7 @@ Local Electron IPC only, from the Home page's own top frame (`home-preload.js` �
 | `compose:stop` | the foreground Home document only | exactly `{id, confirmed}` | stop, only for a task this Home document started (keyed by its webContents and document) |
 | `compose:open-in-tasks` | Home | a task id it started | opens Tasks and selects it |
 
-Main → page: `compose:focus` (the menu bar's New task… or the shortcut; once, after load, only to the selected Home page), `compose:event` `{id, line}` and `compose:task` `{id, row}` for a task this document started, `compose:changed` (the helper connected or went away). Main → Tasks: `tasks:compose` (New task… with the box hidden; not while a Tasks dialog is open) and `tasks:reveal` (an id). Nothing here approves, denies or answers: approvals are answered in Tasks. The shortcut (`composeShortcut` in config, set on the Widget page) is off by default and never takes the widget's or the voice key.
+Main → page: `compose:focus` (the menu bar's New task… or the shortcut; once, after load, only to the selected Home page), `compose:event` `{id, line, at}` (`at`: when main last saw activity on the task, ms) and `compose:task` `{id, row}` (`row.lastActivityMs`: the engine's last activity, or main's last event if later; null when unknown) for a task this document started, `compose:changed` (the helper connected or went away). Main → Tasks: `tasks:compose` (New task… with the box hidden; not while a Tasks dialog is open) and `tasks:reveal` (an id). Nothing here approves, denies or answers: approvals are answered in Tasks. The shortcut (`composeShortcut` in config, set on the Widget page) is off by default and never takes the widget's or the voice key.
 
 ## Home IPC: project safety (`src/guardrails-main.js`)
 

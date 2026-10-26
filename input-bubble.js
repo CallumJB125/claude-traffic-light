@@ -98,7 +98,7 @@
     }
     const EXPLAIN_FAIL = { busy: 'Already explaining another request. Try again in a moment.', 'no-cli': 'Install Claude Code to explain this one.', off: 'Explain mode is off in Settings.' };
     function explainBlock(input) {
-      if (!explainOn || !api.explainInput || input.kind !== 'permission') return null;
+      if (!explainOn || !api.explainInput || input.kind !== 'permission' || input.source !== 'hook') return null;
       const box = el('div', 'ib-explain');
       const r = explained.get(input.id);
       if (!r) {

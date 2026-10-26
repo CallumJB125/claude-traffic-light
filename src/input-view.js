@@ -27,7 +27,8 @@
   const cut = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
   function project(input) {
-    return Organise.projectOf({ cwd: typeof input?.cwd === 'string' ? input.cwd : null }).heading;
+    const name = Organise.projectOf({ cwd: typeof input?.cwd === 'string' ? input.cwd : null }).heading;
+    return typeof input?.tag === 'string' && input.tag ? `${name} (${input.tag})` : name;
   }
 
   function headline(input) {

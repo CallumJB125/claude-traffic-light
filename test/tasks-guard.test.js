@@ -263,3 +263,12 @@ test('O4 finding 1: expectAi only with ai "auto" and a known AI; anywhere else i
   assert.equal(G.validateCreate({ text: 'do it', ai: 'auto', expectAi: null }, '/p').code, 'VALIDATION');
   assert.equal('expectAi' in G.validateCreate({ text: 'do it', ai: 'auto' }, '/p').spec, false, 'the Tasks page’s create is unchanged');
 });
+
+test('lastActivityMs comes from live.activity_age_ms, and a state event refreshes it', () => {
+  const t = G.sanitizeTask({ ...view(), live: { activity_age_ms: 5000 } }, { now: 100_000, homeDir: HOME });
+  assert.equal(t.lastActivityMs, 95_000);
+  assert.equal(G.sanitizeTask(view(), { now: 100_000, homeDir: HOME }).lastActivityMs, null);
+  const next = G.applyState(t, { type: 'state', seq: 6, taskId: 't1', state: 'quiet', prevState: 'running', green: false, label: 'Quiet', tone: 'grey', reason: 'r', actions: [], confirm: [], live: { activity_age_ms: 1000 } }, 200_000);
+  assert.equal(next.lastActivityMs, 199_000);
+  assert.equal(G.applyState(t, { type: 'state', seq: 7, taskId: 't1', state: 'quiet', prevState: 'running', green: false, label: 'Quiet', tone: 'grey', reason: 'r', actions: [], confirm: [] }, 200_000).lastActivityMs, 95_000);
+});

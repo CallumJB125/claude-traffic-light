@@ -10,8 +10,13 @@ const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 const tick = (ms = 5) => new Promise((r) => setTimeout(r, ms));
 
+const pages = [];
+// The page keeps a 30 s repaint timer for the running card: close each page so the process can exit.
+test.after(() => pages.forEach((d) => d.window.close()));
+
 async function open(runReply) {
   const dom = new JSDOM('<section id="compose" hidden><div class="body"></div><p id="compose-hint"></p><p id="compose-status"></p></section>', { runScripts: 'outside-only', pretendToBeVisual: true, url: 'http://localhost/' });
+  pages.push(dom);
   const w = dom.window, runs = [];
   const folder = { handle: 'h-1', label: '~/work' };
   w.composeApi = {

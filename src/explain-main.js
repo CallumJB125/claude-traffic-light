@@ -70,7 +70,7 @@ function create({ config, inputs = () => [], sessions = () => [], runner = Expla
     if (!on()) return { ok: false, reason: 'off' };
     if (typeof id !== 'string' || !ID_RE.test(id)) return { ok: false, reason: 'invalid' };
     const input = (inputs() || []).find((i) => i && i.id === id);
-    if (!input || input.kind !== 'permission') return { ok: false, reason: 'gone' };
+    if (!input || input.kind !== 'permission' || input.source !== 'hook') return { ok: false, reason: 'gone' };
     const key = `${id}:${input.tool}:${input.text || input.headline}`;
     if (cache.has(key)) return cache.get(key);
     const local = Explain.explainLocal(input);

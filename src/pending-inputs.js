@@ -9,6 +9,9 @@
 // Pure: main.js passes what it has already read.
 const { describeRequest, reveal } = require('./request-view.js');
 const Input = require('../hooks/pending-input.js');
+const Machine = require('../hooks/session-machine.js');
+const Organise = require('./work-organise.js');
+const { disambiguate } = require('./session-card-view.js');
 
 const ASK_MS = 55000;
 const BLOCKED_KEEP_MS = 30 * 60 * 1000;
@@ -74,6 +77,13 @@ function fromSession(s, { pendingSessionIds = new Set(), now = Date.now() } = {}
         title: text(ask.title, 200) || 'Needs your input', text: text(ask.message, 2000), options: [], created_at: ask.at || null });
     }
   }
+  // A permission wait with no request file and no ask (Codex's PermissionRequest):
+  // shown at once for a blocking ask, after the transient hold otherwise.
+  if (s.signal === 'permission-ask' && !ask && !pendingSessionIds.has(s.sessionId) && Machine.presentSignal(s, now) === 'permission-ask') {
+    // A Codex request_user_input is a question to the person, not a tool permission.
+    const question = Machine.codexInputPending(s, now);
+    out.push({ ...base, id: `ask-${s.host}-${s.sessionId}`, kind: question ? 'question' : 'permission', tool: s.tool || null, title: question ? 'Codex has a question' : 'Needs your permission', text: '', options: [], created_at: s.signalSince || s.updatedAt || null });
+  }
   const b = s.blocked && typeof s.blocked === 'object' ? s.blocked : null;
   const bAt = b ? Date.parse(b.at) : NaN;
   if (b && Number.isFinite(bAt) && now - bAt < BLOCKED_KEEP_MS) {
@@ -101,6 +111,16 @@ function fromDialog(d) {
   };
 }
 
+// The provider the overview shows is `source`, with Claude Code's own hook writing none.
+const providerOf = (s) => s.source || 'claude';
+
+// session id → short tag, only for sessions that share a provider and folder with another.
+function sessionTags(sessions) {
+  const rows = (Array.isArray(sessions) ? sessions : []).filter((s) => s && s.sessionId);
+  const tags = disambiguate(rows.map((s) => ({ provider: providerOf(s), project: Organise.projectOf({ cwd: s.cwd || null }).heading, id: s.sessionId, startedAt: s.startedAt || s.codexStartedAt || s.createdAt, tmux: s.tmuxWindow, title: s.terminalTitle })));
+  return new Map(rows.map((s, i) => [s.sessionId, tags[i]]).filter(([, t]) => t));
+}
+
 function collect({ requests = [], sessions = [], dialogs = [], now = Date.now() } = {}) {
   const pendingSessionIds = new Set(requests.map((r) => r.sessionId));
   const items = [
@@ -109,8 +129,10 @@ function collect({ requests = [], sessions = [], dialogs = [], now = Date.now() 
   ];
   // A pane read beats the session's vaguer notification text for the same session.
   const dialogSessions = new Set(dialogs.map((d) => d.sessionId).filter(Boolean));
-  const kept = items.filter((i) => !(i.kind === 'notification' && dialogSessions.has(i.session)));
-  return [...kept, ...dialogs.map(fromDialog)].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  const kept = items.filter((i) => !((i.kind === 'notification' || (i.source === 'session' && (i.kind === 'permission' || i.kind === 'question'))) && dialogSessions.has(i.session)));
+  const tags = sessionTags(sessions);
+  return [...kept, ...dialogs.map(fromDialog)].map((i) => (tags.has(i.session) ? { ...i, tag: tags.get(i.session) } : i))
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
 }
 
-module.exports = { fromRequest, fromSession, fromDialog, answerFor, collect, BLOCKED_KEEP_MS, BLOCKED_SUMMARY_CHARS };
+module.exports = { fromRequest, fromSession, fromDialog, answerFor, collect, sessionTags, BLOCKED_KEEP_MS, BLOCKED_SUMMARY_CHARS };
