@@ -20,8 +20,10 @@ const {
 const { runUserCommand } = require('./key-helper.cjs');
 
 const PROBE_MS = 2000;
-// The default listen of Burst's gateway (fixture board/shared/test/fixtures/codex-config/burst-codex-enable.redacted.toml).
+// Burst's default listens: 7777 is its Claude gateway; 7779 its Codex gateway (real capture of `claude-burst codex
+// enable`, board/shared/test/fixtures/codex-config/burst-codex-enable.redacted.toml).
 const BURST_GATEWAY_PORT = 7777;
+const BURST_CODEX_GATEWAY_PORT = 7779;
 const DEFAULT_TTL_MS = 5 * 60_000;
 const NOT_LOGGED_IN = 'Claude is not logged in. Run claude in a terminal and sign in with /login, then resume.';
 const OAUTH_TOKEN_NOTE = " (a CLAUDE_CODE_OAUTH_TOKEN in your shell doesn't reach runs yet)";
@@ -55,8 +57,8 @@ function tcpProbe({ host, port, timeoutMs = PROBE_MS, connect = net.connect }) {
 }
 
 // Burst owns a loopback port when it is installed (its binary is in place) and the port is its gateway's.
-async function burstOwnsPort(port, { home = os.homedir(), platform = process.platform } = {}) {
-  if (platform !== 'darwin' || port !== BURST_GATEWAY_PORT) return false;
+async function burstOwnsPort(port, { home = os.homedir(), platform = process.platform, burstPort = BURST_GATEWAY_PORT } = {}) {
+  if (platform !== 'darwin' || port !== burstPort) return false;
   try { fs.accessSync(path.join(home, '.local', 'bin', 'claude-burst'), fs.constants.X_OK); return true; } catch { return false; }
 }
 
@@ -294,4 +296,4 @@ function productionCarry(opts = {}) {
   return createClaudeCarry({ env: process.env, ...opts });
 }
 
-module.exports = { PROC_RULES, createClaudeCarry, productionCarry, sweepKeyFiles, burstOwnsPort, BURST_GATEWAY_PORT, denyRules, tcpProbe, oneShotModel, NOT_LOGGED_IN, PROBE_MS };
+module.exports = { PROC_RULES, createClaudeCarry, productionCarry, sweepKeyFiles, burstOwnsPort, BURST_GATEWAY_PORT, BURST_CODEX_GATEWAY_PORT, denyRules, tcpProbe, oneShotModel, NOT_LOGGED_IN, PROBE_MS };

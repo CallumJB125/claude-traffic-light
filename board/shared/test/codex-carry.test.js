@@ -133,35 +133,51 @@ test('a provider gateway that does not answer fails with the host, before Codex 
 });
 
 test('a loopback gateway Burst owns, without the Burst marker: "Burst gateway isn\'t running"', async () => {
-  const text = 'model_provider = "local"\n[model_providers.local]\nbase_url = "http://127.0.0.1:7777/v1"\n';
+  const text = 'model_provider = "local"\n[model_providers.local]\nbase_url = "http://127.0.0.1:7779/v1"\n';
   const r = await carry(text, { probeOk: false, burstOwns: true }).c.prepare({ mode: 'noshell' });
   assert.equal(r.failure.reason, "Burst gateway isn't running");
-  const other = await carry(text.replace('7777', '4001'), { probeOk: false, burstOwns: false }).c.prepare({ mode: 'noshell' });
+  const other = await carry(text.replace('7779', '4001'), { probeOk: false, burstOwns: false }).c.prepare({ mode: 'noshell' });
   assert.equal(other.failure.reason, "the gateway at 127.0.0.1:4001 isn't answering");
 });
 
-// The Burst fixture is RECONSTRUCTED from the claude-burst binary's template strings, not captured from a live
-// `codex-enable` (Burst is macOS-only and not in the DGX lab). These cases run against it so the code path is
-// exercised; plan §8 / M5 keeps PR 3 from merging until the real capture replaces it (the todo below).
-const burstText = fs.readFileSync(path.join(FIX, 'burst-codex-enable.redacted.toml'), 'utf8');
-
-test('Burst (reconstructed fixture): carried as-is; requires_openai_auth keeps the ChatGPT login, no key in the env', async () => {
-  const r = await carry(burstText).c.prepare({ mode: 'noshell' });
-  assert.equal(r.failure, null);
-  assert.equal(r.providerId, 'claude-burst');
-  assert.equal(r.burst, true);
-  assert.ok(r.overrides.includes('model_providers.claude-burst.requires_openai_auth=true'));
-  assert.deepEqual(r.cliEnv, {});
+test('the production Burst-owned-port check is 7779 for Codex (7777 is Burst\'s Claude gateway)', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pxburst-'));
+  try {
+    fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.local', 'bin', 'claude-burst'), '', { mode: 0o755 });
+    const reasonFor = async (port) => (await createCodexCarry({ env: {}, home, platform: 'darwin', probe: async () => false,
+      readFile: (f) => (f === `${home}/.codex/config.toml` ? `model_provider = "local"\n[model_providers.local]\nbase_url = "http://127.0.0.1:${port}/v1"\n` : null) }).prepare({ mode: 'noshell' })).failure.reason;
+    assert.equal(await reasonFor(7779), "Burst gateway isn't running");
+    assert.equal(await reasonFor(7777), "the gateway at 127.0.0.1:7777 isn't answering");
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
-test('Burst (reconstructed fixture): a gateway that is down says so by name, and the probe carries no credential', async () => {
+// The REAL capture of `claude-burst codex enable` (claude-burst 0.20.36, throwaway HOME/CODEX_HOME; no secrets).
+const burstText = fs.readFileSync(path.join(FIX, 'burst-codex-enable.redacted.toml'), 'utf8');
+
+test('Burst (real capture): carried as-is on every site; requires_openai_auth is the ChatGPT login, so no secret and no key file', async () => {
+  assert.match(burstText, /^# BEGIN claude-burst \(/m);
+  assert.match(burstText, /^# END claude-burst$/m);
+  for (const mode of ['shell', 'noshell', 'takeover']) {
+    const r = await carry(burstText).c.prepare({ mode, keyFile: '/run/x/codex-provider.key' });
+    assert.equal(r.failure, null, mode);
+    assert.equal(r.providerId, 'claude-burst');
+    assert.equal(r.burst, true);
+    assert.ok(r.overrides.includes('model_providers.claude-burst.requires_openai_auth=true'), mode);
+    assert.ok(r.overrides.includes('model_providers.claude-burst.base_url="http://127.0.0.1:7779/backend-api/codex"'));
+    assert.ok(!r.overrides.some((o) => o.includes('.auth=')), 'no auth command: nothing to carry');
+    assert.equal(r.keyFile, null);
+    assert.deepEqual(r.cliEnv, {});
+    assert.equal(r.translated, false);
+  }
+});
+
+test('Burst (real capture): a gateway that is down says so by name, and the probe carries no credential', async () => {
   const { c, probes } = carry(burstText, { probeOk: false });
   const r = await c.prepare({ mode: 'noshell' });
   assert.deepEqual(r.failure, { kind: 'provider', reason: "Burst gateway isn't running" });
-  assert.deepEqual(probes, [{ host: '127.0.0.1', port: 7777, timeoutMs: 2000 }]);
+  assert.deepEqual(probes, [{ host: '127.0.0.1', port: 7779, timeoutMs: 2000 }]);
 });
-
-test.todo('Burst (REAL capture): replace burst-codex-enable.redacted.toml with a redacted config.toml from a live `claude-burst codex enable`, re-derive BURST_CODEX_MARKERS from it, and re-run the two Burst cases above (plan §8 M5; blocks the PR 3 merge; needs the user\'s approval to run Burst)');
 
 test('dropped provider fields are logged by name only', async () => {
   const lines = [];

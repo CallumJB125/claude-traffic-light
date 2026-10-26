@@ -17,7 +17,7 @@ const path = require('node:path');
 const {
   codexProvider, boundedReadFile, CONFIG_TOML_MAX_BYTES,
 } = require('./user-provider.cjs');
-const { tcpProbe, burstOwnsPort, PROBE_MS } = require('./claude-carry.cjs');
+const { tcpProbe, burstOwnsPort, BURST_CODEX_GATEWAY_PORT, PROBE_MS } = require('./claude-carry.cjs');
 
 const TRANSLATED = /^PLEXIFORM_PROVIDER_/;
 const LOOPBACK = (host) => host === 'localhost' || host === '::1' || host === '[::1]' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
@@ -69,7 +69,8 @@ function createCodexCarry({
   loginShellEnv = null,     // seam for PR 2b (src/login-shell-env.js): async ({ names }) => ({ [name]: value })
   readFile = (file) => boundedReadFile(file, CONFIG_TOML_MAX_BYTES),
   probe = tcpProbe,
-  burstOwnsPort: burstOwns = (port) => burstOwnsPort(port, { home, platform }),
+  // Burst's Codex gateway is 7779 (7777 is its Claude one).
+  burstOwnsPort: burstOwns = (port) => burstOwnsPort(port, { home, platform, burstPort: BURST_CODEX_GATEWAY_PORT }),
   log = () => {},
   keyViaAuthFile = KEY_VIA_AUTH_FILE,
   writeKey = (file, value) => {

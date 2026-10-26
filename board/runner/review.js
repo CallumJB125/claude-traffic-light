@@ -27,7 +27,8 @@ const ENV_KEYS = ['HOME', 'USER', 'LOGNAME', 'PATH', 'LANG', 'TMPDIR', 'TZ', 'CL
 const SHELL_KEYS = ['HOME', 'PATH', 'LANG', 'TMPDIR'];
 // The reviewer reads only the diff on stdin, so it gets no command tool at all (the same names the owned chat
 // disables, src/codex-app-server.js): with no shell, nothing can read the CLI's env through /proc or ps.
-export const REVIEW_NO_SHELL = Object.freeze(['shell_tool', 'unified_exec', 'unified_exec_tty', 'shell_snapshot', 'code_mode_host']);
+// multi_agent too: a spawned sub-agent would get its own shell (lab: its tools stay with the shell features off).
+export const REVIEW_NO_SHELL = Object.freeze(['shell_tool', 'unified_exec', 'unified_exec_tty', 'shell_snapshot', 'code_mode_host', 'multi_agent']);
 const HEAD = /^(?:[0-9a-f]{40}|[A-Za-z0-9][A-Za-z0-9._/-]{0,199})$/;
 const KEY = /^[A-Za-z][A-Za-z0-9]{0,15}-[0-9]{1,9}$/;
 const okRef = (r) => typeof r === 'string' && HEAD.test(r) && !r.includes('..') && !r.endsWith('.lock');
@@ -56,7 +57,6 @@ export function reviewArgs(ai, { model = null, budgetUsd = null, cwd, provider =
       ...['approval_policy="never"', 'web_search="disabled"', 'mcp_servers={}', 'project_doc_max_bytes=0', 'hooks={}', 'notify=[]',
         'features.apps=false', 'features.multi_agent=false', 'features.hooks=false', 'shell_environment_policy.inherit="none"',
         `shell_environment_policy.set={${SHELL_KEYS.filter((k) => env[k]).map((k) => `${k}=${JSON.stringify(env[k])}`).join(',')}}`,
-        'include_apply_patch_tool=false',
         ...(provider?.overrides ?? []), ...(provider?.model ? [`model=${JSON.stringify(provider.model)}`] : [])].flatMap((c) => ['-c', c]),
       ...REVIEW_NO_SHELL.flatMap((f) => ['--disable', f]), '-'];
   }

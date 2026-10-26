@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
-import { codexProvider, boundedReadFile, readDirOrNull, claudeProvider, CONFIG_TOML_MAX_BYTES, CLAUDE_JSON_MAX_BYTES } from '../user-provider.cjs';
+import { codexProvider, boundedReadFile, readDirOrNull, claudeProvider, BURST_CODEX_MARKERS, BURST_CODEX_BEGIN, BURST_CODEX_END, CONFIG_TOML_MAX_BYTES, CLAUDE_JSON_MAX_BYTES } from '../user-provider.cjs';
 import { findSecrets } from '../secret-patterns.mjs';
 import { codexConfig } from '../../runner/backends/codex.js';
 
@@ -156,22 +156,30 @@ test('12 syntax forms give the same provider and base URL', () => {
 });
 
 const burstFixture = path.join(FIX, 'burst-codex-enable.redacted.toml');
-// The fixture was reconstructed from the claude-burst binary's template strings, not captured from a live write (plan §8).
-test('13 Burst codex-enable fixture', () => {
+// The real capture of `claude-burst codex enable` (claude-burst 0.20.36). BURST_CODEX_MARKERS re-derived from it:
+// the provider id, inside a "# BEGIN claude-burst (…)" / "# END claude-burst" block.
+test('13 Burst codex-enable fixture (real capture)', () => {
   const text = fs.readFileSync(burstFixture, 'utf8');
   assert.deepEqual(findSecrets(text), []);
+  assert.deepEqual([...BURST_CODEX_MARKERS], ['claude-burst']);
+  const lines = text.split('\n');
+  assert.ok(lines[0].startsWith(BURST_CODEX_BEGIN) && lines[0] !== BURST_CODEX_BEGIN, 'the BEGIN line has a suffix; the prefix matches');
+  assert.ok(lines.includes(BURST_CODEX_END));
   const r = run(text);
   assert.equal(r.providerId, 'claude-burst');
   assert.equal(r.burst.detected, true);
+  assert.equal(r.burst.block, true);
   assert.deepEqual(r.unsupported, []);
   assert.deepEqual(r.dropped, []);
-  assert.ok(r.overrides.includes('model_providers.claude-burst.base_url="http://127.0.0.1:7777/backend-api/codex"'));
+  assert.ok(r.overrides.includes('model_providers.claude-burst.base_url="http://127.0.0.1:7779/backend-api/codex"'));
+  assert.ok(r.overrides.includes('model_providers.claude-burst.name="Claude Burst"') && r.overrides.includes('model_providers.claude-burst.wire_api="responses"'));
   assert.ok(r.overrides.includes('model_providers.claude-burst.requires_openai_auth=true'));
   assert.deepEqual(r.missingEnv, []);
 });
 
 test('13b a non-Burst provider is not detected as Burst', () => {
   assert.equal(run(PLEXLAB).burst.detected, false);
+  assert.equal(run(PLEXLAB).burst.block, false);
 });
 
 test('14 size cap runs before parse', () => {
