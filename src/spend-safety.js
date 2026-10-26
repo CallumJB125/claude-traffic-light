@@ -10,6 +10,7 @@
 // reference. It is labelled as an estimate everywhere it shows.
 const { costOf } = require('../usage.js');
 const Brand = require('../brand.js');
+const { BURST_GATEWAY_PORT } = require('../board/shared/claude-carry.cjs');
 
 const HOUR_MS = 3600000;
 const FIVE_HOURS_MS = 5 * HOUR_MS;
@@ -51,14 +52,17 @@ function normalize(saved) {
 }
 
 // How Claude Code is routed, from the provider board/shared/user-provider.cjs
-// resolves (settings files, app and login-shell env): a gateway (Burst's
-// localGateway included) or a cloud provider is billed by that service and an
-// API key or token per token, so none of them has a Claude plan's limits.
+// resolves (settings files, app and login-shell env): a gateway or a cloud
+// provider is billed by that service and an API key or token per token, so
+// none of them has a Claude plan's limits. Burst's local gateway is the
+// exception: it carries the person's own plan login (docs/burst.md), so with
+// no key of its own the tier decides, as without Burst.
 // → 'gateway' | 'cloud' | 'api' | null (OAuth or nothing: the tier decides).
 function providerPlan(provider) {
   if (!provider || typeof provider !== 'object') return null;
   const kind = provider.auth && provider.auth.kind;
   if (kind === 'bedrock' || kind === 'vertex' || kind === 'foundry') return 'cloud';
+  if (provider.localGateway && provider.localGateway.port === BURST_GATEWAY_PORT && (!kind || kind === 'oauth-or-none')) return null;
   if (provider.localGateway || (provider.routing && provider.routing.ANTHROPIC_BASE_URL)) return 'gateway';
   if (kind === 'api-key' || kind === 'auth-token' || kind === 'helper') return 'api';
   return null;

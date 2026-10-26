@@ -149,6 +149,8 @@ function install(deps) {
     const subscriber = S.SUBSCRIPTIONS.includes(plan);
     return {
       settings: s, plan, planLabel: plan ? S.PLAN_LABEL[plan] : null, detected: det, subscriber,
+      // Dollars are API-price equivalents unless the person pays per token on the API (an unknown plan included).
+      apiEquivalent: plan !== 'api',
       showDollars: !subscriber || s.showApiPrices,
       limits: subscriber ? S.limitEstimate(turns, plan, t) : null,
       unknownPlan: !plan && turns.length > 0,
@@ -164,7 +166,7 @@ function install(deps) {
       for (const l of loops) notify(`loop|${l.sessionId}|${l.since}`, 'Retry loop?', `${l.text}. Check it isn't stuck.`, l.cwd);
       const v = await view();
       const day = new Date(now()).toDateString();
-      for (const p of v.projects) if (p.level === 'over') notify(`cap|${p.project}|${day}`, 'Project over its daily cap', `${p.text}${v.subscriber ? ' (API-price equivalent)' : ''}.`, null);
+      for (const p of v.projects) if (p.level === 'over') notify(`cap|${p.project}|${day}`, 'Project over its daily cap', `${p.text}${v.apiEquivalent ? ' (API-price equivalent)' : ''}.`, null);
       const snap = deps.spend ? deps.spend() : null;
       const burns = (snap && snap.runaway) || [];
       for (const p of S.nudgePauses((deps.config() || {}).rules, burns, acked)) {
@@ -173,7 +175,7 @@ function install(deps) {
       }
       current = {
         alerts: [
-          ...burns.map((r) => ({ key: `burn|${r.sessionId}|${r.firedAt || 0}`, kind: 'needs-you', sessionId: r.sessionId, paused: paused.has(r.sessionId), text: `${S.burnText(r, v.subscriber)}${paused.has(r.sessionId) ? PAUSED_TAIL : ''}` })),
+          ...burns.map((r) => ({ key: `burn|${r.sessionId}|${r.firedAt || 0}`, kind: 'needs-you', sessionId: r.sessionId, paused: paused.has(r.sessionId), text: `${S.burnText(r, v.apiEquivalent)}${paused.has(r.sessionId) ? PAUSED_TAIL : ''}` })),
           ...v.projects.filter((p) => p.level === 'over').map((p) => ({ key: `cap|${p.project}|${day}`, kind: 'needs-you', sessionId: `cap:${p.project}`, text: `${p.project} is over its daily cap` })),
           ...loops.map((l) => ({ key: `loop|${l.sessionId}|${l.since}`, kind: 'stuck', sessionId: l.sessionId, text: l.text })),
         ],
