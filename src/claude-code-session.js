@@ -20,8 +20,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { claudeActivityLabel } = require('./session-activity');
-const os = require('node:os');
-const { NONE, prepareNoTool, prepareChat, carryFor } = require('./claude-carry');
+const { NONE, prepareNoTool, prepareChat, carryFor, keyDirPrefix, resolveKeyRoot } = require('./claude-carry');
 const { denyRules, PROC_RULES } = require('../board/shared/claude-carry.cjs');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -60,7 +59,7 @@ function buildClaudeArgs({ sessionId, writable = false, model = 'haiku', systemP
 }
 
 function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.spawn, safeRoot = null, model = 'haiku', systemPrompt = null,
-  maxBudgetUsd = null, ackMs = ACK_MS, controlMs = CONTROL_MS, killGraceMs = KILL_GRACE_MS, carry = carryFor(env), keyRoot = os.tmpdir() } = {}) {
+  maxBudgetUsd = null, ackMs = ACK_MS, controlMs = CONTROL_MS, killGraceMs = KILL_GRACE_MS, carry = carryFor(env), keyRoot = null } = {}) {
   const events = new EventEmitter();
   const children = new Map(); // target (our --session-id) -> child record
   const emit = (e) => events.emit('event', e);
@@ -182,8 +181,11 @@ function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.
     // project, behind apiKeyHelper, with the dir and /proc denied to its file tools.
     let c0, keyDir = null, disallowed = writable ? [...PROC_RULES] : [], settingsFile = null;
     if (carry && writable) {
-      fs.mkdirSync(keyRoot, { recursive: true, mode: 0o700 });
-      keyDir = fs.mkdtempSync(path.join(keyRoot, 'chat-'));
+      // No private folder of the app's own: fail closed rather than put a key in /tmp.
+      const root = resolveKeyRoot(keyRoot);
+      if (!root) throw new Error("Plexiform has no private folder for this chat's key");
+      fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+      keyDir = fs.mkdtempSync(path.join(root, keyDirPrefix('chat')));
       c0 = await prepareChat(carry, keyDir, path.join(keyDir, 'api.key'));
       if (!c0.failure && c0.settings) {
         settingsFile = path.join(keyDir, 'settings.json');

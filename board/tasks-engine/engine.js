@@ -699,8 +699,9 @@ export class TasksEngine extends EventEmitter {
   }
 
   #recover() {
-    // No run survives an engine restart, so no key file from before this start is still needed.
-    sweepKeyFiles(path.join(this.dataDir, 'run'));
+    // No background run survives an engine restart, so its key file is not needed. A takeover (handed_over) runs in the
+    // person's terminal and outlives the engine: its settings.json still reads <run>/api.key.
+    sweepKeyFiles(path.join(this.dataDir, 'run'), (id) => this.tasks.get(id)?.state === 'handed_over');
     for (const task of this.tasks.values()) {
       const had = task.run;
       if (had?.kind === 'windows-job' || String(had?.lstart ?? '').startsWith('win32:') || task.windowsStopUnconfirmed) {

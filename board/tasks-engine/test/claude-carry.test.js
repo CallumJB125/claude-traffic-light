@@ -158,3 +158,26 @@ test('engine start sweeps a key file left by a crash (review 3); other run files
     assert.deepEqual(fs.readdirSync(stale), ['settings.json']);
   } finally { await m.close().catch(() => {}); rm(dir); }
 });
+
+test('R2-B: engine start keeps the key file of a handed_over task (a takeover outlives the engine) and sweeps the others', { skip: !posix }, async () => {
+  const dir = tmpDir();
+  const repo = makeRepo(dir);
+  const fx = fixtureCarry({ files: user({ env: gateway }) });
+  const m1 = await startEngine({ dir, engineOpts: { claudeCarry: fx.carry } });
+  writePolicy(m1.dataDir, { repos: { [repo.checkout]: { remote_tasks: true } } });
+  const { id } = await m1.client.createTask({ text: 'Fix the README', cwd: repo.checkout });
+  await waitFor(async () => (await stateOf(m1.client, id)) === 'running', { label: 'running' });
+  await m1.client.act(id, 'takeover', { mode: 'print' });
+  const runDir = path.join(m1.dataDir, 'run', id);
+  const other = path.join(m1.dataDir, 'run', 'tsk_stale');
+  fs.mkdirSync(other, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(runDir, 'api.key'), KEY, { mode: 0o600 });
+  fs.writeFileSync(path.join(other, 'api.key'), KEY, { mode: 0o600 });
+  await m1.close({ leaveRuns: true }).catch(() => {});
+  const m2 = await startEngine({ dir, engineOpts: { claudeCarry: fx.carry } });
+  try {
+    assert.equal((await stateOf(m2.client, id)), 'handed_over');
+    assert.equal(fs.readFileSync(path.join(runDir, 'api.key'), 'utf8'), KEY, 'the takeover keeps its key');
+    assert.equal(fs.existsSync(path.join(other, 'api.key')), false, 'a stale one is swept');
+  } finally { await m2.close().catch(() => {}); rm(dir); }
+});

@@ -62,22 +62,29 @@ async function prepareChat(carry, keyDir, keyFile) {
 }
 
 // Where a child that has file tools keeps its key file: <userData>/run, a private dir of the app's own, never /tmp.
-// Each use makes chat-* / voice-key-* below it; a start removes whatever a crash left.
-const KEY_DIR_PREFIXES = ['chat-', 'voice-key-'];
+// Each use makes chat-<pid>-* / voice-key-<pid>-* below it; a start removes what a crash left, never a dir whose
+// process is alive (a second instance, a dev run sharing the folder).
+const KEY_DIR_KINDS = ['chat', 'voice-key'];
+const keyDirPrefix = (kind, pid = process.pid) => `${kind}-${pid}-`;
 function ensureKeyRoot(root) {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(root, 0o700); } catch { /* not ours to tighten */ }
   return root;
 }
-function sweepKeyDirs(root) {
+const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; } };
+function sweepKeyDirs(root, { alive = pidAlive } = {}) {
   let names;
   try { names = fs.readdirSync(root); } catch { return 0; }
   let n = 0;
   for (const name of names) {
-    if (!KEY_DIR_PREFIXES.some((p) => name.startsWith(p))) continue;
+    const m = /^(chat|voice-key)-(?:(\d+)-)?/.exec(name);
+    if (!m) continue;
+    if (m[2] && alive(Number(m[2]))) continue;
     try { fs.rmSync(path.join(root, name), { recursive: true, force: true }); n++; } catch { /* gone */ }
   }
   return n;
 }
+// keyRoot may be a path or a getter (main resolves it after the dev profile is set).
+const resolveKeyRoot = (keyRoot) => (typeof keyRoot === 'function' ? keyRoot() : keyRoot) || null;
 
-module.exports = { ensureKeyRoot, sweepKeyDirs, KEY_DIR_PREFIXES, prepareChat, NONE, prepareNoTool, defaultCarry, carryFor, setLoginShellEnv, burstOwnsPort, BURST_GATEWAY_PORT };
+module.exports = { ensureKeyRoot, sweepKeyDirs, keyDirPrefix, resolveKeyRoot, KEY_DIR_KINDS, prepareChat, NONE, prepareNoTool, defaultCarry, carryFor, setLoginShellEnv, burstOwnsPort, BURST_GATEWAY_PORT };

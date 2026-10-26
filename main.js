@@ -1794,7 +1794,8 @@ claudeChannel.attach=async args=>{
   return attachClaudeChannel(args);
 };
 // A Claude child with file tools keeps its key file here, never in /tmp; a start removes what a crash left.
-const claudeKeyRoot = (() => { const C = require('./src/claude-carry.js'); const root = path.join(app.getPath('userData'), 'run'); C.ensureKeyRoot(root); C.sweepKeyDirs(root); return root; })();
+// Resolved on first use, after the dev profile is set; swept only by the instance that holds the lock (see gotLock).
+const claudeKeyRoot = () => require('./src/claude-carry.js').ensureKeyRoot(path.join(app.getPath('userData'), 'run'));
 const InteractionMain=require('./src/interaction-main').createInteractionMain({
   keyRoot:claudeKeyRoot,
   accountScope:followupScope,
@@ -5470,6 +5471,7 @@ app.whenReady().then(() => {
   // Release CI: start, install hooks, run one, open the window, quit (src/smoke.js).
   const smokeReport = Smoke.reportPathFrom(process.argv);
   // An AppImage's copies for older versions go only once this is the one running instance.
+  if (gotLock) { try { require('./src/claude-carry.js').sweepKeyDirs(path.join(app.getPath('userData'), 'run')); } catch (err) { console.warn('[claude] could not tidy old key folders:', err.message); } }
   if (gotLock) { try { HookPaths.prune(HOOK_PATHS); } catch (err) { console.warn('[hooks] could not tidy old copies:', err.message); } }
   if (smokeReport) { Smoke.run({ app, installHooks, areHooksInstalled, createWindow, getWindow: () => win, settingsPath: CLAUDE_SETTINGS_PATH, sessionsDir: SESSIONS_DIR, reportPath: smokeReport }); return; }
   if (fs.existsSync(path.join(nativeBoardDir(), 'connections.bin'))) {

@@ -5,7 +5,7 @@
 // The helper keeps audio in memory only; this side only ever sees text.
 const readline = require('readline');
 const path = require('path');
-const { prepareNoTool, prepareChat } = require('./claude-carry');
+const { prepareNoTool, prepareChat, keyDirPrefix, resolveKeyRoot } = require('./claude-carry');
 const { denyRules } = require('../board/shared/claude-carry.cjs');
 
 // Where the helper binary is. A packaged app only ever uses its own bundled copy.
@@ -182,7 +182,9 @@ function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, ma
   };
   const none = { failure: null, env: {}, model: 'haiku' };
   if (carry && hasFileTools(args)) {
-    try { keyDir = fs.mkdtempSync(`${(keyRoot || tmpdir).replace(/\/$/, '')}/voice-key-`); } catch { done(null); return { promise, cancel }; }
+    // No private folder of the app's own: fail closed (no spawn) rather than put a key in /tmp.
+    const root = resolveKeyRoot(keyRoot);
+    try { if (!root) throw new Error('no key root'); keyDir = fs.mkdtempSync(`${root.replace(/\/$/, '')}/${keyDirPrefix('voice-key')}`); } catch { done(null); return { promise, cancel }; }
     prepareChat(carry, keyDir, `${keyDir}/api.key`).then(begin, () => begin(none));
   } else if (carry) prepareNoTool(carry).then(begin, () => begin(none));
   else begin({ failure: null, env: {}, model: 'haiku' });

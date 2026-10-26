@@ -161,7 +161,7 @@ test('every Claude site: tool set against where the key lives (lab proc-environ-
     await writable.open({ cwd: root }); writable.stop();
     const screenCalls = [];
     const fsFake = { mkdtempSync: (p) => fs.mkdtempSync(p), writeFileSync: fs.writeFileSync, realpathSync: fs.realpathSync, rmSync: fs.rmSync };
-    const ask = VoiceHelper.askClaude({ spawn: (b, a, o) => { screenCalls.push({ args: a, opts: o }); return child({ out: 'Click Wi-Fi.' }); }, fs: fsFake, tmpdir: keyRoot, args: VoiceScreen.claudeArgs('/tmp/x/screen.png'), env: { HOME: '/fx/home' }, prompt: 'q', carry });
+    const ask = VoiceHelper.askClaude({ spawn: (b, a, o) => { screenCalls.push({ args: a, opts: o }); return child({ out: 'Click Wi-Fi.' }); }, fs: fsFake, tmpdir: os.tmpdir(), keyRoot, args: VoiceScreen.claudeArgs('/tmp/x/screen.png'), env: { HOME: '/fx/home' }, prompt: 'q', carry });
     assert.equal(await ask.promise, 'Click Wi-Fi.');
     for (const c of [chatCalls[0], screenCalls[0]]) {
       assert.notEqual(at(c.args, '--tools'), '', 'has a file tool');
@@ -183,9 +183,9 @@ test('the key dirs of a child with file tools live under the app data dir and a 
   try {
     const root = Carry.ensureKeyRoot(path.join(userData, 'run'));
     assert.equal(fs.statSync(root).mode & 0o777, 0o700);
-    for (const n of ['chat-aaa', 'voice-key-bbb']) { fs.mkdirSync(path.join(root, n)); fs.writeFileSync(path.join(root, n, 'api.key'), KEY); }
+    for (const n of ['chat-aaa', 'voice-key-bbb', 'chat-999999991-x']) { fs.mkdirSync(path.join(root, n)); fs.writeFileSync(path.join(root, n, 'api.key'), KEY); }
     fs.mkdirSync(path.join(root, 'other'));
-    assert.equal(Carry.sweepKeyDirs(root), 2);
+    assert.equal(Carry.sweepKeyDirs(root, { alive: () => false }), 3);
     assert.deepEqual(fs.readdirSync(root), ['other']);
     assert.equal(Carry.sweepKeyDirs(path.join(userData, 'nope')), 0);
     // a writable chat made by the owned adapters puts its key dir under the root it was given
@@ -194,11 +194,60 @@ test('the key dirs of a child with file tools live under the app data dir and a 
     let dir;
     const session = createClaudeCodeSession({ bin: '/x/claude', env: { HOME: '/fx/home' }, carry, safeRoot: project, keyRoot: root, spawn: (b, a) => { dir = path.dirname(a[a.indexOf('--settings') + 1]); return child(); } });
     await session.open({ cwd: project });
-    assert.ok(path.basename(dir).startsWith('chat-') && path.dirname(dir) === root, dir);
+    assert.ok(path.basename(dir).startsWith(`chat-${process.pid}-`) && path.dirname(dir) === root, dir);
     session.stop();
     fs.rmSync(project, { recursive: true, force: true });
     assert.equal(typeof ownedAdapters, 'function');
   } finally { fs.rmSync(userData, { recursive: true, force: true }); }
+});
+
+test('R2-A: a sweep keeps the key dirs of a live process (a second instance, a dev run) and removes a dead one\'s', () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const Carry = require('../src/claude-carry.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kr-'));
+  try {
+    const live = `${Carry.keyDirPrefix('chat', 4242)}abc`, voice = `${Carry.keyDirPrefix('voice-key', 4242)}abc`, dead = `${Carry.keyDirPrefix('chat', 777)}abc`;
+    for (const n of [live, voice, dead, 'chat-old']) { fs.mkdirSync(path.join(root, n)); fs.writeFileSync(path.join(root, n, 'api.key'), KEY); }
+    assert.equal(Carry.sweepKeyDirs(root, { alive: (pid) => pid === 4242 }), 2);
+    assert.deepEqual(fs.readdirSync(root).sort(), [live, voice].sort(), 'live-pid dirs kept, the dead one\'s and a pid-less leftover removed');
+
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('R2-A: the key root is a getter read at open time (after the dev profile is set), and main sweeps only after the single-instance lock', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const rootA = fs.mkdtempSync(path.join(os.tmpdir(), 'kr-a-')), rootB = fs.mkdtempSync(path.join(os.tmpdir(), 'kr-b-')), project = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+  try {
+    let current = rootA;
+    const { carry } = await carryOf(GW_SETTINGS);
+    const dirs = [];
+    const session = createClaudeCodeSession({ bin: '/x/claude', env: { HOME: '/fx/home' }, carry, safeRoot: project, keyRoot: () => current, spawn: (b, a) => { dirs.push(path.dirname(a[a.indexOf('--settings') + 1])); return child(); } });
+    current = rootB;       // the dev profile was set after the session was built
+    await session.open({ cwd: project }); session.stop();
+    assert.equal(path.dirname(dirs[0]), rootB, 'resolved when used, not when built');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+    assert.match(src, /const claudeKeyRoot = \(\) =>/, 'a getter, not a value computed at load');
+    const lock = src.indexOf('requestSingleInstanceLock()'), sweep = src.indexOf('sweepKeyDirs(');
+    assert.ok(lock > 0 && sweep > lock, 'the sweep comes after the single-instance lock');
+    assert.equal((src.match(/sweepKeyDirs\(/g) || []).length, 1, 'one sweep, guarded by gotLock');
+    assert.match(src.slice(sweep - 120, sweep), /gotLock/);
+  } finally { for (const d of [rootA, rootB, project]) fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('N2: a file-tool child with a carry but no key root fails closed: nothing spawns and nothing is written to /tmp', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const { carry } = await carryOf(GW_SETTINGS);
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+  const before = fs.readdirSync(os.tmpdir()).filter((n) => /^(chat|voice-key)-/.test(n));
+  try {
+    const s = createClaudeCodeSession({ bin: '/x/claude', env: { HOME: '/fx/home' }, carry, safeRoot: project, spawn: () => { throw new Error('must not start'); } });
+    await assert.rejects(s.open({ cwd: project }), /no private folder/);
+    let spawned = false;
+    const ask = VoiceHelper.askClaude({ spawn: () => { spawned = true; return child(); }, fs: require('node:fs'), tmpdir: os.tmpdir(), args: VoiceScreen.claudeArgs('/tmp/x/screen.png'), env: { HOME: '/fx/home' }, prompt: 'q', carry });
+    assert.equal(await ask.promise, null);
+    assert.equal(spawned, false);
+    assert.deepEqual(fs.readdirSync(os.tmpdir()).filter((n) => /^(chat|voice-key)-/.test(n)), before);
+  } finally { fs.rmSync(project, { recursive: true, force: true }); }
 });
 
 test('a writable chat with no carry (plain login) still denies /proc to Read, Grep and Glob', async () => {
