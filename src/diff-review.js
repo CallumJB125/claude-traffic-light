@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { findClaudeBin } = require('./claude-code-session');
+const { NONE, prepareNoTool, carryFor } = require('./claude-carry');
 
 const MODELS = Object.freeze(['haiku', 'sonnet', 'opus']);
 const DEFAULT_BUDGET = 0.05;
@@ -34,26 +35,28 @@ function normalize(s = {}) {
   };
 }
 
-function buildArgs({ model, maxBudgetUsd }) {
+function buildArgs({ model, maxBudgetUsd, haikuModel = 'haiku' }) {
   const s = normalize({ model, maxBudgetUsd });
   return ['-p', '--output-format', 'text', '--no-session-persistence',
     '--setting-sources', '', '--safe-mode', '--strict-mcp-config', '--disable-slash-commands',
     '--tools', '', '--permission-mode', 'dontAsk',
-    '--model', s.model, '--max-budget-usd', String(s.maxBudgetUsd)];
+    '--model', s.model === 'haiku' ? haikuModel : s.model, '--max-budget-usd', String(s.maxBudgetUsd)];
 }
 
 /**
  * → {ok:true, text} | {ok:false, reason: 'off'|'not-entitled'|'no-cli'|'empty'|'failed'}.
  * Never throws. The diff goes on stdin, never in argv.
  */
-async function review({ diff, settings, entitled, bin = findClaudeBin(), env = process.env, spawn = childProcess.spawn, timeoutMs = TIMEOUT_MS }) {
+async function review({ diff, settings, entitled, bin = findClaudeBin(), env = process.env, spawn = childProcess.spawn, timeoutMs = TIMEOUT_MS, carry = carryFor(env) }) {
   const s = normalize(settings);
   if (!s.enabled) return { ok: false, reason: 'off' };
   if (!entitled) return { ok: false, reason: 'not-entitled' };
   if (!bin) return { ok: false, reason: 'no-cli' };
   if (typeof diff !== 'string' || !diff.trim()) return { ok: false, reason: 'empty' };
   const body = diff.length > MAX_DIFF ? `${diff.slice(0, MAX_DIFF)}\n[diff truncated]\n` : diff;
-  const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
+  const c = carry ? await prepareNoTool(carry) : NONE;
+  if (c.failure) return { ok: false, reason: 'failed' };
+  const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), ...c.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
   let dir;
   try { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-review-')); } catch { return { ok: false, reason: 'failed' }; }
   try {
@@ -62,7 +65,7 @@ async function review({ diff, settings, entitled, bin = findClaudeBin(), env = p
       const finish = (r) => { if (!done) { done = true; clearTimeout(timer); resolve(r); } };
       let child;
       try {
-        child = spawn(bin, buildArgs(s), { cwd: dir, env: childEnv, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true }); // privacy-flow: diff-review
+        child = spawn(bin, buildArgs({ ...s, haikuModel: c.model }), { cwd: dir, env: childEnv, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true }); // privacy-flow: diff-review
       } catch { return finish({ ok: false, reason: 'failed' }); }
       timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } finish({ ok: false, reason: 'failed' }); }, timeoutMs);
       child.on('error', () => finish({ ok: false, reason: 'failed' }));

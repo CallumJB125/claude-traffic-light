@@ -5,6 +5,7 @@
 // The helper keeps audio in memory only; this side only ever sees text.
 const readline = require('readline');
 const path = require('path');
+const { prepareNoTool } = require('./claude-carry');
 
 // Where the helper binary is. A packaged app only ever uses its own bundled copy.
 // A dev or test run may name another with PLEXIFORM_VOICE_HELPER_PATH (absolute
@@ -131,7 +132,10 @@ function createFlow({ reply, speak, send, speakable = (t) => t }) {
 // memory applies, an allowlisted env, the question on stdin, never in argv.
 // A screen question (src/voice-capture-main.js) passes its own args, which
 // allow Read on the one screenshot file, and room for its POINT tags.
-function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, maxChars = 400, setTimer = setTimeout, clearTimer = clearTimeout }) {
+// carry (src/claude-carry.js): the user's own provider and auth. The child has no Bash tool, so a key may be in
+// its env, and the `haiku` default becomes the provider's small model on a gateway. Without it nothing is carried.
+const swapHaiku = (args, model) => args.map((a, i) => (args[i - 1] === '--model' && a === 'haiku' ? model : a));
+function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, maxChars = 400, setTimer = setTimeout, clearTimer = clearTimeout, carry = null }) {
   let child = null;
   let dir = null;
   let settled = false;
@@ -146,16 +150,22 @@ function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, ma
   };
   const cancel = () => { if (child) { try { child.kill('SIGKILL'); } catch { /* gone */ } } done(null); };
   const timer = setTimer(cancel, timeoutMs);
-  try {
-    dir = fs.mkdtempSync(`${tmpdir.replace(/\/$/, '')}/buddy-ask-`);
-    child = spawn('claude', args, { cwd: dir, env, stdio: ['pipe', 'pipe', 'ignore'] }); // privacy-flow: voice-ask
-  } catch { done(null); return { promise, cancel }; }
-  let out = '';
-  child.stdout.on('data', (d) => { if (out.length < 256 * 1024) out += d; });
-  child.on('error', () => done(null));
-  child.on('close', (code) => done(code === 0 ? String(out).trim().slice(0, maxChars) || null : null));
-  child.stdin.on('error', () => {});
-  child.stdin.end(prompt);
+  const begin = (c) => {
+    if (settled) return;
+    if (c.failure) { done(null); return; }
+    try {
+      dir = fs.mkdtempSync(`${tmpdir.replace(/\/$/, '')}/buddy-ask-`);
+      child = spawn('claude', swapHaiku(args, c.model), { cwd: dir, env: Object.keys(c.env).length ? { ...env, ...c.env } : env, stdio: ['pipe', 'pipe', 'ignore'] }); // privacy-flow: voice-ask
+    } catch { done(null); return; }
+    let out = '';
+    child.stdout.on('data', (d) => { if (out.length < 256 * 1024) out += d; });
+    child.on('error', () => done(null));
+    child.on('close', (code) => done(code === 0 ? String(out).trim().slice(0, maxChars) || null : null));
+    child.stdin.on('error', () => {});
+    child.stdin.end(prompt);
+  };
+  if (carry) prepareNoTool(carry).then(begin, () => begin({ failure: null, env: {}, model: 'haiku' }));
+  else begin({ failure: null, env: {}, model: 'haiku' });
   return { promise, cancel };
 }
 

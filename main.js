@@ -4435,7 +4435,7 @@ const voiceClaudeEnv = () => Voice.claudeEnv(process.env, `${path.join(os.homedi
 const VoiceCapture = require('./src/voice-capture-main.js');
 const voiceScreen = VoiceCapture.create({
   systemPreferences, desktopCapturer: require('electron').desktopCapturer, screen, fs, path, tmpdir: os.tmpdir(),
-  randomHex: () => crypto.randomBytes(6).toString('hex'), askClaude: VoiceHelper.askClaude, spawn, env: voiceClaudeEnv(), log: console.log,
+  randomHex: () => crypto.randomBytes(6).toString('hex'), askClaude: VoiceHelper.askClaude, spawn, env: voiceClaudeEnv(), carry: require('./src/claude-carry.js').carryFor(process.env), log: console.log,
 });
 const pointer = require('./src/pointer-overlay-main.js').create({
   BrowserWindow, screen, htmlPath: path.join(__dirname, 'pointer-overlay.html'), preloadPath: path.join(__dirname, 'pointer-overlay-preload.js'),
@@ -4486,7 +4486,7 @@ async function voiceReply(text, onCancel) {
   if (free) {
     const ask = VoiceHelper.askClaude({
       spawn, fs, tmpdir: os.tmpdir(), args: Voice.claudeArgs(), prompt: Voice.claudePrompt(text, Voice.snapshot(ctx)),
-      env: voiceClaudeEnv(),
+      env: voiceClaudeEnv(), carry: require('./src/claude-carry.js').carryFor(process.env),
     });
     onCancel(ask.cancel);
     const said = await ask.promise;

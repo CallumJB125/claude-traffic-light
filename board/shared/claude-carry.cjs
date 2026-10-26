@@ -11,7 +11,7 @@
 // Never used for hosted runs (the hub config is their only source). prepare()
 // never throws and never puts a value in a reason.
 const fs = require('node:fs');
-const net = require('node:net');
+const net = require('node:net'); // privacy-flow: gateway-probe
 const os = require('node:os');
 const path = require('node:path');
 const {
@@ -34,7 +34,7 @@ const MOVE_IT = {
 };
 const BLOCKING_ALWAYS = new Set(['claude_settings_unreadable', 'path_var_relative']);
 
-function tcpProbe({ host, port, timeoutMs = PROBE_MS, connect = net.connect }) {
+function tcpProbe({ host, port, timeoutMs = PROBE_MS, connect = net.connect }) { // privacy-flow: gateway-probe
   return new Promise((resolve) => {
     let done = false;
     let sock;
@@ -48,7 +48,7 @@ function tcpProbe({ host, port, timeoutMs = PROBE_MS, connect = net.connect }) {
 
 function writeSecretFile(file, value) {
   const tmp = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
-  fs.writeFileSync(tmp, value, { mode: 0o600 }); // privacy-flow: api-key-file
+  fs.writeFileSync(tmp, value, { mode: 0o600 });
   fs.chmodSync(tmp, 0o600);
   fs.renameSync(tmp, file);
 }

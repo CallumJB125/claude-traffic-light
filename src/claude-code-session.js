@@ -20,6 +20,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { claudeActivityLabel } = require('./session-activity');
+const { NONE, prepareNoTool, carryFor } = require('./claude-carry');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ENV_KEYS = ['HOME', 'USER', 'LOGNAME', 'PATH', 'LANG', 'TMPDIR', 'TZ', 'CLAUDE_CONFIG_DIR',
@@ -57,7 +58,7 @@ function buildClaudeArgs({ sessionId, writable = false, model = 'haiku', systemP
 }
 
 function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.spawn, safeRoot = null, model = 'haiku', systemPrompt = null,
-  maxBudgetUsd = null, ackMs = ACK_MS, controlMs = CONTROL_MS, killGraceMs = KILL_GRACE_MS } = {}) {
+  maxBudgetUsd = null, ackMs = ACK_MS, controlMs = CONTROL_MS, killGraceMs = KILL_GRACE_MS, carry = carryFor(env) } = {}) {
   const events = new EventEmitter();
   const children = new Map(); // target (our --session-id) -> child record
   const emit = (e) => events.emit('event', e);
@@ -173,8 +174,11 @@ function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.
     const real = (p) => { try { return fs.realpathSync(p); } catch { return null; } };
     const rootReal = safeRoot ? real(safeRoot) : null, cwdReal = real(cwd);
     const writable = !!rootReal && !!cwdReal && inside(rootReal, cwdReal);
-    const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
-    const child = spawn(bin, buildClaudeArgs({ sessionId: target, writable, model, systemPrompt, maxBudgetUsd }), // privacy-flow: owned-claude-session
+    // The user's own provider and auth. This child has no Bash tool, so a key may sit in its env.
+    const c0 = carry ? await prepareNoTool(carry) : NONE;
+    if (c0.failure) throw new Error(c0.failure.reason);
+    const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), ...c0.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
+    const child = spawn(bin, buildClaudeArgs({ sessionId: target, writable, model: model === 'haiku' ? c0.model : model, systemPrompt, maxBudgetUsd }), // privacy-flow: owned-claude-session
       { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
     const c = { target, child, sent: new Set(), done: new Set(), waiters: new Map(), blocks: new Map(), tools: new Map(), blockMessage: '', active: null, interrupting: null, closed: false, exited: false };
     children.set(target, c);
