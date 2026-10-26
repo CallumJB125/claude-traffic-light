@@ -1,0 +1,9 @@
+model_provider = "gw"  # trailing
+notify = [
+  "a", # first
+  # between
+  "b",
+]
+[model_providers.gw]
+name = "Gateway"
+base_url = "https://gw.example.com/v1" # url

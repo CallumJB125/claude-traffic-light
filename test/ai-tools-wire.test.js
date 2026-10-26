@@ -6,6 +6,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+// No version probe may reach a real claude/codex.
+require('node:child_process').execFile = (bin, args, opts, cb) => { cb(new Error('probe disabled in tests')); return undefined; };
 const Adapters = require('../adapters/index.js');
 const { wire } = require('../src/ai-tools-wire.js');
 const { testTempDir } = require('./helpers/tmp');

@@ -64,6 +64,9 @@ function fixtureRoot({ filesA, filesB, overrides = {}, licenseB = MIT } = {}) {
   fs.mkdirSync(path.join(root, 'src'));
   fs.mkdirSync(archives);
   fs.copyFileSync(path.join(ROOT, 'catalog/agents/icon-rules.json'), path.join(root, 'catalog/agents/icon-rules.json'));
+  fs.copyFileSync(path.join(ROOT, 'catalog/bundled-npm.json'), path.join(root, 'catalog/bundled-npm.json'));
+  fs.mkdirSync(path.join(root, 'catalog/npm-licenses'), { recursive: true });
+  fs.copyFileSync(path.join(ROOT, 'catalog/npm-licenses/smol-toml.LICENSE'), path.join(root, 'catalog/npm-licenses/smol-toml.LICENSE'));
   fs.writeFileSync(path.join(root, 'catalog/agents/overrides.json'), JSON.stringify({ schema: 1, agents: overrides }));
   fs.writeFileSync(path.join(root, 'catalog/sources.json'), JSON.stringify({ schema: 1, sources: [
     { id: 'alpha', name: 'Alpha', repo: 'o/alpha', sha: SHA_A, license: 'MIT', licensePath: 'LICENSE', stars: 100, dedupeKey: 'name', enabled: true, include: ['engineering/**/*.md', 'specialized/*.md'], exclude: ['**/README.md'] },
@@ -272,7 +275,7 @@ test('shipped catalogue: no high-risk agent unless overridden, and the stored sc
 
 test('shipped catalogue: every source has its licence shipped and noted', () => {
   const notices = fs.readFileSync(path.join(ROOT, 'THIRD_PARTY_NOTICES.md'), 'utf8');
-  assert.equal(notices, builder.notices(shipped.catalog.sources));
+  assert.equal(notices, builder.notices(shipped.catalog.sources, builder.loadBundledNpm(ROOT)));
   assert.deepEqual(shipped.catalog.sources.map((s) => s.id), sources.map((s) => s.id));
   for (const s of shipped.catalog.sources) {
     const text = fs.readFileSync(path.join(ROOT, 'catalog/agents', s.licenseFile), 'utf8');

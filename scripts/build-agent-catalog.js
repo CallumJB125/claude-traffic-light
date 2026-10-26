@@ -282,7 +282,22 @@ function build(root, opts = {}) {
   return { catalog, json, lock: { schema: SCHEMA, sources: outLock }, licenses, report, sources: sourceMeta };
 }
 
-function notices(sources) {
+// npm packages that ship inside the app (root `dependencies` the code requires directly).
+// Each entry's licence text is reproduced in full (BSD-style licences require it).
+function loadBundledNpm(root) {
+  const list = JSON.parse(fs.readFileSync(path.join(root, 'catalog/bundled-npm.json'), 'utf8'));
+  return list.map((p) => ({ ...p, licenseText: fs.readFileSync(path.join(root, 'catalog', p.licenseFile), 'utf8') }));
+}
+
+function bundledNpmSection(list) {
+  const lines = ['## Bundled npm packages', '', 'These packages are installed from npm and shipped in the app unchanged.', ''];
+  for (const p of list) {
+    lines.push(`### ${p.name}`, '', `- Version: ${p.version}`, `- Licence: ${p.license}`, `- ${p.copyright}`, `- Source: ${p.url}`, `- Licence text: \`catalog/${p.licenseFile}\``, '', '```text', p.licenseText.trimEnd(), '```', '');
+  }
+  return lines.join('\n');
+}
+
+function notices(sources, bundled = []) {
   const lines = [
     '# Third-party notices',
     '',
@@ -296,6 +311,7 @@ function notices(sources) {
   for (const s of sources) {
     lines.push(`### ${s.name}`, '', `- Source: ${s.url}`, `- Commit: \`${s.sha}\``, `- Licence: ${s.license}${s.copyright ? ` (${s.copyright})` : ''}`, `- Licence text: \`catalog/agents/${s.licenseFile}\``, '');
   }
+  if (bundled.length) lines.push(bundledNpmSection(bundled));
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
@@ -310,7 +326,7 @@ function outputs(root, result) {
   out.set(`${dir}/lock.json`, `${JSON.stringify(result.lock, null, 2)}\n`);
   out.set(`${dir}/build-report.json`, `${JSON.stringify(result.report, null, 2)}\n`);
   for (const [id, text] of Object.entries(result.licenses)) out.set(`${dir}/licenses/${id}.LICENSE`, text);
-  out.set('THIRD_PARTY_NOTICES.md', notices(result.sources));
+  out.set('THIRD_PARTY_NOTICES.md', notices(result.sources, loadBundledNpm(root)));
   out.set('src/agent-catalog-pin.js', pinModule(result.json, result.report.counts));
   return out;
 }
@@ -374,4 +390,4 @@ if (require.main === module) {
   try { process.exitCode = main(process.argv.slice(2)); } catch (e) { console.error(`build-agent-catalog: ${e.message}`); process.exitCode = 1; }
 }
 
-module.exports = { build, outputs, untar, globRe, slugify, bestWhenOf, firstSentence, clip, licenseKind, notices, main };
+module.exports = { build, outputs, untar, globRe, slugify, bestWhenOf, firstSentence, clip, licenseKind, notices, bundledNpmSection, loadBundledNpm, main };

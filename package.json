@@ -12,9 +12,9 @@
     "install-hooks": "node hooks/install.js",
     "predist": "npm run calendar-helper && npm run voice-helper && npm run setups-helper && npm run account-storage-parent",
     "dist": "electron-builder -c electron-builder.config.js --mac",
-    "test": "node --test --test-timeout=300000 test/*.test.js test/*.test.mjs test/adapters/*.test.js && npm run test:remote && node --test --test-timeout=300000 site/test/*.test.js",
+    "test": "node --import ./test/support/no-real-cli.mjs --test --test-timeout=300000 test/*.test.js test/*.test.mjs test/adapters/*.test.js && npm run test:remote && node --import ./test/support/no-real-cli.mjs --test --test-timeout=300000 site/test/*.test.js",
     "test:remote": "npm --prefix remote test",
-    "fuzz": "FUZZ_SEQUENCES=${FUZZ_SEQUENCES:-2000} node --test test/state-fuzzer.test.js",
+    "fuzz": "FUZZ_SEQUENCES=${FUZZ_SEQUENCES:-2000} node --import ./test/support/no-real-cli.mjs --test test/state-fuzzer.test.js",
     "icons": "node scripts/build-icons.js",
     "dist:win": "electron-builder -c electron-builder.config.js --win",
     "dist:linux": "electron-builder -c electron-builder.config.js --linux",
@@ -352,6 +352,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "electron-updater": "^6.8.9",
+    "smol-toml": "1.9.1",
     "ws": "^8.22.0",
     "zod": "^4.6.2"
   }

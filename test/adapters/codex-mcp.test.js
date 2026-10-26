@@ -70,7 +70,7 @@ test('specOf reads only a stdio transport; sameSpec compares command, args and e
   assert.ok(!CodexMcp.sameSpec(s, { command: 'c', args: ['a', 'b'], env: { A: '1', B: '2' } }));
 });
 
-test('the real Codex CLI, against a scratch CODEX_HOME only', { skip: !findCodexBin() && 'Codex is not installed' }, async (t) => {
+test('the real Codex CLI, against a scratch CODEX_HOME only', { skip: (globalThis.__plexiformNoRealCli && 'real CLIs are blocked by test/support/no-real-cli.mjs') || (!findCodexBin() && 'Codex is not installed') }, async (t) => {
   const s = scratch(t);
   const cli = CodexMcp.create({ bin: findCodexBin(), env: { ...process.env, HOME: s.dir, CODEX_HOME: s.codexHome } });
   assert.deepEqual(await cli.get(), { ok: true, spec: null });

@@ -404,8 +404,8 @@ test('release.yml: tags and manual runs only, nothing signed, no branch conditio
   assert.match(jobs.build, /timeout-minutes: 60/);
   assert.doesNotMatch(jobs.build, /--test-force-exit/, 'forced exit can silently discard completed child-test verdicts');
   assert.match(jobs.build, /name: Unit tests\n(?:.*\n)*? {8}timeout-minutes: 20\n/);
-  assert.match(jobs.build, /node --test --test-concurrency=1 --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
-  assert.match(jobs.build, /node --test --test-concurrency=4 --test-timeout=120000 remote\/test\//);
+  assert.match(jobs.build, /node --import "\$GITHUB_WORKSPACE\/test\/support\/no-real-cli\.mjs" --test --test-concurrency=1 --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
+  assert.match(jobs.build, /node --import "\$GITHUB_WORKSPACE\/test\/support\/no-real-cli\.mjs" --test --test-concurrency=4 --test-timeout=120000 remote\/test\//);
   assert.ok(!/npm test/.test(jobs.build));
   // Every selected platform blocks staging; artifacts/evidence remain for debugging.
   assert.ok(!/continue-on-error:/.test(jobs.build));
@@ -413,7 +413,7 @@ test('release.yml: tags and manual runs only, nothing signed, no branch conditio
   releaseMatrixExpression(yml); // semantics and native/stage gates are exercised above
   assert.match(jobs.build, /name: Windows installer lifecycle/);
   assert.match(jobs.build, /run: node scripts\/windows-install-smoke\.js/);
-  assert.match(jobs.build, /node --test --test-concurrency=4 --test-timeout=120000 '\*\/test\/\*\*\/\*\.test\.js'/, 'the board authority suite is mandatory too');
+  assert.match(jobs.build, /node --import "\$GITHUB_WORKSPACE\/test\/support\/no-real-cli\.mjs" --test --test-concurrency=4 --test-timeout=120000 '\*\/test\/\*\*\/\*\.test\.js'/, 'the board authority suite is mandatory too');
   assert.match(jobs.build, /dist\/\*\.yml/, 'beta*.yml as well as latest*.yml');
   // N2: both stage jobs read the repo variable and drop Windows before the checksums and every upload
   for (const j of ['stage', 'stage-beta']) {
@@ -647,7 +647,7 @@ test('every workflow file is valid YAML with jobs and an on: trigger', () => {
 // one missing file: the remote suite then "fails" without running a test.
 test('release.yml passes test files, never a bare directory, to node --test', () => {
   const yml = readText('.github/workflows/release.yml');
-  const runs = yml.split('\n').filter((l) => /node --test\b/.test(l));
+  const runs = yml.split('\n').filter((l) => /node (--import \S+ )?--test\b/.test(l));
   assert.ok(runs.length >= 2, runs.join('\n'));
   for (const l of runs) assert.doesNotMatch(l, /\s[\w./-]+\/(\s|\|\||$)/, `bare directory in: ${l.trim()}`);
   assert.match(yml, /remote\/test\/\*\.test\.js/);

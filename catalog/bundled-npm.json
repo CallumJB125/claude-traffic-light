@@ -1,0 +1,10 @@
+[
+  {
+    "name": "smol-toml",
+    "version": "1.9.1",
+    "license": "BSD-3-Clause",
+    "copyright": "Copyright (c) Squirrel Chat et al., All rights reserved.",
+    "licenseFile": "npm-licenses/smol-toml.LICENSE",
+    "url": "https://github.com/squirrelchat/smol-toml"
+  }
+]
