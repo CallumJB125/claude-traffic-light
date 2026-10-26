@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { RUNNER_SERVICE } = require('./brand');
 const WindowsPrivate = require('../board/shared/windows-private-directory.cjs');
+const { loginEnvMessage } = require('../src/login-env-hub');
 
 const RESTART_WINDOW_MS = 10 * 60_000;
 const MAX_RESTARTS = 5;
@@ -127,7 +128,7 @@ function ensurePrivateDir(dir, { uid = process.getuid?.(), platform = process.pl
   }
 }
 
-function createDeviceController({ account, teamId, credsFile, seal, unseal, canSeal = () => true, fork, runnerEntry, entryExists = () => fs.existsSync(runnerEntry), dataDir, onStatus = () => {}, onEvent = () => {}, log = () => {}, now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms), stopGraceMs = STOP_GRACE_MS }) {
+function createDeviceController({ account, teamId, credsFile, seal, unseal, canSeal = () => true, fork, runnerEntry, entryExists = () => fs.existsSync(runnerEntry), dataDir, onStatus = () => {}, onEvent = () => {}, log = () => {}, loginEnv = () => null, now = () => Date.now(), schedule = (fn, ms) => setTimeout(fn, ms), stopGraceMs = STOP_GRACE_MS }) {
   // account: accounts.js client for the team's hub (origin, enrol(), unenrol()).
   let creds = null; // {hub, team_id, enrollment_id, runner_token, name}: on this Mac ⇔ enrolled and on
   try { if (fs.existsSync(credsFile)) creds = JSON.parse(unseal(fs.readFileSync(credsFile))); } catch (e) { log('runner enrolment unreadable; treated as off', e.message); creds = null; }
@@ -216,7 +217,11 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
     c.once('exit', (code) => onExit(c, code));
     // Exactly these five: no device id, account token or Access service token.
     c.postMessage({ type: 'runner.config', hub_url: account.origin, runner_token: creds.runner_token, team_id: teamId, data_dir: dataDir }); // privacy-flow: team-hub-runner
+    sendLoginEnvTo(c, loginEnv());
   }
+
+  // The login-shell values (src/login-env-hub.js) go over parentPort only: never argv, env or a log line.
+  function sendLoginEnvTo(c, values) { if (values && c) { try { c.postMessage(loginEnvMessage(values)); } catch { /* exiting */ } } } // privacy-flow: team-hub-runner
 
   function send(c, p) { try { c.postMessage({ type: 'runner.presence', enabled: p.enabled, share_summaries: p.enabled && p.share_summaries, sessions: p.enabled ? p.sessions : [] }); } catch { /* exiting */ } } // privacy-flow: team-hub-runner
 
@@ -358,6 +363,8 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
     },
     running: () => wanted && RUNNING.has(runner.state),
     /** Burst's secondary-provider spend and readiness for the runner's budget and limit handling (numbers only, local pipe). */
+    /** Re-send the login-shell values after main re-read them. */
+    sendLoginEnv(values) { if (child?.ready) sendLoginEnvTo(child, values); },
     sendBurst(facts) { if (child?.ready) { try { child.postMessage({ type: 'runner.burst', ...facts }); } catch { /* exiting */ } } }, // privacy-flow: team-hub-runner
     /** Share (or stop sharing) the live sessions list; `enabled:false` clears at once. Summaries need both switches. */
     setPresence(enabled, sessions = [], { shareSummaries = false } = {}) {

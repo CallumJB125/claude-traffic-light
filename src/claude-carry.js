@@ -72,14 +72,30 @@ function ensureKeyRoot(root) {
   return root;
 }
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; } };
-function sweepKeyDirs(root, { alive = pidAlive } = {}) {
+// When a process started (ms since epoch), or null when unknown: `ps -o etimes=` is elapsed seconds on macOS and Linux.
+function pidStartedAt(pid) {
+  try {
+    const out = require('node:child_process').execFileSync('/bin/ps', ['-o', 'etimes=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }); // privacy-flow: key-dir-sweep
+    const s = Number(String(out).trim());
+    return Number.isFinite(s) ? Date.now() - s * 1000 : null;
+  } catch { return null; }
+}
+// A dir whose pid is alive is kept, unless the dir is older than that process: the pid was reused after a crash.
+function sweepKeyDirs(root, { alive = pidAlive, startedAt = pidStartedAt } = {}) {
   let names;
   try { names = fs.readdirSync(root); } catch { return 0; }
   let n = 0;
   for (const name of names) {
     const m = /^(chat|voice-key)-(?:(\d+)-)?/.exec(name);
     if (!m) continue;
-    if (m[2] && alive(Number(m[2]))) continue;
+    if (m[2] && alive(Number(m[2]))) {
+      let older = false;
+      try {
+        const started = startedAt(Number(m[2]));
+        older = started != null && fs.statSync(path.join(root, name)).mtimeMs < started - 2000;
+      } catch { older = false; }
+      if (!older) continue;
+    }
     try { fs.rmSync(path.join(root, name), { recursive: true, force: true }); n++; } catch { /* gone */ }
   }
   return n;

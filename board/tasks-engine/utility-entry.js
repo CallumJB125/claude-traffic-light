@@ -8,6 +8,7 @@ import { makeLogger } from '../runner/util.js';
 import { desktopProviders } from './desktop-providers.js';
 import { parentBus, BUS_REQUEST } from './parent-bus.js';
 import { productionCarry } from '../shared/claude-carry.cjs';
+import { createLoginEnvStore } from '../shared/login-env-store.cjs';
 
 // The app's enforced spend cap (src/spend-enforce.js writes it; hooks/spend-gate.js reads it, fail-open). The
 // router skips every AI while it holds.
@@ -36,7 +37,13 @@ function peersFor(taskId) {
     try { parent.postMessage({ type: 'awareness.peers', id, taskId }); } catch { asks.get(id)?.(null); }
   });
 }
+// PR 2b: the allowlisted login-shell values main reads arrive as {type:'login.env'} over parentPort, are kept in
+// memory only and reach the carry through loginShellEnv. Never argv, env or a log line.
+const loginEnv = createLoginEnvStore();
+const acceptLoginEnv = (m) => loginEnv.accept(m);
+
 parent?.on('message', (e) => {
+  if (acceptLoginEnv(e?.data)) return;
   if (e?.data?.type === 'tasks.shutdown') close();
   if (e?.data?.type === 'awareness.peers.reply') asks.get(e.data.id)?.(e.data.result ?? null);
   if (e?.data?.type === BUS_REQUEST) {
@@ -49,8 +56,7 @@ try {
   engine = await startTasksEngine({
     dataDir: process.env.PLEXIFORM_TASKS_DATA_DIR,
     ...desktopProviders(),
-    // loginShellEnv is the seam for PR 1b (src/login-shell-env.js): pass the filtered login-shell reader here.
-    claudeCarry: productionCarry({ log: () => {} }),
+    claudeCarry: productionCarry({ log: () => {}, loginShellEnv: loginEnv.loginShellEnv }),
     spendGate: () => SpendGate.readGate(appRoot),
     log: makeLogger(process.stderr, { quiet: true }),
     stopGraceMs: 1500,

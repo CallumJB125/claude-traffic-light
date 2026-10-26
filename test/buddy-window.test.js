@@ -1031,6 +1031,7 @@ function deviceHarness(over = {}) {
     seal: over.seal ?? ((s) => Buffer.from(`SEALED:${Buffer.from(s).toString('base64')}`)),
     unseal: (b) => Buffer.from(String(b).slice(7), 'base64').toString(),
     fork: (entry, args, opts) => { const c = new FakeChild(); c.entry = entry; c.args = args; c.opts = opts; c.sent = []; c.postMessage = (m) => c.sent.push(m); children.push(c); return c; },
+    ...(over.loginEnv ? { loginEnv: over.loginEnv } : {}),
     runnerEntry: '/app/board/runner/app-entry.js', entryExists: () => over.entryExists ?? true, dataDir: path.join(dir, 'runner', teamId),
     onStatus: (s) => statuses.push(s), onEvent: (e) => { if (over.onEventThrows) throw new Error('subscriber bug'); events.push(e); }, schedule: (fn) => pending.push(fn), now: () => t, stopGraceMs: 1000, log: (...a) => logs.push(a.map(String).join(' ')),
   });
@@ -1038,6 +1039,33 @@ function deviceHarness(over = {}) {
   const unsealed = (teamId) => JSON.parse(Buffer.from(fs.readFileSync(credsFile(teamId), 'utf8').slice(7), 'base64').toString());
   return { dir, calls, children, statuses, pending, logs, events, make, credsFile, unsealed, tick: (ms) => { t += ms; } };
 }
+
+test('PR 2b: the runner gets the login-shell values over parentPort after runner.config, and again on change; never argv, env or a log line', async () => {
+  const secret = 'sk-shell-LOGINSECRET000000000000000000000000';
+  let current = { ANTHROPIC_BASE_URL: 'https://shell-gw.example/v1', ANTHROPIC_AUTH_TOKEN: secret };
+  const h = deviceHarness({ loginEnv: () => current });
+  const d = h.make();
+  assert.equal((await d.enable({ name: 'Callum’s Mac' })).ok, true);
+  const c = h.children[0];
+  assert.equal(c.sent[0].type, 'runner.config');
+  assert.deepEqual(c.sent[1], { type: 'login.env', values: current });
+  assert.deepEqual(c.args, []);
+  assert.ok(!JSON.stringify(c.opts).includes(secret), 'not in the fork env');
+  d.sendLoginEnv({ ANTHROPIC_BASE_URL: 'https://b.example' });
+  assert.equal(c.sent.length, 2, 'not sent to a runner that has not said ready');
+  c.emit('message', { type: 'runner.ready' });
+  d.sendLoginEnv({ ANTHROPIC_BASE_URL: 'https://b.example' });
+  assert.deepEqual(c.sent.at(-1), { type: 'login.env', values: { ANTHROPIC_BASE_URL: 'https://b.example' } });
+  assert.ok(!JSON.stringify(h.logs).includes(secret), 'never in a log line');
+  assert.ok(!JSON.stringify(h.statuses).includes(secret));
+});
+
+test('PR 2b: with no login values (read failed or still pending) the runner is sent nothing extra', async () => {
+  const h = deviceHarness({ loginEnv: () => null });
+  const d = h.make();
+  await d.enable({ name: 'Callum’s Mac' });
+  assert.equal(h.children[0].sent.length, 1);
+});
 
 test('device name reads like a person made it', () => {
   assert.equal(defaultDeviceName('Callum', 'Callums-MacBook-Air.local'), 'Callum’s Callums MacBook Air');

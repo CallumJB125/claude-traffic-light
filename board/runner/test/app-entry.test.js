@@ -265,6 +265,29 @@ test('app mode under the test guard: a claimed run never reads HOME or runs the 
   }
 });
 
+test('PR 2b: a login.env message is accepted, kept in memory only and never reaches a log line (BOARD_DEBUG on)', async () => {
+  const root = tmpDir();
+  const hub = await startFakeHub();
+  const secret = 'sk-shell-LOGINSECRET000000000000000000000000';
+  const app = spawnApp(root);
+  try {
+    app.child.send({ type: 'login.env', values: { ANTHROPIC_BASE_URL: 'https://shell-gw.example/v1', ANTHROPIC_AUTH_TOKEN: secret } });   // before the config, as main may send it
+    app.child.send(config(hub, root));
+    await app.next('runner.status', (m) => m.state === 'connected');
+    app.child.send({ type: 'login.env', values: { ANTHROPIC_AUTH_TOKEN: `${secret}2` } });
+    app.child.send({ type: 'login.env', values: 'junk' });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(app.child.exitCode, null, 'still running');
+    assert.equal(app.logs().includes(secret) || app.logs().includes('shell-gw.example'), false, 'no value in any log line');
+    assert.equal(JSON.stringify(app.messages).includes(secret), false, 'none echoed back to main');
+  } finally {
+    app.child.kill('SIGTERM');
+    await app.exited;
+    await hub.close();
+    rm(root);
+  }
+});
+
 test('app mode quit: SIGTERM parks a live run (handover, pushed snapshot, release{requeue}); the next start finds no orphan', async () => {
   const root = tmpDir();
   const hub = await startFakeHub();
