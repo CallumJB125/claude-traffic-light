@@ -537,24 +537,9 @@ function askFromWidgetOn() {
   try { return !!JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'config.json'), 'utf8')).askFromWidget; } catch { return false; }
 }
 
-// The frontmost application's name, read locally with macOS lsappinfo (no permission prompt); nothing leaves the Mac.
-// The folder's override file lets tests name one; a repo's settings cannot reach it.
-function frontmostApp(overrides) {
-  if (typeof overrides.frontmostApp === 'string') return overrides.frontmostApp;
-  if (process.platform !== 'darwin') return null;
-  try {
-    const { execFileSync } = require('child_process');
-    const front = execFileSync('/usr/bin/lsappinfo', ['front'], { encoding: 'utf8', timeout: 800 }).trim(); // privacy-flow: frontmost-app
-    const out = execFileSync('/usr/bin/lsappinfo', ['info', '-only', 'name', front], { encoding: 'utf8', timeout: 800 }); // privacy-flow: frontmost-app
-    return (/"LSDisplayName"="([^"]*)"/.exec(out) || [])[1] || null;
-  } catch { return null; }
-}
-
 function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
   const AskPolicy = require('./ask-policy.js');
-  const overrides = AskPolicy.readOverrides(ROOT_DIR);
-  const askPolicy = AskPolicy.policy(typeof overrides.held === 'boolean' ? { held: overrides.held } : {});
-  const askMs = Math.min(AskPolicy.clampAskMs(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS, askPolicy.ceilingMs), maxAskMs);
+  const askMs = Math.min(AskPolicy.clampAskMs(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS), maxAskMs);
   writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
   const described = Input.describeHookInput(channel, data);
   // Nothing to bind an answer to: an unreadable payload must never become a
@@ -600,15 +585,23 @@ function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
   let answer = null;
   let answered = false;
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
-  const waitStart = Date.now();
-  const hostApp = askPolicy.earlyStopWhenTerminalFrontmost ? detectHostApp(prevOnEntry?.hostApp) : null;
-  let nextFrontCheck = waitStart + AskPolicy.EARLY_STOP_AFTER_MS;
+  // Claude Code kills this hook when the terminal answers No (and at its timeout): a watcher removes the request then.
+  try { require('child_process').spawn(process.execPath, ['-e', AskPolicy.REAPER_SOURCE, reqFile, ansFile, id, String(process.pid)], { detached: true, stdio: 'ignore' }).unref(); } catch { /* the 60 s request expiry still clears it */ } // privacy-flow: hook-request-cleanup
+  // The terminal answered Yes: Claude Code does not kill the hook, but the tool's PostToolUse takes this tool call's
+  // entry out of the session file. Only watched when the payload names the call and the entry is there to begin with.
+  const watchId = typeof data?.tool_use_id === 'string' ? data.tool_use_id : null;
+  const owner = data?.agent_id ?? null;
+  const asking = () => Machine.claudeInputEntries(readPrev()).some((r) => r.id === watchId && r.agentId === owner);
+  let watching = false;
+  try { watching = !!watchId && asking(); } catch { watching = false; }
+  let nextWatch = Date.now() + 1000;
   while (Date.now() < waitUntil) {
     if (fs.existsSync(ansFile)) { answer = Answer.consumeAnswerDetail(REQUESTS_DIR, id, decisionHash, key, judge); answered = true; break; }
-    // C-V(a): with the terminal dialog held, stop waiting once the person is looking at that terminal.
-    if (askPolicy.earlyStopWhenTerminalFrontmost && Date.now() >= nextFrontCheck) {
-      nextFrontCheck = Date.now() + 1000;
-      if (AskPolicy.terminalFrontmost(frontmostApp(overrides), hostApp)) break;
+    if (watching && Date.now() >= nextWatch) {
+      nextWatch = Date.now() + 1000;
+      let still = true;
+      try { still = asking(); } catch { still = true; }
+      if (!still) break; // answered in the terminal: stop waiting and take the card away
     }
     Atomics.wait(sleeper, 0, 0, 150);
   }

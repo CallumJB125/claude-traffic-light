@@ -39,9 +39,30 @@ answers, the hook claims the answer slot with a timeout marker, deletes the
 request and prints nothing. The docs say only the `decision` object can grant
 or deny a PermissionRequest. They say PreToolUse with no decision leaves "the
 normal permission flow". For a PermissionRequest hook that prints nothing, the
-docs are silent (**UNVERIFIED**). The existing widget design has always
-relied on the terminal dialog showing in that case (set-status.js), and this
-change doesn't alter that.
+docs are silent, so it was measured (below).
+
+**Measured on Claude Code 2.1.310** (12 trials in the lab; raw timings in
+`work/dogfood-lab/cv-report.md`):
+- **The terminal dialog is not held by the hook.** It is drawn 51 to 283 ms
+  after the hook starts and accepts a key within about 0.4 s, while the hook
+  still has about 14.5 s to run. A terminal Yes runs the tool about 265 ms
+  later without waiting for the hook. So the 55 s wait costs the person at the
+  keyboard nothing, and no shorter ceiling or early stop is needed.
+- **A late allow is harmless.** After a terminal No, Claude Code SIGTERMs the
+  hook about 76 ms later and the tool never runs. After a terminal Yes the hook
+  keeps running and its allow, arriving about 12.8 s later, is ignored: the tool
+  ran exactly once (3 of 3).
+- **The 60 s hook timeout does not block the session.** Claude Code SIGTERMs
+  the hook at 60.0 s; the dialog stays on screen and stays answerable.
+
+What the hook does about it: a terminal No kills the hook, which cannot run its
+own cleanup while it is blocked in its wait, so a tiny watcher process removes
+that hook's own request file once the hook is gone (and only a file whose id is
+the hook's own). After a terminal Yes the hook is not killed; when the payload
+names the tool call (`tool_use_id`) and the session file shows it waiting, the
+hook stops waiting as soon as the tool's PostToolUse takes that entry out, and
+removes its card. The environment can only shorten the wait, never lengthen it
+(a repo's `.claude/settings.json` can set environment variables for hooks).
 
 Classifier denials: **yes**, a hook signal exists (`PermissionDenied`, with
 `reason`), so no transcript parsing is needed. In `-p` runs with

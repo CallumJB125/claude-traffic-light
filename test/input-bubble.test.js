@@ -641,7 +641,7 @@ test('N1: on the Waiting page the off notice is the banner only; the bubble keep
   const off = { id: 'ask-h-s', kind: 'permission', source: 'session', answerable: false, actions: ['open'], expires_at: null, answering: false, tool: 'Bash', cwd: '/w/app', title: 'Needs your permission', text: '', options: [], created_at: ago(1) };
   const page = setup({ mode: 'page' });
   page.show([off]);
-  assert.match(page.$$('.ib-body .ib-hint').map((n) => n.textContent).join('|'), /Answering here is off/);
+  assert.doesNotMatch(page.root.textContent, /Answering here is off/, 'the banner says it; no repeated line with a dangling separator');
   assert.equal(page.$$('.ib-body .ib-link').length, 0);
   const bubble = setup();
   bubble.show([off]);

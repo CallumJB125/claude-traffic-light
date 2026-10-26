@@ -61,7 +61,7 @@ test('C-F: main refuses a flagged allow, and a plan\'s auto-accept, from home:an
   const vm = require('vm');
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   const a = src.indexOf('function homeAnswerRefusal');
-  const body = src.slice(a, src.indexOf('// C-V(b)', a));
+  const body = src.slice(a, src.indexOf("ipcMain.handle('answer-input'", a));
   const AutoRules = require('../src/auto-rules.js');
   const refuse = vm.runInNewContext(`${body}; homeAnswerRefusal`, { AutoRules });
   const req = (command) => ({ id: 'r', kind: 'permission', tool: 'Bash', cwd: '/w/app', toolInput: { command } });

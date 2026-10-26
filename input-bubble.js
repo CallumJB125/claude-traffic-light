@@ -456,15 +456,18 @@
       if (input.kind !== 'blocked' && (!V.canAnswer(input, t)) && V.canOpen(input)) {
         const why = A.answerability(input, { now: t }).reason;
         if (why === 'setting-off') {
-          const line = el('div', 'ib-hint', `${A.reasonText(why)} · `);
-          if (api.openWidgetSettings && mode !== 'page') { // the Waiting page has its own banner with the link
-            const turnOn = el('button', 'ib-link', 'Turn it on');
-            turnOn.type = 'button';
-            turnOn.setAttribute('aria-label', 'Turn on answering from the widget in Settings');
-            turnOn.addEventListener('click', (e) => { e.stopPropagation(); api.openWidgetSettings(); });
-            line.appendChild(turnOn);
+          // The Waiting page has its own banner with the link: no second line there.
+          if (mode !== 'page') {
+            const line = el('div', 'ib-hint', `${A.reasonText(why)} · `);
+            if (api.openWidgetSettings) {
+              const turnOn = el('button', 'ib-link', 'Turn it on');
+              turnOn.type = 'button';
+              turnOn.setAttribute('aria-label', 'Turn on answering from the widget in Settings');
+              turnOn.addEventListener('click', (e) => { e.stopPropagation(); api.openWidgetSettings(); });
+              line.appendChild(turnOn);
+            }
+            body.appendChild(line);
           }
-          body.appendChild(line);
         } else if (why === 'session-reported' || why === 'pre-hook') body.appendChild(el('div', 'ib-hint', A.reasonText(why)));
         const row = el('div', 'ib-opts');
         row.appendChild(openButton(input));

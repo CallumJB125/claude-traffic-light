@@ -4627,11 +4627,6 @@ function homeAnswerRefusal(req, optionId) {
   if (!/^allow/.test(optionId)) return false;
   try { return AutoRules.danger(req) !== null; } catch { return true; }
 }
-// C-V(b), on only if the measurement says a late allow does harm: the session must still be asking.
-function lateAnswerWhy(req) {
-  const s = (aggregateState().sessions || []).find((x) => x.sessionId === req.sessionId);
-  return AskPolicy.lateAnswerRefusal(s);
-}
 ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   if (!inputSenderOk(e)) return { ok: false, error: 'not allowed' };
   // Answering from the widget is a setting: off means off, even for a request file still on disk.
@@ -4652,8 +4647,6 @@ ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   }
   // Bound to the request as shown (readRequests drops edited ones): the file
   // must still hash the same when the answer is written.
-  const lateWhy = lateAnswerWhy(req);
-  if (lateWhy) return { ok: false, error: lateWhy };
   const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'desk', extra: answer.extra, key: keyFor(req.id), decisionHash: req.decisionHash });
   console.log(`[answer] ${req.kind || 'permission'} ${req.tool} ${req.id}: ${optionId} → ${w.ok ? answer.decision : `not sent (${w.error})`}`);
   setTimeout(broadcastStatus, 250);
@@ -4683,8 +4676,6 @@ ipcMain.handle('home:answer-input', (e, id, optionId) => {
   const answer = PendingInputs.answerFor(req, optionId);
   if (!answer) return { ok: false, error: 'not an option for this request' };
   if (homeAnswerRefusal(req, optionId)) return { ok: false, error: 'flagged' };
-  const lateWhy = lateAnswerWhy(req);
-  if (lateWhy) return { ok: false, error: lateWhy };
   const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'home', extra: answer.extra, key: keyFor(req.id), decisionHash: req.decisionHash });
   console.log(`[answer] ${req.kind || 'permission'} ${req.tool} ${req.id}: ${optionId} → ${w.ok ? answer.decision : `not sent (${w.error})`} (home)`);
   setTimeout(broadcastStatus, 250);
