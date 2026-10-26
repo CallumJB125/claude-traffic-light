@@ -111,7 +111,7 @@ test('a brand-new user sees one empty message per section, each with a button', 
     await tick();
     assert.equal(f.section('banner').hidden, false);
     assert.match(f.section('banner').textContent, /No AI tools found yet/);
-    for (const id of ['needs', 'running']) {
+    for (const id of ['running']) {
       const empties = f.section(id).querySelectorAll('.empty');
       assert.equal(empties.length, 1, `${id}: one empty message`);
       assert.equal(empties[0].querySelectorAll('button').length, 1, `${id}: one action`);
@@ -139,7 +139,7 @@ test('a live session appears on Home within one refresh tick', async () => {
   } finally { f.close(); }
 });
 
-test('needs you lists each wait once with an Answer that opens the Waiting page; team cards open by handle', async () => {
+test('Home has no Needs you section (the Inbox is the one source); team cards open by handle', async () => {
   const calls = [];
   const state = { ...fresh, banner: null, needs: { total: 2, items: [{ kind: 'Permission', headline: 'Bash: npm test', project: 'app', age: 'waiting 6 min', late: true, action: 'answer' }, { kind: 'Question', headline: 'Pick one', project: 'web', age: 'waiting 1 min', late: false, action: 'go-to-terminal' }] },
     today: { spend: { spent: 4, budget: 0, level: null, unpriced: 0, equivalent: false }, longestWaitMs: 360000 },
@@ -147,10 +147,7 @@ test('needs you lists each wait once with an Answer that opens the Waiting page;
   const f = setup([state], calls);
   try {
     await tick();
-    assert.equal(f.section('needs').querySelectorAll('li').length, 2);
-    assert.deepEqual([...f.section('needs').querySelectorAll('li button')].map((b) => b.textContent), ['Answer', 'Open'], 'Answer only where Plexiform can deliver it');
-    f.section('needs').querySelector('li button').click();
-    assert.deepEqual(calls.at(-1), ['navigate', 'waiting']);
+    assert.equal(f.dom.window.document.getElementById('needs'), null, 'no Needs you section, so no Answer that only opens the Waiting page');
     assert.match(f.section('today').textContent, /\$4\.00.*no daily limit/);
     assert.equal(f.section('today').querySelector('.actions button').textContent, 'Set a daily limit');
     f.section('today').querySelector('.actions button').click();
@@ -258,30 +255,12 @@ test('the cost guard hands its report to main for Home', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('needs you: the cost guard pause sits first, Resume asks main and Raise limit opens Usage & cost', async () => {
+test('the cost guard pause still travels with the needs data (the Inbox shows its Resume)', () => {
   const paused = { text: 'Paused at your $10.00 daily limit ($12.00 spent)', note: 'Claude Code tool calls are refused until you resume or raise the limit.', resumable: true };
   const n = Home.needs([], NOW, paused);
   assert.equal(n.total, 0); assert.deepEqual(n.paused, paused);
   assert.equal(Home.needs([], NOW, null).paused, null);
   assert.equal(Home.costs({ enforce: { available: true, settings: { enforceCaps: true }, capActive: true, paused } }).enforce.status, 'Paused at your $10.00 daily limit ($12.00 spent): tool calls are being refused.');
-  const calls = [];
-  const state = { ...fresh, banner: null, needs: { paused, total: 1, items: [{ kind: 'Permission', headline: 'Bash: npm test', project: 'app', age: 'waiting 6 min', late: false }] } };
-  const f = setup([state, { ...state, needs: { paused: null, total: 1, items: state.needs.items } }], calls);
-  f.dom.window.homeApi.resumeCap = async () => { calls.push(['resume']); return { ok: true }; };
-  try {
-    await tick();
-    const items = f.section('needs').querySelectorAll('li');
-    assert.equal(items.length, 2);
-    assert.equal(items[0].id, 'needs-paused');
-    assert.match(items[0].textContent, /Paused at your \$10\.00 daily limit/);
-    const [resume, raise] = items[0].querySelectorAll('button');
-    assert.equal(resume.textContent, 'Resume'); assert.equal(raise.textContent, 'Raise limit');
-    raise.click();
-    assert.deepEqual(calls.at(-1), ['navigate', 'usage']);
-    resume.click(); await tick(); await tick();
-    assert.ok(calls.some((c) => c[0] === 'resume'));
-    assert.equal(f.section('needs').querySelectorAll('li').length, 1, 'after the resume the card is gone');
-  } finally { f.close(); }
 });
 
 test('home:resume-cap forwards to the cost guard and re-reads the costs card at once', async () => {

@@ -13,7 +13,7 @@ const shot = (name) => (process.env.PLEXIFORM_VIEW_DIR ? { path: path.join(proce
 test('Home shows only what needs you, what is running and today', async () => {
   const home = await embedded(h.app, 'home', 'home.html');
   await expect(home.locator('body')).toHaveClass(/simple/);
-  await expect(home.locator('#needs')).toBeVisible();
+  await expect(home.locator('#needs')).toHaveCount(0);
   await expect(home.locator('#running')).toBeVisible();
   await expect(home.locator('#today')).toBeVisible();
   for (const id of ['#digest', '#teamwork', '#cards', '#costs', '#open-tasks']) await expect(home.locator(id)).toBeHidden();
