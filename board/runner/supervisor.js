@@ -24,6 +24,7 @@ import { lstartOf, sameProcess, treeGroups, processTable, killGroups, killTree, 
 import { runReview } from './review.js';
 import { REVIEW_PROVIDERS } from '../shared/review.js';
 import { sweepKeyFiles } from '../shared/claude-carry.cjs';
+import { CODEX_KEY_FILE } from '../shared/codex-carry.cjs';
 import { makeLogger, realClock, ensureDir, writeJsonAtomic, writeFileAtomic, RUNNER_VERSION, lineReader } from './util.js';
 
 // Device-level frames carry no repo_id; they still pass the serializer guard
@@ -605,7 +606,8 @@ export class Supervisor extends EventEmitter {
     const bin = m.ai === 'claude' ? this.claudeBin : this.ais?.find((a) => a.id === m.ai)?.bin;
     let provider = null;
     if (m.ai === 'codex' && !this.hosted && this.codexCarry) {
-      const c = await this.codexCarry.prepare();
+      // The review's Codex has no command tool (reviewArgs disables them), so a key may sit in its CLI env.
+      const c = await this.codexCarry.prepare({ mode: 'noshell' });
       // The hub gets a fixed sentence: the detail (paths, a gateway address) stays on this machine.
       if (c.failure) { this.log.warn('review provider check failed', { kind: c.failure.kind }); return reply({ ok: false, error: `Codex ${c.failure.kind === 'auth' ? 'auth' : 'provider'} check failed on this machine` }); }
       const home = c.codexHome ? { CODEX_HOME: c.codexHome } : {};
@@ -729,10 +731,12 @@ export class Supervisor extends EventEmitter {
     }
     let codexHome = null;
     if (ai === 'codex' && !this.hosted && this.codexCarry) {
-      carry = await this.codexCarry.prepare();
+      // A board run has a tool shell: a key goes only through a file in the denied run dir (or is refused).
+      carry = await this.codexCarry.prepare({ mode: 'shell', keyFile: path.join(run.runDir, CODEX_KEY_FILE) });
       if (carry.failure) throw Object.assign(new Error(carry.failure.reason), { code: carry.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER', ai });
       codexHome = carry.codexHome ?? null;
       if (!carry.carry) carry = null;
+      run.carry = carry;   // released (the key file deleted) at the next spawn and at run end
       if (this.runs.get(run.run_id) !== run || run.ending || run.ended || run.fenced || !run.gateState().open) return null;
     }
     const anthropicKey = hosted?.anthropicKey ?? this.env.ANTHROPIC_API_KEY;

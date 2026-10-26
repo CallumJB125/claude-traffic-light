@@ -256,7 +256,7 @@ test('a helper\'s Codex carry gets CODEX_HOME and the env_key value from the sto
   const store = createLoginEnvStore();
   store.accept(loginEnvMessage({ CODEX_HOME: '/fx/alt', DEEPSEEK_API_KEY: CODEX_KEY }));
   const carry = createCodexCarry({ env: { HOME: '/fx/home' }, home: '/fx/home', platform: 'linux', loginShellEnv: store.loginShellEnv, readFile: (f) => codexFiles[f] ?? null, probe: async () => true, burstOwnsPort: async () => false });
-  const r = await carry.prepare();
+  const r = await carry.prepare({ mode: 'noshell' });
   assert.equal(r.failure, null);
   assert.equal(r.codexHome, '/fx/alt');
   assert.equal(r.cliEnv.DEEPSEEK_API_KEY, CODEX_KEY);

@@ -140,7 +140,8 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
   async function preflight() {
     if (!codexCarry) return null;
     let c;
-    try { c = await codexCarry.prepare(); } catch { throw Object.assign(new Error('Codex settings could not be read'), { code: 'PROVIDER' }); }
+    // Owned threads have no command tool (DISABLED_FEATURES), so a key may sit in this process's env.
+    try { c = await codexCarry.prepare({ mode: 'noshell' }); } catch { throw Object.assign(new Error('Codex settings could not be read'), { code: 'PROVIDER' }); }
     if (c.failure) throw Object.assign(new Error(c.failure.reason), { code: c.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' });
     return c;
   }

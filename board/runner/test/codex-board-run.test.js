@@ -182,3 +182,16 @@ test('board run: CODEX_HOME is the carry\'s codexHome, denied to tool shells alo
     } finally { await h.close(); }
   }
 });
+
+test('board run: the carry is asked for a shell run with its key file in the denied run dir; release runs at run end', async () => {
+  const seen = []; let released = 0;
+  const h = await rig({ codexCarry: { prepare: async (o) => { seen.push(o); return { carry: true, failure: null, overrides: ['model_provider="local"'], model: null, cliEnv: {}, codexHome: null, release() { released++; } }; } } });
+  try {
+    const run = await claimRun(h.sup, h.hub, h.offer); await waitFor(() => run.localState === 'idle');
+    assert.equal(seen[0].mode, 'shell');
+    assert.equal(seen[0].keyFile, path.join(run.runDir, 'codex-provider.key'));
+    const fsTable = starts(h)[0].argv.find((a) => a.startsWith('permissions.plexiform.filesystem='));
+    assert.ok(fsTable.includes(`${JSON.stringify(path.join(h.home, 'run'))}="deny"`), 'the run root, and so the key file, is denied');
+  } finally { await h.close(); }
+  assert.ok(released >= 1, 'the key file is released by the end');
+});

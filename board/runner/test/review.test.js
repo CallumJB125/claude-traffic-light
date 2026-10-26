@@ -228,7 +228,7 @@ test('supervisor: a codex review gets the carried provider; a failed check answe
   let carry = { carry: true, failure: null, overrides: ['model_provider="plexlab"'], model: 'glm-5.3-flash', cliEnv: { PLEXLAB_KEY: 'k' }, release() {} };
   const sup = await startRunner({ hub, home, repo, env: { HOME: home, PATH: process.env.PATH, TMPDIR: root }, policyExtra: { ai_ids: ['codex'] }, opts: {
     detectAis: async () => [{ id: 'codex', installed: true, signedIn: true, startable: true, bin: '/x/codex' }],
-    codexCarry: { prepare: async () => carry },
+    codexCarry: { prepare: async (o) => { (globalThis.__reviewPrepareArgs ??= []).push(o); return carry; } },
     runReview: async (o, ctx) => { calls.push(ctx); return { ok: true, output: '{"verdict":"needs_human"}', cost_usd: null, files: [], signals: [], truncated: false, model: null }; },
   } });
   try {
@@ -247,4 +247,18 @@ test('supervisor: a codex review gets the carried provider; a failed check answe
     await hub.close();
     rm(root);
   }
+});
+
+test('the review asked the carry for a no-shell site', () => {
+  assert.ok((globalThis.__reviewPrepareArgs ?? []).length > 0);
+  assert.ok(globalThis.__reviewPrepareArgs.every((o) => o?.mode === 'noshell'));
+});
+
+// Lead decision (DGX /proc lab): the Codex reviewer gets no command tool at all, so nothing in it can read the CLI env.
+test('reviewArgs: codex review disables every shell and exec tool and apply_patch, before the stdin marker', () => {
+  const a = reviewArgs('codex', { cwd: '/tmp/x' });
+  for (const f of ['shell_tool', 'unified_exec', 'unified_exec_tty', 'shell_snapshot', 'code_mode_host']) assert.equal(a[a.indexOf(f) - 1], '--disable', f);
+  assert.equal(a[a.indexOf('include_apply_patch_tool=false') - 1], '-c');
+  assert.equal(a.at(-1), '-');
+  assert.ok(a.includes('--sandbox') && a[a.indexOf('--sandbox') + 1] === 'read-only', 'the read-only sandbox stays as a second layer');
 });

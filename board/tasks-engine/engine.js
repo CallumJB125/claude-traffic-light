@@ -23,7 +23,7 @@ import {
 import { T_QUIET_MS } from '../shared/liveness.js';
 import { redact, filterPath, normalizeRemoteUrl } from '../shared/scope.js';
 import { sweepKeyFiles } from '../shared/claude-carry.cjs';
-import { TAKEOVER_TRANSLATED } from '../shared/codex-carry.cjs';
+import { TAKEOVER_TRANSLATED, CODEX_KEY_FILE } from '../shared/codex-carry.cjs';
 import { untrusted, envelopeTag } from '../shared/untrusted.js';
 import { BACKENDS } from '../runner/backends/index.js';
 import { buildSettings, buildMcpConfig, buildEnv, trustedInstructions, HOOK_TOKEN_FILE, API_KEY_FILE, MCP_SERVER, DEFAULT_MAX_TURNS, DISALLOWED_TOOLS, BUS_DISALLOWED, DENY_READ } from '../runner/launch.js';
@@ -1176,9 +1176,9 @@ export class TasksEngine extends EventEmitter {
   // a takeover of a task that never ran here, or after a restart or a config change, must not fall back to OpenAI.
   // → the prepare result (carry:false = no provider, still with its codexHome), or null with no carry configured;
   // a failed preflight throws AUTH or PROVIDER with its reason.
-  async #codexProvider() {
+  async #codexProvider(opts) {
     if (!this.codexCarry) return null;
-    const c = await this.codexCarry.prepare();
+    const c = await this.codexCarry.prepare(opts);
     if (c.failure) throw Object.assign(new Error(c.failure.reason), { code: c.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' });
     return c;
   }
@@ -1237,7 +1237,8 @@ export class TasksEngine extends EventEmitter {
     let codexHome = null;
     if (task.ai.id === 'codex') {
       this.#releaseCarry(task);
-      const c = await this.#codexProvider();
+      // A Tasks run has a tool shell: a key goes only through a file in the denied run dir (or is refused).
+      const c = await this.#codexProvider({ mode: 'shell', keyFile: path.join(runDir, CODEX_KEY_FILE) });
       codexHome = c?.codexHome ?? null;
       if (c?.carry) this.carries.set(task.id, c);
     }
@@ -2009,7 +2010,8 @@ export class TasksEngine extends EventEmitter {
         let codexCarry = null, codexHome = null;
         if (task.ai.id === 'codex') {
           let c;
-          try { c = await this.#codexProvider(); } catch (e) { throw new ApiError('NOT_AVAILABLE', e.message); }
+          // The terminal's own env supplies env_key; no key value is handed over.
+          try { c = await this.#codexProvider({ mode: 'takeover' }); } catch (e) { throw new ApiError('NOT_AVAILABLE', e.message); }
           if (c?.translated) throw new ApiError('NOT_AVAILABLE', TAKEOVER_TRANSLATED);
           codexCarry = c?.carry ? c : null;
           codexHome = c?.codexHome ?? null;
