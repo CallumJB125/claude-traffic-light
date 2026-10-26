@@ -58,8 +58,11 @@ function resolveFile(file, env) {
   return null;
 }
 
+const CLI_PACKAGE = /^@(anthropic-ai\/claude-code|openai\/codex)(@|\/|$)/;
+
 function deniedTarget(file, env) {
   const f = String(file);
+  if (CLI_PACKAGE.test(f)) return true;
   const resolved = resolveFile(f, env);
   if (resolved && fakeRoots().some((r) => under(resolved, r))) return false;
   if (['claude', 'codex'].includes(baseOf(f)) || (resolved && ['claude', 'codex'].includes(baseOf(resolved)))) return true;
@@ -67,14 +70,19 @@ function deniedTarget(file, env) {
   return hasSegment(probe) || cliRoots().some((r) => under(probe, r));
 }
 
-const TOKEN = /(^|[\s/\\;&|"'])(claude|codex)(\.exe|\.cmd)?(\s|$|["'])/i;
+// Conservative: a false positive in a test is acceptable, a missed real launch is not.
+const TOKEN = /(^|[\s/\;&|"'=(`])(claude|codex)(\.exe|\.cmd)?([\s;&|)`"']|$)/i;
 function shellDenied(command) {
   const roots = fakeRoots();
   const kept = String(command).split(/\s+/).filter((t) => !(path.isAbsolute(t.replace(/^["']|["']$/g, '')) && roots.some((r) => under(real(t.replace(/^["']|["']$/g, '')), r)))).join(' ');
-  return TOKEN.test(kept) || hasSegment(kept) || cliRoots().some((r) => slash(kept).includes(r));
+  return TOKEN.test(kept) || hasSegment(kept) || CLI_PACKAGE.test(kept) || cliRoots().some((r) => slash(kept).includes(r));
 }
 
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'cmd', 'powershell', 'pwsh']);
+// Launchers whose real target is one of their arguments.
+const WRAPPERS = new Set(['env', 'npx', 'xargs', 'timeout', 'nice', 'caffeinate', 'arch', 'sudo', 'script', 'stdbuf', 'command', 'nohup', 'time', 'exec']);
+const NODE_VALUE_FLAGS = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader']);
+const NODE_EVAL_FLAGS = new Set(['-e', '--eval', '-p', '--print']);
 
 function check(kind, file, args, options, isShellString) {
   const env = options && typeof options === 'object' ? options.env : undefined;
@@ -86,9 +94,29 @@ function check(kind, file, args, options, isShellString) {
   } else {
     bad = deniedTarget(file, env);
     const list = Array.isArray(args) ? args : [];
-    if (!bad && isNode(file) && list.length) { bad = deniedTarget(list[0], env); if (bad) shown += ` ${list[0]}`; }
+    if (!bad && isNode(file)) {
+      // The script is the first non-flag entry; later entries only count when they look like paths.
+      let first = true;
+      for (let i = 0; i < list.length && !bad; i++) {
+        const a = String(list[i]);
+        if (NODE_EVAL_FLAGS.has(a)) break;
+        if (NODE_VALUE_FLAGS.has(a)) {
+          if (list[i + 1] != null && deniedTarget(list[i + 1], env)) { bad = true; shown += ` ${list[i + 1]}`; }
+          i += 1;
+          continue;
+        }
+        if (a.startsWith('-')) continue;
+        if ((first || /[\\/]/.test(a) || CLI_PACKAGE.test(a)) && deniedTarget(a, env)) { bad = true; shown += ` ${a}`; }
+        first = false;
+      }
+    }
+    if (!bad && WRAPPERS.has(baseOf(file))) {
+      const strings = list.filter((a) => typeof a === 'string');
+      const hit = strings.find((a) => !a.startsWith('-') && deniedTarget(a, env));
+      if (hit) { bad = true; shown += ` ${hit}`; } else if (shellDenied(strings.join(' '))) bad = true;
+    }
     if (!bad && (SHELLS.has(baseOf(file)) || (options && typeof options === 'object' && options.shell))) {
-      const i = list.findIndex((a) => /^(-c|\/c|-command)$/i.test(String(a)));
+      const i = list.findIndex((a) => /^(-[a-z]*c|\/c|-command)$/i.test(String(a)));
       const cmd = options && options.shell ? [file, ...list].join(' ') : i >= 0 ? list[i + 1] : null;
       if (cmd != null && shellDenied(cmd)) bad = true;
     }
@@ -102,14 +130,32 @@ const STRING_LAUNCHERS = ['exec', 'execSync'];
 
 function argsAndOptions(a, b) { return Array.isArray(a) ? [a, b] : [[], a]; }
 
+// Grandchildren: a node child only gets the guard if --import reaches it via NODE_OPTIONS.
+const GUARD_IMPORT = `--import=${import.meta.url}`;
+const withGuard = (v) => (String(v || '').includes(GUARD_IMPORT) ? v : `${v ? `${v} ` : ''}${GUARD_IMPORT}`);
+function guardOptions(file, options) {
+  if (!options || typeof options !== 'object' || !options.env || typeof options.env !== 'object' || !isNode(file)) return options;
+  return { ...options, env: { ...options.env, NODE_OPTIONS: withGuard(options.env.NODE_OPTIONS) } };
+}
+// Put the (possibly rewritten) options back where the caller had them.
+const repack = (a, b, options) => (Array.isArray(a) ? [a, options] : [options, b]);
+
 for (const name of FILE_LAUNCHERS) {
   const orig = cp[name];
   const wrapped = function (file, a, b, ...rest) {
     const [args, options] = argsAndOptions(a, b);
     check(name, file, args, options, false);
-    return orig.call(this, file, a, b, ...rest);
+    const [x, y] = repack(a, b, guardOptions(file, options));
+    return orig.call(this, file, x, y, ...rest);
   };
-  if (orig[util.promisify.custom]) wrapped[util.promisify.custom] = (file, a, b, ...rest) => { const [args, options] = argsAndOptions(a, b); check(name, file, args, options, false); return orig[util.promisify.custom](file, a, b, ...rest); };
+  if (orig[util.promisify.custom]) {
+    wrapped[util.promisify.custom] = (file, a, b, ...rest) => {
+      const [args, options] = argsAndOptions(a, b);
+      check(name, file, args, options, false);
+      const [x, y] = repack(a, b, guardOptions(file, options));
+      return orig[util.promisify.custom](file, x, y, ...rest);
+    };
+  }
   cp[name] = wrapped;
 }
 for (const name of STRING_LAUNCHERS) {
@@ -127,9 +173,11 @@ for (const name of STRING_LAUNCHERS) {
     const [args, options] = argsAndOptions(a, b);
     const exec = (options && options.execPath) || process.execPath;
     check('fork', exec, [String(modulePath), ...args], options, false);
-    return orig.call(this, modulePath, a, b, ...rest);
+    const [x, y] = repack(a, b, guardOptions(exec, options));
+    return orig.call(this, modulePath, x, y, ...rest);
   };
 }
 
+process.env.NODE_OPTIONS = withGuard(process.env.NODE_OPTIONS);
 nodeModule.syncBuiltinESMExports();
 globalThis.__plexiformNoRealCli = true;

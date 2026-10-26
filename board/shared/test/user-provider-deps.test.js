@@ -34,11 +34,14 @@ test('secret-patterns.mjs loads by require under plain node', () => {
 });
 
 test('the third-party notice for smol-toml is generated and current', () => {
-  const { bundledNpmSection } = require('../../../scripts/build-agent-catalog.js');
-  const list = JSON.parse(read('catalog', 'bundled-npm.json'));
+  const { bundledNpmSection, loadBundledNpm } = require('../../../scripts/build-agent-catalog.js');
+  const list = loadBundledNpm(ROOT);
   const entry = list.find((p) => p.name === 'smol-toml');
   assert.equal(entry.version, rootPkg.dependencies['smol-toml']);
+  for (const lock of ['package-lock.json', 'board/package-lock.json']) assert.equal(JSON.parse(read(...lock.split('/')))['packages']['node_modules/smol-toml'].version, entry.version, lock);
   const section = bundledNpmSection(list);
+  assert.equal(entry.licenseText, read('node_modules', 'smol-toml', 'LICENSE'), 'shipped licence text must equal the package LICENSE');
+  assert.ok(entry.licenseText.includes(entry.copyright));
   assert.ok(section.includes('smol-toml') && section.includes(entry.version) && section.includes(entry.license));
   assert.ok(read('THIRD_PARTY_NOTICES.md').includes(section.trimEnd()), 'THIRD_PARTY_NOTICES.md is stale: run node scripts/build-agent-catalog.js');
 });

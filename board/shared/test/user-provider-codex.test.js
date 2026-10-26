@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { codexProvider, CONFIG_TOML_MAX_BYTES } from '../user-provider.cjs';
+import os from 'node:os';
+import { codexProvider, boundedReadFile, CONFIG_TOML_MAX_BYTES } from '../user-provider.cjs';
 import { findSecrets } from '../secret-patterns.mjs';
 import { codexConfig } from '../../runner/backends/codex.js';
 
@@ -186,4 +187,34 @@ test('15 CODEX_HOME: ~ expands, relative is unsupported', () => {
   const rel = run(PLEXLAB, { env: { CODEX_HOME: 'cx' } });
   assert.ok(rel.unsupported.some((u) => u.code === 'codex_home_relative'));
   assert.equal(rel.providerId, null);
+});
+
+const FAKE_KEY = `sk-ant-api03-${'A1b2C3d4'.repeat(8)}`;
+
+test('16 a credential in base_url, name or another field never reaches overrides', () => {
+  for (const [field, value] of [['base_url', 'https://gw.example.com/v1?api_key=abc123'], ['base_url', `https://u:${FAKE_KEY}@gw.example.com`], ['name', FAKE_KEY], ['env_key_instructions', FAKE_KEY]]) {
+    const okUrl = field === 'base_url' ? '' : 'base_url = "https://ok.example.com"\n';
+    const r = run(`model_provider = "gw"\n[model_providers.gw]\n${okUrl}${field} = "${value}"\n`);
+    assert.ok(r.unsupported.some((u) => u.code === 'codex_secret_in_field'), field + value);
+    assert.ok(!JSON.stringify(r).includes('abc123') && !JSON.stringify(r).includes(FAKE_KEY), field);
+    assert.ok(!r.overrides.some((o) => o.startsWith(`model_providers.gw.${field}=`)), field);
+  }
+  const m = run(`model = "${FAKE_KEY}"\n`);
+  assert.deepEqual(m.overrides, []);
+  assert.ok(!JSON.stringify(m).includes(FAKE_KEY));
+});
+
+test('17 boundedReadFile: missing is null, small is whole, big is capped at max + 1', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'up-br-'));
+  try {
+    assert.equal(boundedReadFile(path.join(dir, 'nope.toml')), null);
+    fs.writeFileSync(path.join(dir, 'small.toml'), 'model = "x"\n');
+    assert.equal(boundedReadFile(path.join(dir, 'small.toml')), 'model = "x"\n');
+    fs.writeFileSync(path.join(dir, 'big.toml'), 'x'.repeat(CONFIG_TOML_MAX_BYTES * 4));
+    const big = boundedReadFile(path.join(dir, 'big.toml'));
+    assert.equal(big.length, CONFIG_TOML_MAX_BYTES + 1);
+    assert.ok(run(big).unsupported.some((u) => u.code === 'codex_config_too_large'));
+    assert.equal(boundedReadFile(path.join(dir, 'big.toml'), 10).length, 11);
+    assert.throws(() => boundedReadFile(dir), /EISDIR/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

@@ -60,7 +60,7 @@ test('FAKE claude: isolation flags and minimal env reach the child; logins and s
     assert.deepEqual(passedEnv, [[...allowed].sort()], 'the adapter passes only its exact environment allowlist');
     // libuv supplies fixed OS bootstrap variables on Windows even for a
     // deliberately minimal env. These are not caller credentials or secrets.
-    const bootstrap = process.platform === 'win32' ? ['HOMEDRIVE', 'HOMEPATH', 'LOGONSERVER', 'SYSTEMDRIVE', 'SYSTEMROOT', 'TEMP', 'USERDOMAIN', 'USERNAME', 'USERPROFILE', 'WINDIR'] : ['__CF_USER_TEXT_ENCODING'];
+    const bootstrap = process.platform === 'win32' ? ['HOMEDRIVE', 'HOMEPATH', 'LOGONSERVER', 'SYSTEMDRIVE', 'SYSTEMROOT', 'TEMP', 'USERDOMAIN', 'USERNAME', 'USERPROFILE', 'WINDIR', 'NODE_OPTIONS'] : ['__CF_USER_TEXT_ENCODING', 'NODE_OPTIONS']; // NODE_OPTIONS: the test guard's --import for node grandchildren
     assert.deepEqual(env.filter((k) => ![...allowed, ...bootstrap].includes(k)), []);
     for (const forbidden of ['ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'SECRET_TOKEN', 'CLAUDE_CODE_ENTRYPOINT']) assert.equal(env.includes(forbidden), false, forbidden);
   } finally { x.hub.stopAll(); }

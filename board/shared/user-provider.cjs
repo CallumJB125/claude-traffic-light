@@ -3,7 +3,9 @@
 // What the user's own Claude Code / Codex setup says about routing and auth,
 // reduced to a closed allowlist. Pure: no spawn, no network, no logging, no
 // process.env or os.homedir(). All file access goes through the injected
-// readFile (and readDir for the managed drop-in folder). Results carry values
+// readFile (and readDir for the managed drop-in folder). Reader contract:
+// null = missing, a throw = unreadable. Callers pass a size-bounded reader
+// (see boundedReadFile); this module caps config.toml only after reading it. Results carry values
 // only in routing, pathVars, auth.secret, noToolSecrets and cliEnv.
 const path = require('node:path');
 const { parse } = require('smol-toml');
@@ -41,6 +43,7 @@ const ROUTING = new Set(CLAUDE_ROUTING_KEYS);
 const PATH_KEYS = new Set(CLAUDE_PATH_KEYS);
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SECRET_HEADER_NAME = /auth|key|token|secret|cookie/i;
+const SECRET_QUERY_NAME = /key|token|secret|sig|auth|passw|pwd|credential/i;
 const TRUTHY = /^(1|true|yes|on)$/i;
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -53,16 +56,47 @@ function expandHome(value, home, p) {
   return value;
 }
 
-function readJson(readFile, file, unsupported) {
+// A value that must not travel as routing: a known secret shape, URL userinfo, or a credential-named query parameter.
+function secretish(value) {
+  if (typeof value !== 'string') return false;
+  if (findSecrets(value).length) return true;
+  let u;
+  try { u = new URL(value); } catch { return false; }
+  if (u.username || u.password) return true;
+  for (const k of u.searchParams.keys()) if (SECRET_QUERY_NAME.test(k)) return true;
+  return false;
+}
+
+function readJson(readFile, file, unsupported, code = 'claude_settings_unreadable') {
   let text;
-  try { text = readFile(file); } catch { text = null; }
+  try { text = readFile(file); } catch {
+    unsupported.push({ code, message: `${file} could not be read` });
+    return null;
+  }
   if (text == null) return null;
   try {
     const v = JSON.parse(text);
     if (isObj(v)) return v;
   } catch { /* fall through */ }
-  unsupported.push({ code: 'claude_settings_unreadable', message: `${file} is not valid JSON` });
+  unsupported.push({ code, message: `${file} is not valid JSON` });
   return null;
+}
+
+// Bounded reader for the injected readFile: null when missing, throws on other errors, and never
+// returns more than maxBytes + 1 bytes (so the config.toml cap still trips). Pass a larger cap for
+// ~/.claude.json, which can be big; a truncated read there is reported as unreadable.
+function boundedReadFile(file, maxBytes = CONFIG_TOML_MAX_BYTES) {
+  const fs = require('node:fs');
+  let fd;
+  try { fd = fs.openSync(file, 'r'); } catch (e) {
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return null;
+    throw e;
+  }
+  try {
+    const buf = Buffer.alloc(maxBytes + 1);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    return buf.toString('utf8', 0, n);
+  } finally { fs.closeSync(fd); }
 }
 
 function localGatewayOf(baseUrl) {
@@ -99,10 +133,10 @@ function claudeProvider({ env = {}, loginEnv = {}, home, platform, readFile, rea
   const managedPath = p.join(managedDir, 'managed-settings.json');
   const managedFiles = [managedPath];
   let dropIns = null;
-  try { dropIns = readDir(p.join(managedDir, 'managed-settings.d')); } catch { dropIns = null; }
+  const unsupportedBefore = unsupported.length;
+  try { dropIns = readDir(p.join(managedDir, 'managed-settings.d')); } catch { unsupported.push({ code: 'claude_settings_unreadable', message: 'managed-settings.d could not be listed' }); }
   for (const n of [...(Array.isArray(dropIns) ? dropIns : [])].filter((f) => typeof f === 'string' && f.endsWith('.json')).sort()) managedFiles.push(p.join(managedDir, 'managed-settings.d', n));
   const managed = { env: {} };
-  const unsupportedBefore = unsupported.length;
   let managedSeen = false;
   for (const f of managedFiles) {
     const j = readJson(readFile, f, unsupported);
@@ -118,7 +152,7 @@ function claudeProvider({ env = {}, loginEnv = {}, home, platform, readFile, rea
   const userPath = p.join(configDir, 'settings.json');
   const user = readJson(readFile, userPath, unsupported);
   const claudeJsonPath = p.join(configDirSet ? configDir : home, '.claude.json');
-  const claudeJson = readJson(readFile, claudeJsonPath, unsupported);
+  const claudeJson = readJson(readFile, claudeJsonPath, unsupported, 'claude_global_config_unreadable');
 
   const layers = [
     { kind: 'managed', path: managedSeen ? managedPath : null, env: managed.env, top: managed },
@@ -165,6 +199,9 @@ function claudeProvider({ env = {}, loginEnv = {}, home, platform, readFile, rea
         noToolSecrets[name] = hit.value;
         unsupported.push({ code: 'secret_custom_headers', message: 'ANTHROPIC_CUSTOM_HEADERS carries a credential' });
       } else routing[name] = hit.value;
+    } else if (secretish(hit.value)) {
+      noToolSecrets[name] = hit.value;
+      unsupported.push({ code: 'secret_in_routing', message: `${name} carries a credential` });
     } else routing[name] = hit.value;
   }
 
@@ -184,6 +221,8 @@ function claudeProvider({ env = {}, loginEnv = {}, home, platform, readFile, rea
   const awsCredentialExport = pickTop('awsCredentialExport');
   const model = pickTop('model');
 
+  // Order is the effective one for a run, not the interactive CLI's: a policy (managed) helper beats
+  // the run's --settings file inside the CLI, so it comes before the token and key.
   let kind = 'oauth-or-none';
   let secret = null;
   let secretName = null;
@@ -253,6 +292,12 @@ function codexProvider({ env = {}, loginEnv = {}, home, readFile }) {
   const out = blankCodex(codexHome);
   out.providerId = providerId || null;
   out.model = model || null;
+  if (secretish(providerId) || secretish(model)) {
+    out.providerId = null;
+    out.model = null;
+    out.unsupported.push({ code: 'codex_secret_in_field', message: 'model or model_provider carries a credential' });
+    return out;
+  }
   if (providerId) out.overrides.push(`model_provider=${tomlValue(providerId)}`);
   if (model) out.overrides.push(`model=${tomlValue(model)}`);
 
@@ -297,12 +342,16 @@ function codexProvider({ env = {}, loginEnv = {}, home, readFile }) {
     }
     if (Object.keys(headerEnv).length) fields.env_http_headers = headerEnv; else delete fields.env_http_headers;
 
-    if (isObj(fields.query_params) && Object.entries(fields.query_params).some(([k, v]) => findSecrets(`${k}=${v}`).length)) {
+    if (isObj(fields.query_params) && Object.entries(fields.query_params).some(([k, v]) => findSecrets(`${k}=${v}`).length || secretish(String(v)))) {
       out.unsupported.push({ code: 'codex_query_params_secret', message: `model_providers.${providerId}.query_params carries a credential` });
       delete fields.query_params;
     }
 
     for (const [f, v] of Object.entries(fields)) {
+      if (f !== 'env_key' && (isObj(v) ? Object.entries(v).some(([k, x]) => findSecrets(`${k}=${x}`).length || secretish(String(x))) : secretish(v))) {
+        out.unsupported.push({ code: 'codex_secret_in_field', message: `model_providers.${providerId}.${f} carries a credential` });
+        continue;
+      }
       const t = tomlValue(v);
       if (t == null) { if (!out.dropped.includes(f)) out.dropped.push(f); continue; }
       out.overrides.push(`${prefix}.${f}=${t}`);
@@ -316,7 +365,7 @@ function codexProvider({ env = {}, loginEnv = {}, home, readFile }) {
 }
 
 module.exports = {
-  claudeProvider, codexProvider,
+  claudeProvider, codexProvider, boundedReadFile,
   CLAUDE_ROUTING_KEYS, CLAUDE_PATH_KEYS, CLAUDE_SECRET_KEYS, CLAUDE_READ_NAMES,
   CODEX_PROVIDER_FIELDS, CODEX_BUILTIN_PROVIDER_IDS, CODEX_TOP_KEYS,
   BURST_CODEX_MARKERS, CONFIG_TOML_MAX_BYTES,

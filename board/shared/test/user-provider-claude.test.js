@@ -262,3 +262,51 @@ test('21 unparseable managed settings fail closed, without throwing', () => {
     assert.equal(r.auth.secret, null);
   }
 });
+
+const FAKE_KEY = `sk-ant-api03-${'A1b2C3d4'.repeat(8)}`;
+
+test('22 secrets embedded in a routing value are refused', () => {
+  const cases = {
+    ANTHROPIC_BASE_URL: `https://user:${FAKE_KEY}@gw.example.com/v1`,
+    ANTHROPIC_BEDROCK_BASE_URL: 'https://gw.example.com/v1?api_key=abc123',
+    ANTHROPIC_VERTEX_BASE_URL: 'https://gw.example.com/v1?access_token=abc123',
+    ANTHROPIC_FOUNDRY_BASE_URL: 'https://gw.example.com/v1?sig=abc123',
+    AWS_PROFILE: FAKE_KEY,
+  };
+  for (const [name, value] of Object.entries(cases)) {
+    const { r } = run({ [`${CFG}/settings.json`]: settings({ [name]: value, AWS_REGION: 'eu-west-1' }) });
+    assert.equal(name in r.routing, false, name);
+    assert.equal(r.noToolSecrets[name], value, name);
+    assert.ok(r.unsupported.some((u) => u.code === 'secret_in_routing' && u.message.includes(name)), name);
+    assert.equal(r.routing.AWS_REGION, 'eu-west-1');
+    assert.ok(!JSON.stringify({ ...r, noToolSecrets: undefined }).includes('abc123') && !JSON.stringify({ ...r, noToolSecrets: undefined }).includes(FAKE_KEY), name);
+  }
+  assert.equal(run({}, { env: { ANTHROPIC_BASE_URL: 'https://gw.example.com/v1?api-version=1' } }).r.routing.ANTHROPIC_BASE_URL, 'https://gw.example.com/v1?api-version=1');
+});
+
+test('22b nothing secret-shaped is left anywhere outside the value channels', () => {
+  const { r } = run({ [`${CFG}/settings.json`]: settings({ ANTHROPIC_BASE_URL: `https://u:${FAKE_KEY}@gw`, ANTHROPIC_AUTH_TOKEN: FAKE_KEY, MY_ODD: 'x' }) });
+  const visible = JSON.stringify({ routing: r.routing, pathVars: r.pathVars, unsupported: r.unsupported, dropped: r.dropped, sources: r.sources });
+  assert.ok(!visible.includes(FAKE_KEY));
+});
+
+test('23 an unparseable .claude.json has its own code and is not a managed failure', () => {
+  const { r } = run({ [`${HOME}/.claude.json`]: '{ trunc' });
+  assert.ok(r.unsupported.some((u) => u.code === 'claude_global_config_unreadable'));
+  assert.ok(!r.unsupported.some((u) => u.code === 'claude_settings_unreadable'));
+  assert.equal(r.carry, true);
+});
+
+test('24 a managed file or drop-in listing that throws fails closed', () => {
+  const eacces = () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
+  const settingsFile = settings({ ANTHROPIC_BASE_URL: 'https://user' });
+  const a = claudeProvider({ env: {}, home: HOME, platform: 'linux', readFile: (p) => (p === MANAGED ? eacces() : p === `${CFG}/settings.json` ? settingsFile : null), readDir: () => null });
+  assert.equal(a.carry, false);
+  assert.equal(a.carryOffReason, 'managed_settings_unreadable');
+  assert.deepEqual(a.routing, {});
+  const b = claudeProvider({ env: {}, home: HOME, platform: 'linux', readFile: (p) => (p === `${CFG}/settings.json` ? settingsFile : null), readDir: eacces });
+  assert.equal(b.carryOffReason, 'managed_settings_unreadable');
+  const c = claudeProvider({ env: {}, home: HOME, platform: 'linux', readFile: (p) => (p === `${CFG}/settings.json` ? eacces() : null), readDir: () => null });
+  assert.equal(c.carry, true);
+  assert.ok(c.unsupported.some((u) => u.code === 'claude_settings_unreadable'));
+});
