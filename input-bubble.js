@@ -457,7 +457,7 @@
         const why = A.answerability(input, { now: t }).reason;
         if (why === 'setting-off') {
           const line = el('div', 'ib-hint', `${A.reasonText(why)} · `);
-          if (api.openWidgetSettings) {
+          if (api.openWidgetSettings && mode !== 'page') { // the Waiting page has its own banner with the link
             const turnOn = el('button', 'ib-link', 'Turn it on');
             turnOn.type = 'button';
             turnOn.setAttribute('aria-label', 'Turn on answering from the widget in Settings');

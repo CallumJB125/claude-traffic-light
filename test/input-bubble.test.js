@@ -636,3 +636,14 @@ test('C-R: a pre-hook session\'s prompt reads "restart this session to answer he
   assert.match(t.root.textContent, /restart this session to answer here/);
   assert.equal(t.$$('[data-option="allow"], [data-option="deny"]').length, 0);
 });
+
+test('N1: on the Waiting page the off notice is the banner only; the bubble keeps its own Turn it on link', () => {
+  const off = { id: 'ask-h-s', kind: 'permission', source: 'session', answerable: false, actions: ['open'], expires_at: null, answering: false, tool: 'Bash', cwd: '/w/app', title: 'Needs your permission', text: '', options: [], created_at: ago(1) };
+  const page = setup({ mode: 'page' });
+  page.show([off]);
+  assert.match(page.$$('.ib-body .ib-hint').map((n) => n.textContent).join('|'), /Answering here is off/);
+  assert.equal(page.$$('.ib-body .ib-link').length, 0);
+  const bubble = setup();
+  bubble.show([off]);
+  assert.equal(bubble.$$('.ib-body .ib-link').length, 1);
+});
