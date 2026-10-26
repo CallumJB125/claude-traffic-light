@@ -88,3 +88,9 @@ test('grandchildren are guarded through NODE_OPTIONS', () => {
     assert.match(r.stdout, /no-real-cli/);
   }
 });
+
+test('Windows-style and forward-slash paths to a CLI in a shell string are blocked', () => {
+  assert.throws(() => cp.exec('C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd -p hi'), /no-real-cli/);
+  assert.throws(() => cp.exec('C:/Users/me/AppData/Roaming/npm/claude.cmd -p hi'), /no-real-cli/);
+  assert.throws(() => cp.execSync('"C:\\Program Files\\nodejs\\codex.exe" --version'), /no-real-cli/);
+});

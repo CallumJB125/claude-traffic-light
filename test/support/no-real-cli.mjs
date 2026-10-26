@@ -71,7 +71,7 @@ function deniedTarget(file, env) {
 }
 
 // Conservative: a false positive in a test is acceptable, a missed real launch is not.
-const TOKEN = /(^|[\s/\;&|"'=(`])(claude|codex)(\.exe|\.cmd)?([\s;&|)`"']|$)/i;
+const TOKEN = /(^|[\s/\\;&|"'=(`])(claude|codex)(\.exe|\.cmd)?([\s;&|)`"']|$)/i;
 function shellDenied(command) {
   const roots = fakeRoots();
   const kept = String(command).split(/\s+/).filter((t) => !(path.isAbsolute(t.replace(/^["']|["']$/g, '')) && roots.some((r) => under(real(t.replace(/^["']|["']$/g, '')), r)))).join(' ');

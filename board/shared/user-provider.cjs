@@ -37,6 +37,7 @@ const CODEX_BUILTIN_PROVIDER_IDS = Object.freeze(['openai', 'oss', 'ollama', 'lm
 // Provider id Burst writes for `claude-burst codex enable` (fixture reconstructed from the Burst binary).
 const BURST_CODEX_MARKERS = Object.freeze(['claude-burst']);
 const CONFIG_TOML_MAX_BYTES = 262144;
+const CLAUDE_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
 const MANAGED_DIRS = { darwin: '/Library/Application Support/ClaudeCode', linux: '/etc/claude-code', win32: 'C:\\Program Files\\ClaudeCode' };
 const ROUTING = new Set(CLAUDE_ROUTING_KEYS);
@@ -83,10 +84,10 @@ function readJson(readFile, file, unsupported, code = 'claude_settings_unreadabl
 }
 
 // Bounded reader for the injected readFile: null when missing, throws on other errors, and never
-// returns more than maxBytes + 1 bytes (so the config.toml cap still trips). Pass a larger cap for
-// ~/.claude.json, which can be big; a truncated read there is reported as unreadable.
-function boundedReadFile(file, maxBytes = CONFIG_TOML_MAX_BYTES) {
-  const fs = require('node:fs');
+// returns more than maxBytes + 1 bytes (so the config.toml cap still trips). Loops over short reads.
+// Use the default for config.toml and settings files; pass CLAUDE_JSON_MAX_BYTES for ~/.claude.json,
+// which the CLI grows with every project (a truncated read there reports as unreadable).
+function boundedReadFile(file, maxBytes = CONFIG_TOML_MAX_BYTES, fs = require('node:fs')) {
   let fd;
   try { fd = fs.openSync(file, 'r'); } catch (e) {
     if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return null;
@@ -94,9 +95,22 @@ function boundedReadFile(file, maxBytes = CONFIG_TOML_MAX_BYTES) {
   }
   try {
     const buf = Buffer.alloc(maxBytes + 1);
-    const n = fs.readSync(fd, buf, 0, buf.length, 0);
-    return buf.toString('utf8', 0, n);
+    let total = 0;
+    while (total < buf.length) {
+      const n = fs.readSync(fd, buf, total, buf.length - total, total);
+      if (n === 0) break;
+      total += n;
+    }
+    return buf.toString('utf8', 0, total);
   } finally { fs.closeSync(fd); }
+}
+
+// readDir for managed-settings.d: null when the folder is missing, a throw otherwise (which fails closed).
+function readDirOrNull(dir, fs = require('node:fs')) {
+  try { return fs.readdirSync(dir); } catch (e) {
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return null;
+    throw e;
+  }
 }
 
 function localGatewayOf(baseUrl) {
@@ -365,8 +379,8 @@ function codexProvider({ env = {}, loginEnv = {}, home, readFile }) {
 }
 
 module.exports = {
-  claudeProvider, codexProvider, boundedReadFile,
+  claudeProvider, codexProvider, boundedReadFile, readDirOrNull,
   CLAUDE_ROUTING_KEYS, CLAUDE_PATH_KEYS, CLAUDE_SECRET_KEYS, CLAUDE_READ_NAMES,
   CODEX_PROVIDER_FIELDS, CODEX_BUILTIN_PROVIDER_IDS, CODEX_TOP_KEYS,
-  BURST_CODEX_MARKERS, CONFIG_TOML_MAX_BYTES,
+  BURST_CODEX_MARKERS, CONFIG_TOML_MAX_BYTES, CLAUDE_JSON_MAX_BYTES,
 };

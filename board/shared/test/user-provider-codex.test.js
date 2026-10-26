@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
-import { codexProvider, boundedReadFile, CONFIG_TOML_MAX_BYTES } from '../user-provider.cjs';
+import { codexProvider, boundedReadFile, readDirOrNull, claudeProvider, CONFIG_TOML_MAX_BYTES, CLAUDE_JSON_MAX_BYTES } from '../user-provider.cjs';
 import { findSecrets } from '../secret-patterns.mjs';
 import { codexConfig } from '../../runner/backends/codex.js';
 
@@ -216,5 +216,29 @@ test('17 boundedReadFile: missing is null, small is whole, big is capped at max 
     assert.ok(run(big).unsupported.some((u) => u.code === 'codex_config_too_large'));
     assert.equal(boundedReadFile(path.join(dir, 'big.toml'), 10).length, 11);
     assert.throws(() => boundedReadFile(dir), /EISDIR/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('18 boundedReadFile loops over short reads', () => {
+  const data = Buffer.from('a'.repeat(1000));
+  let pos = 0;
+  const fake = {
+    openSync: () => 3, closeSync() {},
+    readSync: (fd, buf, off, len, at) => { const n = Math.min(7, len, data.length - at); data.copy(buf, off, at, at + n); pos += n; return n; },
+  };
+  assert.equal(boundedReadFile('/x', 5000, fake).length, 1000);
+  assert.equal(boundedReadFile('/x', 100, fake).length, 101);
+  assert.equal(CLAUDE_JSON_MAX_BYTES, 16 * 1024 * 1024);
+});
+
+test('19 readDirOrNull: missing is null (carry stays true), other errors throw (fail closed)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'up-rd-'));
+  try {
+    assert.equal(readDirOrNull(path.join(dir, 'managed-settings.d')), null);
+    fs.writeFileSync(path.join(dir, 'a.json'), '{}');
+    assert.deepEqual(readDirOrNull(dir), ['a.json']);
+    assert.throws(() => readDirOrNull(path.join(dir, 'a.json', 'x'), { readdirSync: () => { throw Object.assign(new Error('x'), { code: 'EACCES' }); } }), /x/);
+    const r = claudeProvider({ env: {}, home: '/home/u', platform: 'linux', readFile: () => null, readDir: (d) => readDirOrNull(path.join(dir, 'missing', d)) });
+    assert.equal(r.carry, true);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
