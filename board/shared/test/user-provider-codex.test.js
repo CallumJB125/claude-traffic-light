@@ -242,3 +242,11 @@ test('19 readDirOrNull: missing is null (carry stays true), other errors throw (
     assert.equal(r.carry, true);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('20 env_http_headers holds variable names: an Authorization header is carried, not refused as a credential', () => {
+  const r = run(`${PLEXLAB}env_http_headers = { Authorization = "PLEXLAB_AUTH" }\n`, { env: { PLEXLAB_KEY: 'k-fake', PLEXLAB_AUTH: 'Bearer fake-value' } });
+  assert.deepEqual(r.unsupported, []);
+  assert.ok(r.overrides.includes('model_providers.plexlab.env_http_headers={Authorization="PLEXLAB_AUTH"}'));
+  assert.equal(r.cliEnv.PLEXLAB_AUTH, 'Bearer fake-value');
+  assert.ok(!r.overrides.join('\n').includes('fake-value'));
+});

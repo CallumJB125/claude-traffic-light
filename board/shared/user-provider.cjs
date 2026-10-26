@@ -31,9 +31,11 @@ const CLAUDE_SECRET_KEYS = Object.freeze(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_T
 const CLAUDE_READ_NAMES = Object.freeze([...CLAUDE_ROUTING_KEYS, ...CLAUDE_PATH_KEYS, ...CLAUDE_SECRET_KEYS, 'CLAUDE_CONFIG_DIR', 'CODEX_HOME']);
 
 const CODEX_TOP_KEYS = Object.freeze(['profile', 'model_provider', 'model', 'profiles', 'model_providers']);
-// Verify against the pinned codex before PR 3 relies on it.
-const CODEX_PROVIDER_FIELDS = Object.freeze(['name', 'base_url', 'wire_api', 'env_key', 'env_key_instructions', 'env_http_headers', 'query_params', 'requires_openai_auth', 'request_max_retries', 'stream_max_retries', 'stream_idle_timeout_ms']);
-const CODEX_BUILTIN_PROVIDER_IDS = Object.freeze(['openai', 'oss', 'ollama', 'lmstudio']);
+// codex-cli 0.164 (DGX lab 2026-10-26, dogfood-lab/fixtures s8/e). Not carried: the `auth` and `aws` sub-tables
+// (`auth` runs a command; Plexiform runs no user command for Codex), so they land in `dropped`.
+const CODEX_PROVIDER_FIELDS = Object.freeze(['name', 'base_url', 'wire_api', 'env_key', 'env_key_instructions', 'env_http_headers', 'query_params', 'requires_openai_auth', 'request_max_retries', 'stream_max_retries', 'stream_idle_timeout_ms', 'websocket_connect_timeout_ms', 'supports_websockets']);
+// The ids codex 0.164 resolves without a table (same lab probe); `oss` is not one of them.
+const CODEX_BUILTIN_PROVIDER_IDS = Object.freeze(['openai', 'ollama', 'lmstudio', 'amazon-bedrock']);
 // Provider id Burst writes for `claude-burst codex enable` (fixture reconstructed from the Burst binary).
 const BURST_CODEX_MARKERS = Object.freeze(['claude-burst']);
 const CONFIG_TOML_MAX_BYTES = 262144;
@@ -300,7 +302,7 @@ function tomlValue(v) {
 }
 
 function blankCodex(codexHome, unsupported = []) {
-  return { codexHome, providerId: null, model: null, overrides: [], cliEnv: {}, missingEnv: [], burst: { detected: false }, unsupported, dropped: [] };
+  return { codexHome, providerId: null, model: null, baseUrl: null, overrides: [], cliEnv: {}, missingEnv: [], burst: { detected: false }, unsupported, dropped: [] };
 }
 
 function codexProvider({ env = {}, loginEnv = {}, home, readFile }) {
@@ -379,13 +381,15 @@ function codexProvider({ env = {}, loginEnv = {}, home, readFile }) {
     }
 
     for (const [f, v] of Object.entries(fields)) {
-      if (f !== 'env_key' && (isObj(v) ? Object.entries(v).some(([k, x]) => findSecrets(`${k}=${x}`).length || secretish(String(x))) : secretish(v))) {
+      // env_key and env_http_headers hold variable names (checked against ENV_NAME above), never values.
+      if (f !== 'env_key' && f !== 'env_http_headers' && (isObj(v) ? Object.entries(v).some(([k, x]) => findSecrets(`${k}=${x}`).length || secretish(String(x))) : secretish(v))) {
         out.unsupported.push({ code: 'codex_secret_in_field', message: `model_providers.${providerId}.${f} carries a credential` });
         continue;
       }
       const t = tomlValue(v);
       if (t == null) { if (!out.dropped.includes(f)) out.dropped.push(f); continue; }
       out.overrides.push(`${prefix}.${f}=${t}`);
+      if (f === 'base_url' && typeof v === 'string') out.baseUrl = v;
     }
     const hay = [providerId, ...Object.values(fields).filter((v) => typeof v === 'string')];
     out.burst.detected = BURST_CODEX_MARKERS.some((m) => hay.some((h) => h === m || h.includes(m)));
