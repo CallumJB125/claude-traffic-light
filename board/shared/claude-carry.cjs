@@ -156,7 +156,7 @@ function createClaudeCarry({
       out.settingsEnv = routingForCli;
       if (customDir) out.cliEnv = { CLAUDE_CONFIG_DIR: provider.configDir };
       if (key && keyFile) {
-        writeSecretFile(keyFile, key);
+        try { writeSecretFile(keyFile, key); } catch { return withRelease(fail('provider', "the run's key file could not be written")); }
         fileWritten = keyFile;
         out.apiKeyFile = keyFile;
         const ttl = Number(routing.CLAUDE_CODE_API_KEY_HELPER_TTL_MS);

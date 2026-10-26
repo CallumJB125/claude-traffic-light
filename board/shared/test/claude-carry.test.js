@@ -8,6 +8,7 @@ import path from 'node:path';
 import { createClaudeCarry, denyRules, oneShotModel, tcpProbe } from '../claude-carry.cjs';
 import { fixtureCarry, HOME, CFG, MANAGED, KEY, settingsFile } from '../test-support/claude-carry-fixture.js';
 import { testTempDir } from '../test-support/tmp.js';
+import { findSecrets } from '../secret-patterns.mjs';
 
 const SIGN_IN = 'your key helper needs you to sign in; run it once in a terminal';
 const user = (o) => ({ [`${CFG}/settings.json`]: settingsFile(o) });
@@ -233,4 +234,41 @@ test('a one-shot asks for the provider\'s small model on a gateway and stays hai
   assert.equal(plain.oneShotModel, 'haiku', 'a subscription user\'s opus must not make a one-shot expensive');
   assert.equal(plain.model, 'opus', 'but a run follows the person\'s model');
   assert.equal(oneShotModel({ routing: {}, auth: { kind: 'bedrock' }, smallModel: null }), 'haiku');
+});
+
+// ── The recorded CLI shapes this PR answers (fixtures/claude-cli/README.md) ──────────────────────────────
+const fixture = (name) => JSON.parse(fs.readFileSync(new URL(`./fixtures/claude-cli/${name}`, import.meta.url), 'utf8'));
+const resultOf = (f) => f.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((m) => m.type === 'result');
+
+test('T3 as recorded: a gateway only in settings.json env gave "Not logged in" as subtype:success + is_error:true; with the carry the run is given that gateway', async (t) => {
+  const lab = fixture('2.1.310-no-auth-stream-json.json');
+  const r = resultOf(lab);
+  assert.equal(lab.exit_code, 1);
+  assert.deepEqual([r.subtype, r.is_error, r.result], ['success', true, 'Not logged in · Please run /login']);
+  const files = user({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:4001', ANTHROPIC_AUTH_TOKEN: KEY }, model: 'glm-5.3-flash' });
+  const c = await fixtureCarry({ files }).carry.prepare({ mode: 'bash', keyFile: path.join(testTempDir('carry-', t), 'api.key') });
+  assert.equal(c.failure, null);
+  assert.equal(c.settingsEnv.ANTHROPIC_BASE_URL, 'http://127.0.0.1:4001', 'the run now has the gateway the lab run was missing');
+});
+
+test('an unreachable gateway as recorded (172 s of retries to ECONNREFUSED) now fails in the preflight, fast, naming the address', async () => {
+  const lab = fixture('2.1.310-unreachable-stream-json.json');
+  assert.ok(lab.duration_ms > 100_000);
+  assert.match(resultOf(lab).result, /ECONNREFUSED/);
+  const files = user({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:1', ANTHROPIC_API_KEY: KEY, ANTHROPIC_MODEL: 'glm-5.3-flash' } });
+  const carry = createClaudeCarry({ env: {}, home: HOME, platform: 'linux', readFile: (f) => files[f] ?? null, credentialsExist: () => true });
+  const t0 = Date.now();
+  const c = await carry.prepare({ mode: 'bash', keyFile: '/x/api.key' });
+  assert.deepEqual(c.failure, { kind: 'provider', reason: "the gateway at 127.0.0.1:1 isn't answering" });
+  assert.ok(Date.now() - t0 < 3000, 'bounded by the probe\'s own short timeout, not the CLI\'s retries');
+});
+
+test('a key file that cannot be written fails the preflight instead of starting a run without its key', async () => {
+  const c = await fixtureCarry({ files: user({ env: { ...gateway, ANTHROPIC_AUTH_TOKEN: KEY } }) }).carry.prepare({ mode: 'bash', keyFile: '/nonexistent-dir/api.key' });
+  assert.deepEqual(c.failure, { kind: 'provider', reason: "the run's key file could not be written" });
+});
+
+test('the recorded CLI fixtures hold no secret', () => {
+  const dir = new URL('./fixtures/claude-cli/', import.meta.url);
+  for (const f of fs.readdirSync(dir)) assert.deepEqual(findSecrets(fs.readFileSync(new URL(f, dir), 'utf8'), { classes: ['credential'] }), [], `${f}: no credential (the only keyed hit is the literal KEY=REDACTED in the recorded command)`);
 });
