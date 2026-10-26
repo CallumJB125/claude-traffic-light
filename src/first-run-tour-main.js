@@ -18,11 +18,13 @@ const ACTIONS = new Set(['next', 'skip', 'missing', 'answered']);
 // windows: { widget() -> BrowserWindow|null, widgetShown() -> bool, lights() -> BrowserWindow|null, openLights(),
 //            openPage(id), sendToPage(id, channel, payload) -> bool }
 // allowed: { widget(e), lights(e), page(e, id) }
-function install({ ipcMain, config, saveConfig, windows, allowed, demo, hasConnectedTool, now = Date.now, setTimeout: st = setTimeout, clearTimeout: ct = clearTimeout, log = () => {} }) {
+function install({ ipcMain, config, saveConfig, windows, allowed, demo, hasConnectedTool, setupOpen = () => false, now = Date.now, setTimeout: st = setTimeout, clearTimeout: ct = clearTimeout, log = () => {} }) {
   const read = () => Tour.parse(config().tourState);
   const write = (s) => { saveConfig({ tourState: s }); return s; };
   let cancelStart = null;
   let demoInputShown = false;
+  // Set by run(), cleared once the tour settles: a persisted 'running' from a quit or crash isn't live.
+  let live = false;
 
   const missingWindow = (i) => Tour.STEPS[i].target.window === 'widget' && !windows.widgetShown();
   const sendWin = (bw, payload) => {
@@ -43,7 +45,7 @@ function install({ ipcMain, config, saveConfig, windows, allowed, demo, hasConne
     const cur = read();
     const s = Tour.settle(cur, { missing: missingWindow, now: now() });
     if (s !== cur) write(s);
-    if (s.status !== 'running') { clearAll(); demoInputShown = false; return s; }
+    if (s.status !== 'running') { clearAll(); demoInputShown = false; live = false; return s; }
     const step = Tour.STEPS[s.step];
     const base = Tour.view(s);
     const hostKey = step.host.window === 'main' ? step.host.page : step.host.window;
@@ -66,6 +68,7 @@ function install({ ipcMain, config, saveConfig, windows, allowed, demo, hasConne
   function run() {
     if (!hasConnectedTool() && !demo.active()) demo.start();
     write(Tour.start(now()));
+    live = true;
     log('[tour] started');
     return show();
   }
@@ -97,6 +100,14 @@ function install({ ipcMain, config, saveConfig, windows, allowed, demo, hasConne
     },
     restart: () => { cancel(); return run(); },
     state: read,
+    // What Home's tour should hear (src/teammate-tour.js decide()): 'pending' while setup is open or a start is
+    // scheduled for someone who hasn't seen the tour, 'interrupted' for a 'running' left by an earlier launch.
+    homeStatus() {
+      const s = read();
+      if (s.status === 'running') return live ? 'running' : 'interrupted';
+      if (cancelStart || (setupOpen() && Tour.shouldAutoStart(config().tourState))) return 'pending';
+      return s.status;
+    },
     act,
     demoInputShown: () => demoInputShown,
   };

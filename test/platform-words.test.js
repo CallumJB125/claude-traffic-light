@@ -46,6 +46,13 @@ test('in a page, the platform comes from the browser: a Linux page shows Ctrl+K 
   assert.ok(require('../package.json').build.files.includes('platform-words.js'), 'packaged');
 });
 
+test('the rewritten hints are true off Mac: Ctrl+K opens the overview palette, Ctrl+. works in the Waiting bubble', () => {
+  const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+  assert.match(read('overview.html'), /<script src="palette\.js"><\/script>/);
+  assert.match(read('palette.js'), /\(ev\.metaKey \|\| ev\.ctrlKey\)[^\n]*ev\.key\.toLowerCase\(\) === 'k'/);
+  assert.match(read('input-bubble.js'), /\(e\.metaKey \|\| e\.ctrlKey\)[^\n]*e\.key === '\.'/);
+});
+
 test('the lab-reported strings say "this computer" on Linux (A2)', () => {
   const real = Object.getOwnPropertyDescriptor(process, 'platform');
   const fresh = ['../brand.js', '../buddy-window/brand.js', '../buddy-window/pages.js', '../src/spend-safety.js', '../src/setup-checklist.js'].map((m) => require.resolve(m));

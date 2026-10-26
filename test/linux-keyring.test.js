@@ -63,8 +63,57 @@ test('A9: apply appends the switch on the app command line only when chosen, wit
 
 test('A9: main applies it before app.ready, on Linux only', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  const at = main.indexOf("require('./src/linux-keyring.js').apply(app)");
+  const at = main.indexOf("require('./src/linux-keyring.js').apply(app");
   assert.ok(at > 0, 'main wires it');
   assert.match(main.slice(main.lastIndexOf('\n', at), at), /process\.platform === 'linux'/);
+  assert.match(main, /require\('\.\/src\/linux-keyring\.js'\)\.apply\(app, \{ dir: ROOT_DIR \}\)/);
+  assert.ok(main.indexOf('const ROOT_DIR =') < at, 'the marker folder is known before then');
   assert.ok(at < main.indexOf('app.whenReady('), 'before the first whenReady');
+});
+
+const os = require('node:os');
+const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-keyring-'));
+// Answers by method, like a session bus would.
+function busExec({ owner = NOT_OWNED, activatable = '   array [\n      string "org.freedesktop.DBus"\n   ]\n' } = {}) {
+  const calls = [];
+  const exec = (file, args) => {
+    calls.push(args.find((a) => a.startsWith('org.freedesktop.DBus.')));
+    if (args.includes('org.freedesktop.DBus.NameHasOwner')) { if (owner instanceof Error) throw owner; return owner; }
+    if (activatable instanceof Error) throw activatable;
+    return activatable;
+  };
+  return { exec, calls };
+}
+const ACTIVATABLE = '   array [\n      string "org.freedesktop.DBus"\n      string "org.freedesktop.secrets"\n   ]\n';
+
+test('M2: a keyring the bus can start (activatable, not yet running) gets gnome-libsecret', () => {
+  const f = busExec({ activatable: ACTIVATABLE });
+  assert.equal(K.choose({ platform: 'linux', env: {}, exec: f.exec }), 'gnome-libsecret');
+  assert.deepEqual(f.calls, ['org.freedesktop.DBus.NameHasOwner', 'org.freedesktop.DBus.ListActivatableNames']);
+  const hung = busExec({ owner: Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' }), activatable: ACTIVATABLE });
+  assert.equal(K.choose({ platform: 'linux', env: {}, exec: hung.exec }), null, 'a hung bus costs one timeout, not two');
+  assert.equal(hung.calls.length, 1);
+});
+
+test('M2: a yes is remembered in ROOT_DIR, so a later launch that races the keyring still gets gnome-libsecret', () => {
+  const dir = tmpDir();
+  try {
+    assert.equal(K.choose({ platform: 'linux', env: {}, exec: busExec({ owner: OWNED }).exec, dir }), 'gnome-libsecret');
+    const file = path.join(dir, K.MARKER);
+    assert.equal(fs.readFileSync(file, 'utf8'), 'gnome-libsecret\n');
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    const later = busExec({ owner: Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' }) });
+    assert.equal(K.choose({ platform: 'linux', env: {}, exec: later.exec, dir }), 'gnome-libsecret', 'marker present, probe failing');
+    assert.equal(later.calls.length, 0, 'not asked again');
+    assert.equal(K.choose({ platform: 'linux', env: {}, exec: busExec().exec, dir }), 'gnome-libsecret', 'marker present, no keyring now');
+    assert.equal(K.choose({ platform: 'linux', env: { XDG_CURRENT_DESKTOP: 'GNOME' }, exec: busExec().exec, dir }), null, 'a recognised desktop is still left alone');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('M2: no marker and no keyring: no switch, and nothing is written', () => {
+  const dir = tmpDir();
+  try {
+    assert.equal(K.choose({ platform: 'linux', env: {}, exec: busExec().exec, dir }), null);
+    assert.deepEqual(fs.readdirSync(dir), []);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

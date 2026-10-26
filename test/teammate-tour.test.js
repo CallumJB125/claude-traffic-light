@@ -33,7 +33,8 @@ test('tour (A5): decides only on a settled Home state, never while the widget to
   assert.equal(T.decide(fresh, null, null), 'wait');
   assert.equal(T.decide(fresh, { needs: null }, null), 'wait', 'team not asked yet');
   assert.equal(T.decide(fresh, { team: null, firstRunTour: 'running' }, null), 'wait');
+  assert.equal(T.decide(fresh, { team: null, firstRunTour: 'pending' }, null), 'wait', 'setup open or the widget tour about to start');
   assert.equal(T.decide(fresh, { team: null, firstRunTour: 'skipped' }, null), 'dismiss');
-  for (const status of ['finished', 'not-started', null, undefined]) assert.equal(T.decide(fresh, { team: null, firstRunTour: status }, null), 'show', String(status));
+  for (const status of ['finished', 'not-started', 'interrupted', null, undefined]) assert.equal(T.decide(fresh, { team: null, firstRunTour: status }, null), 'show', String(status));
   assert.equal(T.decide(T.dismiss(fresh, 'acct-1'), { team: null, firstRunTour: 'skipped' }, 'acct-1'), 'done');
 });

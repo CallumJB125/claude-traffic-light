@@ -880,7 +880,7 @@ test('team hub URLs: https origins only, bare hosts become https, junk refused',
   assert.throws(() => normalizeHubUrl('javascript:alert(1)'), /web address|https/);
   // T0 option (a): a refused LAN or self-hosted hub says why, in the words the join screens use.
   const scope = require('../buddy-window/brand').COPY.hubScope;
-  assert.match(scope, /only public https hubs; LAN and self-hosted hubs aren’t supported yet/);
+  assert.equal(scope, 'Team hubs need a public https:// address. Local-network and http hubs aren’t supported yet.');
   for (const lan of ['http://hub.lan', 'localhost:8787', 'https://127.0.0.1', 'https://teamhub']) assert.throws(() => normalizeHubUrl(lan), (e) => e.message.endsWith(scope), lan);
   assert.throws(() => normalizeLinkHub('https://192.168.1.20'), (e) => e.message.endsWith(scope));
   const accountJs = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'buddy-window', 'account.js'), 'utf8');

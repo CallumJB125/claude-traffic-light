@@ -47,7 +47,8 @@ module.exports = Object.freeze({
     notAHub: `That address answered, but it isn’t a ${NAME} team address.`,
     notASignIn: `That address redirects somewhere that isn’t a ${NAME} sign-in.`,
     startingBoard: `${NAME} is starting the board…`,
-    // T0 option (a): the packaged app joins only public https hubs (workspaces.js normalizeHubUrl).
-    hubScope: `${NAME} joins only public https hubs; LAN and self-hosted hubs aren’t supported yet.`,
+    // T0 option (a): workspaces.js normalizeHubUrl takes https on a dotted public name (self-hosted included);
+    // links also refuse private address literals (normalizeLinkHub).
+    hubScope: 'Team hubs need a public https:// address. Local-network and http hubs aren’t supported yet.',
   }),
 });

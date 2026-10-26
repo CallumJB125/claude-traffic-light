@@ -16,10 +16,11 @@
   // A dismissal made before Home knew the account ('local') covers every account on this computer.
   const shouldShow = (s, account) => !Object.hasOwn(s.done, 'local') && !Object.hasOwn(s.done, accountKey(account));
   // One tour at a time, decided on a settled Home state (src/home-main.js sends `team` once it has asked,
-  // and `firstRunTour`, the widget tour's status). → 'wait' | 'show' | 'dismiss' (the widget tour was
+  // and `firstRunTour`, the widget tour's status: 'pending' while setup is open or its start is scheduled,
+  // 'interrupted' when a past launch quit mid-tour). → 'wait' | 'show' | 'dismiss' (the widget tour was
   // skipped, so this one is done too) | 'done'.
   function decide(s, home, account) {
-    if (!home || typeof home !== 'object' || home.team === undefined || home.firstRunTour === 'running') return 'wait';
+    if (!home || typeof home !== 'object' || home.team === undefined || home.firstRunTour === 'running' || home.firstRunTour === 'pending') return 'wait';
     if (!shouldShow(s, account)) return 'done';
     return home.firstRunTour === 'skipped' ? 'dismiss' : 'show';
   }
