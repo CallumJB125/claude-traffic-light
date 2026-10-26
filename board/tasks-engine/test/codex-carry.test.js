@@ -126,6 +126,50 @@ test('C4: the Codex takeover reads the key from codex-takeover.key (denied, 0600
   } finally { await h.cleanup(); }
 });
 
+test('R2-1: a takeover that throws after the key write (here ensureIdleIpc) removes codex-takeover.key', { skip: !posix }, async () => {
+  const real = carry(PLEXLAB);
+  let file = null;
+  // The key is written, then <run dir>/shell is made a file, so ensureIdleIpc's mkdir throws after stopRun.
+  const sabotage = { prepare: async (o) => {
+    const r = await real.prepare(o);
+    if (o.mode === 'takeover') {
+      file = r.keyFile;
+      const shell = path.join(path.dirname(o.keyFile), 'shell');
+      fs.rmSync(shell, { recursive: true, force: true });
+      fs.writeFileSync(shell, '');
+    }
+    return r;
+  } };
+  const h = await setup({ wait: true, waitFirstOnly: true }, { codexCarry: sabotage });
+  try {
+    const { id } = await h.client.createTask({ text: 'Take this over', cwd: h.repo.checkout, ai: 'codex', permissionLevel: 'auto-edits' });
+    await waitFor(() => h.task(id)?.sessionStarted && h.task(id).state === 'running');
+    await assert.rejects(h.client.act(id, 'takeover', { mode: 'print' }));
+    assert.equal(path.basename(file), CODEX_TAKEOVER_KEY_FILE);
+    assert.equal(fs.existsSync(file), false, 'no terminal will read it, so it is gone');
+    assert.equal(h.eng.engine.takeoverKeys.has(id), false);
+  } finally { await h.cleanup(); }
+});
+
+test('R2-1: a run whose spawn meets the engine closing after the key write leaves no codex-provider.key (leaveRuns too)', { skip: !posix }, async () => {
+  const real = carry(PLEXLAB);
+  let file = null, closed = null, h = null;
+  const closer = { prepare: async (o) => {
+    const r = await real.prepare(o);
+    if (o.mode === 'shell') { file = r.keyFile; closed = h.eng.engine.close({ leaveRuns: true }); }
+    return r;
+  } };
+  h = await setup({ wait: true }, { codexCarry: closer });
+  try {
+    await h.client.createTask({ text: 'Hold', cwd: h.repo.checkout, ai: 'codex', permissionLevel: 'auto-edits' }).catch(() => {});
+    await waitFor(() => !!closed); // not the promise itself: waitFor would await it
+    await closed;
+    assert.equal(path.basename(file), CODEX_KEY_FILE);
+    assert.equal(h.log().filter((x) => x.kind === 'start').length, 0, 'Codex never started');
+    assert.equal(fs.existsSync(file), false, 'the never-started run keeps no key');
+  } finally { await h.cleanup(); }
+});
+
 test('a provider whose key is written in config.toml runs in the background and takes over through the key file', { skip: !posix }, async () => {
   const inline = `model_provider = "gw"\n[model_providers.gw]\nbase_url = "https://gw.example.test/v1"\nexperimental_bearer_token = "${KEY}"\n`;
   const h = await setup({ wait: true, waitFirstOnly: true }, { codexCarry: carry(inline, { env: {} }) });

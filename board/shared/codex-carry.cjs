@@ -6,10 +6,11 @@
 //   overrides  `-c` values under model_provider and model_providers.<id>.* only (C16), never `model`
 //              (the caller passes the model its own way)
 //   model      the user's model, for a task that sets none
-//   cliEnv     env_key / env_http_headers values and the translated PLEXIFORM_PROVIDER_* (C13). They go in
-//              the Codex CLI's env only: its tool shells get shell_environment_policy.inherit="none" plus an
-//              explicit set, and the board MCP server gets an explicit env with env_vars=[] (D26 as reworded:
-//              no secret is reachable from a tool shell). Never on argv, never in a takeover command.
+//   cliEnv     env_key / env_http_headers values and the translated PLEXIFORM_PROVIDER_* (C13) that still need an
+//              env. With a key file (KEY_VIA_AUTH_FILE, below) the key isn't here: it goes in the file behind the
+//              provider's auth command, because a tool shell can read the CLI's env through /proc despite
+//              inherit="none". cliEnv holds a key only in the fallback, and only where Codex has no shell (noshell) or
+//              in a takeover (the terminal's env). Never on argv, never in a takeover command.
 // Never used for hosted runs. prepare() never throws and never puts a value in a reason.
 const fs = require('node:fs');
 const os = require('node:os');
@@ -78,7 +79,10 @@ function createCodexCarry({
     fs.chmodSync(path.dirname(file), 0o700);
     const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tmp, value, { mode: 0o600, flag: 'wx' });
-    fs.renameSync(tmp, file);
+    try { fs.renameSync(tmp, file); } catch (e) {
+      try { fs.rmSync(tmp, { force: true }); } catch { /* gone */ }
+      throw e;
+    }
   },
   removeKey = (file) => { try { fs.rmSync(file, { force: true }); } catch { /* gone */ } },
 } = {}) {

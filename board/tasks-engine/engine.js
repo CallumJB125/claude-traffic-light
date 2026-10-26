@@ -1249,7 +1249,7 @@ export class TasksEngine extends EventEmitter {
       if (c?.carry) this.carries.set(task.id, c);
     }
     if (task.ai.id !== 'gemini') run.ipc = await startIpcServer({ socketPath, token, log: this.log, handler: this.#ipcHandler(task, run) });
-    if (this.closing || this.closed) { await run.ipc?.close(); return; }
+    if (this.closing || this.closed) { this.#releaseCarry(task); await run.ipc?.close(); return; }
     this.runs.set(task.id, run);
     const carry = this.carries.get(task.id) ?? null;
     const env = { ...buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart }), ...carry?.cliEnv };
@@ -2027,14 +2027,21 @@ export class TasksEngine extends EventEmitter {
           codexCarry = c?.carry ? c : null;
           codexHome = c?.codexHome ?? null;
         }
-        if (run) {
-          this.#setState(task, 'handing_over');
-          await this.#stopRun(task, run);
+        let runDir, socketPath;
+        try {
+          if (run) {
+            this.#setState(task, 'handing_over');
+            await this.#stopRun(task, run);
+          }
+          this.#writeHandover(task, 'takeover');
+          this.#expireApprovals(task);
+          if (task.openAsk && task.openAsk.kind !== 'plan') this.#closeAsk(task, null);
+          ({ runDir, socketPath } = await this.#ensureIdleIpc(task));
+        } catch (e) {
+          // No terminal will read the key file now: it goes before the error does.
+          this.#releaseTakeoverKey(task);
+          throw e;
         }
-        this.#writeHandover(task, 'takeover');
-        this.#expireApprovals(task);
-        if (task.openAsk && task.openAsk.kind !== 'plan') this.#closeAsk(task, null);
-        const { runDir, socketPath } = await this.#ensureIdleIpc(task);
         this.#setState(task, 'handed_over');
         if (task.ai.id === 'codex') {
           const env = buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart });

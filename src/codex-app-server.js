@@ -24,7 +24,8 @@ const DISABLED_FEATURES = ['shell_tool', 'unified_exec', 'unified_exec_tty', 'sh
 // Explicit overrides win over the user's ~/.codex/config.toml: the provider
 // (the user's own, carried by board/shared/codex-carry.cjs, else the built-in
 // OpenAI one), no MCP servers/plugins/project trust entries, no notify, no
-// inherited environment for any command.
+// inherited environment for any command. include_apply_patch_tool is a dead key on codex 0.164 (lab: --strict-config
+// refuses it as unknown); it stays because this path isn't strict and an older CLI may still read it.
 const OPENAI_PROVIDER = 'model_provider="openai"';
 const CONFIG_OVERRIDES = [OPENAI_PROVIDER, 'mcp_servers={}', 'plugins={}', 'projects={}', 'hooks={}', 'notify=[]',
   'web_search="disabled"', 'project_doc_max_bytes=0', 'include_apply_patch_tool=false', 'shell_environment_policy.inherit="none"'];
@@ -159,8 +160,10 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
   }
 
   function launch(provider) {
-    // Key values (env_key, translated headers) go in this process's env only; no command inherits it.
-    // CODEX_HOME is the one the config was read from (maybe the login shell's), with or without a provider.
+    // A key goes to Codex through the key file in keyDir (the provider's auth command). Only without one (no key
+    // root, a failed write, Windows) do key values sit in this process's env, which is safe here only because the
+    // owned chat has no command tool (DISABLED_FEATURES). CODEX_HOME is the one the config was read from (maybe the
+    // login shell's), with or without a provider.
     const carried = provider?.carry ? provider : null;
     const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), ...carried?.cliEnv, ...(provider?.codexHome ? { CODEX_HOME: provider.codexHome } : {}) };
     child = spawn(bin, carried ? appServerArgs(carried) : APP_SERVER_ARGS, { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] }); // privacy-flow: owned-codex-session
