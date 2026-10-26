@@ -15,7 +15,9 @@ const HOUR_MS = 3600000;
 const FIVE_HOURS_MS = 5 * HOUR_MS;
 const WEEK_MS = 7 * 24 * HOUR_MS;
 const PLANS = Object.freeze(['auto', 'api', 'pro', 'max5', 'max20']);
-const PLAN_LABEL = Object.freeze({ api: 'API key (pay per token)', pro: 'Claude Pro', max5: 'Claude Max 5x', max20: 'Claude Max 20x' });
+const PLAN_LABEL = Object.freeze({ api: 'API key (pay per token)', pro: 'Claude Pro', max5: 'Claude Max 5x', max20: 'Claude Max 20x', gateway: 'a gateway (ANTHROPIC_BASE_URL)', cloud: 'a cloud provider (Bedrock, Vertex AI or Foundry)' });
+// Plans that carry 5-hour and weekly limits (and no per-token charge).
+const SUBSCRIPTIONS = Object.freeze(['pro', 'max5', 'max20']);
 // Rough reference points, in API-price-equivalent dollars per window. Anthropic
 // does not publish these; they only turn local usage into a "how close" bar.
 const REFERENCE = Object.freeze({
@@ -48,9 +50,26 @@ function normalize(saved) {
   };
 }
 
-// The plan from ~/.claude.json's oauthAccount (tier fields only) and the
-// environment. → 'api' | 'pro' | 'max5' | 'max20' | null when nothing says.
-function detectPlan({ claudeJson = null, env = {} } = {}) {
+// How Claude Code is routed, from the provider board/shared/user-provider.cjs
+// resolves (settings files, app and login-shell env): a gateway (Burst's
+// localGateway included) or a cloud provider is billed by that service and an
+// API key or token per token, so none of them has a Claude plan's limits.
+// → 'gateway' | 'cloud' | 'api' | null (OAuth or nothing: the tier decides).
+function providerPlan(provider) {
+  if (!provider || typeof provider !== 'object') return null;
+  const kind = provider.auth && provider.auth.kind;
+  if (kind === 'bedrock' || kind === 'vertex' || kind === 'foundry') return 'cloud';
+  if (provider.localGateway || (provider.routing && provider.routing.ANTHROPIC_BASE_URL)) return 'gateway';
+  if (kind === 'api-key' || kind === 'auth-token' || kind === 'helper') return 'api';
+  return null;
+}
+
+// The plan from the resolved provider, then ~/.claude.json's oauthAccount
+// (tier fields only) and the environment.
+// → 'gateway' | 'cloud' | 'api' | 'pro' | 'max5' | 'max20' | null when nothing says.
+function detectPlan({ claudeJson = null, env = {}, provider = null } = {}) {
+  const routed = providerPlan(provider);
+  if (routed) return routed;
   if (env && typeof env.ANTHROPIC_API_KEY === 'string' && env.ANTHROPIC_API_KEY) return 'api';
   const o = claudeJson && typeof claudeJson === 'object' ? claudeJson.oauthAccount : null;
   if (!o || typeof o !== 'object') return null;
@@ -63,13 +82,13 @@ function detectPlan({ claudeJson = null, env = {} } = {}) {
   return null;
 }
 
-// The plan in use: the person's choice wins, then detection, then the spend
-// mode they picked in Preferences (subscription → Pro as the cautious guess).
+// The plan in use: the person's choice wins, then detection, then an API
+// spend mode. Never a guessed subscription: null means "pick your plan" (A10).
 function effectivePlan(settings, detected, spendMode) {
   const s = normalize(settings);
   if (s.plan !== 'auto') return s.plan;
   if (detected) return detected;
-  return spendMode === 'api' ? 'api' : 'pro';
+  return spendMode === 'api' ? 'api' : null;
 }
 
 function todayByProject(turns, now) {
@@ -220,4 +239,4 @@ function nudgePauses(rules, runaway, acked = new Set()) {
     .map((r) => ({ sessionId: r.sessionId, firedAt: r.firedAt || 0, rule: rule.name || 'Pause nudges' }));
 }
 
-module.exports = { nudgePauses, PLANS, PLAN_LABEL, REFERENCE, LOOP_MIN, normalize, detectPlan, effectivePlan, projectCaps, projectedToday, limitEstimate, openWindow, countdown, toolCalls, retryLoop, loopText, burnText, folderOf };
+module.exports = { nudgePauses, PLANS, PLAN_LABEL, SUBSCRIPTIONS, providerPlan, REFERENCE, LOOP_MIN, normalize, detectPlan, effectivePlan, projectCaps, projectedToday, limitEstimate, openWindow, countdown, toolCalls, retryLoop, loopText, burnText, folderOf };

@@ -1747,6 +1747,12 @@
     // Loading ends whether or not the read produced data.
     $('mix-loading').hidden = true;
     if (!mix) { $('mix-empty').hidden = false; $('mix-body').hidden = true; return; }
+    // Turns on models with no price are still activity: say so, without the Connect button (A10).
+    const unpriced = !mix.week.turns && mix.unpricedWeek > 0;
+    $('mix-empty-text').textContent = unpriced
+      ? `${mix.unpricedWeek} turn${mix.unpricedWeek === 1 ? '' : 's'} in the last 7 days, all on models with no price, so there is no cost or model mix to show.`
+      : 'No AI activity in the last 7 days.';
+    $('mix-connect').hidden = unpriced;
     $('mix-empty').hidden = mix.week.turns > 0;
     $('mix-body').hidden = !mix.week.turns;
     if (mix.week.turns) {

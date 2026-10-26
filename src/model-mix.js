@@ -68,4 +68,13 @@ function modelMix(turns, { now = Date.now() } = {}) {
   return { today, week, opus, recommendation };
 }
 
-module.exports = { isRoutine, routineEstimate, savingLine, modelMix, startOfDay, DAY_MS };
+// Turns in modelMix's 7-day window on models with no price (a gateway's own
+// models): activity modelMix leaves out of its counts (A10).
+function unpricedTurns(turns, { now = Date.now() } = {}) {
+  const from = startOfDay(now - 6 * DAY_MS);
+  let n = 0;
+  for (const t of Array.isArray(turns) ? turns : []) if (t && t.ts >= from && t.ts <= now && Usage.costOf(t) == null) n += 1;
+  return n;
+}
+
+module.exports = { isRoutine, routineEstimate, savingLine, modelMix, unpricedTurns, startOfDay, DAY_MS };

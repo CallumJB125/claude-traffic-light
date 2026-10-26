@@ -4136,7 +4136,7 @@ function getUsageTurns() {
 // The Model mix card: read-only — which models your turns ran on, what they
 // cost, one recommendation line, and a note if an old router shim is still
 // in a shell rc (never edited from here).
-utilityHandle('model-mix', e => fromUtilityPage(e, 'usage'), async () => Usage.modelMix(await getUsageTurns()));
+utilityHandle('model-mix', e => fromUtilityPage(e, 'usage'), async () => { const turns = await getUsageTurns(); return { ...Usage.modelMix(turns), unpricedWeek: require('./src/model-mix.js').unpricedTurns(turns) }; });
 
 // The Usage tab and buddy_usage_history read the permanent record from disk.
 // Asking also nudges a fresh fold in, so an open tab stays current.
@@ -4809,7 +4809,7 @@ const WidgetStrip = require('./src/widget-strip.js');
 let strip = WidgetStrip.NONE;
 let applyingStrip = false;
 require('./src/widget-page.js').register({ utilityHandle, allowed: (e) => fromUtilityPage(e, 'widget'), loadConfig, commitConfig, widget: () => win, strip: () => strip, ensureWidget: () => { if (!win) createWindow(); applyWidgetVisibility(); }, resizeBy, busy: () => roamState.busy || !!gardenRun, stopGlide, saveBounds, screen, limits: { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }, openPage: (id) => { openBuddy(id); if (id === 'settings') buddyWin?.sendToPage('settings', 'show-section', 'widget'); }, platform: process.platform, composeShortcut: () => ComposeShortcut.view() });
-spendSafety = require('./src/spend-safety-main.js').install({ Notification, handle: utilityHandle, allowed: (e) => analyticsSender(e) || settingsOnly(e), rootDir: ROOT_DIR, projectsDir: PROJECTS_DIR, home: os.homedir(), env: process.env, config: loadConfig, turns: () => getUsageTurns(), spend: () => spendSnapshot(loadConfig()), silent: IS_DEV_RUN, log: console.log });
+spendSafety = require('./src/spend-safety-main.js').install({ Notification, handle: utilityHandle, allowed: (e) => analyticsSender(e) || settingsOnly(e), rootDir: ROOT_DIR, projectsDir: PROJECTS_DIR, home: os.homedir(), env: process.env, provider: () => require('./src/claude-carry.js').carryFor(process.env)?.resolve() ?? null, config: loadConfig, turns: () => getUsageTurns(), spend: () => spendSnapshot(loadConfig()), silent: IS_DEV_RUN, log: console.log });
 require('./src/rule-notify-main.js').install({ Notification, busy: () => BusyWatch.holding(), paused: (id) => spendSafety?.nudgesPaused(id), handle: utilityHandle, allowed: widgetConfigSender, config: loadConfig, sessions: () => aggregateState({ ignoreTravel: true }).sessions || [], env: () => { const c = loadConfig(); return { offline: !online, ...BusyWatch.env(), git: gitEvents(c), spend: spendSnapshot(c) }; }, log: console.log });
 const WidgetPolish = require('./src/widget-polish-main.js').install({ ipcMain, globalShortcut, utilityHandle, config: loadConfig, commitConfig, widgetWindow: () => win, quiet: Quiet, widgetAllowed: (e) => widgetOnly(e), pageAllowed: (e) => fromUtilityPage(e, 'widget'), sessions: () => localSessions(aggregateState().sessions || []), strip: () => strip, saveBounds, stopGlide, screen, sizing: { aspect: WIDGET_ASPECT, minWidth: MIN_WIDTH }, log: console.log });
 const FirstRunTour = require('./src/first-run-tour-main.js').install({ ipcMain, config: loadConfig, saveConfig, setupOpen: () => !!onboardingWin, demo: Demo, hasConnectedTool: () => AiTools.quick().some((t) => t.connected), windows: { widget: () => win, widgetShown: () => !!win && !win.isDestroyed() && win.isVisible(), lights: () => lightsWin, openLights: () => createLightsWindow(), openPage: (id) => openBuddy(id), sendToPage: (id, ch, p) => !!buddyWin?.sendToPage(id, ch, p) }, allowed: { widget: (e) => widgetOnly(e), lights: (e) => fromPage(e, lightsWin?.webContents), page: (e, id) => fromUtilityPage(e, id) }, log: console.log });
@@ -5393,7 +5393,7 @@ utilityHandle('preview-on-widget', widgetConfigSender, (e, look, ms = 4000) => {
 });
 
 ipcMain.handle('open-lights', e => { if (widgetOnly(e) || fromUtilityPage(e, 'help')) createLightsWindow(); });
-ipcMain.handle('open-preferences', e => { if (widgetConfigSender(e)) createSettingsWindow(); });
+ipcMain.handle('open-preferences', e => { if (widgetConfigSender(e) || analyticsSender(e)) createSettingsWindow(); });
 
 // A subtle system alert sound when the resolved look's sound channel turns on
 // (transition only, not every poll).

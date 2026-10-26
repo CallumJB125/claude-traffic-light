@@ -1,7 +1,7 @@
 'use strict';
 // Spend safety, main side (src/spend-safety.js does the sums). Local only:
-// reads the Claude Code transcripts and ~/.claude.json's plan tier fields on
-// this Mac, keeps its settings in spend-safety.json, and raises desktop
+// reads the Claude Code transcripts, ~/.claude.json's plan tier fields and the
+// provider the Claude carry resolves (gateway, key or cloud) on this Mac, keeps its settings in spend-safety.json, and raises desktop
 // notifications. Nothing here touches the network or stops a session.
 //   - per-project daily caps: one notification per project per day when over
 //   - retry loops: the same failing tool call 3+ times in a row, one
@@ -82,7 +82,7 @@ function cwdOf(lines) {
 
 /**
  * deps: { handle(channel, allowed, fn), allowed(e), Notification?, rootDir, projectsDir?, home,
- *         env?, config() → app config, turns() → Promise<usage turns>, spend() → spend snapshot,
+ *         env?, provider?() → Promise<the resolved Claude provider (user-provider.cjs) | null>, config() → app config, turns() → Promise<usage turns>, spend() → spend snapshot,
  *         silent?: bool (dev runs: no notifications), now?, log? }
  */
 function install(deps) {
@@ -91,7 +91,25 @@ function install(deps) {
   const file = path.join(deps.rootDir, FILE);
   const projectsRoot = deps.projectsDir || path.join(deps.home, '.claude', 'projects');
   const settings = () => S.normalize(readJson(file, {}));
-  const detected = () => S.detectPlan({ claudeJson: readJson(path.join(deps.home, '.claude.json'), null), env: deps.env || {} });
+  // The provider is read through the carry's own resolver (no second detector), at most once a minute;
+  // callers that arrive while a read (which may ask the login shell) is running share it.
+  let providerMemo = null;
+  let providerRead = null;
+  function provider() {
+    if (!deps.provider) return Promise.resolve(null);
+    if (providerMemo && now() - providerMemo.at < TICK_MS) return Promise.resolve(providerMemo.value);
+    if (!providerRead) {
+      providerRead = (async () => {
+        let value = null;
+        try { value = (await deps.provider()) || null; } catch (err) { log(`[spend-safety] provider read failed: ${err.message}`); }
+        providerMemo = { at: now(), value };
+        providerRead = null;
+        return value;
+      })();
+    }
+    return providerRead;
+  }
+  const detected = async () => S.detectPlan({ claudeJson: readJson(path.join(deps.home, '.claude.json'), null), env: deps.env || {}, provider: await provider() });
   const notified = new Set();
   let loops = [];
 
@@ -123,16 +141,17 @@ function install(deps) {
   async function view() {
     const c = deps.config() || {};
     const s = settings();
-    const det = detected();
+    const det = await detected();
     const plan = S.effectivePlan(s, det, c.spend && c.spend.mode);
     let turns = [];
     try { turns = (await deps.turns()) || []; } catch (err) { log(`[spend-safety] turns failed: ${err.message}`); }
     const t = now();
-    const subscriber = plan !== 'api';
+    const subscriber = S.SUBSCRIPTIONS.includes(plan);
     return {
-      settings: s, plan, planLabel: S.PLAN_LABEL[plan], detected: det, subscriber,
+      settings: s, plan, planLabel: plan ? S.PLAN_LABEL[plan] : null, detected: det, subscriber,
       showDollars: !subscriber || s.showApiPrices,
       limits: subscriber ? S.limitEstimate(turns, plan, t) : null,
+      unknownPlan: !plan && turns.length > 0,
       projected: S.projectedToday(turns, t),
       projects: S.projectCaps(turns, s, t, (c.spend && c.spend.warnAt) || 0.8),
       loops: loops.map((l) => ({ sessionId: l.sessionId, tool: l.tool, count: l.count, text: l.text })),

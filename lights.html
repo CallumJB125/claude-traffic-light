@@ -636,6 +636,7 @@
   #mix .stats-sub { max-width: 64ch; line-height: 1.45; }
   .mix-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }
   .mix-card[hidden] { display: none; }
+  #mix-connect[hidden] { display: none; }
   .mix-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
   .mix-card .k { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
   .mix-card .v { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; margin-top: 3px; line-height: 1.05; }
@@ -684,6 +685,7 @@
   .uv-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
   .uv-chip { font: inherit; font-size: 12px; color: var(--text); background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
   .uv-note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 0; max-width: 72ch; }
+  .uv-about:not([hidden]) { display: flex; flex-direction: column; gap: 6px; }
   #mix:has(#mix-empty:not([hidden])) .uv-empty { display: none; }
   .uv-empty { font-size: 13px; color: var(--muted); line-height: 1.5; margin: 6px 0; max-width: 60ch; }
   .uv-callouts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -1427,7 +1429,7 @@
         <button type="button" class="btn ghost" id="budget-auto" hidden>Auto-answer rules</button>
       </div>
       <div class="stats-sub" id="mix-loading">Reading transcripts…</div>
-      <div class="stats-sub" id="mix-empty" hidden>No AI activity in the last 7 days. <button type="button" class="btn uv-cta" id="mix-connect">Connect AI tools</button></div>
+      <div class="stats-sub" id="mix-empty" hidden><span id="mix-empty-text">No AI activity in the last 7 days.</span> <button type="button" class="btn uv-cta" id="mix-connect">Connect AI tools</button></div>
       <div class="mix-card" id="mix-body" hidden>
         <div class="mix-cols">
           <div>
@@ -1444,7 +1446,6 @@
           </div>
         </div>
         <div class="mix-rec" id="mix-rec"></div>
-        <div class="note">Estimate — "routine" means a reply under 400 tokens on under 4k new tokens of context. The saving prices those same tokens at Sonnet rates; the low end allows 35% more tokens on the cheaper model. Quality effects aren't counted.</div>
       </div>
       <div id="usage-where" aria-label="Where it went" hidden></div>
       <div id="usage-work" aria-label="Cost by work" hidden></div>
