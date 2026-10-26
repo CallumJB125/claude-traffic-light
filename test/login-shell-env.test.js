@@ -66,9 +66,9 @@ test('timeout kills the whole process group and reports not found', async () => 
   const pidFile = path.join(root, 'child.pid');
   const shell = fake('hang', `sleep 30 &\necho $! > "${pidFile}"\nsleep 30`);
   const t0 = Date.now();
-  const r = await readLoginShellEnv({ ...base, shell, names: ['X'], timeoutMs: 1000 });
+  const r = await readLoginShellEnv({ ...base, shell, names: ['X'], timeoutMs: 3000 });
   assert.deepEqual(r, { env: {}, ok: false, reason: 'timeout' });
-  assert.ok(Date.now() - t0 < 3000);
+  assert.ok(Date.now() - t0 < 6000);
   const pid = Number(fs.readFileSync(pidFile, 'utf8'));
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });

@@ -50,7 +50,7 @@ function resolveShell({ shell, env, platform, shells }) {
 function defaultExec(file, args, { cwd, env, timeout }) {
   return new Promise((resolve) => {
     let child;
-    try { child = spawn(file, args, { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'ignore'] }); }
+    try { child = spawn(file, args, { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'ignore'] }); } // privacy-flow: login-shell-env
     catch { resolve({ code: null, stdout: '', timedOut: false }); return; }
     const chunks = [];
     let size = 0, timedOut = false, done = false;
