@@ -204,6 +204,20 @@ test('concurrent identical calls share one spawn', async () => {
   assert.deepEqual(all.map((r) => r.env.KEEP), ['1', '1', '1']);
 });
 
+test('invalidate() during an in-flight call does not let the old call evict the new one', async () => {
+  let runs = 0;
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const exec = async () => { const n = ++runs; await wait(n === 1 ? 30 : 200); return okExec('KEEP=1')(); };
+  const args = { ...base, shell: noisy(), exec, names: ['KEEP'] };
+  const a = readLoginShellEnv(args);
+  invalidate();
+  const b = readLoginShellEnv(args);
+  await a;
+  const c = readLoginShellEnv(args);
+  await Promise.all([b, c]);
+  assert.equal(runs, 2);
+});
+
 test('timeout, non-zero exit and no-sentinel failures are cached for 60 s; other failures are not', async () => {
   let runs = 0, clock = 1000;
   const results = [{ code: null, timedOut: true }, { code: 1, stdout: '' }, { code: 0, stdout: 'nothing' }, { code: null, error: 'spawn_failed' }];

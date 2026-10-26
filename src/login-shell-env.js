@@ -6,7 +6,7 @@
 // logs: failures come back as fixed reason codes, never as shell output.
 //
 // Shells: zsh and bash (`-l -i -c`) are the supported ones. fish accepts the
-// flags but may not expand `\0` in printf, and tcsh/csh reject `-l` with other
+// flags and likely works (printf is called as a command), unverified, and tcsh/csh reject `-l` with other
 // flags; both then fail safe as `no_sentinel` / `exit_nonzero` with no values.
 //
 // Trust boundary: an explicit `shell` skips the /etc/shells check, so it must
@@ -19,8 +19,9 @@ const { spawn } = require('node:child_process');
 
 const START = '\0__PLX_ENV__\0';
 const END = '\0__PLX_END__\0';
-// Absolute printf so an rc-defined function or alias can't break the markers.
-const COMMAND = "/usr/bin/printf '\\0__PLX_ENV__\\0'; /usr/bin/env -0; /usr/bin/printf '\\0__PLX_END__\\0'";
+// `env printf` skips an rc-defined function or alias, and /usr/bin/env exists
+// even where printf isn't in /usr/bin (NixOS).
+const COMMAND = "/usr/bin/env printf '\\0__PLX_ENV__\\0'; /usr/bin/env -0; /usr/bin/env printf '\\0__PLX_END__\\0'";
 const TIMEOUT_MS = 4000;
 const CACHE_MS = 5 * 60 * 1000;
 const FAIL_CACHE_MS = 60 * 1000;
@@ -193,7 +194,7 @@ async function readLoginShellEnv({ names, shell, home, platform = process.platfo
   if (hit && now() - hit.at < (hit.result.ok ? CACHE_MS : FAIL_CACHE_MS)) return copy(hit.result);
   let inflight = pending.get(key);
   if (!inflight) {
-    inflight = load({ names, shell, home, platform, env, exec, timeoutMs, shells }, key, now).finally(() => pending.delete(key));
+    inflight = load({ names, shell, home, platform, env, exec, timeoutMs, shells }, key, now).finally(() => { if (pending.get(key) === inflight) pending.delete(key); });
     pending.set(key, inflight);
   }
   return copy(await inflight);
