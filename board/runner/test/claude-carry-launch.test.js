@@ -71,7 +71,22 @@ test('board runner: a failed preflight never starts the CLI; the reason is prep.
   try {
     r.hub.send(offerFor());
     const failed = await waitFor(() => r.hub.outs('prep.failed')[0], { what: 'prep.failed' });
-    assert.match(failed.cause, /^spawn: .*AWS profile/);
+    assert.equal(failed.cause, 'spawn: Claude provider check failed on this machine', 'the hub gets a fixed sentence (review 5); the detail stays in the local log');
     assert.ok(!JSON.stringify(failed).includes('ABSK-fixture'));
   } finally { await r.close(); }
+});
+
+test('board runner start sweeps an api.key left by a crash (review 3)', { skip: !posix }, async () => {
+  const root = tmpDir();
+  const hub = await startFakeHub();
+  const repo = makeRepo(root);
+  const home = path.join(root, 'home');
+  const stale = path.join(home, 'run', 'old-run');
+  fs.mkdirSync(stale, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(stale, 'api.key'), KEY, { mode: 0o600 });
+  fs.writeFileSync(path.join(stale, 'mcp.json'), '{}');
+  const sup = await startRunner({ hub, home, repo, scenario: { steps: [{ result: 'success' }] }, opts: { claudeCarry: fixtureCarry({ files: {} }).carry } });
+  try {
+    assert.deepEqual(fs.readdirSync(stale), ['mcp.json']);
+  } finally { await sup.shutdown(); await hub.close(); rm(root); }
 });

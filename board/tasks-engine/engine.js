@@ -22,6 +22,7 @@ import {
 } from '../tasks-api/protocol.js';
 import { T_QUIET_MS } from '../shared/liveness.js';
 import { redact, filterPath, normalizeRemoteUrl } from '../shared/scope.js';
+import { sweepKeyFiles } from '../shared/claude-carry.cjs';
 import { untrusted, envelopeTag } from '../shared/untrusted.js';
 import { BACKENDS } from '../runner/backends/index.js';
 import { buildSettings, buildMcpConfig, buildEnv, trustedInstructions, HOOK_TOKEN_FILE, API_KEY_FILE, MCP_SERVER, DEFAULT_MAX_TURNS, DISALLOWED_TOOLS, BUS_DISALLOWED, DENY_READ } from '../runner/launch.js';
@@ -692,7 +693,14 @@ export class TasksEngine extends EventEmitter {
   // Background runs can't be re-adopted (their stdio pipes died with the old
   // engine): a CLI still alive is killed (pid + lstart must match), and the
   // task becomes orphaned with its session resumable. Nothing restarts on its own.
+  // The real path and the path as given (/var vs /private/var, a user symlink): the agent may ask for either.
+  #dataForms() {
+    return [...new Set([fs.realpathSync(this.dataDir), path.resolve(this.dataDir)])];
+  }
+
   #recover() {
+    // No run survives an engine restart, so no key file from before this start is still needed.
+    sweepKeyFiles(path.join(this.dataDir, 'run'));
     for (const task of this.tasks.values()) {
       const had = task.run;
       if (had?.kind === 'windows-job' || String(had?.lstart ?? '').startsWith('win32:') || task.windowsStopUnconfirmed) {
@@ -1186,8 +1194,8 @@ export class TasksEngine extends EventEmitter {
     const apiKeyFile = carry ? carry.apiKeyFile : this.env.ANTHROPIC_API_KEY ? path.join(runDir, API_KEY_FILE) : null;
     if (apiKeyFile && !carry) writeFileAtomic(apiKeyFile, this.env.ANTHROPIC_API_KEY);
     writeJsonAtomic(path.join(runDir, 'settings.json'), buildSettings({
-      worktree: task.worktree, tmpdir: path.join(cacheDir, 'tmp'), repo: {}, apiKeyFile, env: carry?.settingsEnv, extraDenyRead: [fs.realpathSync(this.dataDir), ...(carry?.denyRead ?? [])],
-      extraDenyWrite: [fs.realpathSync(this.dataDir), ...protectedWrite],
+      worktree: task.worktree, tmpdir: path.join(cacheDir, 'tmp'), repo: {}, apiKeyFile, env: carry?.settingsEnv, extraDenyRead: [...this.#dataForms(), ...(carry?.denyRead ?? [])],
+      extraDenyWrite: [...this.#dataForms(), ...protectedWrite],
       level: task.planFirst && !task.planApproved ? 'plan' : task.permissionLevel, cacheWrite: [cacheDir], bus: task.source === 'bus',
     }));
     writeJsonAtomic(path.join(runDir, 'mcp.json'), buildMcpConfig({ socket: socketPath, token, server: this.mcpServer }));
@@ -1248,7 +1256,7 @@ export class TasksEngine extends EventEmitter {
       budget: remaining != null ? { amount: remaining, unit: 'usd' } : null, maxTurns: ONE_TURN.has(task.ai.id) ? undefined : DEFAULT_MAX_TURNS,
       systemPrompt: this.#brief(task), model: task.ai.model ?? carry?.model ?? undefined, log: this.log, boardHome: null,
       permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel],
-      extraDisallowed: [...['Read', 'Edit', 'Write'].map((t) => `${t}(/${dataReal}/**)`), ...(carry?.disallowed ?? []), ...(task.source === 'bus' ? BUS_DISALLOWED : [])],
+      extraDisallowed: [...['Read', 'Edit', 'Write'].flatMap((t) => this.#dataForms().map((d) => `${t}(/${d}/**)`)), ...(carry?.disallowed ?? []), ...(task.source === 'bus' ? BUS_DISALLOWED : [])],
       interruptWaitMs: this.opts.interruptWaitMs, stopGraceMs: this.opts.stopGraceMs,
       dataDir: dataReal, cacheDir, ...gitAccess, ...(task.ai.id === 'codex' ? { taskRunDir: runDir } : {}),
     });
@@ -2002,7 +2010,7 @@ export class TasksEngine extends EventEmitter {
             argv: [info.bin, ...(task.sessionStarted ? ['--resume', task.sessionId] : ['--session-id', task.sessionId]),
               '--setting-sources', '', '--settings', path.join(runDir, 'settings.json'),
               '--strict-mcp-config', '--mcp-config', path.join(runDir, 'mcp.json'),
-              '--disallowedTools', ...DISALLOWED_TOOLS, ...['Read', 'Edit', 'Write'].map((t) => `${t}(/${fs.realpathSync(this.dataDir)}/**)`), ...(takeoverCarry?.disallowed ?? []),
+              '--disallowedTools', ...DISALLOWED_TOOLS, ...['Read', 'Edit', 'Write'].flatMap((t) => this.#dataForms().map((d) => `${t}(/${d}/**)`)), ...(takeoverCarry?.disallowed ?? []),
               '--permission-mode', mode, ...(!task.ai.model && takeoverCarry?.model ? ['--model', takeoverCarry.model] : [])],
             cwd: task.worktree,
             env: { ...takeoverCarry?.cliEnv, TMPDIR: path.join(this.#cacheDir(task), 'tmp'), BOARD_RUN_SOCKET: socketPath, BOARD_SUPERVISOR_PID: String(process.pid), BOARD_SUPERVISOR_LSTART: this.lstart ?? '', BUDDY_TASK_ID: task.id },

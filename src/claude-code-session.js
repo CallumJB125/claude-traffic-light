@@ -20,7 +20,9 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { claudeActivityLabel } = require('./session-activity');
-const { NONE, prepareNoTool, carryFor } = require('./claude-carry');
+const os = require('node:os');
+const { NONE, prepareNoTool, prepareChat, carryFor } = require('./claude-carry');
+const { denyRules } = require('../board/shared/claude-carry.cjs');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ENV_KEYS = ['HOME', 'USER', 'LOGNAME', 'PATH', 'LANG', 'TMPDIR', 'TZ', 'CLAUDE_CONFIG_DIR',
@@ -45,11 +47,11 @@ const inside = (root, p) => { const rel = path.relative(root, p); return rel ===
 // into Plexiform, no plugins, no permission allow rules), no MCP servers, no
 // skills or slash commands, no CLAUDE.md (--safe-mode), no persistence, and
 // nothing that would prompt is ever approved (dontAsk + prompts none).
-function buildClaudeArgs({ sessionId, writable = false, model = 'haiku', systemPrompt = null, maxBudgetUsd = null }) {
+function buildClaudeArgs({ sessionId, writable = false, model = 'haiku', systemPrompt = null, maxBudgetUsd = null, settingsFile = null, disallowed = [] }) {
   return ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--include-partial-messages', '--replay-user-messages',
     '--session-id', sessionId, '--no-session-persistence',
-    '--setting-sources', '', '--safe-mode', '--strict-mcp-config', '--disable-slash-commands',
+    '--setting-sources', '', ...(settingsFile ? ['--settings', settingsFile] : []), ...(disallowed.length ? ['--disallowedTools', ...disallowed] : []), '--safe-mode', '--strict-mcp-config', '--disable-slash-commands',
     '--tools', writable ? EDIT_TOOLS : NO_TOOLS,
     '--permission-mode', writable ? 'acceptEdits' : 'dontAsk', '--permission-prompts', 'none',
     '--model', model,
@@ -58,7 +60,7 @@ function buildClaudeArgs({ sessionId, writable = false, model = 'haiku', systemP
 }
 
 function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.spawn, safeRoot = null, model = 'haiku', systemPrompt = null,
-  maxBudgetUsd = null, ackMs = ACK_MS, controlMs = CONTROL_MS, killGraceMs = KILL_GRACE_MS, carry = carryFor(env) } = {}) {
+  maxBudgetUsd = null, ackMs = ACK_MS, controlMs = CONTROL_MS, killGraceMs = KILL_GRACE_MS, carry = carryFor(env), keyRoot = os.tmpdir() } = {}) {
   const events = new EventEmitter();
   const children = new Map(); // target (our --session-id) -> child record
   const emit = (e) => events.emit('event', e);
@@ -71,6 +73,7 @@ function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.
     if (c.active) emit({ kind: 'turn-completed', target: c.target, turnId: c.active, status: 'failed', error: reason });
     c.active = null;
     children.delete(c.target);
+    c.release?.();
     reap(c);
     emit({ kind: 'closed', target: c.target });
   }
@@ -174,13 +177,28 @@ function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.
     const real = (p) => { try { return fs.realpathSync(p); } catch { return null; } };
     const rootReal = safeRoot ? real(safeRoot) : null, cwdReal = real(cwd);
     const writable = !!rootReal && !!cwdReal && inside(rootReal, cwdReal);
-    // The user's own provider and auth. This child has no Bash tool, so a key may sit in its env.
-    const c0 = carry ? await prepareNoTool(carry) : NONE;
-    if (c0.failure) throw new Error(c0.failure.reason);
+    // The user's own provider and auth. A read-only chat has no tools, so a key may sit in its env. A writable
+    // chat has Read/Glob/Grep, so (like a run with a shell) its key goes to a file in a private dir outside the
+    // project, behind apiKeyHelper, with the dir and /proc denied to its file tools.
+    let c0, keyDir = null, disallowed = [], settingsFile = null;
+    if (carry && writable) {
+      keyDir = fs.mkdtempSync(path.join(keyRoot, 'plexiform-claude-'));
+      c0 = await prepareChat(carry, keyDir, path.join(keyDir, 'api.key'));
+      if (!c0.failure && c0.settings) {
+        settingsFile = path.join(keyDir, 'settings.json');
+        fs.writeFileSync(settingsFile, JSON.stringify(c0.settings), { mode: 0o600 });
+        disallowed = [...c0.disallowed, ...denyRules([...new Set([real(keyDir), keyDir].filter(Boolean))])];
+      } else if (!c0.failure) { try { fs.rmSync(keyDir, { recursive: true, force: true }); } catch { /* gone */ } keyDir = null; }
+    } else c0 = carry ? await prepareNoTool(carry) : NONE;
+    const cleanKeys = () => { c0.release?.(); if (keyDir) { try { fs.rmSync(keyDir, { recursive: true, force: true }); } catch { /* gone */ } } };
+    if (c0.failure) { cleanKeys(); throw new Error(c0.failure.reason); }
     const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), ...c0.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
-    const child = spawn(bin, buildClaudeArgs({ sessionId: target, writable, model: model === 'haiku' ? c0.model : model, systemPrompt, maxBudgetUsd }), // privacy-flow: owned-claude-session
+    let child;
+    try {
+      child = spawn(bin, buildClaudeArgs({ sessionId: target, writable, model: model === 'haiku' ? c0.model : model, systemPrompt, maxBudgetUsd, settingsFile, disallowed }), // privacy-flow: owned-claude-session
       { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
-    const c = { target, child, sent: new Set(), done: new Set(), waiters: new Map(), blocks: new Map(), tools: new Map(), blockMessage: '', active: null, interrupting: null, closed: false, exited: false };
+    } catch (e) { cleanKeys(); throw e; }
+    const c = { release: cleanKeys, target, child, sent: new Set(), done: new Set(), waiters: new Map(), blocks: new Map(), tools: new Map(), blockMessage: '', active: null, interrupting: null, closed: false, exited: false };
     children.set(target, c);
     let buffer = '', skipping = false;
     child.stdout.setEncoding('utf8');

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { createClaudeCarry, denyRules, oneShotModel, tcpProbe } from '../claude-carry.cjs';
+import { createClaudeCarry, denyRules, oneShotModel, tcpProbe, sweepKeyFiles, productionCarry } from '../claude-carry.cjs';
 import { fixtureCarry, HOME, CFG, MANAGED, KEY, settingsFile } from '../test-support/claude-carry-fixture.js';
 import { testTempDir } from '../test-support/tmp.js';
 import { findSecrets } from '../secret-patterns.mjs';
@@ -203,8 +203,8 @@ test('a loopback gateway that does not answer fails as a provider error naming t
   assert.equal((await up.carry.prepare({ mode: 'bash', keyFile: '/x' })).failure, null);
   assert.deepEqual(up.probes.map((p) => [p.host, p.port]), [['127.0.0.1', 7777]]);
   const remote = fixtureCarry({ files: user({ env: gateway }), probeUp: false });
-  assert.equal((await remote.carry.prepare({ mode: 'bash', keyFile: '/x' })).failure, null);
-  assert.equal(remote.probes.length, 0, 'only loopback gateways are probed');
+  assert.deepEqual((await remote.carry.prepare({ mode: 'bash', keyFile: '/x' })).failure, { kind: 'provider', reason: "the gateway at gw.example:443 isn't answering" }, 'a remote gateway is probed too (item 6)');
+  assert.deepEqual(remote.probes.map((p) => [p.host, p.port]), [['gw.example', 443]]);
 });
 
 test('the real probe is a bare TCP connect: a key-bearing config sends the gateway zero bytes', async () => {
@@ -280,10 +280,131 @@ test('the default readers: a 1 MB .claude.json is read whole (CLAUDE_JSON_MAX_BY
   assert.ok(fs.statSync(path.join(home, '.claude.json')).size > 1024 * 1024);
   fs.mkdirSync(path.join(home, '.claude'));
   fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: { ...gateway, ANTHROPIC_API_KEY: KEY } }));
-  const carry = createClaudeCarry({ env: {}, home, platform: 'linux', credentialsExist: () => true });
+  const carry = createClaudeCarry({ env: {}, home, platform: 'linux', credentialsExist: () => true, probe: async () => true });
   return carry.prepare({ mode: 'notool' }).then((c) => {
     assert.equal(c.failure, null, 'the big file was not reported unreadable');
     assert.ok(!JSON.stringify(c.childEnv).includes(KEY), 'its rejection list was read and honoured');
     assert.equal(c.childEnv.ANTHROPIC_BASE_URL, gateway.ANTHROPIC_BASE_URL);
   });
+});
+
+test('release() wins over an in-flight refresh: a late helper result never recreates api.key (review 2)', async (t) => {
+  const dir = testTempDir('carry-', t);
+  const keyFile = path.join(dir, 'api.key');
+  let finish;
+  const late = new Promise((r) => { finish = r; });
+  let n = 0;
+  const { carry, intervals } = fixtureCarry({
+    files: user({ apiKeyHelper: 'get-key', env: gateway }),
+    commands: { 'get-key': () => (++n === 1 ? { ok: true, output: KEY } : late) },
+  });
+  const c = await carry.prepare({ mode: 'bash', keyFile });
+  assert.equal(fs.readFileSync(keyFile, 'utf8'), KEY);
+  const refresh = intervals[0].fn();
+  c.release();
+  finish({ ok: true, output: 'sk-ant-LATE' });
+  await refresh;
+  assert.equal(fs.existsSync(keyFile), false, 'not recreated after release');
+  assert.deepEqual(fs.readdirSync(dir), [], 'no .tmp left either');
+});
+
+test('a key file whose rename fails leaves no .tmp behind', async (t) => {
+  const dir = testTempDir('carry-', t);
+  fs.mkdirSync(path.join(dir, 'api.key'));      // a directory in the way: the rename fails
+  const { carry } = fixtureCarry({ files: user({ env: { ...gateway, ANTHROPIC_AUTH_TOKEN: KEY } }) });
+  const c = await carry.prepare({ mode: 'bash', keyFile: path.join(dir, 'api.key') });
+  assert.equal(c.failure.kind, 'provider');
+  assert.deepEqual(fs.readdirSync(dir), ['api.key']);
+});
+
+test('sweepKeyFiles removes api.key and half-written api.key.*.tmp from every run dir except the ones kept', (t) => {
+  const root = testTempDir('carry-sweep-', t);
+  for (const id of ['a', 'b']) {
+    fs.mkdirSync(path.join(root, id));
+    fs.writeFileSync(path.join(root, id, 'api.key'), KEY);
+    fs.writeFileSync(path.join(root, id, `api.key.1.x.tmp`), KEY);
+    fs.writeFileSync(path.join(root, id, 'settings.json'), '{}');
+  }
+  assert.equal(sweepKeyFiles(root, (id) => id === 'b'), 2);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'a')), ['settings.json']);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'b')).sort(), ['api.key', 'api.key.1.x.tmp', 'settings.json']);
+  assert.equal(sweepKeyFiles(path.join(root, 'nope')), 0, 'a missing root is fine');
+});
+
+test('the awsCredentialExport gate follows ITS origin, not the apiKeyHelper\'s (review 8)', async () => {
+  const exp = { awsCredentialExport: 'export-creds' };
+  const managedHelper = { [MANAGED]: settingsFile({ apiKeyHelper: '/opt/corp/get-key' }), ...user({ ...exp, env: gateway }) };
+  const a = await fixtureCarry({ files: managedHelper }).carry.prepare({ mode: 'bash', keyFile: '/x' });
+  assert.match(a.failure?.reason ?? '', /awsCredentialExport can't be passed to a run that has a shell/, 'a USER export is refused even with a managed helper');
+  const managedExport = { [MANAGED]: settingsFile(exp), ...user({ apiKeyHelper: 'get-key', env: gateway }) };
+  const b = await fixtureCarry({ files: managedExport, commands: { 'get-key': { ok: true, output: KEY } } }).carry.prepare({ mode: 'bash', keyFile: path.join(testTempDir('carry-'), 'api.key') });
+  assert.equal(b.failure, null, 'a MANAGED export is the CLI\'s policy, not ours to refuse');
+});
+
+test('unreadable managed settings fail closed instead of falling back to the app env (review 9)', async () => {
+  const { carry } = fixtureCarry({ files: { [MANAGED]: '{not json', ...user({ env: gateway }) } });
+  const c = await carry.prepare({ mode: 'bash', keyFile: '/x' });
+  assert.deepEqual(c.failure, { kind: 'provider', reason: "your organisation's Claude settings could not be read" });
+});
+
+test('a successful helper result is reused for the TTL and dropped on failure (review 10)', async () => {
+  let now = 1_000_000;
+  const realNow = Date.now; Date.now = () => now;
+  try {
+    let n = 0;
+    let result = () => ({ ok: true, output: `${KEY}${++n}` });
+    const { carry, calls } = fixtureCarry({ files: user({ apiKeyHelper: 'get-key', env: gateway }), commands: { 'get-key': () => result() } });
+    const first = await carry.prepare({ mode: 'notool' });
+    const second = await carry.prepare({ mode: 'notool' });
+    assert.equal(calls.length, 1, 'second prepare used the cache');
+    assert.equal(second.childEnv.ANTHROPIC_API_KEY, first.childEnv.ANTHROPIC_API_KEY);
+    now += 5 * 60_000 + 1;
+    await carry.prepare({ mode: 'notool' });
+    assert.equal(calls.length, 2, 'expired');
+    result = () => ({ ok: false, timedOut: false, code: 1, reason: 'key helper failed (exit 1)' });
+    now += 5 * 60_000 + 1;
+    assert.equal((await carry.prepare({ mode: 'notool' })).failure.kind, 'auth');
+    result = () => ({ ok: true, output: KEY });
+    await carry.prepare({ mode: 'notool' });
+    assert.equal(calls.length, 4, 'the failure dropped the cache');
+  } finally { Date.now = realNow; }
+});
+
+test('the Linux not-logged-in reason names CLAUDE_CODE_OAUTH_TOKEN when one is set (review, Focus 6)', async () => {
+  const plain = await fixtureCarry({ files: user({ model: 'opus' }), loggedIn: false }).carry.prepare({ mode: 'bash', keyFile: '/x' });
+  assert.ok(!plain.failure.reason.includes('CLAUDE_CODE_OAUTH_TOKEN'));
+  const withToken = await fixtureCarry({ files: user({ model: 'opus' }), loggedIn: false, env: { CLAUDE_CODE_OAUTH_TOKEN: 'tok' } }).carry.prepare({ mode: 'bash', keyFile: '/x' });
+  assert.match(withToken.failure.reason, /^Claude is not logged in\..*\(a CLAUDE_CODE_OAUTH_TOKEN in your shell doesn't reach runs yet\), then resume\.$/);
+  assert.ok(!withToken.failure.reason.includes('tok'));
+});
+
+test("'chat' mode (writable owned chat): key file and settings env like a run, nothing secret in the child env, /proc and the key dir denied", async (t) => {
+  const dir = testTempDir('carry-', t);
+  const keyFile = path.join(dir, 'api.key');
+  const { carry } = fixtureCarry({ files: user({ env: { ...gateway, ANTHROPIC_AUTH_TOKEN: KEY } }) });
+  const c = await carry.prepare({ mode: 'chat', keyFile });
+  assert.equal(c.failure, null);
+  assert.equal(c.apiKeyFile, keyFile);
+  assert.equal(fs.readFileSync(keyFile, 'utf8'), KEY);
+  assert.deepEqual(c.childEnv, {}, 'no key in the env');
+  assert.ok(!JSON.stringify({ s: c.settingsEnv, e: c.cliEnv, d: c.disallowed }).includes(KEY));
+  for (const r of ['Read(//proc/**)', 'Grep(//proc/**)', 'Glob(//proc/**)', 'Read(/proc/**)']) assert.ok(c.disallowed.includes(r), r);
+  c.release();
+  assert.equal(fs.existsSync(keyFile), false);
+});
+
+test('productionCarry is none under the no-real-cli guard, so an entry point started by a test never reads HOME or runs a helper', () => {
+  assert.equal(globalThis.__plexiformNoRealCli, true);
+  assert.equal(productionCarry({}), null);
+});
+
+test('the default Burst check lives in the shared carry, so the board runner and Tasks name Burst too (review 7)', async (t) => {
+  const home = testTempDir('carry-burst-', t);
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:7777' } }));
+  const make = () => createClaudeCarry({ env: {}, home, platform: 'darwin', credentialsExist: () => true, probe: async () => false });
+  assert.equal((await make().prepare({ mode: 'bash', keyFile: '/x' })).failure.reason, "the gateway at 127.0.0.1:7777 isn't answering");
+  fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.local', 'bin', 'claude-burst'), '#!/bin/sh\n', { mode: 0o755 });
+  assert.equal((await make().prepare({ mode: 'bash', keyFile: '/x' })).failure.reason, "Burst gateway isn't running");
 });

@@ -23,6 +23,7 @@ import { decideOffer, advertisable, answererAllowed } from './policy.js';
 import { lstartOf, sameProcess, treeGroups, processTable, killGroups, killTree, detectFormFactor } from './procs.js';
 import { runReview } from './review.js';
 import { REVIEW_PROVIDERS } from '../shared/review.js';
+import { sweepKeyFiles } from '../shared/claude-carry.cjs';
 import { makeLogger, realClock, ensureDir, writeJsonAtomic, writeFileAtomic, RUNNER_VERSION, lineReader } from './util.js';
 
 // Device-level frames carry no repo_id; they still pass the serializer guard
@@ -144,6 +145,8 @@ export class Supervisor extends EventEmitter {
   async start() {
     if (TIME_SCALE !== 1) this.log.warn('BOARD_TEST_TIME_SCALE is set: every liveness timer is compressed (tests only)', { scale: TIME_SCALE });
     await this.recoverOrphans();
+    // Orphans were stopped above, so no run is left that still needs a key file from before this start.
+    sweepKeyFiles(path.join(this.l.home, 'run'));
     this.ais = await this.#detectAis();
     if (this.opts.controlSocket !== false) await this.#startControl();
     if (this.opts.powerMonitor) this.attachPowerMonitor(this.opts.powerMonitor);
@@ -679,7 +682,9 @@ export class Supervisor extends EventEmitter {
       this.sendHbNow();   // the hub learns child_alive now, not at the next 15 s tick
     } catch (e) {
       this.log.error('spawn failed', { err: e.message });
-      await run.prepFailed(`spawn: ${e.message}`);
+      // The hub gets a fixed sentence: the detail (paths, a gateway address) stays on this machine.
+      const local = e.code === 'AUTH' || e.code === 'PROVIDER';
+      await run.prepFailed(local ? `spawn: Claude ${e.code === 'AUTH' ? 'auth' : 'provider'} check failed on this machine` : `spawn: ${e.message}`);
     }
     this.notifyLocal({ event: 'run_started', run_id: run.run_id, key });
     return run;
@@ -818,8 +823,8 @@ export class Supervisor extends EventEmitter {
   // stay in the member's repo (refs are shared by every worktree). A final
   // snapshot that never got pushed keeps the worktree for a manual salvage.
   cleanupRun(run) {
-    if (run.windowsStopUnconfirmed) return;
     run.carry?.release();
+    if (run.windowsStopUnconfirmed) return;
     // Hosted: push the run branch and empty its cgroup before the worktree goes.
     if (this.hosted && !run.hostedFinished) {
       run.hostedFinished = true;

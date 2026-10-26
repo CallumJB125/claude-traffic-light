@@ -39,6 +39,9 @@ test('engine run: one settings file (routing env + /bin/cat api.key), the person
     const dataReal = fs.realpathSync(m.dataDir);
     assert.ok(settings.sandbox.filesystem.denyRead.includes(dataReal), 'the run dir is under a sandbox-denied path');
     for (const tool of ['Read', 'Edit', 'Write']) assert.ok(start.argv.includes(`${tool}(/${dataReal}/**)`), `${tool} refused on the data dir`);
+    const dataAsGiven = path.resolve(m.dataDir);
+    for (const tool of ['Read', 'Edit', 'Write']) assert.ok(start.argv.includes(`${tool}(/${dataAsGiven}/**)`), `${tool} refused on the data dir as given too (review 11)`);
+    assert.ok(settings.sandbox.filesystem.denyRead.includes(dataAsGiven));
     for (const k of ['~/.config/gcloud', '~/.azure']) assert.ok(settings.sandbox.filesystem.denyRead.includes(k));
     for (const where of [JSON.stringify(start.argv), JSON.stringify(start.env), JSON.stringify(settings)]) assert.ok(!where.includes(KEY));
     assert.ok(!('ANTHROPIC_AUTH_TOKEN' in start.env) && !('ANTHROPIC_API_KEY' in start.env));
@@ -136,4 +139,17 @@ test('L1\': the dev mock\'s takeover argv keeps in step with the engine\'s (same
     assert.equal(argv[argv.indexOf('--model') + 1], engineArgv[engineArgv.indexOf('--model') + 1]);
     assert.equal(argv[argv.indexOf('--setting-sources') + 1], '');
   } finally { await mock.close(); }
+});
+
+test('engine start sweeps a key file left by a crash (review 3); other run files stay', { skip: !posix }, async () => {
+  const dir = tmpDir();
+  const stale = path.join(dir, 'data', 'run', 'tsk_old');
+  fs.mkdirSync(stale, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(stale, 'api.key'), KEY, { mode: 0o600 });
+  fs.writeFileSync(path.join(stale, 'api.key.99.abc.tmp'), KEY, { mode: 0o600 });
+  fs.writeFileSync(path.join(stale, 'settings.json'), '{}');
+  const m = await startEngine({ dir, engineOpts: { claudeCarry: fixtureCarry({ files: user({ env: gateway }) }).carry } });
+  try {
+    assert.deepEqual(fs.readdirSync(stale), ['settings.json']);
+  } finally { await m.close().catch(() => {}); rm(dir); }
 });

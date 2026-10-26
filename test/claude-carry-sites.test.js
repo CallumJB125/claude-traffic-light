@@ -94,6 +94,43 @@ test('owned Claude chat (L8): provider, key and model reach the child; a failed 
   await assert.rejects(b.open({ cwd: '/tmp' }), (e) => e.message === SIGN_IN);
 });
 
+test('writable owned chat (review 4): the key is a file in a private dir behind apiKeyHelper, never in the child env; the dir and /proc are denied; the dir goes at close', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-root-'));
+  const keyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-keys-'));
+  try {
+    const { carry } = await carryOf(GW_SETTINGS);
+    const calls = [];
+    let seen;
+    const spawn = (bin, args, opts) => {
+      const settingsFile = args[args.indexOf('--settings') + 1];
+      seen = { settingsFile, settings: JSON.parse(fs.readFileSync(settingsFile, 'utf8')), mode: fs.statSync(settingsFile).mode & 0o777, dir: path.dirname(settingsFile), keyMode: fs.statSync(path.join(path.dirname(settingsFile), 'api.key')).mode & 0o777 };
+      calls.push({ args, opts });
+      return child();
+    };
+    const session = createClaudeCodeSession({ bin: '/x/claude', env: { HOME: '/fx/home', PATH: '/bin' }, carry, spawn, safeRoot: root, keyRoot });
+    await session.open({ cwd: root });
+    const { args, opts } = calls[0];
+    assert.equal(at(args, '--tools'), 'Read,Glob,Grep,Edit,Write');
+    assert.equal(seen.settings.apiKeyHelper, `/bin/cat '${path.join(seen.dir, 'api.key')}'`);
+    assert.equal(seen.settings.env.ANTHROPIC_BASE_URL, GATEWAY);
+    assert.equal(seen.mode, 0o600); assert.equal(seen.keyMode, 0o600);
+    assert.equal(fs.statSync(seen.dir).mode & 0o777, 0o700);
+    assert.ok(seen.dir.startsWith(fs.realpathSync(keyRoot)) || seen.dir.startsWith(keyRoot), 'outside the project');
+    assert.ok(!('ANTHROPIC_AUTH_TOKEN' in opts.env) && !('ANTHROPIC_API_KEY' in opts.env), 'no key in the child env');
+    assert.ok(![JSON.stringify(args), JSON.stringify(opts.env), JSON.stringify(seen.settings)].some((x) => x.includes(KEY)));
+    const deny = args.slice(args.indexOf('--disallowedTools') + 1);
+    for (const r of ['Read(//proc/**)', 'Grep(//proc/**)', 'Glob(//proc/**)', 'Read(/proc/**)', `Read(/${seen.dir}/**)`, `Write(/${seen.dir}/**)`]) assert.ok(deny.includes(r), r);
+    session.stop();
+    assert.equal(fs.existsSync(seen.dir), false, 'key dir deleted at close');
+    // a failed preflight leaves nothing behind
+    const bad = await carryOf({ apiKeyHelper: 'sso' }, { commands: { sso: { ok: false, timedOut: true, reason: SIGN_IN } } });
+    const s2 = createClaudeCodeSession({ bin: '/x/claude', env: { HOME: '/fx/home' }, carry: bad.carry, spawn: () => { throw new Error('must not start'); }, safeRoot: root, keyRoot });
+    await assert.rejects(s2.open({ cwd: root }), (e) => e.message === SIGN_IN);
+    assert.deepEqual(fs.readdirSync(keyRoot), [], 'no key dir left');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(keyRoot, { recursive: true, force: true }); }
+});
+
 test('voice free-form (L9b): voice-helper merges the carried env and swaps haiku; the voice env keeps the person\'s config dir and proxy', async () => {
   const { carry } = await carryOf(GW_SETTINGS);
   const calls = [];

@@ -16,7 +16,7 @@ import { WS_CLOSE } from '../shared/protocol.js';
 import { Supervisor } from './supervisor.js';
 import { PresenceReporter } from './presence.js';
 import { makeLogger, ensurePrivateDir } from './util.js';
-import { createClaudeCarry } from '../shared/claude-carry.cjs';
+import { productionCarry } from '../shared/claude-carry.cjs';
 
 const QUIT_BUDGET_MS = 25_000;   // the app waits for us; exit 0 by then whatever is left
 const QUIT_HANDOVER_MS = 10_000; // the agent's final-handover window inside that budget
@@ -89,7 +89,7 @@ async function start(m) {
   try {
     ensurePrivateDir(m.data_dir);
     // loginShellEnv is the seam for PR 1b (src/login-shell-env.js): the filtered login-shell values arrive over parentPort.
-    sup = new Supervisor({ home: m.data_dir, device, log, enabledAis: m.ai_ids ?? ['codex'], claudeCarry: createClaudeCarry({ env: process.env, log: (line) => log.warn?.(line) }) });
+    sup = new Supervisor({ home: m.data_dir, device, log, enabledAis: m.ai_ids ?? ['codex'], claudeCarry: productionCarry({ log: (line) => log.warn?.(line) }) });
     presence = new PresenceReporter(sup);
     sup.on('connected', () => status('connected'));
     sup.on('runner_event', (ev) => post(ev));

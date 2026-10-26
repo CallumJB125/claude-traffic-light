@@ -7,7 +7,7 @@ import { startTasksEngine } from './index.js';
 import { makeLogger } from '../runner/util.js';
 import { desktopProviders } from './desktop-providers.js';
 import { parentBus, BUS_REQUEST } from './parent-bus.js';
-import { createClaudeCarry } from '../shared/claude-carry.cjs';
+import { productionCarry } from '../shared/claude-carry.cjs';
 
 // The app's enforced spend cap (src/spend-enforce.js writes it; hooks/spend-gate.js reads it, fail-open). The
 // router skips every AI while it holds.
@@ -50,7 +50,7 @@ try {
     dataDir: process.env.PLEXIFORM_TASKS_DATA_DIR,
     ...desktopProviders(),
     // loginShellEnv is the seam for PR 1b (src/login-shell-env.js): pass the filtered login-shell reader here.
-    claudeCarry: createClaudeCarry({ env: process.env, log: () => {} }),
+    claudeCarry: productionCarry({ log: () => {} }),
     spendGate: () => SpendGate.readGate(appRoot),
     log: makeLogger(process.stderr, { quiet: true }),
     stopGraceMs: 1500,

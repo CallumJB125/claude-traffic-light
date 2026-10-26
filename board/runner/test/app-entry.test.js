@@ -240,6 +240,31 @@ const HANDOVER_SCENARIO = {
   on_input: { 'asked for a handover': [{ mcp: 'board_write_handover', args: { patch: { next: 'finish the parser after the restart' } } }, { result: 'success' }] },
 };
 
+test('app mode under the test guard: a claimed run never reads HOME or runs the developer\'s key helper (review 1)', async () => {
+  const root = tmpDir();
+  const hub = await startFakeHub();
+  const home = path.join(root, 'fake-home');
+  const markerFile = path.join(root, 'helper-ran');
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ apiKeyHelper: `touch '${markerFile}'; echo fixture-key`, env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9' } }));
+  appWithRepo(root, { steps: [{ result: 'success' }] });
+  const app = spawnApp(root, { env: { HOME: home } });
+  try {
+    app.child.send(config(hub, root));
+    await app.next('runner.status', (m) => m.state === 'connected');
+    hub.send(offerFor({ key: 'G-1' }));
+    await waitFor(() => hub.of('claim')[0], { what: 'claim', timeout: 15000 });
+    await waitFor(() => hub.outs('activity').length, { what: 'the run is live', timeout: 15000 });
+    assert.equal(fs.existsSync(markerFile), false, 'the helper never ran');
+    assert.equal(hub.outs('prep.failed').length, 0, 'no preflight against the (unreachable) fixture gateway either');
+  } finally {
+    app.child.kill('SIGTERM');
+    await app.exited;
+    await hub.close();
+    rm(root);
+  }
+});
+
 test('app mode quit: SIGTERM parks a live run (handover, pushed snapshot, release{requeue}); the next start finds no orphan', async () => {
   const root = tmpDir();
   const hub = await startFakeHub();
