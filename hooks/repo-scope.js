@@ -13,7 +13,7 @@
 const path = require('path');
 
 // = board/runner/launch.js DENY_READ (test/repo-scope.test.js keeps them equal).
-const DENY_READ = Object.freeze(['~/.ssh', '~/.aws', '~/.config/gh', '~/Library/Keychains', '~/.claude', '~/.claude.json', '~/.codex', '~/.claude-traffic-light']);
+const DENY_READ = Object.freeze(['~/.ssh', '~/.aws', '~/.config/gh', '~/Library/Keychains', '~/.claude', '~/.claude.json', '~/.codex', '~/.claude-traffic-light', '~/.config/gcloud', '~/.azure']);
 // = engine.js PROTECTED_IN_PLACE: a dot-folder or ~/Library directly under $HOME.
 const PROTECTED_IN_PLACE = /^(?:\.|Library$)/;
 const CASE_INSENSITIVE_HOSTS = new Set(['github.com', 'gitlab.com', 'bitbucket.org', 'codeberg.org']);
