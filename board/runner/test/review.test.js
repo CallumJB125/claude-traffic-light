@@ -208,6 +208,12 @@ test('reviewArgs/invokeReviewer: codex takes the provider -c values and model; i
   await invokeReviewer({ ai: 'codex', prompt: 'p', bin: '/x/codex', env: { HOME: '/tmp/h', PATH: '/bin' }, provider, spawn });
   assert.equal(calls[0].opts.env.PLEXLAB_KEY, KEY);
   assert.ok(!calls[0].args.some((x) => x.includes(KEY)));
+  // Review L6: the shell keeps HOME/PATH/LANG/TMPDIR so read-only git and rg work, and nothing else.
+  const set = calls[0].args.find((x) => x.startsWith('shell_environment_policy.set='));
+  assert.equal(calls[0].args[calls[0].args.indexOf(set) - 1], '-c');
+  assert.equal(set, 'shell_environment_policy.set={HOME="/tmp/h",PATH="/bin"}');
+  assert.ok(reviewArgs('codex', { cwd: '/tmp/x', env: { HOME: '/h', PATH: '/p', LANG: 'C', TMPDIR: '/t', TZ: 'UTC', PLEXLAB_KEY: KEY } })
+    .includes('shell_environment_policy.set={HOME="/h",PATH="/p",LANG="C",TMPDIR="/t"}'));
   const claude = fakeSpawn({ stdout: JSON.stringify({ result: 'ok' }) });
   await invokeReviewer({ ai: 'claude', prompt: 'p', bin: '/x/claude', env: { HOME: '/tmp/h', PATH: '/bin' }, provider, spawn: claude.spawn });
   assert.equal(claude.calls[0].opts.env.PLEXLAB_KEY, undefined, 'a Claude review never takes the Codex provider');

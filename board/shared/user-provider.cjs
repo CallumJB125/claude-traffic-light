@@ -310,7 +310,8 @@ function codexProvider({ env = {}, loginEnv = {}, home, readFile }) {
   if (!path.isAbsolute(codexHome)) return blankCodex(codexHome, [{ code: 'codex_home_relative', message: 'CODEX_HOME is not an absolute path' }]);
   const file = path.join(codexHome, 'config.toml');
   let text;
-  try { text = readFile(file); } catch { text = null; }
+  // readFile returns null for a missing file; a file that is there but can't be read is not "no config".
+  try { text = readFile(file); } catch { return blankCodex(codexHome, [{ code: 'codex_config_unreadable', message: `${file} could not be read` }]); }
   if (text == null) return blankCodex(codexHome);
   if (Buffer.byteLength(text) > CONFIG_TOML_MAX_BYTES) return blankCodex(codexHome, [{ code: 'codex_config_too_large', message: `${file} is larger than ${CONFIG_TOML_MAX_BYTES} bytes` }]);
   let doc;

@@ -19,6 +19,7 @@ const { tcpProbe, burstOwnsPort, PROBE_MS } = require('./claude-carry.cjs');
 
 const TRANSLATED = /^PLEXIFORM_PROVIDER_/;
 const LOOPBACK = (host) => host === 'localhost' || host === '::1' || host === '[::1]' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+const BARE_ID = /^[A-Za-z0-9_-]+$/;
 const EMPTY = Object.freeze({ carry: false, failure: null, providerId: null, overrides: [], model: null, cliEnv: {}, burst: false, translated: false });
 
 // C16: a provider override may only set these key paths, which are disjoint from codexConfig's.
@@ -75,9 +76,15 @@ function createCodexCarry({
    */
   async function prepare() {
     let p;
-    try { p = await resolve(); } catch { return { ...EMPTY, release() {} }; }
+    // carry:false means only "config read, no model_provider"; an unreadable config must never fall back to OpenAI.
+    try { p = await resolve(); } catch { return fail('provider', 'Codex settings could not be read'); }
     if (p.unsupported.length) return fail('provider', `Codex settings: ${p.unsupported[0].message}`);
     if (!p.providerId) return { ...EMPTY, release() {} };
+    // codex splits a -c key path on every '.', so a quoted id can't be addressed; refuse it rather than misroute.
+    if (!BARE_ID.test(p.providerId)) return fail('provider', 'Codex provider ids with characters other than letters, digits, - and _ aren\'t carried yet');
+    // Without its sign-in the run would reach the gateway unauthenticated and fail late with a 401.
+    if (p.dropped.includes('auth')) return fail('auth', `Codex provider "${p.providerId}" signs in with a command (auth), which Plexiform doesn't run yet`);
+    if (p.dropped.includes('aws')) return fail('auth', `Codex provider "${p.providerId}" signs in with AWS (aws), which Plexiform doesn't carry yet`);
     if (p.dropped.length) log(`codex provider fields not carried: ${p.dropped.join(', ')}`);
     if (p.missingEnv.length) {
       const name = p.missingEnv[0];

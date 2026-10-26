@@ -383,3 +383,30 @@ test('L7: a test env never reaches the developer\'s Codex config (no carry unles
   const a = createCodexAppServer({ bin: FAKE, spawn: r.spawn, env: { HOME: '/home/fixture' } });
   try { await a.open({ cwd: '/tmp' }); assert.deepEqual(r.calls[0].args, APP_SERVER_ARGS); } finally { a.stop(); }
 });
+
+// Review round 1, item 2: the owned chat never falls back to OpenAI when the user's provider can't be checked.
+test('L7: a provider check that throws refuses the chat (PROVIDER) before any spawn, never the openai default', async () => {
+  const r = recordingSpawn();
+  const a = createCodexAppServer({ bin: FAKE, spawn: r.spawn, env: { HOME: '/home/fixture' }, carry: { prepare: async () => { throw new Error('boom'); } } });
+  await assert.rejects(a.open({ cwd: '/tmp' }), (e) => e.code === 'PROVIDER' && e.message === 'Codex settings could not be read');
+  assert.equal(r.calls.length, 0);
+});
+
+test('L7: with no carry passed, a copied env still reads the user\'s provider through that env (no silent openai)', async () => {
+  const net = require('node:net'), fs = require('node:fs'), os = require('node:os');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pxl7-'));
+  const gw = net.createServer((s) => s.destroy());
+  await new Promise((res) => gw.listen(0, '127.0.0.1', res));
+  fs.writeFileSync(path.join(home, 'config.toml'), PLEXLAB_TOML.replace('http://10.0.0.5:4001/v1', `http://127.0.0.1:${gw.address().port}/v1`));
+  const r = recordingSpawn();
+  let a;
+  // The guard nulls the production carry; lift it only while the adapter is built, with CODEX_HOME in a temp dir
+  // so the real ~/.codex is never read. Spawns stay guarded and go to the fake.
+  globalThis.__plexiformNoRealCli = false;
+  try { a = createCodexAppServer({ bin: FAKE, spawn: r.spawn, env: { HOME: home, CODEX_HOME: home, PATH: '/bin', PLEXLAB_KEY } }); } finally { globalThis.__plexiformNoRealCli = true; }
+  try {
+    await a.open({ cwd: '/tmp' });
+    assert.equal(r.calls[0].args[r.calls[0].args.indexOf('model_provider="plexlab"') - 1], '-c');
+    assert.ok(!r.calls[0].args.includes('model_provider="openai"'));
+  } finally { a.stop(); gw.close(); fs.rmSync(home, { recursive: true, force: true }); }
+});

@@ -47,9 +47,10 @@ function findCodexBin({ env = process.env, exists = (p) => { try { fs.accessSync
 
 const inputText = (content) => (Array.isArray(content) ? content : []).filter((c) => c?.type === 'text' && typeof c.text === 'string').map((c) => c.text).join('');
 
-// carry: the user's Codex provider; undefined = the app's own (only for the app's own env), null = none.
+// carry: the user's Codex provider; undefined = the app's own, read with this env (a copied or filtered env must not
+// lose the user's provider and silently go to OpenAI), null = none.
 function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spawn, clientVersion = '0', carry } = {}) {
-  const codexCarry = carry !== undefined ? carry : env === process.env ? productionCodexCarry() : null;
+  const codexCarry = carry !== undefined ? carry : productionCodexCarry({ env });
   const events = new EventEmitter();
   const pending = new Map();
   let child = null, ready = null, nextId = 1, exited = false, skipping = false;
@@ -134,7 +135,7 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
   async function preflight() {
     if (!codexCarry) return null;
     let c;
-    try { c = await codexCarry.prepare(); } catch { return null; }
+    try { c = await codexCarry.prepare(); } catch { throw Object.assign(new Error('Codex settings could not be read'), { code: 'PROVIDER' }); }
     if (c.failure) throw Object.assign(new Error(c.failure.reason), { code: c.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' });
     return c.carry ? c : null;
   }

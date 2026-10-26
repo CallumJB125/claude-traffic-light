@@ -1172,6 +1172,16 @@ export class TasksEngine extends EventEmitter {
     return { commonGitDir, gitDir, gitRef };
   }
 
+  // A fresh read of the user's Codex provider (board/shared/codex-carry.cjs) for each launch, never a cached one:
+  // a takeover of a task that never ran here, or after a restart or a config change, must not fall back to OpenAI.
+  // → the carry, or null for no provider; a failed preflight throws AUTH or PROVIDER with its reason.
+  async #codexProvider() {
+    if (!this.codexCarry) return null;
+    const c = await this.codexCarry.prepare();
+    if (c.failure) throw Object.assign(new Error(c.failure.reason), { code: c.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' });
+    return c.carry ? c : null;
+  }
+
   #releaseCarry(task) {
     this.carries.get(task.id)?.release();
     this.carries.delete(task.id);
@@ -1184,15 +1194,7 @@ export class TasksEngine extends EventEmitter {
     const cacheDir = this.#cacheDir(task);
     ensureDir(cacheDir);
     ensureDir(path.join(cacheDir, 'tmp'));
-    if (task.ai.id === 'codex') {
-      writeFileAtomic(path.join(runDir, HOOK_TOKEN_FILE), token);
-      this.#releaseCarry(task);
-      if (this.codexCarry) {
-        const carry = await this.codexCarry.prepare();
-        if (carry.failure) throw Object.assign(new Error(carry.failure.reason), { code: carry.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' });
-        if (carry.carry) this.carries.set(task.id, carry);
-      }
-    }
+    if (task.ai.id === 'codex') writeFileAtomic(path.join(runDir, HOOK_TOKEN_FILE), token);
     if (ONE_TURN.has(task.ai.id)) return;
     const protectedWrite = task.workInPlace
       ? ['.git/config', '.git/hooks', '.claude', '.mcp.json', 'CLAUDE.md', 'AGENTS.md'].map((p) => path.join(task.worktree, p)) : [];
@@ -1231,6 +1233,11 @@ export class TasksEngine extends EventEmitter {
     };
     run.exited = new Promise((r) => { run.resolveExited = r; });
     await this.#writeRunFiles(task, runDir, socketPath, token);
+    if (task.ai.id === 'codex') {
+      this.#releaseCarry(task);
+      const c = await this.#codexProvider();
+      if (c) this.carries.set(task.id, c);
+    }
     if (task.ai.id !== 'gemini') run.ipc = await startIpcServer({ socketPath, token, log: this.log, handler: this.#ipcHandler(task, run) });
     if (this.closing || this.closed) { await run.ipc?.close(); return; }
     this.runs.set(task.id, run);
@@ -1994,6 +2001,12 @@ export class TasksEngine extends EventEmitter {
       case 'takeover': {
         if (!['claude', 'codex'].includes(task.ai.id)) throw new ApiError('CAPABILITY_MISSING', 'This AI does not support a managed terminal handover.');
         const info = this.#aiInfo(task.ai.id);
+        // Checked before a live run is stopped, so a refusal leaves it running.
+        let codexCarry = null;
+        if (task.ai.id === 'codex') {
+          try { codexCarry = await this.#codexProvider(); } catch (e) { throw new ApiError('NOT_AVAILABLE', e.message); }
+          if (codexCarry?.translated) throw new ApiError('NOT_AVAILABLE', TAKEOVER_TRANSLATED);
+        }
         if (run) {
           this.#setState(task, 'handing_over');
           await this.#stopRun(task, run);
@@ -2002,14 +2015,12 @@ export class TasksEngine extends EventEmitter {
         this.#expireApprovals(task);
         if (task.openAsk && task.openAsk.kind !== 'plan') this.#closeAsk(task, null);
         const { runDir, socketPath } = await this.#ensureIdleIpc(task);
-        if (task.ai.id === 'codex' && this.carries.get(task.id)?.translated) { this.#releaseCarry(task); throw new ApiError('NOT_AVAILABLE', TAKEOVER_TRANSLATED); }
         this.#setState(task, 'handed_over');
         if (task.ai.id === 'codex') {
           const env = buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart });
           if (this.env.CODEX_HOME) env.CODEX_HOME = this.env.CODEX_HOME;
           env.TMPDIR = path.join(this.#cacheDir(task), 'tmp');
           // The provider's -c values go on the command; its key values never do (the terminal's own env supplies env_key).
-          const codexCarry = this.carries.get(task.id) ?? null;
           const options = { bin: info.bin, cwd: task.worktree, env, runDir, sessionId: task.sessionId, resume: task.sessionStarted,
             dataDir: fs.realpathSync(this.dataDir), cacheDir: this.#cacheDir(task), ...await this.#gitAccess(task),
             permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel], model: task.ai.model ?? codexCarry?.model ?? undefined,

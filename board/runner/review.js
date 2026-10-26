@@ -24,6 +24,7 @@ export const REVIEW_RUN_TIMEOUT_MS = 120_000;
 const MAX_RAW_DIFF = 8 << 20;
 const ENV_KEYS = ['HOME', 'USER', 'LOGNAME', 'PATH', 'LANG', 'TMPDIR', 'TZ', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME',
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'NODE_EXTRA_CA_CERTS'];
+const SHELL_KEYS = ['HOME', 'PATH', 'LANG', 'TMPDIR'];
 const HEAD = /^(?:[0-9a-f]{40}|[A-Za-z0-9][A-Za-z0-9._/-]{0,199})$/;
 const KEY = /^[A-Za-z][A-Za-z0-9]{0,15}-[0-9]{1,9}$/;
 const okRef = (r) => typeof r === 'string' && HEAD.test(r) && !r.includes('..') && !r.endsWith('.lock');
@@ -42,14 +43,16 @@ export function scrubDiff(diff, { home = null } = {}) {
  * UNVERIFIED against a real Codex CLI: the exec flags follow backends/codex.js;
  * --sandbox read-only is documented but not exercised here.
  * provider: the user's Codex provider (board/shared/codex-carry.cjs) → its -c values and model. Its key values
- * travel in the CLI env only, and the shell gets none of that env (inherit="none").
+ * travel in the CLI env only, and the shell gets none of that env (inherit="none"): only HOME, PATH, LANG and
+ * TMPDIR from env, so read-only git and rg still work.
  */
-export function reviewArgs(ai, { model = null, budgetUsd = null, cwd, provider = null } = {}) {
+export function reviewArgs(ai, { model = null, budgetUsd = null, cwd, provider = null, env = {} } = {}) {
   if (ai === 'claude') return DiffReview.buildArgs({ model, maxBudgetUsd: budgetUsd }).map((a) => (a === 'text' ? 'json' : a));
   if (ai === 'codex') {
     return ['exec', '--json', '--ignore-user-config', '--ignore-rules', '--strict-config', '--skip-git-repo-check', '--sandbox', 'read-only', '-C', cwd,
       ...['approval_policy="never"', 'web_search="disabled"', 'mcp_servers={}', 'project_doc_max_bytes=0', 'hooks={}', 'notify=[]',
         'features.apps=false', 'features.multi_agent=false', 'features.hooks=false', 'shell_environment_policy.inherit="none"',
+        `shell_environment_policy.set={${SHELL_KEYS.filter((k) => env[k]).map((k) => `${k}=${JSON.stringify(env[k])}`).join(',')}}`,
         ...(provider?.overrides ?? []), ...(provider?.model ? [`model=${JSON.stringify(provider.model)}`] : [])].flatMap((c) => ['-c', c]), '-'];
   }
   throw Object.assign(new Error(`${ai} cannot run reviews`), { code: 'NOT_AVAILABLE' });
@@ -83,7 +86,7 @@ export async function invokeReviewer({ ai, prompt, model, budgetUsd, bin, env = 
   let dir;
   try { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-board-review-')); } catch { return { ok: false, error: 'could not make a temporary folder' }; }
   try {
-    const args = reviewArgs(ai, { model, budgetUsd, cwd: dir, provider: ai === 'codex' ? provider : null });
+    const args = reviewArgs(ai, { model, budgetUsd, cwd: dir, provider: ai === 'codex' ? provider : null, env: childEnv });
     return await new Promise((resolve) => {
       let out = '', done = false, timer = null, child;
       const finish = (r) => { if (!done) { done = true; clearTimeout(timer); resolve(r); } };

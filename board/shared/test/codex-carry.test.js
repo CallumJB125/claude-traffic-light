@@ -165,9 +165,9 @@ test.todo('Burst (REAL capture): replace burst-codex-enable.redacted.toml with a
 
 test('dropped provider fields are logged by name only', async () => {
   const lines = [];
-  const r = await carry(`${PLEXLAB}auth = { command = "fetch-token-fake" }\n`, { env: { PLEXLAB_KEY: KEY }, log: (l) => lines.push(l) }).c.prepare();
+  const r = await carry(`${PLEXLAB}future_field = "fetch-token-fake"\n`, { env: { PLEXLAB_KEY: KEY }, log: (l) => lines.push(l) }).c.prepare();
   assert.equal(r.failure, null);
-  assert.deepEqual(lines, ['codex provider fields not carried: auth']);
+  assert.deepEqual(lines, ['codex provider fields not carried: future_field']);
   assert.ok(!r.overrides.some((o) => o.includes('fetch-token-fake')));
 });
 
@@ -187,4 +187,37 @@ test('bus isolation: a config.toml with mcp_servers, hooks and notify carries no
   const r = await carry(text, { env: { PLEXLAB_KEY: KEY } }).c.prepare();
   for (const o of r.overrides) assert.ok(/^model_provider(s\.|=)/.test(o), o);
   assert.ok(!r.overrides.some((o) => /mcp_servers|hooks|notify|projects|sandbox/.test(o)));
+});
+
+// Review round 1, item 2: carry:false means only "config read, no model_provider". Nothing else may land there,
+// because every caller treats carry:false as "use the built-in OpenAI provider".
+test('fail closed: a config.toml that is there but cannot be read fails provider, never carry:false', async () => {
+  const c = createCodexCarry({ env: {}, home: HOME, platform: 'linux', readFile: () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); }, probe: async () => true });
+  const r = await c.prepare();
+  assert.equal(r.carry, true);
+  assert.equal(r.failure.kind, 'provider');
+  assert.match(r.failure.reason, /config\.toml could not be read/);
+});
+
+test('fail closed: an unexpected error while resolving fails provider, never carry:false', async () => {
+  const c = createCodexCarry({ env: {}, home: HOME, platform: 'linux', readFile: () => ({}), probe: async () => true });
+  const r = await c.prepare();
+  assert.deepEqual([r.carry, r.failure], [true, { kind: 'provider', reason: 'Codex settings could not be read' }]);
+  assert.deepEqual(r.overrides, []);
+});
+
+test('review item 5: a provider id outside [A-Za-z0-9_-] is refused, not quoted into a -c key codex would split', async () => {
+  const r = await carry('model_provider = "my.gw"\n[model_providers."my.gw"]\nbase_url = "http://10.0.0.5:4001/v1"\n').c.prepare();
+  assert.equal(r.failure.kind, 'provider');
+  assert.match(r.failure.reason, /letters, digits, - and _/);
+  assert.deepEqual(r.overrides, []);
+});
+
+test('review item 7: a provider that signs in with an auth command (or aws) fails auth before the run, not with a late 401', async () => {
+  const a = await carry('model_provider = "gw"\n[model_providers.gw]\nbase_url = "http://10.0.0.5:4001/v1"\n[model_providers.gw.auth]\ncommand = "get-token"\n').c.prepare();
+  assert.equal(a.failure.kind, 'auth');
+  assert.match(a.failure.reason, /signs in with a command \(auth\)/);
+  assert.ok(!a.failure.reason.includes('get-token'), 'the command is never named');
+  const w = await carry('model_provider = "gw"\n[model_providers.gw]\nbase_url = "http://10.0.0.5:4001/v1"\n[model_providers.gw.aws]\nprofile = "p"\n').c.prepare();
+  assert.equal(w.failure.kind, 'auth');
 });

@@ -106,3 +106,72 @@ test('no config.toml: the run is today\'s (no provider -c values)', { skip: !pos
     assert.ok(!start.argv.some((a) => a.startsWith('model_provider')));
   } finally { await h.cleanup(); }
 });
+
+// Review round 1, item 1: a takeover reads the provider fresh, never from a background run's cache. `live` is a
+// config.toml and env the test can change between steps.
+function liveCarry(live) {
+  return createCodexCarry({
+    env: live.env, home: HOME, platform: 'linux',
+    readFile: (f) => (f === `${HOME}/.codex/config.toml` ? live.text : null),
+    probe: async () => true, burstOwnsPort: async () => false,
+  });
+}
+const INLINE = `model_provider = "gw"\n[model_providers.gw]\nbase_url = "https://gw.example.test/v1"\nexperimental_bearer_token = "${KEY}"\n`;
+const carriesPlexlab = (argv) => argv[argv.indexOf('model_provider="plexlab"') - 1] === '-c' && argv.includes('model_providers.plexlab.env_key="PLEXLAB_KEY"');
+
+test('takeover of a task that never ran in the background carries the provider (no cached carry to read)', { skip: !posix }, async () => {
+  const live = { text: PLEXLAB, env: {} };
+  const h = await setup({ text: 'ok' }, { codexCarry: liveCarry(live) });
+  try {
+    const { id } = await h.client.createTask({ text: 'Take this over', cwd: h.repo.checkout, ai: 'codex', permissionLevel: 'auto-edits' });
+    await waitFor(async () => (await getTask(h, id)).state === 'parked');
+    assert.equal(h.log().filter((x) => x.kind === 'start').length, 0, 'Codex never ran');
+    await assert.rejects(h.client.act(id, 'takeover', { mode: 'print' }), (e) => /\$PLEXLAB_KEY/.test(e.message), 'a failed check refuses, never OpenAI');
+    assert.equal((await getTask(h, id)).state, 'parked', 'a refused takeover leaves the task where it was');
+    live.env.PLEXLAB_KEY = KEY;
+    const r = await h.client.act(id, 'takeover', { mode: 'print' });
+    assert.ok(carriesPlexlab(r.takeover.argv), 'model_provider="plexlab" on the takeover command');
+    assert.equal(r.takeover.argv[r.takeover.argv.indexOf('--model') + 1], 'glm-5.3-flash');
+    assert.ok(!JSON.stringify(r.takeover).includes(KEY));
+  } finally { await h.cleanup(); }
+});
+
+test('takeover after an engine restart carries the provider, and refuses a key written in config.toml', { skip: !posix }, async () => {
+  const live = { text: PLEXLAB, env: { PLEXLAB_KEY: KEY } };
+  const h = await setup({ wait: true, waitFirstOnly: true }, { codexCarry: liveCarry(live) });
+  try {
+    const { id } = await h.client.createTask({ text: 'Take this over', cwd: h.repo.checkout, ai: 'codex', permissionLevel: 'auto-edits' });
+    await waitFor(() => h.task(id)?.sessionStarted && h.task(id).state === 'running');
+    await h.restart();
+    live.text = INLINE;
+    await assert.rejects(h.client.act(id, 'takeover', { mode: 'print' }), (e) => e.message === TAKEOVER_TRANSLATED);
+    live.text = PLEXLAB;
+    const r = await h.client.act(id, 'takeover', { mode: 'print' });
+    assert.ok(carriesPlexlab(r.takeover.argv));
+  } finally { await h.cleanup(); }
+});
+
+test('takeover after the provider was set (or changed) since the last run uses the provider as it is now', { skip: !posix }, async () => {
+  const live = { text: null, env: { PLEXLAB_KEY: KEY } };
+  const h = await setup({ wait: true, waitFirstOnly: true }, { codexCarry: liveCarry(live) });
+  try {
+    const { id } = await h.client.createTask({ text: 'Take this over', cwd: h.repo.checkout, ai: 'codex', permissionLevel: 'auto-edits' });
+    await waitFor(() => h.task(id)?.sessionStarted && h.task(id).state === 'running');
+    assert.ok(!h.log().find((x) => x.kind === 'start').argv.some((a) => a.startsWith('model_provider')), 'the run had no provider');
+    live.text = PLEXLAB;
+    const r = await h.client.act(id, 'takeover', { mode: 'print' });
+    assert.ok(carriesPlexlab(r.takeover.argv), 'the provider set after the run is carried');
+  } finally { await h.cleanup(); }
+});
+
+test('a run whose provider became an inline key since it started refuses the takeover and keeps running', { skip: !posix }, async () => {
+  const live = { text: PLEXLAB, env: { PLEXLAB_KEY: KEY } };
+  const h = await setup({ wait: true, waitFirstOnly: true }, { codexCarry: liveCarry(live) });
+  try {
+    const { id } = await h.client.createTask({ text: 'Take this over', cwd: h.repo.checkout, ai: 'codex', permissionLevel: 'auto-edits' });
+    await waitFor(() => h.task(id)?.sessionStarted && h.task(id).state === 'running');
+    live.text = INLINE;
+    await assert.rejects(h.client.act(id, 'takeover', { mode: 'print' }), (e) => e.message === TAKEOVER_TRANSLATED);
+    assert.equal(h.task(id).state, 'running', 'checked before the run is stopped');
+  } finally { await h.cleanup(); }
+});
