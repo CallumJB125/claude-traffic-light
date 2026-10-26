@@ -309,68 +309,105 @@ function linkPanel(host, preset, onDone) {
 }
 // Organised views PR 7: where each live session's project's new work goes, with the first-time question, Change
 // and Link. main words every row (src/work-routing-view.js); the page only shows them and sends back opaque keys.
-let routingGeneration = 0;
-async function loadRouting() {
-  const box = document.getElementById('routing'), list = box.querySelector('.body'), out = document.getElementById('routing-status');
-  const mine = ++routingGeneration;
-  let data = null;
-  try { data = await api.routing?.(); } catch { data = null; }
-  if (mine !== routingGeneration) return;
-  const rows = Array.isArray(data?.rows) ? data.rows : [];
-  list.replaceChildren(); box.hidden = !rows.length;
-  const act = async (run) => {
-    for (const b of box.querySelectorAll('button, select')) b.disabled = true;
-    let r = null; try { r = await run(); } catch { r = null; }
-    if (r?.ok) { out.textContent = ''; await loadRouting(); if (r.text) say(out, r.text, true); }
-    else { for (const b of box.querySelectorAll('button, select')) b.disabled = false; say(out, r?.text || 'Could not save. Try again.', false); }
-  };
-  for (const row of rows) {
-    const li = node('li', '', `routing-row routing-${row.state}`);
-    // The sentence as shown, and as read out: "goes to" for the arrow (#62 review).
-    const text = node('p', '', 'routing-text'), seen = node('span', row.text), heard = node('span', row.label || row.text, 'sr-only');
-    seen.setAttribute('aria-hidden', 'true'); text.append(seen, heard); li.append(text);
-    if (row.note) li.append(node('p', row.note, 'muted'));
-    const actions = node('div', '', 'routing-actions');
-    const choices = (row.choices ?? []).map(c => button(c.label, () => act(() => api.routeChoose(row.repo, c.key))));
-    // An unlinked project an admin can link: the Link picker first, "Keep on My board" after it (#62 review).
-    const linkFirst = row.state === 'unlinked' && !!row.link?.length;
-    if (!linkFirst) actions.append(...choices);
-    // A board picker revealed by one button: Change (new work goes elsewhere) or Link (admins: put it on a team board).
-    const picker = (label, options, go, goLabel) => {
-      const sel = select(options.map(o => ({ value: o.key, label: o.label })), 'Nothing to choose');
-      const cur = options.find(o => o.current); if (cur) sel.value = cur.key;
-      const wrap = node('div', '', 'routing-pick'); wrap.hidden = true;
-      wrap.append(field(label, sel), button(goLabel, () => act(() => go(sel.value))));
-      return wrap;
-    };
-    if (!row.choices && row.change?.length) {
-      const pick = picker('New work goes to', row.change, key => api.routeChoose(row.repo, key), 'Save');
-      actions.append(button('Change', () => { pick.hidden = !pick.hidden; }), pick);
-    }
-    if (row.link?.length) {
-      const pick = picker('Team board', row.link, key => api.routeLink(row.repo, key), 'Link');
-      if (row.note) pick.hidden = false; else actions.append(button('Put on a team board…', () => { pick.hidden = !pick.hidden; }));
-      actions.append(pick);
-      if (linkFirst) actions.append(...choices);
-    }
-    // Ask an admin (a plain member): the team to ask, then one button; main says what was sent.
-    if (row.ask?.length) {
-      const team = select(row.ask.map(t => ({ value: t.key, label: t.label })), 'No team');
-      const wrap = node('div', '', 'routing-pick routing-ask'); wrap.hidden = !row.note;
-      const go = button('Ask an admin', async () => {
-        for (const b of box.querySelectorAll('button, select')) b.disabled = true;
-        let r = null; try { r = await api.routeAsk(row.repo, team.value); } catch { r = null; }
-        for (const b of box.querySelectorAll('button, select')) b.disabled = false;
-        say(out, r?.text || 'Could not ask. Try again.', !!r?.ok);
-      });
-      if (row.ask.length > 1) wrap.append(field('Team', team));
-      wrap.append(go);
-      if (!row.note) actions.append(button('Ask an admin…', () => { wrap.hidden = !wrap.hidden; }));
-      actions.append(wrap);
-    }
-    if (actions.childNodes.length) li.append(actions);
-    list.append(li);
+// PR 3: each row carries its project's group key from main, and sits in that project's header; a row with no
+// header to go to (Group by Status or AI tool, or a project whose sessions have gone) stays in the strip.
+// The first fetch waits for the first list, so it asks with that list's projects already known.
+let routingGeneration = 0, routingTimer = null, routingStarted = false;
+let routingAsked = new Set(), repoKeysNow = new Set();
+const routingNodes = new Map(); // repo → {li, key, status}: owned here, never by #content
+const routingBox = () => document.getElementById('routing');
+const routingControls = () => [...routingNodes.values()].flatMap(n => [...n.li.querySelectorAll('button, select')]);
+// Focus in a routing line, or a picker the person opened: a refresh must not move or replace it.
+const routingFocused = () => { const a = document.activeElement; return !!(a && a !== document.body && [...routingNodes.values()].some(n => n.li.contains(a))); };
+const routingBusy = () => routingFocused() || [...routingNodes.values()].some(n => n.li.querySelector('.routing-pick[data-opened]:not([hidden])'));
+const routingStatus = repo => { const n = routingNodes.get(repo); return n && !routingBox().contains(n.li) ? n.status : document.getElementById('routing-status'); };
+function placeRouting() {
+  const box = routingBox(), strip = box.querySelector('.body'), into = new Map(), left = [];
+  for (const n of routingNodes.values()) {
+    const g = groupBy === 'project' && typeof n.key === 'string' ? groupNodes.get(n.key) : null;
+    if (g && content.contains(g.section)) { if (!into.has(g)) into.set(g, []); into.get(g).push(n.li); } else left.push(n.li);
   }
+  for (const g of groupNodes.values()) { const lis = into.get(g) ?? []; place(g.routing, lis); g.routing.hidden = !lis.length; }
+  place(strip, left);
+  box.hidden = !left.length;
+}
+function routingItem(row) {
+  const li = node('li', '', `routing-row routing-${row.state}`);
+  const status = node('p', '', 'result routing-status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+  const sayRow = (text, ok) => { const t = routingStatus(row.repo); say(t, text, ok); if (t.id !== 'routing-status') t.className = 'result routing-status'; };
+  const act = async (run) => {
+    for (const b of routingControls()) b.disabled = true;
+    let r = null; try { r = await run(); } catch { r = null; }
+    if (r?.ok) { await loadRouting({ force: true }); if (r.text) sayRow(r.text, true); }
+    else { for (const b of routingControls()) b.disabled = false; sayRow(r?.text || 'Could not save. Try again.', false); }
+  };
+  // The sentence as shown, and as read out: "goes to" for the arrow (#62 review).
+  const text = node('p', '', 'routing-text'), seen = node('span', row.text), heard = node('span', row.label || row.text, 'sr-only');
+  seen.setAttribute('aria-hidden', 'true'); text.append(seen, heard); li.append(text);
+  if (row.note) li.append(node('p', row.note, 'muted'));
+  const actions = node('div', '', 'routing-actions');
+  const choices = (row.choices ?? []).map(c => button(c.label, () => act(() => api.routeChoose(row.repo, c.key))));
+  // An unlinked project an admin can link: the Link picker first, "Keep on My board" after it (#62 review).
+  const linkFirst = row.state === 'unlinked' && !!row.link?.length;
+  if (!linkFirst) actions.append(...choices);
+  // A board picker revealed by one button: Change (new work goes elsewhere) or Link (admins: put it on a team board).
+  const picker = (label, options, go, goLabel) => {
+    const sel = select(options.map(o => ({ value: o.key, label: o.label })), 'Nothing to choose');
+    const cur = options.find(o => o.current); if (cur) sel.value = cur.key;
+    const wrap = node('div', '', 'routing-pick'); wrap.hidden = true;
+    wrap.append(field(label, sel), button(goLabel, () => act(() => go(sel.value))));
+    return wrap;
+  };
+  const reveal = (wrap) => { wrap.hidden = !wrap.hidden; if (wrap.hidden) delete wrap.dataset.opened; else wrap.dataset.opened = '1'; };
+  if (!row.choices && row.change?.length) {
+    const pick = picker('New work goes to', row.change, key => api.routeChoose(row.repo, key), 'Save');
+    actions.append(button('Change', () => reveal(pick)), pick);
+  }
+  if (row.link?.length) {
+    const pick = picker('Team board', row.link, key => api.routeLink(row.repo, key), 'Link');
+    if (row.note) pick.hidden = false; else actions.append(button('Put on a team board…', () => reveal(pick)));
+    actions.append(pick);
+    if (linkFirst) actions.append(...choices);
+  }
+  // Ask an admin (a plain member): the team to ask, then one button; main says what was sent.
+  if (row.ask?.length) {
+    const team = select(row.ask.map(t => ({ value: t.key, label: t.label })), 'No team');
+    const wrap = node('div', '', 'routing-pick routing-ask'); wrap.hidden = !row.note;
+    const go = button('Ask an admin', async () => {
+      for (const b of routingControls()) b.disabled = true;
+      let r = null; try { r = await api.routeAsk(row.repo, team.value); } catch { r = null; }
+      for (const b of routingControls()) b.disabled = false;
+      sayRow(r?.text || 'Could not ask. Try again.', !!r?.ok);
+    });
+    if (row.ask.length > 1) wrap.append(field('Team', team));
+    wrap.append(go);
+    if (!row.note) actions.append(button('Ask an admin…', () => reveal(wrap)));
+    actions.append(wrap);
+  }
+  if (actions.childNodes.length) li.append(actions);
+  li.append(status);
+  return { li, key: typeof row.key === 'string' ? row.key : null, status };
+}
+async function loadRouting({ force = false } = {}) {
+  if (!force && routingBusy()) return;
+  const mine = ++routingGeneration;
+  routingAsked = new Set(repoKeysNow);
+  let data = null, failed = false;
+  try { data = await api.routing?.(); } catch { failed = true; }
+  if (mine !== routingGeneration) return;
+  // A fetch that failed keeps the lines on screen; signed out, no team or no routes clears them.
+  if (failed || data?.reason === 'error') return;
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  for (const n of routingNodes.values()) n.li.remove();
+  routingNodes.clear();
+  for (const row of rows) routingNodes.set(row.repo, routingItem(row));
+  document.getElementById('routing-status').textContent = '';
+  placeRouting();
+}
+// A project whose first session started after the page opened gets its line without a reload.
+function routingFollow() {
+  if (![...repoKeysNow].some(k => !routingAsked.has(k)) || routingTimer) return;
+  routingTimer = setTimeout(() => { routingTimer = null; if (!routingBusy()) void loadRouting(); }, 1000);
 }
 function startPanel(host) {
   loadSetup(true).then(d => {
@@ -458,21 +495,165 @@ function togglePanel(id, fill) {
   if (!host.hidden) fill(host);
 }
 
+// ── Organised views PR 3: project → bucket groups ─────────────────────────────
+// main gives each row group {key, heading, sub} (never a path); the page groups with src/work-organise.js.
+// Group nodes live in a Map outside #content, so a refresh that rebuilds the session rows moves nothing a
+// person is using: headers and the routing lines in them are reused in place, and focus is put back by key.
+const Organise = window.PlexiformWorkOrganise;
+const BY = ['project', 'bucket', 'provider'];
+const GROUP_STORE = 'plexiform.sessions.groups.v1', BY_STORE = 'plexiform.sessions.groupBy.v1', STORE_MAX = 200;
+const STORED_KEY = /^(?:(repo|git|dir|name)-[0-9a-z]{1,7}|other)(?:\/(needs|working|check|stuck|idle))?$/;
+const storage = { get(k) { try { return window.localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { window.localStorage.setItem(k, v); } catch { /* unavailable */ } } };
+// Only explicit toggles, only in Project mode, only for keys that pass the pattern; anything else is dropped on read.
+function readClosed() {
+  let raw = null; try { raw = JSON.parse(storage.get(GROUP_STORE) || 'null'); } catch { raw = null; }
+  const out = new Map();
+  if (raw && typeof raw === 'object' && raw.closed && typeof raw.closed === 'object') for (const [k, v] of Object.entries(raw.closed)) if (STORED_KEY.test(k) && typeof v === 'boolean' && out.size < STORE_MAX) out.set(k, v);
+  return out;
+}
+const savedClosed = readClosed();
+function saveClosed(key, closed) {
+  savedClosed.delete(key); savedClosed.set(key, closed);
+  while (savedClosed.size > STORE_MAX) savedClosed.delete(savedClosed.keys().next().value);
+  storage.set(GROUP_STORE, JSON.stringify({ v: 1, closed: Object.fromEntries(savedClosed) }));
+}
+let groupBy = (() => { const v = storage.get(BY_STORE); return BY.includes(v) ? v : 'project'; })();
+const memClosed = new Map(); // `${by}|${key}` → bool: every toggle this page has seen, saved or not
+const groupNodes = new Map(); // key → header and bucket nodes, for the current Group by
+const pendingKeys = new Set(); // groups whose rows git has not placed yet: toggles stay in memory
+function isClosed(key, fallback) {
+  const mem = memClosed.get(`${groupBy}|${key}`);
+  if (mem !== undefined) return mem;
+  if (groupBy === 'project' && !pendingKeys.has(key.split('/')[0]) && savedClosed.has(key)) return savedClosed.get(key);
+  return fallback;
+}
+function setClosed(key, closed) {
+  memClosed.set(`${groupBy}|${key}`, closed);
+  if (groupBy === 'project' && !pendingKeys.has(key.split('/')[0]) && STORED_KEY.test(key)) saveClosed(key, closed);
+}
+const bucketHeading = id => Organise.BUCKETS.find(b => b.id === id).heading;
+// "Needs you 2 · Working on it 3", worded from BUCKETS and read as "Needs you 2, Working on it 3".
+function countParts(host, counts) {
+  host.replaceChildren();
+  const parts = Organise.BUCKETS.filter(b => counts[b.id] > 0);
+  parts.forEach((b, i) => {
+    if (i) { host.append(node('span', ',', 'sr-only')); const dot = node('span', ' · '); dot.setAttribute('aria-hidden', 'true'); host.append(dot); }
+    host.append(document.createTextNode(`${b.heading} ${counts[b.id]}`));
+  });
+}
+const domKey = key => key.replace(/[^\w-]/g, '_');
+function groupNode(key) {
+  let g = groupNodes.get(key);
+  if (g) return g;
+  const id = `grp-${domKey(key)}`;
+  const section = node('section', '', 'group'), h2 = node('h2', '', 'group-head'), btn = node('button', '', 'group-toggle');
+  section.dataset.groupKey = key; section.setAttribute('aria-labelledby', `${id}-title`);
+  h2.id = `${id}-title`; btn.type = 'button'; btn.dataset.focusKey = `grp:${key}`; btn.setAttribute('aria-controls', id);
+  const name = node('span', '', 'group-name'), counts = node('span', '', 'group-counts');
+  btn.append(name, node('span', ': ', 'sr-only'), counts); h2.append(btn);
+  const sub = node('p', '', 'group-sub muted'), routing = node('ul', '', 'group-routing'), region = node('div', '', 'group-body');
+  sub.hidden = true; routing.hidden = true; region.id = id;
+  btn.addEventListener('click', () => { const closed = !region.hidden; region.hidden = closed; btn.setAttribute('aria-expanded', String(!closed)); setClosed(key, closed); });
+  section.append(h2, sub, routing, region);
+  g = { key, section, btn, name, counts, sub, routing, region, buckets: new Map() };
+  groupNodes.set(key, g);
+  return g;
+}
+function bucketNode(g, id) {
+  let b = g.buckets.get(id);
+  if (b) return b;
+  const details = document.createElement('details'), summary = node('summary', '', 'bucket-head'), list = node('div', '', 'bucket-body');
+  details.className = 'bucket'; details.id = `grp-${domKey(g.key)}-${id}`; details.dataset.bucket = id;
+  summary.dataset.focusKey = `grp:${g.key}/${id}`;
+  // A person's click (or Enter/Space, which clicks) is the only toggle saved; opening one for a selected row is not.
+  summary.addEventListener('click', () => setClosed(`${g.key}/${id}`, details.open));
+  details.append(summary, list);
+  b = { details, summary, list };
+  g.buckets.set(id, b);
+  return b;
+}
+// The rows' groups for the chosen Group by: [{key, heading, sub, rows, groups?}] from work-organise.
+function grouped(items) {
+  const rows = items.map(item => ({ item, project: item.group && typeof item.group.key === 'string' ? item.group : { key: 'other', heading: Organise.FALLBACK, sub: null }, bucket: item.bucket, status: item.status, provider: item.provider }));
+  return groupBy === 'bucket' ? Organise.group(rows, 'bucket') : Organise.group(rows, groupBy, { then: 'bucket' });
+}
+// Fill each group from fresh session nodes; returns the group sections in order.
+function placeGroups(items, nodes, selected) {
+  pendingKeys.clear();
+  for (const item of items) if (item.groupPending && item.group) pendingKeys.add(item.group.key);
+  const out = [];
+  for (const grp of grouped(items)) {
+    const g = groupNode(grp.key);
+    g.name.textContent = grp.heading;
+    g.sub.textContent = grp.sub || ''; g.sub.hidden = !grp.sub;
+    const fallback = groupBy === 'bucket' ? !!grp.collapsed : false;
+    const holds = rows => !!selected && rows.some(r => r.item === selected);
+    const open = holds(grp.rows) || !isClosed(grp.key, fallback);
+    g.region.hidden = !open; g.btn.setAttribute('aria-expanded', String(open));
+    if (groupBy === 'bucket') {
+      for (const b of g.buckets.values()) b.details.remove();
+      g.buckets.clear();
+      g.region.replaceChildren(...grp.rows.map(r => nodes.get(r.item)));
+    } else {
+      const seen = [];
+      for (const inner of grp.groups) {
+        const b = bucketNode(g, inner.key), bkey = `${grp.key}/${inner.key}`;
+        b.details.open = holds(inner.rows) || !isClosed(bkey, !!inner.collapsed);
+        b.list.replaceChildren(...inner.rows.map(r => nodes.get(r.item)));
+        seen.push(b.details);
+      }
+      for (const [id, b] of g.buckets) if (!seen.includes(b.details)) { b.details.remove(); g.buckets.delete(id); }
+      place(g.region, seen);
+    }
+    out.push(g.section);
+  }
+  for (const [key, g] of groupNodes) if (!out.includes(g.section)) { g.section.remove(); groupNodes.delete(key); }
+  return out;
+}
+// Counts and visibility from what the filters leave showing, so the numbers match the screen.
+function countGroups() {
+  for (const g of groupNodes.values()) {
+    const rows = [...g.region.querySelectorAll('.session')], shown = rows.filter(r => !r.hidden);
+    const counts = Object.fromEntries(Organise.BUCKETS.map(b => [b.id, 0]));
+    for (const r of shown) if (Object.hasOwn(counts, r.dataset.bucket)) counts[r.dataset.bucket]++;
+    if (groupBy === 'bucket') g.counts.textContent = `${shown.length} ${shown.length === 1 ? 'session' : 'sessions'}`;
+    else countParts(g.counts, counts);
+    for (const [id, b] of g.buckets) { b.summary.textContent = `${bucketHeading(id)} (${counts[id]})`; b.details.hidden = !counts[id]; }
+    g.section.hidden = !shown.length && !g.routing.contains(document.activeElement); // never hide the header holding a focused routing control
+  }
+}
+// Keyed, in-place: an element moves only when its position must change.
+function place(container, nodes) {
+  let prev = null;
+  for (const n of nodes) { const want = prev ? prev.nextSibling : container.firstChild; if (want !== n) container.insertBefore(n, want); prev = n; }
+  while (prev ? prev.nextSibling : container.firstChild) (prev ? prev.nextSibling : container.firstChild).remove();
+}
+// A rebuild can detach what had focus (a bucket's summary, a header); put focus back on the same control.
+function keepFocus(run) {
+  const active = document.activeElement, key = active && content.contains(active) ? active.closest('[data-focus-key]')?.dataset.focusKey : null;
+  run();
+  if (key && !content.contains(document.activeElement)) [...content.querySelectorAll('[data-focus-key]')].find(e => e.dataset.focusKey === key)?.focus({ preventScroll: true });
+}
+
+let lastSnapshot = null;
 function render(snapshot) {
-  content.replaceChildren();
+  lastSnapshot = snapshot;
+  const before = [], nodes = new Map(), items = snapshot.sessions ?? [];
+  let selectedItem = null;
   const a = snapshot.activity;
   activity.textContent = a?.observed ? `A Codex lifecycle event was received ${age(a.latest_age_ms).toLowerCase()}.`
     : a?.configured === true ? 'Hooks are configured. No local lifecycle event is visible yet. Review the Plexiform hooks through Codex /hooks, then start a fresh turn.'
       : a?.configured === false ? 'Codex is not connected to this copy of Plexiform. Connect it on the AI tools page, then review the hooks in Codex.'
         : 'Codex hook configuration could not be read. Check Codex on the AI tools page.';
-  for (const t of snapshot.shared ?? []) content.append(node('p', `${t.sessions} sessions share this working tree: ${t.project}, with ${t.dirty} uncommitted file${t.dirty === 1 ? '' : 's'}. Commit, or give one session its own worktree, before they overwrite each other.`, 'banner'));
+  for (const t of snapshot.shared ?? []) before.push(node('p', `${t.sessions} sessions share this working tree: ${t.project}, with ${t.dirty} uncommitted file${t.dirty === 1 ? '' : 's'}. Commit, or give one session its own worktree, before they overwrite each other.`, 'banner'));
   document.getElementById('coord').hidden = !(snapshot.sessions ?? []).some(i => i.burst?.coordination);
-  for (const item of snapshot.sessions ?? []) {
+  for (const item of items) {
     const section = node('section', '', 'session');
+    section.dataset.bucket = typeof item.bucket === 'string' ? item.bucket : Organise.bucketOf(item.status);
     section.dataset.search = `${item.provider} ${item.project}`.toLocaleLowerCase(); section.dataset.provider = item.provider; section.dataset.freshness = item.freshness;
     if (item.handover?.key) section.dataset.sessionKey = item.handover.key;
     const selected = item.handover?.key === selectedSessionKey;
-    if (selected) { section.setAttribute('aria-current', 'true'); section.tabIndex = -1; }
+    if (selected) { section.setAttribute('aria-current', 'true'); section.tabIndex = -1; selectedItem = item; }
     const heading = node('h2', `${item.provider} · ${item.project}`);
     heading.append(node('span', item.freshness === 'recent' ? 'Recent' : item.freshness === 'stale' ? 'Stale' : 'Freshness unknown', 'freshness'));
     if (item.policy?.name) heading.append(node('span', `Policy: ${item.policy.name}`, 'freshness policy'));
@@ -495,13 +676,17 @@ function render(snapshot) {
     if (item.handover) handoverRow(section, item.handover);
     sessionTools(section, item);
     rowActions(section, item);
-    content.append(section);
-    if (selected && selectionPending) { selectionPending = false; section.scrollIntoView?.({ block: 'center' }); section.focus({ preventScroll: true }); }
+    nodes.set(item, section);
   }
-  if (!snapshot.sessions?.length) {
-    content.append(node('p', snapshot.status === 'unavailable' ? 'Local session reports are unavailable. Try Refresh.' : 'No local sessions are visible yet.', 'muted'));
-    if (snapshot.status !== 'unavailable') content.append(emptyState());
+  const after = [];
+  if (!items.length) {
+    after.push(node('p', snapshot.status === 'unavailable' ? 'Local session reports are unavailable. Try Refresh.' : 'No local sessions are visible yet.', 'muted'));
+    if (snapshot.status !== 'unavailable') after.push(emptyState());
   }
+  keepFocus(() => { place(content, [...before, ...placeGroups(items, nodes, selectionPending ? selectedItem : null), ...after]); placeRouting(); });
+  if (selectedItem && selectionPending) { selectionPending = false; const section = nodes.get(selectedItem); section.scrollIntoView?.({ block: 'center' }); section.focus({ preventScroll: true }); }
+  repoKeysNow = new Set(items.map(i => i.group?.key).filter(k => typeof k === 'string' && k.startsWith('repo-')));
+  if (!routingStarted) { routingStarted = true; void loadRouting(); } else routingFollow();
   updateLocalFilters(snapshot.sessions ?? []);
   // The Add sessions panel stays open while there is nothing to show and folds once sessions exist, unless the person chose.
   if (!addTouched) document.getElementById('add').open = !snapshot.sessions?.length;
@@ -518,6 +703,7 @@ function applyLocalFilters() {
   }
   document.getElementById('session-count').textContent = `${shown} of ${rows.length} ${rows.length === 1 ? 'session' : 'sessions'}`;
   document.getElementById('session-filter-empty').hidden = !rows.length || shown > 0;
+  countGroups();
 }
 function updateLocalFilters(sessions) {
   const provider = document.getElementById('session-provider'), previous = provider.value;
@@ -530,9 +716,15 @@ function resetLocalFilters() {
   for (const id of ['session-search', 'session-provider', 'session-freshness']) document.getElementById(id).value = '';
   applyLocalFilters();
 }
+// Empty the session rows. A routing line someone is using stays where it is; otherwise the headers go and their
+// lines return to the strip, so a failed refresh never drops them.
+function clearRows() {
+  if (routingFocused()) { for (const r of content.querySelectorAll('.session')) r.remove(); for (const n of [...content.children]) if (!n.classList.contains('group')) n.remove(); countGroups(); return; }
+  placeGroups([], new Map(), null); content.replaceChildren(); placeRouting();
+}
 async function refresh({ clear = false } = {}) {
   const request = ++generation;
-  if (clear) { content.replaceChildren(); updateLocalFilters([]); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…'; }
+  if (clear) { clearRows(); updateLocalFilters([]); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…'; }
   try {
     let timer;
     const snapshot = await Promise.race([window.sessionsApi.state(), new Promise((_, reject) => {
@@ -541,9 +733,11 @@ async function refresh({ clear = false } = {}) {
     if (request !== generation || document.hidden) return;
     if (!snapshot) throw new Error('unavailable');
     if (editing) { if (selectionPending) focusSelectedSession(); return; } // preserve an open editor while navigating to an existing row
+    if (routingFocused()) return; // a header's routing control has focus: the next tick redraws
     render(snapshot);
   } catch {
-    if (request === generation && !document.hidden) { content.replaceChildren(); updateLocalFilters([]); activity.textContent = 'Codex activity is unavailable. Check Codex on the AI tools page.'; status.textContent = 'Local activity is unavailable. Try Refresh.'; }
+    if (request === generation && !document.hidden && !routingStarted) { routingStarted = true; void loadRouting(); }
+    if (request === generation && !document.hidden) { clearRows(); updateLocalFilters([]); activity.textContent = 'Codex activity is unavailable. Check Codex on the AI tools page.'; status.textContent = 'Local activity is unavailable. Try Refresh.'; }
   }
 }
 const COORD_LABELS = { shared: 'shared', refused: 'refused', held: 'held for a commit', stopped: 'stopped with uncommitted files', errors: 'hook errors' };
@@ -567,6 +761,18 @@ document.getElementById('coord').addEventListener('toggle', e => { if (e.current
 document.getElementById('coord-days').addEventListener('change', () => { void loadCoordination(); });
 document.getElementById('session-search').addEventListener('input', applyLocalFilters);
 for (const id of ['session-provider', 'session-freshness']) document.getElementById(id).addEventListener('change', applyLocalFilters);
+// Group by: Project (with a bucket inside each), Status, or AI tool. The choice is remembered on this Mac.
+{
+  const pick = document.getElementById('session-group');
+  pick.value = groupBy;
+  pick.addEventListener('change', () => {
+    if (!BY.includes(pick.value)) { pick.value = groupBy; return; }
+    groupBy = pick.value; storage.set(BY_STORE, groupBy);
+    for (const g of groupNodes.values()) g.section.remove();
+    groupNodes.clear();
+    if (lastSnapshot) { render(lastSnapshot); applyLocalFilters(); } else placeRouting();
+  });
+}
 for (const id of ['session-reset', 'session-empty-reset']) document.getElementById(id).addEventListener('click', resetLocalFilters);
 document.getElementById('start-session-shortcut').addEventListener('click', () => { const add = document.getElementById('add'), host = document.getElementById('panel-start'); add.open = true; addTouched = true; host.hidden = false; startPanel(host); host.scrollIntoView?.({ block: 'center' }); });
 document.getElementById('refresh').addEventListener('click', () => { editing = false; refresh({ clear: true }); void loadRouting(); });
@@ -585,9 +791,8 @@ document.getElementById('codex-aitools').addEventListener('click', async event =
 });
 document.addEventListener('visibilitychange', () => {
   // A hidden page must not retain a status that appears current on return.
-  editing = false; ++generation; content.replaceChildren(); updateLocalFilters([]); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…';
+  editing = false; ++generation; clearRows(); updateLocalFilters([]); status.textContent = 'Checking local sessions…'; activity.textContent = 'Checking local activity…';
   if (!document.hidden) void refresh();
 });
 setInterval(() => { if (!document.hidden) void refresh(); }, 5000);
 if (!document.hidden) void refresh();
-void loadRouting();

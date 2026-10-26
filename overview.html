@@ -24,7 +24,8 @@
     <p class="muted">Your sessions across connected tools, devices and local models, each counted once. Sessions you share with a team or that run on a team board carry a team badge.</p>
     <p id="mine-status" class="muted" role="status" aria-live="polite"></p>
     <div id="mine-summary" class="summary" aria-label="My sessions summary"></div>
-    <ul id="mine-list" class="dir-list" aria-label="My sessions"></ul>
+    <div class="mine-filters"><label>Group by<select id="mine-group"><option value="project">Project</option><option value="bucket">Status</option><option value="provider">AI tool</option></select></label></div>
+    <div id="mine-list" class="dir-groups"></div>
     <p id="mine-empty" class="empty" hidden>No sessions yet. Start one below, or start work in a connected tool.</p>
   </section>
   <section id="team-section" class="directory" role="tabpanel" aria-labelledby="tab-team" hidden>

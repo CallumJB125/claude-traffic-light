@@ -285,7 +285,7 @@ test('work-organise: git resolver — one lookup per cwd, cached, worktree foldi
     '/d/bad\nname': { top: '/d/bad\nname', common: '/d/bad\nname/.git', branch: 'main' },
   });
   const repoFor = async (cwd) => (cwd.startsWith('/d/claude') || cwd.startsWith('/w/') ? 'github.com/acme/claude-traffic-light' : null);
-  const r = createGitInfoResolver({ git, repoFor, now: () => t, ttlMs: 60_000 });
+  const r = createGitInfoResolver({ git, repoFor, now: () => t, ttlMs: 60_000, jitter: 0 });
 
   const wt = await r.resolve('/w/awareness-p4');
   assert.deepEqual(wt, { repoName: 'github.com/acme/claude-traffic-light', toplevel: '/w/awareness-p4', commonDir: '/d/claude-traffic-light/.git', branch: 'codex/views' });
@@ -307,7 +307,8 @@ test('work-organise: git resolver — one lookup per cwd, cached, worktree foldi
   await Promise.all([r.resolve('/w/awareness-p4'), r.resolve('/w/awareness-p4'), r.resolve('/tmp/not-a-repo')]);
   assert.equal(calls.length, n, 'cached, failures included');
   t += 60_001;
-  await r.resolve('/w/awareness-p4');
+  assert.equal(await r.resolve('/w/awareness-p4'), wt, 'an expired answer is still served while it is looked up again');
+  await r.idle();
   assert.equal(calls.length, n + 2, 'expires after the TTL');
 });
 
@@ -333,6 +334,14 @@ test('work-organise: git resolver — in-flight calls share one lookup; bad inpu
   for (const d of ['/1', '/2', '/3', '/4', '/5']) await sync.resolve(d);
   assert.equal(sync.size(), 3);
   assert.equal((await sync.resolve('/5')).repoName, null, 'an origin that is not canonical is dropped');
+  let looks = 0;
+  const lru = createGitInfoResolver({ git: (d, args) => { looks++; return args[0] === 'rev-parse' ? `${d}\n.git` : 'main'; }, repoFor: () => null, max: 3 });
+  for (const d of ['/1', '/2', '/3']) await lru.resolve(d);
+  await lru.resolve('/1'); await lru.resolve('/4');
+  const seen = looks; await lru.resolve('/1');
+  assert.equal(looks, seen, 'a recently used entry survives eviction');
+  await lru.resolve('/2');
+  assert.ok(looks > seen, 'the least recently used one was evicted');
   const throwing = createGitInfoResolver({ git: () => { throw new Error('spawn failed'); }, repoFor: () => { throw new Error('x'); } });
   assert.deepEqual(await throwing.resolve('/x'), { repoName: null, commonDir: null, toplevel: null, branch: null });
   assert.throws(() => createGitInfoResolver({}), /git runner/);
@@ -746,4 +755,78 @@ test('titleOf: the default redaction is the hub title scrub (review L2)', () => 
   const { title } = W.titleOf({ team: false, reported: 'call +27 82 555 0199 about db1.internal.example.com fe80::1ff:fe23:4567:890a' });
   assert.doesNotMatch(title, /555 0199|db1\.internal|fe80::/, title);
   assert.equal(W.titleOf({ team: false, reported: 'Bump node 22.4.1 for ENG-42 at 10:30' }).title, 'Bump node 22.4.1 for ENG-42 at 10:30');
+});
+
+// Organised views PR 3 (review C1/C2): the Sessions page asks for groups on every render, so the
+// resolver answers synchronously from its last good value and never lets a failed lookup replace it.
+const timeout = () => { const e = new Error('timed out'); e.killed = true; e.signal = 'SIGTERM'; return e; };
+test('work-organise: resolver — a good answer survives a failed lookup; a failure retries after 5 s, not the TTL', async () => {
+  let t = 0, down = false;
+  const inner = fakeGit({ '/r/app': { top: '/r/app', common: '/r/app/.git', branch: 'main' } }).git;
+  let n = 0;
+  const git = async (d, a) => { n++; if (down) throw timeout(); return inner(d, a); };
+  const repoFor = async () => (down ? null : 'github.com/acme/app');
+  const r = createGitInfoResolver({ git, repoFor, now: () => t, jitter: 0 });
+  const cold = r.groupOf('/r/app');
+  assert.equal(cold.pending, true, 'no answer yet: the folder, marked pending');
+  assert.deepEqual(Object.keys(cold).sort(), ['heading', 'key', 'pending', 'sub']);
+  await r.idle();
+  const good = r.groupOf('/r/app');
+  assert.equal(good.pending, false);
+  assert.match(good.key, /^repo-/);
+
+  down = true; t += 60_001;
+  assert.equal(r.groupOf('/r/app').key, good.key, 'expired: still the good answer while it is looked up');
+  await r.idle();
+  assert.equal(r.groupOf('/r/app').key, good.key, 'git timed out: the good answer is kept');
+  const before = n;
+  t += 4_000; r.groupOf('/r/app'); await r.idle();
+  assert.equal(n, before, 'inside the 5 s backoff: no new lookup');
+  down = false; t += 1_000; r.groupOf('/r/app'); await r.idle();
+  assert.ok(n > before, 'retried after 5 s');
+  assert.equal(r.groupOf('/r/app').key, good.key);
+
+  // Cold and failing: pending, then recovers on the first retry rather than after 60 s.
+  let off = true;
+  const r2 = createGitInfoResolver({ git: async (d, a) => { if (off) throw timeout(); return inner(d, a); }, repoFor, now: () => t, jitter: 0 });
+  r2.groupOf('/r/app'); await r2.idle();
+  assert.equal(r2.groupOf('/r/app').pending, true, 'failed cold lookup stays pending');
+  off = false; t += 5_000; r2.groupOf('/r/app'); await r2.idle();
+  assert.deepEqual([r2.groupOf('/r/app').pending, r2.groupOf('/r/app').key], [false, good.key], 'recovered within 5 s');
+});
+
+test('work-organise: resolver — losing the origin is believed only when the next lookup agrees', async () => {
+  let t = 0, origin = 'github.com/acme/app';
+  const { git } = fakeGit({ '/r/app': { top: '/r/app', common: '/r/app/.git', branch: 'main' } });
+  const r = createGitInfoResolver({ git, repoFor: async () => origin, now: () => t, jitter: 0 });
+  r.groupOf('/r/app'); await r.idle();
+  const repoKey = r.groupOf('/r/app').key;
+  origin = null; t += 60_001; r.groupOf('/r/app'); await r.idle();
+  assert.equal(r.groupOf('/r/app').key, repoKey, 'one slow git config does not move the project');
+  t += 5_000; r.groupOf('/r/app'); await r.idle();
+  assert.match(r.groupOf('/r/app').key, /^git-/, 'said twice: the origin really is gone');
+});
+
+test('work-organise: resolver — at most 4 lookups at once, one per cwd; TTLs are jittered', async () => {
+  let live = 0, peak = 0;
+  const release = [];
+  const git = (d, a) => new Promise((res) => { live++; peak = Math.max(peak, live); release.push(() => { live--; res(a[0] === 'rev-parse' ? `${d}\n${d}/.git\n` : 'main\n'); }); });
+  const r = createGitInfoResolver({ git, now: () => 0 });
+  const dirs = Array.from({ length: 20 }, (_, i) => `/q/${i}`);
+  for (const d of dirs) { r.groupOf(d); r.groupOf(d); }
+  const settle = async () => { while (release.length) { release.shift()(); await new Promise((res) => setImmediate(res)); } };
+  await new Promise((res) => setImmediate(res));
+  assert.equal(peak, 8, "two git calls per lookup, four lookups at once");
+  await settle(); await r.idle();
+  assert.ok(dirs.every((d) => !r.groupOf(d).pending));
+
+  // ±20 %: the same answer looked up at 0 lives 48 s with the lowest draw and 72 s with the highest.
+  const looks = async (draw) => {
+    let t = 0, count = 0;
+    const q = createGitInfoResolver({ git: (d, a) => { count++; return a[0] === 'rev-parse' ? `${d}\n.git` : 'main'; }, now: () => t, random: () => draw });
+    q.groupOf('/j'); await q.idle();
+    t = 50_000; q.groupOf('/j'); await q.idle();
+    return count;
+  };
+  assert.deepEqual([await looks(0), await looks(1)], [4, 2], 'expired at 48 s, still fresh at 72 s');
 });

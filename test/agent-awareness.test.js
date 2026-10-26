@@ -693,3 +693,21 @@ test('re-review trade-off (Linux): a session is verified only when its program i
   assert.equal(r.unverified, 7);
   assert.ok(w.calls.every(([f]) => f === 'git'), 'no ps or lsof on Linux: /proc only');
 });
+
+// Organised views PR 3 (review condition): grouping is not an awareness feature. gitInfo answers with
+// "Let my AI sessions see each other" off, and asking it never writes the roster.
+test('gitInfo: resolves a repository with awareness off and never touches the roster', async (t) => {
+  const w = world(t);
+  const repo = gitInit(path.join(w.dir, 'code', 'grouped'));
+  w.state.config = { agentAwareness: { enabled: false }, agentBus: { exclude: [] } };
+  const a = w.make({ gitInfoFrom: require('../src/work-organise.js').createGitInfoResolver, repoFor: async () => 'github.com/acme/grouped' });
+  const info = await a.gitInfo.resolve(repo);
+  assert.equal(info.repoName, 'github.com/acme/grouped');
+  assert.equal(info.toplevel, fs.realpathSync(repo));
+  const g = a.gitInfo.groupOf(repo);
+  assert.deepEqual([g.heading, g.pending], ['grouped', false]);
+  assert.match(g.key, /^repo-[0-9a-z]{1,7}$/);
+  assert.equal(fs.existsSync(a.rosterFile), false, 'no roster written');
+  assert.ok(w.calls.every((c) => c[0] === 'git'), 'only git ran');
+  assert.equal(w.make().gitInfo, null, 'no factory passed: no resolver, and the snapshot groups by folder');
+});

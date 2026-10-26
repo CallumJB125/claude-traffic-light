@@ -6,17 +6,19 @@ const path = require('node:path');
 const { JSDOM } = require('jsdom');
 const html = fs.readFileSync(path.join(__dirname, '../sessions.html'), 'utf8');
 const script = fs.readFileSync(path.join(__dirname, '../sessions.js'), 'utf8');
+const organiseScript = fs.readFileSync(path.join(__dirname, '../src/work-organise.js'), 'utf8');
 const menuScript = fs.readFileSync(path.join(__dirname, '../continue-menu.js'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const state = overrides => ({ status: 'complete', observed_at: Date.now(), omitted: 0, activity: { configured: true, observed: true, latest_age_ms: 1000 }, sessions: [], ...overrides });
-function setup(api) {
-  const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true });
+function setup(api, { url, seed } = {}) {
+  const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, ...(url ? { url } : {}) });
+  if (seed) seed(dom.window);
   let hidden = false; const intervals = [], timeouts = [];
   Object.defineProperty(dom.window.document, 'hidden', { get: () => hidden });
   dom.window.setInterval = callback => { intervals.push(callback); return intervals.length; };
   dom.window.setTimeout = callback => { timeouts.push(callback); return timeouts.length; };
   dom.window.clearTimeout = () => {};
-  dom.window.sessionsApi = { onContinue() {}, ...api }; dom.window.eval(menuScript); dom.window.eval(script);
+  dom.window.sessionsApi = { onContinue() {}, ...api }; dom.window.eval(menuScript); dom.window.eval(organiseScript); dom.window.eval(script);
   return { dom, document: dom.window.document, intervals, timeouts, hide(value) { hidden = value; dom.window.document.dispatchEvent(new dom.window.Event('visibilitychange')); } };
 }
 test('DOM renders only text metadata, with explicit stale and child reported state', async () => {
@@ -418,4 +420,219 @@ test('PR 7 routing strip: Ask an admin sends the chosen team and says what happe
     assert.deepEqual(calls, [['github.com/org/new', 't2']]);
     assert.match(fixture.document.getElementById('routing-status').textContent, /Asked Beta’s admins/);
   } finally { fixture.dom.window.close(); }
+});
+
+// ── Organised views PR 3: project → bucket groups ─────────────────────────────
+const O = require('../src/work-organise.js');
+const KEY = { app: O.projectOf({ repoName: 'github.com/org/app' }).key, site: O.projectOf({ repoName: 'github.com/org/site' }).key, notes: O.projectOf({ cwd: '/w/notes' }).key };
+const grp = (name, extra = {}) => ({ key: KEY[name] ?? 'other', heading: name === 'other' ? 'Other work' : name, sub: null, ...extra });
+const srow = (name, bucket, extra = {}) => ({ provider: 'Claude Code', project: name, group: grp(name), bucket, status: O.headingOf(bucket), freshness: 'recent', age_ms: 1000, children: [], ...extra });
+const MIXED = [srow('app', 'needs'), srow('app', 'working'), srow('app', 'working', { provider: 'Codex' }), srow('app', 'idle'), srow('site', 'check', { group: grp('site', { sub: 'views' }) }), srow('other', 'stuck'), srow('notes', 'idle')];
+const URL_ = 'http://plexiform.test/sessions.html';
+const heads = d => [...d.querySelectorAll('#content .group')].filter(g => !g.hidden).map(g => g.querySelector('.group-name').textContent);
+const groupOf = (d, key) => d.querySelector(`#content .group[data-group-key="${key}"]`);
+const countsText = g => g.querySelector('.group-counts').textContent;
+
+test('PR 3 groups: project headers in order with Other work last, counts worded from BUCKETS, a branch sub-label, Idle folded', async () => {
+  const f = setup({ state: async () => state({ sessions: MIXED }) });
+  try {
+    await tick(); const d = f.document;
+    assert.deepEqual(heads(d), ['app', 'notes', 'site', 'Other work']);
+    const app = groupOf(d, KEY.app);
+    assert.equal(countsText(app), 'Needs you 1, · Working on it 2, · Idle 1');
+    // Seen: "Needs you 1 · Working on it 2 · Idle 1"; heard: "app: Needs you 1, Working on it 2, Idle 1".
+    const seen = node => [...node.childNodes].filter(n => !(n.classList?.contains('sr-only'))).map(n => n.textContent).join('');
+    const heard = node => [...node.childNodes].filter(n => n.getAttribute?.('aria-hidden') !== 'true').map(n => n.textContent).join('');
+    const counts = app.querySelector('.group-counts');
+    assert.equal(seen(counts), 'Needs you 1 · Working on it 2 · Idle 1');
+    assert.equal(heard(counts), 'Needs you 1,Working on it 2,Idle 1');
+    for (const b of O.BUCKETS) assert.ok(!seen(counts).includes(b.heading) || /\d/.test(seen(counts)));
+    assert.deepEqual([...app.querySelectorAll('details.bucket')].map(x => [x.dataset.bucket, x.querySelector('summary').textContent, x.open]),
+      [['needs', 'Needs you (1)', true], ['working', 'Working on it (2)', true], ['idle', 'Idle (1)', false]]);
+    assert.equal(countsText(groupOf(d, KEY.site)), 'Finished — check it 1');
+    assert.equal(groupOf(d, KEY.site).querySelector('.group-sub').textContent, 'views');
+    assert.equal(groupOf(d, KEY.app).querySelector('.group-sub').hidden, true);
+    // Markup: the button sits inside an h2; no aria-label anywhere in a header; ids from the key.
+    const h2 = app.querySelector('h2'), btn = h2.querySelector('button');
+    assert.ok(btn && btn.parentElement === h2);
+    assert.equal(app.querySelectorAll('[aria-label]').length, 0);
+    assert.equal(btn.getAttribute('aria-controls'), `grp-${KEY.app}`);
+    assert.equal(app.getAttribute('aria-labelledby'), h2.id);
+    assert.equal(btn.getAttribute('aria-expanded'), 'true');
+    btn.click(); assert.equal(d.getElementById(`grp-${KEY.app}`).hidden, true); assert.equal(btn.getAttribute('aria-expanded'), 'false');
+  } finally { f.dom.window.close(); }
+});
+
+test('PR 3 groups: counts follow the filters (the numbers match what is shown); a group with nothing shown is hidden', async () => {
+  const f = setup({ state: async () => state({ sessions: MIXED }) });
+  try {
+    await tick(); const d = f.document;
+    assert.equal(countsText(groupOf(d, KEY.app)), 'Needs you 1, · Working on it 2, · Idle 1');
+    const tool = d.getElementById('session-provider'); tool.value = 'Codex'; tool.dispatchEvent(new f.dom.window.Event('change'));
+    assert.deepEqual(heads(d), ['app']);
+    assert.equal(countsText(groupOf(d, KEY.app)), 'Working on it 1');
+    assert.deepEqual([...groupOf(d, KEY.app).querySelectorAll('details.bucket')].map(x => x.hidden), [true, false, true]);
+    assert.equal(groupOf(d, KEY.app).querySelector('details[data-bucket="working"] summary').textContent, 'Working on it (1)');
+    d.getElementById('session-reset').click();
+    assert.deepEqual(heads(d), ['app', 'notes', 'site', 'Other work']);
+    assert.equal(countsText(groupOf(d, KEY.app)), 'Needs you 1, · Working on it 2, · Idle 1');
+  } finally { f.dom.window.close(); }
+});
+
+test('PR 3 groups: Group by Status and AI tool; the choice is remembered', async () => {
+  const f = setup({ state: async () => state({ sessions: MIXED }) }, { url: URL_ });
+  try {
+    await tick(); const d = f.document, pick = d.getElementById('session-group');
+    assert.deepEqual([...pick.options].map(o => [o.value, o.textContent]), [['project', 'Project'], ['bucket', 'Status'], ['provider', 'AI tool']]);
+    pick.value = 'bucket'; pick.dispatchEvent(new f.dom.window.Event('change'));
+    assert.deepEqual(heads(d), O.BUCKETS.map(b => b.heading));
+    assert.equal(countsText(groupOf(d, 'working')), '2 sessions');
+    assert.equal(groupOf(d, 'idle').querySelector('.group-body').hidden, true, 'Idle starts folded');
+    pick.value = 'provider'; pick.dispatchEvent(new f.dom.window.Event('change'));
+    assert.deepEqual(heads(d), ['Claude', 'Codex']);
+    assert.equal(f.dom.window.localStorage.getItem('plexiform.sessions.groupBy.v1'), 'provider');
+  } finally { f.dom.window.close(); }
+  const again = setup({ state: async () => state({ sessions: MIXED }) }, { url: URL_, seed: w => w.localStorage.setItem('plexiform.sessions.groupBy.v1', 'provider') });
+  try { await tick(); assert.equal(again.document.getElementById('session-group').value, 'provider'); assert.deepEqual(heads(again.document), ['Claude', 'Codex']); } finally { again.dom.window.close(); }
+  const junk = setup({ state: async () => state({ sessions: MIXED }) }, { url: URL_, seed: w => w.localStorage.setItem('plexiform.sessions.groupBy.v1', 'device') });
+  try { await tick(); assert.equal(junk.document.getElementById('session-group').value, 'project'); } finally { junk.dom.window.close(); }
+});
+
+test('PR 3 collapse: saved per viewer in Project mode only; nothing written in Status or AI tool mode; bad stored keys dropped; storage failing is harmless', async () => {
+  const STORE = 'plexiform.sessions.groups.v1';
+  const f = setup({ state: async () => state({ sessions: MIXED }) }, { url: URL_ });
+  try {
+    await tick(); const d = f.document, ls = f.dom.window.localStorage;
+    assert.equal(ls.getItem(STORE), null, 'defaults are not written');
+    groupOf(d, KEY.app).querySelector('.group-toggle').click();
+    groupOf(d, KEY.site).querySelector('details[data-bucket="check"] summary').click();
+    const saved = JSON.parse(ls.getItem(STORE)).closed;
+    assert.deepEqual(saved, { [KEY.app]: true, [`${KEY.site}/check`]: true });
+    for (const k of Object.keys(saved)) assert.match(k, /^(?:(repo|git|dir|name)-[0-9a-z]{1,7}|other)(?:\/(needs|working|check|stuck|idle))?$/);
+    const before = ls.getItem(STORE), pick = d.getElementById('session-group');
+    for (const by of ['bucket', 'provider']) {
+      pick.value = by; pick.dispatchEvent(new f.dom.window.Event('change'));
+      for (const g of d.querySelectorAll('#content .group-toggle')) g.click();
+      for (const s of d.querySelectorAll('#content summary')) s.click();
+      assert.equal(ls.getItem(STORE), before, `${by}: toggles stay in memory`);
+    }
+    pick.value = 'bucket'; pick.dispatchEvent(new f.dom.window.Event('change'));
+    assert.equal(groupOf(d, 'needs').querySelector('.group-body').hidden, true, 'an in-memory toggle holds for the page');
+  } finally { f.dom.window.close(); }
+  // Relaunch: the saved fold applies; junk keys and values are dropped.
+  const seeded = { v: 1, closed: { [KEY.app]: true, '/Users/sam/app': true, 'repo-UPPER': true, [`${KEY.app}/later`]: true, [KEY.site]: 'yes', [`${KEY.notes}/idle`]: false } };
+  const g = setup({ state: async () => state({ sessions: MIXED }) }, { url: URL_, seed: w => w.localStorage.setItem(STORE, JSON.stringify(seeded)) });
+  try {
+    await tick(); const d = g.document;
+    assert.equal(groupOf(d, KEY.app).querySelector('.group-body').hidden, true, 'relaunch keeps the fold');
+    assert.equal(groupOf(d, KEY.site).querySelector('.group-body').hidden, false, 'a non-boolean value is ignored');
+    assert.equal(groupOf(d, KEY.notes).querySelector('details[data-bucket="idle"]').open, true, 'an explicit open Idle is kept');
+    groupOf(d, KEY.site).querySelector('.group-toggle').click();
+    assert.deepEqual(Object.keys(JSON.parse(g.dom.window.localStorage.getItem(STORE)).closed).sort(), [KEY.app, `${KEY.notes}/idle`, KEY.site].sort(), 'only valid keys are written back');
+  } finally { g.dom.window.close(); }
+  // No storage at all (about:blank throws): defaults, and toggling still works.
+  const none = setup({ state: async () => state({ sessions: MIXED }) });
+  try { await tick(); const t = groupOf(none.document, KEY.app).querySelector('.group-toggle'); t.click(); assert.equal(t.getAttribute('aria-expanded'), 'false'); } finally { none.dom.window.close(); }
+});
+
+test('PR 3 collapse: a group git has not placed yet is folded in memory only, and a saved fold is not applied to it', async () => {
+  const STORE = 'plexiform.sessions.groups.v1';
+  const pending = [srow('app', 'working', { groupPending: true })];
+  const f = setup({ state: async () => state({ sessions: pending }) }, { url: URL_, seed: w => w.localStorage.setItem(STORE, JSON.stringify({ v: 1, closed: { [KEY.app]: true } })) });
+  try {
+    await tick(); const d = f.document, t = groupOf(d, KEY.app).querySelector('.group-toggle');
+    assert.equal(t.getAttribute('aria-expanded'), 'true', 'saved state is not read for a pending key');
+    t.click(); t.click();
+    assert.deepEqual(JSON.parse(f.dom.window.localStorage.getItem(STORE)).closed, { [KEY.app]: true }, 'nothing written while pending');
+  } finally { f.dom.window.close(); }
+});
+
+const route = (name, extra = {}) => ({ repo: `github.com/org/${name}`, short: name, key: KEY[name], state: 'set', text: `${name} → My board (private)`, label: `${name} goes to My board (private)`, note: null, choices: null, change: [{ key: 'k1', label: 'A / Core', current: false }, { key: 'local', label: 'My board (private)', current: true }], link: null, ask: null, ...extra });
+test('PR 3 routing: each line sits in its project header by key; a line with no header stays in the strip; Status mode puts all in the strip', async () => {
+  const gone = route('gone', { key: O.projectOf({ repoName: 'github.com/org/gone' }).key });
+  const twin = route('app', { repo: 'git.example/Org/App', short: 'App', text: 'App → My board (private)', label: 'App goes to My board (private)' });
+  const f = setup({ state: async () => state({ sessions: MIXED }), routing: async () => ({ rows: [route('app'), twin, route('site'), gone] }) });
+  try {
+    await tick(); await tick(); const d = f.document;
+    assert.deepEqual([...groupOf(d, KEY.app).querySelectorAll('.group-routing .routing-row')].map(r => r.querySelector('.routing-text .sr-only').textContent), ['app goes to My board (private)', 'App goes to My board (private)'], 'a header takes more than one line');
+    assert.equal(groupOf(d, KEY.site).querySelectorAll('.group-routing .routing-row').length, 1);
+    const strip = d.getElementById('routing');
+    assert.equal(strip.hidden, false);
+    assert.deepEqual([...strip.querySelectorAll('.routing-row')].map(r => r.querySelector('.sr-only').textContent), ['gone goes to My board (private)']);
+    // Folded, the line and its buttons stay visible: they are siblings of the region, not inside it.
+    groupOf(d, KEY.app).querySelector('.group-toggle').click();
+    assert.equal(groupOf(d, KEY.app).querySelector('.group-routing').hidden, false);
+    const pick = d.getElementById('session-group'); pick.value = 'bucket'; pick.dispatchEvent(new f.dom.window.Event('change'));
+    assert.equal(strip.querySelectorAll('.routing-row').length, 4);
+    pick.value = 'project'; pick.dispatchEvent(new f.dom.window.Event('change'));
+    assert.equal(strip.querySelectorAll('.routing-row').length, 1);
+    assert.equal(d.querySelectorAll('.routing-row').length, 4, 'one node per line');
+  } finally { f.dom.window.close(); }
+});
+
+test('PR 3 routing: focus in a header picker survives the 5 s refresh and a failed one; a header line says what happened in place', async () => {
+  let fail = false;
+  const f = setup({ state: async () => { if (fail) throw new Error('down'); return state({ sessions: MIXED }); }, routing: async () => ({ rows: [route('app')] }),
+    routeChoose: async () => ({ ok: false, text: 'That board is no longer available.' }) });
+  try {
+    await tick(); await tick(); const d = f.document;
+    const row = groupOf(d, KEY.app).querySelector('.routing-row');
+    [...row.querySelectorAll('button')].find(b => b.textContent === 'Change').click();
+    const sel = row.querySelector('.routing-pick select'); sel.value = 'k1'; sel.focus();
+    assert.equal(d.activeElement, sel);
+    f.intervals[0](); await tick(); await tick();
+    assert.equal(d.activeElement, sel, 'same control after a tick'); assert.equal(sel.value, 'k1');
+    fail = true; f.intervals[0](); await tick(); await tick();
+    assert.equal(d.activeElement, sel, 'and after a failed refresh'); assert.ok(groupOf(d, KEY.app).contains(sel));
+    assert.equal(d.querySelectorAll('#content .session').length, 0, 'the failed refresh still clears the rows');
+    assert.equal(groupOf(d, KEY.app).hidden, false, 'the header holding the focused picker is not hidden');
+    fail = false; sel.blur(); f.intervals[0](); await tick(); await tick();
+    assert.equal(d.querySelectorAll('#content .session').length, MIXED.length);
+    [...row.querySelectorAll('button')].find(b => b.textContent === 'Save').click(); await tick(); await tick();
+    assert.equal(row.querySelector('.routing-status').textContent, 'That board is no longer available.', 'said beside the line, not in the hidden strip');
+  } finally { f.dom.window.close(); }
+});
+
+test('PR 3 routing: a failed fetch keeps the lines; a project that appears later is fetched for (debounced), not while a picker is open', async () => {
+  let rows = [route('app')], answer = null, calls = 0, sessions = [srow('app', 'working')];
+  const f = setup({ state: async () => state({ sessions }), routing: async () => { calls++; return answer ?? { rows }; } });
+  try {
+    await tick(); await tick(); const d = f.document;
+    assert.equal(calls, 1);
+    answer = { rows: [], reason: 'error' };
+    d.getElementById('refresh').click(); await tick(); await tick();
+    assert.equal(d.querySelectorAll('.routing-row').length, 1, 'an error keeps the line');
+    answer = null;
+    sessions = [srow('app', 'working'), srow('site', 'check')]; rows = [route('app'), route('site')];
+    const follows = () => f.timeouts.filter(cb => String(cb).includes('loadRouting'));
+    const before = follows().length;
+    f.intervals[0](); await tick();
+    assert.equal(follows().length, before + 1, 'a new repository schedules one fetch');
+    f.intervals[0](); await tick();
+    assert.equal(follows().length, before + 1, 'debounced');
+    // A picker the person opened holds the fetch back.
+    [...groupOf(d, KEY.app).querySelectorAll('button')].find(b => b.textContent === 'Change').click();
+    const n = calls; follows().at(-1)(); await tick();
+    assert.equal(calls, n, 'not while a picker is open');
+    [...groupOf(d, KEY.app).querySelectorAll('button')].find(b => b.textContent === 'Change').click();
+    f.intervals[0](); await tick(); follows().at(-1)(); await tick(); await tick();
+    assert.equal(calls, n + 1);
+    assert.equal(groupOf(d, KEY.site).querySelectorAll('.routing-row').length, 1);
+    answer = { rows: [], reason: 'no_teams' };
+    d.getElementById('refresh').click(); await tick(); await tick();
+    assert.equal(d.querySelectorAll('.routing-row').length, 0, 'signed out of every team: the lines go');
+  } finally { f.dom.window.close(); }
+});
+
+test('PR 3 selection: a selected row in a folded project and Idle bucket is shown, without saving that', async () => {
+  const STORE = 'plexiform.sessions.groups.v1';
+  const rows = [srow('app', 'idle', { handover: { key: 'claude-app-1', updated: 'Updated now', ready: false } })];
+  const f = setup({ state: async () => state({ sessions: rows }), selection: async () => 'claude-app-1' }, { url: URL_, seed: w => w.localStorage.setItem(STORE, JSON.stringify({ v: 1, closed: { [KEY.app]: true } })) });
+  try {
+    await tick(); await tick(); await tick(); const d = f.document;
+    const g = groupOf(d, KEY.app);
+    assert.equal(g.querySelector('.group-body').hidden, false);
+    assert.equal(g.querySelector('details[data-bucket="idle"]').open, true);
+    assert.deepEqual(JSON.parse(f.dom.window.localStorage.getItem(STORE)).closed, { [KEY.app]: true });
+  } finally { f.dom.window.close(); }
 });
