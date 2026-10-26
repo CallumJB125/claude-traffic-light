@@ -33,3 +33,13 @@ The agent prompts in `catalog/agents/catalog.json.gz` are copied unchanged from 
 - Commit: `9236d10702cdbba37eaa34515f1e1dbff8452506`
 - Licence: MIT (Copyright (c) 2025 0xfurai)
 - Licence text: `catalog/agents/licenses/0xfurai.LICENSE`
+
+## Bundled npm packages
+
+These packages are installed from npm and shipped in the app unchanged.
+
+### smol-toml
+
+- Version: 1.9.1
+- Licence: BSD-3-Clause
+- Source: https://github.com/squirrelchat/smol-toml
