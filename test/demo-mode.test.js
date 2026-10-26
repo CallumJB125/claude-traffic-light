@@ -82,7 +82,7 @@ test('Home in the demo answers from fixtures only, never reads the real stores, 
   reads.length = 0;
   demo.start();
   const s = await handlers.get('home:state')({});
-  assert.deepEqual(s, Demo.fixtures(5000));
+  assert.deepEqual(s, { ...Demo.fixtures(5000), firstRunTour: null }, 'the fixtures, plus the widget tour status Home\'s own tour waits on');
   assert.equal(await handlers.get('home:open-card')({}, 'demo-1'), false);
   assert.equal(await handlers.get('home:morning-seen')({}), false);
   assert.deepEqual(reads, [], 'no real store was read while the demo was on');

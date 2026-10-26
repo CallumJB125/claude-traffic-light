@@ -455,7 +455,7 @@ function createAccountFlow({ store, clientFor, signedIn, settledSignedIn = async
 
   async function screenState() {
     const screen = acct.screen;
-    const base = { ok: true, brand: { name: BRAND.NAME, copy: BRAND.COPY, defaultHost: hostOf(BRAND.DEFAULT_HUB) }, screen, notice: acct.notice, alert: acct.alert, host: acct.hub ? hostOf(acct.hub) : null, lastHub: prefill(store.lastHub() ?? BRAND.DEFAULT_HUB), signedInHubs: store.hubs().filter(signedIn).map(hostOf) };
+    const base = { ok: true, brand: { name: BRAND.NAME, copy: BRAND.COPY, defaultHost: hostOf(BRAND.DEFAULT_HUB), machine: BRAND.MACHINE, localBoard: BRAND.LOCAL_BOARD }, screen, notice: acct.notice, alert: acct.alert, host: acct.hub ? hostOf(acct.hub) : null, lastHub: prefill(store.lastHub() ?? BRAND.DEFAULT_HUB), signedInHubs: store.hubs().filter(signedIn).map(hostOf) };
     acct.notice = null;
     acct.alert = null;
     if (screen === 'hub') return { ...base, forInvite: !!pendingInvite };

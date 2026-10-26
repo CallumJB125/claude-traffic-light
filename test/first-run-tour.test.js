@@ -240,3 +240,25 @@ test('C-T: the demo question\'s id is refused by the answer paths and never name
   }
   assert.match(require('fs').readFileSync(require('path').join(__dirname, '..', 'widget.js'), 'utf8'), /tourInput && id === tourInput\.id \? tourAnswered\(\)/, 'the widget answers the demo itself');
 });
+
+test('one tour at a time (A5): Home is told the widget tour\'s status, and first-run setup opens over Home', async () => {
+  const Home = require('../src/home-main.js');
+  const Teammate = require('../src/teammate-tour.js');
+  const handlers = new Map();
+  let status = 'running';
+  Home.register({
+    ipcMain: { handle: (c, f) => handlers.set(c, f) }, allowed: () => true, now: () => 5000,
+    state: () => ({ sessions: [], inputs: [], spend: null }), localSessions: (x) => x, tools: () => [],
+    myDay: { snapshot: async () => ({ sources: [] }), open: async () => true }, morning: () => null,
+    openPage() {}, openAiTools() {}, firstRunTour: () => status,
+  });
+  const home = await handlers.get('home:state')({});
+  assert.equal(home.firstRunTour, 'running');
+  assert.equal(Teammate.decide(Teammate.parse(null), home, null), 'wait', 'Home\'s tour waits while the widget tour runs');
+  status = 'skipped';
+  assert.equal(Teammate.decide(Teammate.parse(null), await handlers.get('home:state')({}), null), 'dismiss', 'and is done when it was skipped');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(main, /require\('\.\/src\/home-main\.js'\)\.register\(\{[^\n]*firstRunTour: \(\) => FirstRunTour\.state\(\)\.status/);
+  const auto = main.slice(main.indexOf('function maybeAutoShowHelp()'));
+  assert.ok(auto.indexOf('openBuddy(homePage())') > 0 && auto.indexOf('openBuddy(homePage())') < auto.indexOf('createOnboardingWindow()'), 'setup opens over Home');
+});

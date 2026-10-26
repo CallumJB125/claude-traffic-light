@@ -13,7 +13,7 @@
 <main>
   <header class="page-header">
     <div><p class="eyebrow">Your AI workspace</p><h1>Sessions &amp; agents</h1><p class="intro">See the work, find the right session, and keep it moving together.</p></div>
-    <div class="actions"><span class="palette-tip">Find anything: <kbd>⌘K</kbd></span><button id="refresh" type="button">Refresh</button></div>
+    <div class="actions"><span class="palette-tip">Find anything: <kbd data-combo="K">⌘K</kbd></span><button id="refresh" type="button">Refresh</button></div>
   </header>
   <div id="views" class="views" role="tablist" aria-label="Overview views" hidden>
     <button id="tab-mine" type="button" role="tab" aria-selected="true" aria-controls="mine-section">My sessions</button>
@@ -141,6 +141,8 @@
   <section class="connections" aria-labelledby="connections-title" data-view="mine"><h2 id="connections-title">Reported providers</h2><div id="connections"></div></section>
   <p class="disclosure">Activity comes from supported reports. A recent report does not verify that a task succeeded. Silent sessions become stale; missing task or child-agent metadata stays unknown. Private chats are not read.</p>
 </main>
+<script src="brand.js"></script>
+<script src="platform-words.js"></script>
 <script src="src/session-router.js"></script>
 <script src="src/work-organise.js"></script>
 <script src="src/session-pulse.js"></script>

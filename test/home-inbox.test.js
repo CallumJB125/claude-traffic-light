@@ -65,7 +65,7 @@ test('Home tour: shown once for a new account, labelled, four steps, dismissal p
     await tick(12);
     const dialog = s.doc.querySelector('.tour-dialog');
     assert.ok(dialog, 'tour shown'); assert.equal(dialog.getAttribute('role'), 'dialog'); assert.equal(dialog.getAttribute('aria-labelledby'), 'tour-title');
-    assert.equal(s.$('tour-title').textContent, 'Home');
+    assert.equal(s.$('tour-title').textContent, 'Inbox', 'step 1 describes the Inbox, so it is called that');
     const next = [...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Next');
     next.click(); next.click(); next.click();
     assert.match(s.$('tour-title').textContent, /Find a shared session and ask/);
@@ -73,6 +73,36 @@ test('Home tour: shown once for a new account, labelled, four steps, dismissal p
     assert.equal(s.doc.querySelector('.tour'), null);
     assert.equal(JSON.parse(s.dom.window.localStorage.getItem('plexiform.tour')).done.local > 0, true);
   } finally { s.close(); }
+});
+
+test('Home tour (A5): one tour at a time; waits for a settled team and for the widget tour, done when that one is skipped', async () => {
+  const fire = (s, detail) => s.doc.dispatchEvent(new s.dom.window.CustomEvent('home:state', { detail }));
+  const unsettled = setup({ st: { ...state, team: undefined } });
+  try {
+    await tick(12);
+    assert.equal(unsettled.doc.querySelector('.tour'), null, 'no decision before Home has asked about the team');
+    fire(unsettled, { ...state, team: null, firstRunTour: 'running' });
+    assert.equal(unsettled.doc.querySelector('.tour'), null, 'the widget tour is running: Home waits');
+    fire(unsettled, { ...state, team: null, firstRunTour: 'finished' });
+    assert.equal(unsettled.doc.querySelectorAll('[role="dialog"]').length, 1, 'then exactly one tour');
+    fire(unsettled, { ...state, team: null, firstRunTour: 'running' });
+    assert.equal(unsettled.doc.querySelector('.tour'), null, 'a widget tour started again: Home steps aside');
+    assert.equal(unsettled.dom.window.localStorage.getItem('plexiform.tour'), null, 'stepping aside is not a dismissal');
+  } finally { unsettled.close(); }
+  const skipped = setup({ st: { ...state, firstRunTour: 'skipped' } });
+  try {
+    await tick(12);
+    assert.equal(skipped.doc.querySelector('.tour'), null, 'skipping the widget tour skips this one');
+    assert.ok(JSON.parse(skipped.dom.window.localStorage.getItem('plexiform.tour')).done.local > 0, 'and it is remembered');
+  } finally { skipped.close(); }
+  const esc = setup();
+  try {
+    await tick(12);
+    esc.doc.querySelector('.tour-dialog').dispatchEvent(new esc.dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert.equal(esc.doc.querySelector('.tour'), null, 'Esc dismisses');
+    fire(esc, { ...state, team: { account: 'acct-1' } });
+    assert.equal(esc.doc.querySelector('.tour'), null, 'a dismissal before the account was known still holds once it is');
+  } finally { esc.close(); }
 });
 
 test('Home Inbox: a wait with simple options is a quick decision card; a click answers by request id and option id', async () => {

@@ -79,7 +79,7 @@ test('signed-out Account offers the same sign-in as Team, not a second sign-in s
 
 test('signed-out Team and Integrations copy: plain, no hub address, status is words', () => {
   const acct = read(dir, 'account.js');
-  assert.match(acct, /heading\('Work with a team', 'Share one board with your teammates and see what their AI sessions are working on\. My board stays on this Mac; only team boards are shared\.'\)/);
+  assert.match(acct, /heading\('Work with a team', `Share one board with your teammates and see what their AI sessions are working on\. My board stays on this \$\{s\.brand\.machine\}; only team boards are shared\.`\)/);
   assert.doesNotMatch(acct, /team’s address/);
   assert.ok(!/app\.plexiform\.dev/.test(acct), 'the host comes from the brand, not the page');
   assert.match(acct, /el\('p', \{ class: 'acct-connector-status' \}, c\.statusText\)/);

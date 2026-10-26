@@ -393,7 +393,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       });
       const launch = await supervisor.ensure().catch(() => null);
       const localCurrent = () => !launch || supervisor.launchCurrent(launch);
-      sources.unshift({ name: 'My board (this Mac)', key:'personal',kind:'personal', current: localCurrent, matches:d=>d?.kind==='local',
+      sources.unshift({ name: BRAND.LOCAL_BOARD, key:'personal',kind:'personal', current: localCurrent, matches:d=>d?.kind==='local',
         send:(row,text,requestId,fresh)=>localCurrent()&&fresh()?supervisor.overviewMessage({card:row.card.id,board:row.board_id,fence:row.card.fence,run:row.card.run.id,text,requestId},()=>localCurrent()&&fresh()):Promise.resolve({ok:false}), read: () => launch ? supervisor.myDay() : Promise.resolve({ ok: false }),
         async open(row, fresh, beginNavigation=null) {
           if (!fresh() || beginNavigation&&!beginNavigation()) return false;
@@ -480,6 +480,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       selected,
       workspaces: store.list().map(({ id, name, kind, group }) => ({ id, name, kind, group: group ?? null })),
       active: store.active().id,
+      localBoard: BRAND.LOCAL_BOARD,
       burst: (() => { try { return burstApi?.snapshot().d.kind === 'present'; } catch { return false; } })(),
       optimiser: selected === 'optimiser' ? { nav: optimiser.nav(), active: optimiser.active() } : null,
       signedIn: store.hubs().some(signedIn),

@@ -78,18 +78,28 @@
   // First-run tour, once per signed-in account (falls back to this computer when Home has no account id).
   if (!Tour) return;
   const account = () => state?.team?.account || state?.team?.user || null;
-  let tourState = store.read('plexiform.tour', Tour.parse), shown = false;
+  let tourState = store.read('plexiform.tour', Tour.parse), shown = null, settled = false;
+  const remember = () => { tourState = Tour.dismiss(tourState, account()); store.write('plexiform.tour', Tour.serialize(tourState)); };
+  // Every Home state until it is decided: wait for the team answer and for the widget tour to end;
+  // if that tour starts while this one is open, this one steps aside and comes back after.
+  function onState(home) {
+    if (settled) return;
+    const d = Tour.decide(tourState, home, account());
+    if (d === 'wait') { if (shown && home?.firstRunTour === 'running') { shown.remove(); shown = null; } return; }
+    if (d === 'done') { settled = true; return; }
+    if (d === 'dismiss') { settled = true; shown?.remove(); shown = null; remember(); return; }
+    if (!shown) showTour();
+  }
   function showTour() {
-    if (shown || !Tour.shouldShow(tourState, account())) return; shown = true;
     const host = node('div', '', 'tour'), dialog = node('div', '', 'tour-dialog'), title = node('h2'), text = node('p'), steps = node('p', '', 'muted tour-steps'), actions = node('div', '', 'actions');
     dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.setAttribute('aria-labelledby', 'tour-title'); title.id = 'tour-title';
     let i = 0; const opener = document.activeElement;
-    const finish = () => { tourState = Tour.dismiss(tourState, account()); store.write('plexiform.tour', Tour.serialize(tourState)); host.remove(); opener?.focus?.(); };
+    const finish = () => { settled = true; remember(); host.remove(); shown = null; opener?.focus?.(); };
     const next = button('Next', () => { if (i === Tour.STEPS.length - 1) { finish(); return; } i = Tour.next(i); paint(); }, 'primary'), skip = button('Skip tour', finish);
     const paint = () => { const s = Tour.STEPS[i]; title.textContent = s.title; text.textContent = s.text; steps.textContent = `Step ${i + 1} of ${Tour.STEPS.length}`; next.textContent = i === Tour.STEPS.length - 1 ? 'Done' : 'Next'; next.focus(); };
-    actions.append(next, skip); dialog.append(title, text, steps, actions); host.append(dialog); document.body.append(host);
+    actions.append(next, skip); dialog.append(title, text, steps, actions); host.append(dialog); document.body.append(host); shown = host;
     dialog.addEventListener('keydown', ev => { if (ev.key === 'Escape') finish(); else if (ev.key === 'Tab') { const f = [next, skip]; const at = f.indexOf(document.activeElement); ev.preventDefault(); f[(at + (ev.shiftKey ? f.length - 1 : 1)) % f.length].focus(); } });
     paint();
   }
-  document.addEventListener('home:state', () => showTour(), { once: true });
+  document.addEventListener('home:state', ev => onState(ev.detail));
 })();

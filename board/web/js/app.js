@@ -517,6 +517,7 @@ function buildModel() {
     localCard: state.authMode === 'local' && !state.localCardDismissed,
     openTeam: canOpenTeam(),
     accounts: state.authMode === 'accounts',
+    local: state.authMode === 'local',
     invite: state.invite,
     handoffs: state.view === 'team' && state.authMode === 'accounts' ? state.handoffs : null,
     cloud: state.cloud,
@@ -2359,6 +2360,7 @@ function onClick(e) {
     case 'communication-reload': if (state.detail) refreshDetail(state.detail.cardId, { communication: true }); return;
     case 'close-drawer': root.querySelector('dialog[data-dialog="drawer"]')?.close(); return;
     case 'close-dialog': el.closest('dialog')?.close(); return;
+    case 'give-add-repo': el.closest('dialog')?.close(); setView('integrations'); return;
     case 'new-card': openNewCard(); return;
     case 'feedback-send': submitFeedback(); return;
     case 'palette': togglePalette(); return;

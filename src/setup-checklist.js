@@ -11,6 +11,7 @@
 
 const { summary } = require('./ai-tools.js');
 const Organise = require('./work-organise.js');
+const Brand = require('../brand.js');
 
 const DONE = 'done';
 const TODO = 'todo';
@@ -59,7 +60,7 @@ function teamRow(account) {
   const state = account == null ? UNKNOWN : account.teamName ? DONE : TODO;
   return {
     id: 'team', title: 'Create or join a team', state,
-    detail: state === DONE ? `On ${account.teamName}.` : 'Your board stays on this Mac until you do.',
+    detail: state === DONE ? `On ${account.teamName}.` : `Your board stays on this ${Brand.machine()} until you do.`,
     fix: state === DONE ? null : { label: 'Sign in or create a team', destination: 'team' },
   };
 }

@@ -53,6 +53,7 @@
       "board/shared/secret-patterns.mjs",
       "preload.js",
       "index.html",
+      "platform-words.js",
       "sessions.html",
       "sessions.css",
       "sessions.js",

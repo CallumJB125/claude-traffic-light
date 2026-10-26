@@ -267,6 +267,12 @@ test('uninstall: NSIS and the .deb take the hooks out before the binary goes, an
   assert.ok(fs.existsSync(path.join(__dirname, '..', 'hooks', 'uninstall-hooks.js')), 'shipped in extraResources hooks/');
 });
 
+test('A1: the .deb has a homepage, and it is the site from brand.js', () => {
+  assert.equal(config.extraMetadata.homepage, require('../brand.js').urls.site);
+  assert.match(config.extraMetadata.homepage, /^https:\/\//);
+  assert.ok(config.linux.target.some((t) => t.target === 'deb'), 'the deb target is still built');
+});
+
 test('Linux has its own icon set: square PNGs named by size', () => {
   const dir = path.join(__dirname, '..', config.linux.icon);
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.png'));

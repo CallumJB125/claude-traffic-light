@@ -295,6 +295,23 @@ test('Tackle with AI: own Codex account by default, sponsor and overlaps shown b
   assert.doesNotMatch(unknown, /No overlapping work/);
 });
 
+test('Send to AI with no repos: says so with a way to add one; a local board never calls itself an offline machine (T5)', () => {
+  const v = view({ run_state: 'todo', run: null, live: null, column: 'todo' });
+  const m = model([entry(v)]);
+  const dlg = { kind: 'give', cardId: v.id, target: 'm-alice', repo_id: '', budget_usd: 5, preview: { overlaps: [], runners: [] } };
+  const loading = giveDialog({ ...dlg, repos: null }, m);
+  assert.match(textOf(loading), /Loading repos…/);
+  assert.equal(findAll(loading, (x) => x.props['data-action'] === 'give-add-repo').length, 0, 'no add link while the list is loading');
+  const empty = giveDialog({ ...dlg, repos: [] }, m);
+  assert.match(textOf(empty), /No repos yet/);
+  assert.doesNotMatch(textOf(empty), /Loading repos/);
+  assert.match(textOf(findAll(empty, (x) => x.props['data-action'] === 'give-add-repo')[0]), /GitHub/);
+  assert.match(textOf(empty), /The machine is offline/, 'a team board still names the offline machine');
+  const local = textOf(giveDialog({ ...dlg, repos: [] }, { ...m, local: true }));
+  assert.doesNotMatch(local, /machine is offline/);
+  assert.match(local, /This (Mac|computer)’s runner isn’t connected yet/);
+});
+
 test('Run in the cloud: honest when no cloud runner is set up or it is offline; online shows its AIs and recent run cost', () => {
   const v = view({ run_state: 'todo', run: null, live: null, column: 'todo' });
   const m = model([entry(v)]);

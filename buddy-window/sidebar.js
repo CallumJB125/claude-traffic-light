@@ -197,7 +197,7 @@ function paintWorkspaces() {
   const sel = el('select', { class: 'ws-select', id: 'ws-select' });
   const groups = new Map();
   for (const w of list) {
-    const o = el('option', { value: w.id }, w.kind === 'local' ? 'My board (this Mac)' : w.name);
+    const o = el('option', { value: w.id }, w.kind === 'local' ? state.localBoard : w.name);
     if (w.id === state.active) o.selected = true;
     if (w.group) {
       if (!groups.has(w.group)) { const g = el('optgroup', { label: w.group }); groups.set(w.group, g); sel.append(g); }

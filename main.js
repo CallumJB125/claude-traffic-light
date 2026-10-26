@@ -189,6 +189,8 @@ const dataRoots = (userDataDir) => ({
 const pendingDeletion = require('./src/data-delete.js').runPendingDeletion(dataRoots(IS_DEV_RUN ? null : (app.commandLine.getSwitchValue('user-data-dir') || path.join(app.getPath('appData'), app.getName()))));
 
 require('./src/logging.js').installFileLogging({ rootDir: ROOT_DIR, isDevRun: IS_DEV_RUN });
+// Linux on a desktop Chromium doesn't know: use the running Secret Service, not plain text (before app.ready).
+if (process.platform === 'linux') { const store = require('./src/linux-keyring.js').apply(app); if (store) console.log(`[keyring] --password-store=${store}`); }
 if (pendingDeletion.ran) console.log(`[data] deleted: ${pendingDeletion.results.map((r) => `${r.id} ${r.status}`).join(', ')}`);
 // Anything that escapes a promise or a callback, from here on: log it (to
 // app.log too) instead of letting it kill a listener silently.
@@ -1618,7 +1620,7 @@ function getBuddy() {
         else if (which === 'mix') openLightsMix();
       },
       onLocalPage: (page, wc) => {
-        if (page.id === 'settings' && !IS_MAC) wc.insertCSS('#busy-sources, .field:has(#busyFocusShortcut) { display: none; }').catch(() => {});
+        if (page.id === 'settings' && !IS_MAC) wc.insertCSS('#busy-sources, .field:has(#busyFocusShortcut), .field:has(#roam) { display: none; }').catch(() => {});
       },
       onClosed: () => { OverviewMain.invalidate(); hatchResults.clear(); feedbackShot = null; feedbackLast = null; SetupsLocal.invalidate(); if (IS_MAC && !lightsWin) app.dock.hide(); },
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
@@ -2651,6 +2653,8 @@ function maybeAutoShowHelp() {
     fs.mkdirSync(ROOT_DIR, { recursive: true });
     fs.writeFileSync(marker, new Date().toISOString());
   } catch (e) { console.warn('[onboarding] could not write the first-run marker:', e.message); }
+  // First-run setup sits over Home, not the board the window opens on by default.
+  if (buddyWin?.isOpen()) openBuddy(homePage());
   createOnboardingWindow();
 }
 
@@ -4997,7 +5001,7 @@ const AgentsFind = (() => {
     openMine: () => { reg.showMine(); openBuddy('agents-find'); buddyWin?.sendToPage('agents-find', 'agents:show', 'mine'); },
   };
 })();
-require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null), resumeCap: () => (costGuardResume ? costGuardResume() : null), demo: Demo, simple: () => loadConfig().simpleMode === true });
+require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null), resumeCap: () => (costGuardResume ? costGuardResume() : null), demo: Demo, simple: () => loadConfig().simpleMode === true, firstRunTour: () => FirstRunTour.state().status });
 require('./src/guardrails-main.js').install({ ipcMain, dialog, shell, BrowserWindow, rootDir: ROOT_DIR, allowed: (e) => fromUtilityPage(e, 'home'), broadcast: () => broadcastStatus(), log: console.log });
 explainSvc = require('./src/explain-main.js').install({ ipcMain, rootDir: ROOT_DIR, home: os.homedir(), config: loadConfig, inputs: () => aggregateState().inputs || [], sessions: () => aggregateState().sessions || [], inputAllowed: inputSenderOk, homeAllowed: (e) => fromUtilityPage(e, 'home'), clipboard, shell, Notification, openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // explain mode (opt-in, config.explainMode)
 require('./src/widget-lane-main.js').install({ ipcMain, send: (ch, v) => { if (win && !win.isDestroyed()) win.webContents.send(ch, v); }, allowed: (e) => !!win && !win.isDestroyed() && e.sender === win.webContents, sources: { state: () => aggregateState(), local: localSessions, collisions: collisionAlerts, git: { active: () => gitEvents(loadConfig()) }, spend: () => spendSnapshot(loadConfig()), warnAt: () => loadConfig().spend.warnAt } });

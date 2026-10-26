@@ -11,7 +11,7 @@ const Organise = require('./work-organise.js');
 const { finding } = require('../usage-waste-view.js');
 const { summary } = require('./ai-tools.js');
 
-const LOCAL_BOARD = 'My board (this Mac)';
+const { LOCAL_BOARD } = require('../buddy-window/brand.js');
 const PAGES = new Set(['waiting', 'sessions', 'board', 'usage', 'optimiser', 'settings', 'team', 'myday', 'overview', 'tasks']);
 const AITOOLS = /^aitools(?::[a-z]{2,12})?$/;
 const LIST_MAX = 20;
@@ -117,7 +117,7 @@ function costs(report) {
 // Tasks finished while you were away (Plus). Null when there is nothing, or the plan lacks it.
 const morningReport = () => require('./morning-report.js').current();
 
-function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, morning = morningReport, now = Date.now, collisions = null, costGuard = () => null, resumeCap = null, demo = null, simple = () => false }) {
+function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPage, openAiTools, morning = morningReport, now = Date.now, collisions = null, costGuard = () => null, resumeCap = null, demo = null, simple = () => false, firstRunTour = () => null }) {
   let toolsMemo = { at: -Infinity, value: null };
   let costsMemo = { at: -Infinity, value: null };
   let teamMemo = { at: -Infinity, value: null, none: false };
@@ -152,7 +152,12 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
     };
   }
   // The demo answers from its fixtures alone: no store is read while it is on.
-  ipcMain.handle('home:state', (e) => (!allowed(e) ? null : demo?.active() ? demo.home(now()) : snapshot()));
+  // firstRunTour: the widget tour's status, so Home's own tour waits for it (src/teammate-tour.js decide).
+  ipcMain.handle('home:state', async (e) => {
+    if (!allowed(e)) return null;
+    const s = demo?.active() ? demo.home(now()) : await snapshot();
+    return s && { ...s, firstRunTour: part(firstRunTour) };
+  });
   ipcMain.handle('home:navigate', (e, destination) => {
     if (!allowed(e) || typeof destination !== 'string') return false;
     if (AITOOLS.test(destination)) { toolsMemo.at = -Infinity; return !!openAiTools(destination); }
