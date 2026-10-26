@@ -370,3 +370,64 @@ test('a permission input says how much of a long command it could not show', () 
   assert.equal(i.text.length + i.detail_cut, `echo ${'x'.repeat(25000)}`.length);
   assert.equal(PI.fromRequest({ ...req, toolInput: { command: 'ls' } }).detail_cut, 0);
 });
+
+// ── C-V: both branches sit behind hooks/ask-policy.js constants, today's behaviour by default ──
+const AskPolicy = require('../hooks/ask-policy.js');
+
+test('C-V: the recorded constants default to today\'s behaviour (a 55 s ceiling, no late-answer check)', () => {
+  assert.equal(AskPolicy.PERMISSION_DIALOG_HELD, false);
+  assert.equal(AskPolicy.LATE_ALLOW_HARMFUL, false);
+  assert.deepEqual(AskPolicy.policy(), { held: false, lateAllowHarmful: false, ceilingMs: 55000, earlyStopWhenTerminalFrontmost: false });
+});
+
+test('C-V(a): with the dialog held the ceiling is 8 to 10 s and the terminal being frontmost stops the wait', () => {
+  const p = AskPolicy.policy({ held: true });
+  assert.ok(p.ceilingMs >= 8000 && p.ceilingMs <= 10000, `ceiling ${p.ceilingMs}`);
+  assert.equal(p.earlyStopWhenTerminalFrontmost, true);
+  assert.equal(AskPolicy.terminalFrontmost('Ghostty', 'Ghostty'), true);
+  assert.equal(AskPolicy.terminalFrontmost('Safari', 'Ghostty'), false);
+  assert.equal(AskPolicy.terminalFrontmost(null, 'Ghostty'), false, 'unknown is never "in front"');
+});
+
+test('C-V(a): the hook waits the held ceiling, not 55 s, and AskUserQuestion stays at 20 s or less', async () => {
+  const home = tmp();
+  const app = await fakeApp(home);
+  try {
+    const h = hook('permission-request', home, app.port, { session_id: 'c', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } }, { askMs: '', env: { CLAUDE_TRAFFIC_LIGHT_ASK_MS: '', CLAUDE_TRAFFIC_LIGHT_DIALOG_HELD: '1' } });
+    const req = await oneRequest(path.join(home, 'requests'));
+    const window = Date.parse(req.expiresAt) - Date.parse(req.createdAt);
+    assert.ok(window <= 10000 && window > 7000, `waits ${window} ms`);
+    h.kill();
+  } finally { app.close(); }
+});
+
+test('C-V(a): held and the session\'s terminal in front → the hook gives the prompt back to the terminal at once', async () => {
+  const home = tmp();
+  const app = await fakeApp(home);
+  try {
+    const started = Date.now();
+    const h = hook('permission-request', home, app.port, { session_id: 'f', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } },
+      { env: { CLAUDE_TRAFFIC_LIGHT_ASK_MS: '', CLAUDE_TRAFFIC_LIGHT_DIALOG_HELD: '1', CLAUDE_TRAFFIC_LIGHT_FRONTMOST_APP: 'Ghostty', TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.mitchellh.ghostty' } });
+    const { out, code } = await h.done;
+    assert.equal(code, 0);
+    assert.equal(out, '', 'no decision: the terminal prompt shows');
+    assert.ok(Date.now() - started < 6000, `gave up after ${Date.now() - started} ms`);
+  } finally { app.close(); }
+});
+
+test('C-V(b): a late allow is refused only when the setting says it is harmful, and only for a session no longer asking', () => {
+  const asking = { signal: 'permission-ask' };
+  const moved = { signal: 'tool-use' };
+  assert.equal(AskPolicy.lateAnswerRefusal(moved), null, 'today: no check');
+  assert.equal(AskPolicy.lateAnswerRefusal(moved, { lateAllowHarmful: true }) !== null, true);
+  assert.equal(AskPolicy.lateAnswerRefusal(asking, { lateAllowHarmful: true }), null);
+  assert.equal(AskPolicy.lateAnswerRefusal(null, { lateAllowHarmful: true }) !== null, true, 'a vanished session');
+});
+
+test('C-N: both first-use notices exist and one recorded constant picks between them', () => {
+  const held = AskPolicy.noticeText({ held: true });
+  const open = AskPolicy.noticeText({ held: false });
+  assert.match(held, /^Plexiform shows Claude’s permission prompts here; your terminal still gets them if you don’t answer within 9 s\.$/);
+  assert.equal(open, 'You can answer Claude’s permission prompts here or in the terminal.');
+  assert.equal(AskPolicy.noticeText(), AskPolicy.PERMISSION_DIALOG_HELD ? held : open, 'the default follows the constant');
+});

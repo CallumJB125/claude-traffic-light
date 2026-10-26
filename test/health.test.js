@@ -450,3 +450,12 @@ test('Burst version: cannot-check-for-updates when Burst has no checkout, never 
   assert.match(row.detail, /can't check for updates: no checkout/);
   assert.doesNotMatch(row.detail, /up to date/);
 });
+
+test('C-P: a new install (askFromWidget on, permission hook installed) is healthy; the same hooks with it off warn', () => {
+  const m = machine();
+  fs.writeFileSync(Claude.configPath(m.home), JSON.stringify(Claude.apply({}, m.runtime, { askFromWidget: true })));
+  const on = byId(Health.runChecks({ ...m.ctx, askFromWidget: true }), 'hooks');
+  assert.equal(on.status, 'ok', on.detail);
+  const off = byId(Health.runChecks({ ...m.ctx, askFromWidget: false }), 'hooks');
+  assert.equal(off.status, 'warn');
+});

@@ -102,4 +102,7 @@ function install({ ipcMain, config, saveConfig, windows, allowed, demo, hasConne
   };
 }
 
-module.exports = { install, DEMO_INPUT };
+// The widget answers the demo itself; main refuses its id outright, so it can never name a request file.
+const isDemoId = (id) => id === DEMO_INPUT.id;
+
+module.exports = { install, DEMO_INPUT, isDemoId };

@@ -53,6 +53,14 @@ function gestureAllowTarget(pending, inputs, now = Date.now()) {
   return { req };
 }
 
+// A gesture "deny" is as blind as an allow: with several waiting it would pick one the person has not looked at.
+// → { req } (none, or the one), or { why }.
+function gestureDenyTarget(pending) {
+  const reqs = Array.isArray(pending) ? pending : [];
+  if (reqs.length > 1) return { why: `${reqs.length} waiting: answer from the bubble` };
+  return { req: reqs[0] || null };
+}
+
 // The verdict is worded for phone approvals; in the widget the same rule
 // reads as "needs a click".
 function widgetWording(reason) {
@@ -61,4 +69,4 @@ function widgetWording(reason) {
     .replace(/\bis desk-only\b/g, 'always needs a click');
 }
 
-module.exports = { enterBlockedReason, gestureAllowTarget, widgetWording, available: () => typeof verdict === 'function' };
+module.exports = { enterBlockedReason, gestureAllowTarget, gestureDenyTarget, widgetWording, available: () => typeof verdict === 'function' };

@@ -421,3 +421,35 @@ test('one character: status and why report the single global character, migrated
   assert.equal(why.kind, 'character');
   assert.equal(why.value.body, 'octopus');
 });
+
+test('C-P: buddy_pending_requests.askFromWidget equals what main records, for both an existing and a new install', () => {
+  const AskDefault = require('../src/ask-default.js');
+  for (const firstRun of [true, false]) {
+    const root = fixture({});
+    const wrote = AskDefault.migrate({ root, firstRun });
+    const p = M.buddyPendingRequests({ root, now: NOW });
+    assert.equal(p.askFromWidget, wrote, `firstRun ${firstRun}`);
+    assert.equal(p.askFromWidget, JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8')).askFromWidget);
+  }
+  assert.equal(M.buddyPendingRequests({ root: fixture({}), now: NOW }).askFromWidget, false, 'no key: the default stays false');
+});
+
+test('C-M: buddy_pending_requests stays read-only and AI-scoped, and a token in a summary is redacted even in scope', () => {
+  const root = fixture({ config: { askFromWidget: true }, sessions: { a: session('in'), b: session('out') } });
+  fs.mkdirSync(path.join(root, 'awareness'));
+  fs.writeFileSync(path.join(root, 'awareness', 'roster.json'), JSON.stringify({ v: 1, generated_at: new Date(NOW).toISOString(), peers: [], groups: [], self: { 'claude|in': { allowed: true, interactive: true }, 'claude|out': { allowed: false } } }));
+  fs.writeFileSync(path.join(root, 'port'), '1');
+  const fake = ['ghp', 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8'].join('_');
+  for (const [id, sessionId] of [['h-in-1', 'in'], ['h-out-1', 'out']]) {
+    fs.writeFileSync(path.join(root, 'requests', `${id}.json`), JSON.stringify({ id, sessionId, cwd: `/w/${sessionId}`, tool: 'Bash', summary: `curl -H "Authorization: token ${fake}" https://example.test`, createdAt: iso(5000) }));
+  }
+  const tool = M.TOOLS.find((t) => t.name === 'buddy_pending_requests');
+  const out = JSON.stringify(tool.run({}, { root, now: NOW }));
+  const r = JSON.parse(out).requests;
+  assert.deepEqual(r.map((q) => q.id), ['h-in-1'], 'an excluded session\'s request is left out');
+  assert.equal(r[0].cwd, '/w/in');
+  assert.ok(!out.includes(fake), 'the token never reaches the AI');
+  assert.match(r[0].summary, /<redacted:/);
+  assert.equal(M.answerRequest, undefined);
+  assert.ok(!M.TOOLS.some((t) => /answer|allow|deny/.test(t.name)));
+});

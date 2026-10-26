@@ -537,8 +537,21 @@ function askFromWidgetOn() {
   try { return !!JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'config.json'), 'utf8')).askFromWidget; } catch { return false; }
 }
 
+// The frontmost application's name (macOS lsappinfo: no permission prompt). Tests set the override.
+function frontmostApp() {
+  if (process.env.CLAUDE_TRAFFIC_LIGHT_FRONTMOST_APP !== undefined) return process.env.CLAUDE_TRAFFIC_LIGHT_FRONTMOST_APP;
+  if (process.platform !== 'darwin') return null;
+  try {
+    const { execFileSync } = require('child_process');
+    const out = execFileSync('/usr/bin/lsappinfo', ['info', '-only', 'name', execFileSync('/usr/bin/lsappinfo', ['front'], { encoding: 'utf8', timeout: 800 }).trim()], { encoding: 'utf8', timeout: 800 });
+    return (/"LSDisplayName"="([^"]*)"/.exec(out) || [])[1] || null;
+  } catch { return null; }
+}
+
 function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
-  const askMs = Math.min(Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || 55000), maxAskMs);
+  const AskPolicy = require('./ask-policy.js');
+  const askPolicy = AskPolicy.policy(process.env.CLAUDE_TRAFFIC_LIGHT_DIALOG_HELD !== undefined ? { held: process.env.CLAUDE_TRAFFIC_LIGHT_DIALOG_HELD === '1' } : {});
+  const askMs = Math.min(Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || askPolicy.ceilingMs), maxAskMs);
   writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
   const described = Input.describeHookInput(channel, data);
   // Nothing to bind an answer to: an unreadable payload must never become a
@@ -584,8 +597,16 @@ function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
   let answer = null;
   let answered = false;
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  const waitStart = Date.now();
+  const hostApp = askPolicy.earlyStopWhenTerminalFrontmost ? detectHostApp(prevOnEntry?.hostApp) : null;
+  let nextFrontCheck = waitStart + AskPolicy.EARLY_STOP_AFTER_MS;
   while (Date.now() < waitUntil) {
     if (fs.existsSync(ansFile)) { answer = Answer.consumeAnswerDetail(REQUESTS_DIR, id, decisionHash, key, judge); answered = true; break; }
+    // C-V(a): with the terminal dialog held, stop waiting once the person is looking at that terminal.
+    if (askPolicy.earlyStopWhenTerminalFrontmost && Date.now() >= nextFrontCheck) {
+      nextFrontCheck = Date.now() + 1000;
+      if (AskPolicy.terminalFrontmost(frontmostApp(), hostApp)) break;
+    }
     Atomics.wait(sleeper, 0, 0, 150);
   }
   // The last word: either our timeout marker lands first, or an answer that

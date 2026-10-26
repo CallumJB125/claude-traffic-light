@@ -80,6 +80,8 @@
     const denyOpen = new Set(); // ids whose Deny was clicked: the reason field and Send show
     const sending = new Set();
     const answered = new Set();
+    let noticeGone = false; // the first-use notice, dismissed here before main's state catches up (C-N)
+    const armed = new Map(); // input id → the option waiting for its second click (C-F)
     const errors = new Map();
     // Explain mode (src/explain-main.js): id → 'pending' | {ok, sentence, rating, recommend} | {ok:false}.
     const explained = new Map();
@@ -172,20 +174,28 @@
     }
 
     function optionButton(input, o, extra, onClick) {
-      const b = el('button', `ib-opt tone-${V.optionTone(input, o)}`, o.label);
+      const confirm = !onClick && V.needsConfirm(input, o.id);
+      const second = confirm && armed.get(input.id) === o.id;
+      const b = el('button', `ib-opt tone-${V.optionTone(input, o)}${second ? ' ib-anyway' : ''}`, second ? 'Allow anyway' : o.label);
       b.type = 'button';
       b.dataset.option = o.id;
       if (o.description) b.title = o.description;
-      b.setAttribute('aria-label', `${o.label}${o.description ? `: ${o.description}` : ''} (${V.KIND_LABEL[input.kind] || 'input'} in ${V.project(input)})`);
+      b.setAttribute('aria-label', `${o.label}${o.description ? `: ${o.description}` : ''} (${V.KIND_LABEL[input.kind] || 'input'} in ${V.spoken(input)})`);
       b.disabled = sending.has(input.id) || !V.canAnswer(input, now()) || !settled(input.id);
-      b.addEventListener('click', (e) => { e.stopPropagation(); if (!settled(input.id)) return; if (onClick) onClick(); else send(input, o.id, extra ? extra() : undefined); });
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!settled(input.id)) return;
+        if (confirm && !second) { armed.set(input.id, o.id); live.textContent = 'Press again to allow anyway'; render(); return; }
+        if (!confirm) armed.delete(input.id);
+        if (onClick) onClick(); else send(input, o.id, extra ? extra() : undefined);
+      });
       return b;
     }
 
     function openButton(input, label = 'Open in terminal') {
       const b = el('button', 'ib-opt tone-plain ib-open', label);
       b.type = 'button';
-      b.setAttribute('aria-label', `${label}: go to the terminal for ${V.project(input)}`);
+      b.setAttribute('aria-label', `${label}: go to the terminal for ${V.spoken(input)}`);
       b.addEventListener('click', (e) => { e.stopPropagation(); open(input); });
       return b;
     }
@@ -196,7 +206,7 @@
       const wrap = el('div', 'ib-textwrap');
       const pre = el('pre', `ib-text${full.has(input.id) ? ' full' : ''}`, text);
       pre.tabIndex = 0;
-      pre.setAttribute('aria-label', `Full text from ${V.project(input)}`);
+      pre.setAttribute('aria-label', `Full text from ${V.spoken(input)}`);
       wrap.appendChild(pre);
       const cut = Number(input.detail_cut) || 0;
       if (cut > 0) wrap.appendChild(el('div', 'ib-warn', `${cut} more characters not shown — check the terminal`));
@@ -382,11 +392,11 @@
       const link = (label, aria, fn) => { const b = el('button', 'ib-link', label); b.type = 'button'; b.setAttribute('aria-label', aria); b.addEventListener('click', (e) => { e.stopPropagation(); fn(); }); return b; };
       const board = scope && scope.board && typeof scope.board.name === 'string' && scope.board.name.trim() ? scope.board.name.trim().slice(0, 60) : 'your team';
       if (v.markPersonal && api.setSessionScope) {
-        const b = link('Not team work', `Not team work: don’t track this ${V.project(input)} session`, () => setScope(input, api.setSessionScope, input.session, 'personal'));
+        const b = link('Not team work', `Not team work: don’t track this ${V.spoken(input)} session`, () => setScope(input, api.setSessionScope, input.session, 'personal'));
         b.title = `Won’t count toward ${board}`;
         line.appendChild(b);
       }
-      if (v.undo && api.setSessionScope) line.appendChild(link('Undo', `Undo personal: track this ${V.project(input)} session again if it counts`, () => setScope(input, api.setSessionScope, input.session, 'auto')));
+      if (v.undo && api.setSessionScope) line.appendChild(link('Undo', `Undo personal: track this ${V.spoken(input)} session again if it counts`, () => setScope(input, api.setSessionScope, input.session, 'auto')));
       if (v.repoUrl && api.setRepoScope) {
         const more = link('⋯', 'More work-scope choices', () => { if (scopeMore.has(input.id)) scopeMore.delete(input.id); else scopeMore.add(input.id); render(); });
         more.setAttribute('aria-expanded', String(scopeMore.has(input.id)));
@@ -455,7 +465,7 @@
             line.appendChild(turnOn);
           }
           body.appendChild(line);
-        } else if (why === 'session-reported') body.appendChild(el('div', 'ib-hint', A.reasonText(why)));
+        } else if (why === 'session-reported' || why === 'pre-hook') body.appendChild(el('div', 'ib-hint', A.reasonText(why)));
         const row = el('div', 'ib-opts');
         row.appendChild(openButton(input));
         body.appendChild(row);
@@ -489,7 +499,12 @@
       row.setAttribute('aria-controls', `ib-body-${input.id}`);
       row.setAttribute('aria-label', V.rowLabel(input, t));
       row.appendChild(icon(input.kind));
-      row.appendChild(el('span', 'ib-proj', V.project(input)));
+      const proj = el('span', 'ib-proj');
+      const whole = V.project(input);
+      const tagText = typeof input.tag === 'string' && input.tag ? ` (${input.tag})` : '';
+      // The folder name gives way first: the tag is what tells two same-folder rows apart.
+      proj.append(el('span', 'ib-proj-name', whole.slice(0, whole.length - tagText.length)), ...(tagText ? [el('span', 'ib-proj-tag', tagText)] : []));
+      row.appendChild(proj);
       row.appendChild(el('span', 'ib-head', V.headline(input)));
       row.appendChild(el('span', 'ib-age', V.expired(input, t) ? 'answer in terminal' : V.ageText(input, t)));
       row.addEventListener('click', (e) => {
@@ -530,6 +545,18 @@
       return card;
     }
 
+    function askNoticeCard(text) {
+      const card = el('div', 'ib-nudge ib-notice');
+      card.setAttribute('role', 'status');
+      card.appendChild(el('div', 'ib-nudge-q', text));
+      const row = el('div', 'ib-opts');
+      const mk = (label, cls, fn) => { const b = el('button', `ib-opt ${cls}`, label); b.type = 'button'; b.addEventListener('click', (e) => { e.stopPropagation(); fn(); }); return b; };
+      row.appendChild(mk('Got it', 'tone-plain', () => { noticeGone = true; render(); if (api.dismissAskNotice) api.dismissAskNotice(); }));
+      if (api.openWidgetSettings) row.appendChild(mk('Turn it off', 'tone-plain', () => { api.openWidgetSettings(); }));
+      card.appendChild(row);
+      return card;
+    }
+
     function showNudge(n) {
       nudge = n;
       clearTimeout(nudgeTimer);
@@ -546,6 +573,8 @@
       let drawnBody = null;
       const kids = [];
       if (nudge) kids.push(nudgeCard());
+      const noticeText = noticeGone ? null : (list.find((i) => typeof i.askNotice === 'string' && i.askNotice) || {}).askNotice;
+      if (noticeText && V.canAnswer(list.find((i) => i.askNotice), now())) kids.push(askNoticeCard(noticeText));
       if (list.length && dismissedKey === key && mode === 'widget') {
         const pill = el('button', 'ib-pill', `${list.length} waiting on you · show`);
         pill.type = 'button';

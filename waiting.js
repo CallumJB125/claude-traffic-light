@@ -18,6 +18,7 @@
       copyCommand: (id) => api.copyInputCommand(id),
       openAutoRule: (id) => api.openAutoRule({ inputId: id }),
       openWidgetSettings: () => api.openWidgetSettings(),
+      dismissAskNotice: () => api.dismissAskNotice(),
       nudgeRule: (key) => api.openAutoRule({ nudgeKey: key }),
       nudgeMute: (key) => api.nudgeMute(key),
       setSessionScope: (id, mode) => api.setSessionScope(id, mode),

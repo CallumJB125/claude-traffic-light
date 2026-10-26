@@ -232,6 +232,19 @@ const renameCopy = RENAME_MIGRATES ? RenameMigration.copyUserData({
   quitOld: () => RenameMigration.quitOldInstance(quitOldOpts).running.length === 0,
 }) : null;
 const copied = !!renameCopy?.copied;
+// C-P: the answering default is decided here, before any config read and before the rename step rewrites hooks.
+// Only a brand-new install gets it ON; every reader's own default stays false (src/ask-default.js).
+if (!DEMO && !RenameMigration.EPHEMERAL_PATH.test(process.execPath)) {
+  try {
+    const HelpFirst = require('./help.js');
+    require('./src/ask-default.js').migrate({
+      root: ROOT_DIR,
+      firstRun: HelpFirst.shouldOnboard({ onboarded: fs.existsSync(path.join(ROOT_DIR, HelpFirst.ONBOARDED_MARKER)), helpShown: fs.existsSync(path.join(ROOT_DIR, HelpFirst.MARKER)), devRun: IS_DEV_RUN }),
+      renameFound: !!renameCopy && (renameCopy.copied || renameCopy.retry === true || renameCopy.gaveUp === true),
+      devRun: IS_DEV_RUN,
+    });
+  } catch (err) { console.warn('[config] could not record the answering default:', err.message); }
+}
 if (copied) RenameMigration.setAsideSealedSecret({ file: path.join(ROOT_DIR, 'approval-secret.json') });
 
 const DEFAULT_CONFIG = {
@@ -485,7 +498,16 @@ function areHooksInstalled() {
 // this app's are replaced, never a look-alike script or a dev checkout's.
 function installHooks({ narrow = RENAME_MIGRATES && RenameMigration.pending(app.getPath('userData')).includes('hooks') } = {}) {
   const opts = claudeHookOpts();
-  try { Adapters.get('claude').install({ ...opts, strip: narrow ? RenameMigration.renameStrip(Adapters.get('claude'), opts) : undefined }); return null; } catch (err) { console.warn(`[hooks] ${CLAUDE_SETTINGS_PATH} not updated:`, err.message); return err.message; }
+  try { Adapters.get('claude').install({ ...opts, strip: narrow ? RenameMigration.renameStrip(Adapters.get('claude'), opts) : undefined }); noteAskHooks(opts.askFromWidget); return null; } catch (err) { console.warn(`[hooks] ${CLAUDE_SETTINGS_PATH} not updated:`, err.message); return err.message; }
+}
+// C-R: when the blocking permission hook went in. A Claude session that started earlier never loads it, so its
+// prompts can't be answered here until it restarts (src/pending-inputs.js).
+function noteAskHooks(on) {
+  try {
+    const at = loadConfig().askHooksAt;
+    if (on && !(at > 0)) saveConfig({ askHooksAt: Date.now() });
+    else if (!on && at !== null && at !== undefined) saveConfig({ askHooksAt: null });
+  } catch (err) { console.warn('[hooks] could not record the install time:', err.message); }
 }
 // Opened straight from Downloads, macOS runs a random read-only copy; run
 // from a mounted disk image, the app is gone once it is ejected. Hooks pinned
@@ -610,6 +632,8 @@ function withDanger(inputs, requests) {
 const PaneDialogs = require('./src/pane-dialogs.js');
 const Owned = require('./hooks/owned.js');
 const AnswerFile = require('./hooks/answer-file.js');
+const AskPolicy = require('./hooks/ask-policy.js');
+const TourMain = require('./src/first-run-tour-main.js');
 let paneDialogs = [];
 let paneDetector = null;
 async function scanPaneDialogs() {
@@ -927,7 +951,10 @@ function computeState(opts = {}) {
   const pending = config.askFromWidget ? requests : [];
   const tasks = config.showTasks ? sumTasks(sessions.filter((s) => !WAITING_SIGNALS.has(s.signal) && s.signal !== 'idle-nudge')) : null;
   // `answering` rides on each input so every surface asks src/answerability.js the same question.
-  const inputs = withDanger(PendingInputs.collect({ requests: pending, sessions, dialogs: paneDialogs }), pending).map((i) => ({ ...i, answering: !!config.askFromWidget }));
+  const inputs = withDanger(PendingInputs.collect({ requests: pending, sessions, dialogs: paneDialogs, askHooksAt: config.askFromWidget ? config.askHooksAt : null }), pending).map((i) => ({ ...i, answering: !!config.askFromWidget }));
+  // C-N: the one-time first-use notice rides on the first real, answerable request of a new install.
+  const noticeAt = config.askFromWidget && config.askNotice === 'pending' ? inputs.findIndex((i) => i.source === 'hook' && i.answerable === true) : -1;
+  if (noticeAt >= 0) inputs[noticeAt] = { ...inputs[noticeAt], askNotice: AskPolicy.noticeText() };
   if (previewLook && Date.now() < previewLook.expiresAt) {
     return { look: previewLook.look, reason: 'preview', sessions, fired: [], pending: [], tasks: null };
   }
@@ -4355,7 +4382,7 @@ async function runAction(action, st) {
       // from its own options, never by a gesture. A gesture can't see what it
       // approves, so it allows only what Enter could: exactly one waiting
       // permission, allow-listed and unflagged. Anything else: go and look.
-      const pick = action.type === 'allow' ? EnterAllow.gestureAllowTarget(st.pending, st.inputs) : { req: st.pending && st.pending[0] };
+      const pick = action.type === 'allow' ? EnterAllow.gestureAllowTarget(st.pending, st.inputs) : EnterAllow.gestureDenyTarget(st.pending);
       if (pick.why) { if (win && !win.isVisible()) win.showInactive(); return { feedback: pick.why }; }
       const req = pick.req;
       if (!req) return { feedback: 'nothing to answer' };
@@ -4593,10 +4620,22 @@ function inputSenderOk(e) {
   const wc = e.sender;
   return !!wc && ((win && wc === win.webContents) || (buddyWin && wc === buddyWin.pageWebContents('waiting')));
 }
+// C-F: the Home cards answer plain requests only. A flagged allow, or a plan's auto-accept, needs the bubble's second click.
+function homeAnswerRefusal(req, optionId) {
+  if (req.kind === 'plan') return optionId === 'allow-accept-edits';
+  if (!/^allow/.test(optionId)) return false;
+  try { return AutoRules.danger(req) !== null; } catch { return true; }
+}
+// C-V(b), on only if the measurement says a late allow does harm: the session must still be asking.
+function lateAnswerWhy(req) {
+  const s = (aggregateState().sessions || []).find((x) => x.sessionId === req.sessionId);
+  return AskPolicy.lateAnswerRefusal(s);
+}
 ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   if (!inputSenderOk(e)) return { ok: false, error: 'not allowed' };
   // Answering from the widget is a setting: off means off, even for a request file still on disk.
   if (!loadConfig().askFromWidget) return { ok: false, error: 'off' };
+  if (TourMain.isDemoId(String(id))) return { ok: false, error: 'not an option for this request' };
   const req = readRequests().find((r) => r.id === String(id));
   if (!req) return { ok: false, error: 'no longer waiting (answered, timed out, or answer it in the terminal)' };
   const m = more && typeof more === 'object' ? more : {};
@@ -4612,6 +4651,8 @@ ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   }
   // Bound to the request as shown (readRequests drops edited ones): the file
   // must still hash the same when the answer is written.
+  const lateWhy = lateAnswerWhy(req);
+  if (lateWhy) return { ok: false, error: lateWhy };
   const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'desk', extra: answer.extra, key: keyFor(req.id), decisionHash: req.decisionHash });
   console.log(`[answer] ${req.kind || 'permission'} ${req.tool} ${req.id}: ${optionId} → ${w.ok ? answer.decision : `not sent (${w.error})`}`);
   setTimeout(broadcastStatus, 250);
@@ -4635,10 +4676,14 @@ ipcMain.handle('home:answer-input', (e, id, optionId) => {
   if (!fromUtilityPage(e, 'home')) return { ok: false, error: 'not allowed' };
   if (!loadConfig().askFromWidget) return { ok: false, error: 'off' };
   if (typeof id !== 'string' || id.length > 100 || typeof optionId !== 'string' || optionId.length > 100) return { ok: false, error: 'invalid' };
+  if (TourMain.isDemoId(id)) return { ok: false, error: 'not an option for this request' };
   const req = readRequests().find((r) => r.id === id);
   if (!req) return { ok: false, error: 'no longer waiting (answered, timed out, or answer it in the terminal)' };
   const answer = PendingInputs.answerFor(req, optionId);
   if (!answer) return { ok: false, error: 'not an option for this request' };
+  if (homeAnswerRefusal(req, optionId)) return { ok: false, error: 'flagged' };
+  const lateWhy = lateAnswerWhy(req);
+  if (lateWhy) return { ok: false, error: lateWhy };
   const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'home', extra: answer.extra, key: keyFor(req.id), decisionHash: req.decisionHash });
   console.log(`[answer] ${req.kind || 'permission'} ${req.tool} ${req.id}: ${optionId} → ${w.ok ? answer.decision : `not sent (${w.error})`} (home)`);
   setTimeout(broadcastStatus, 250);
@@ -4690,6 +4735,7 @@ if (typeof WorkScope?.setSessionScope === 'function' && typeof WorkScope?.setRep
 }
 ipcMain.handle('open-waiting', (e) => { if (!inputSenderOk(e)) return false; createWaitingWindow(); return true; });
 // "Turn it on": Preferences at the Widget tab, where the answering setting lives.
+ipcMain.handle('dismiss-ask-notice', (e) => { if (!inputSenderOk(e)) return false; if (loadConfig().askNotice === 'pending') saveConfig({ askNotice: 'seen' }); stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); return true; });
 ipcMain.handle('open-widget-settings', (e) => { if (!inputSenderOk(e)) return false; openBuddy('settings'); buddyWin?.sendToPage('settings', 'show-section', 'widget'); return true; });
 ipcMain.handle('nudge-mute', (e, key) => (inputSenderOk(e) ? nudger.mute(String(key)) : false));
 

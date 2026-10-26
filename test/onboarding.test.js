@@ -349,3 +349,17 @@ test('the page: "Just me" hides the team offer, the test prompt is there, and a 
   assert.equal($('team-box').hidden, true);
   assert.equal($('legend-line').textContent, `That's your widget. ${require('../src/colour-legend.js').SENTENCE}.`);
 });
+
+test('G2: the Connect step names the blocking permission hook, and no hook is written before the click', async () => {
+  const AskPolicy = require('../hooks/ask-policy.js');
+  const html = fs.readFileSync(path.join(root, 'onboarding.html'), 'utf8');
+  assert.ok(html.includes(AskPolicy.CONSENT_TEXT), 'the page says it in the words the constant holds');
+  assert.match(AskPolicy.CONSENT_TEXT, /show Claude’s permission prompts and wait briefly for your answer/);
+  const r = rig({ claudeAuto: true });
+  r.ctx.saveConfig({ claudeAutoConnect: false });
+  fs.mkdirSync(path.join(r.home, '.claude'));
+  const settings = path.join(r.home, '.claude', 'settings.json');
+  await r.call('onboarding:state');
+  await r.call('onboarding:preview', 'claude');
+  assert.equal(fs.existsSync(settings), false, 'looking at the Connect step installs nothing');
+});

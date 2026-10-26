@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   onStripApplied: (cb) => ipcRenderer.on('strip-applied', (e, px) => cb(px)),
   openWaiting: () => ipcRenderer.invoke('open-waiting'),
   openWidgetSettings: () => ipcRenderer.invoke('open-widget-settings'),
+  dismissAskNotice: () => ipcRenderer.invoke('dismiss-ask-notice'),
   // Lights → Auto-answer, prefilled from an input ({inputId}) or a nudge ({nudgeKey}).
   openAutoRule: (from) => ipcRenderer.invoke('open-auto-rule', from),
   nudgeMute: (key) => ipcRenderer.invoke('nudge-mute', key),

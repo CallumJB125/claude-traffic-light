@@ -23,6 +23,7 @@ const SessionState = require('./hooks/session-state.js');
 const Awareness = require('./hooks/awareness.js');
 const GitSignals = require('./src/github-signals.js');
 const BurstSnapshot = require('./src/burst-snapshot.js');
+const { redactSecrets } = require('./src/secret-patterns.js');
 
 const DEFAULTS = {
   workingStaleMinutes: 6,
@@ -434,7 +435,7 @@ function buddyPendingRequests({ root, now = Date.now() } = {}) {
     askFromWidget: !!config.askFromWidget,
     ...(config.askFromWidget ? {} : { note: '"Answer permission prompts from the widget" is off in Preferences, so the PermissionRequest hook is not installed and nothing new will appear here.' }),
     requests: readRequests(root, now).map((r) => ({
-      id: r.id, sessionId: r.sessionId, cwd: r.cwd, tool: r.tool, summary: r.summary, createdAt: r.createdAt,
+      id: r.id, sessionId: r.sessionId, cwd: r.cwd, tool: r.tool, summary: typeof r.summary === 'string' ? redactSecrets(r.summary, { docExamples: false }) : r.summary, createdAt: r.createdAt,
       ageMs: now - Date.parse(r.createdAt),
       hookWaitsMsMore: Math.max(0, waitMs - (now - Date.parse(r.createdAt))),
       answered: fs.existsSync(path.join(root, 'requests', `${r.id}.answer`)),

@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('waitingApi', {
   explainInput: (id) => (typeof id === 'string' && id.length <= 100 ? ipcRenderer.invoke('explain:input', id) : Promise.resolve({ ok: false })),
   copyInputCommand: (id) => ipcRenderer.invoke('copy-input-command', id),
   openWidgetSettings: () => ipcRenderer.invoke('open-widget-settings'),
+  dismissAskNotice: () => ipcRenderer.invoke('dismiss-ask-notice'),
   openAutoRule: (from) => ipcRenderer.invoke('open-auto-rule', from),
   nudgeMute: (key) => ipcRenderer.invoke('nudge-mute', key),
   setSessionScope: (sessionId, mode) => ipcRenderer.invoke('set-session-scope', sessionId, mode),

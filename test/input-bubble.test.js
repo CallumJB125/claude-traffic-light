@@ -532,3 +532,107 @@ test('PR 5: when the jump to the terminal fails, its own `cant` is what is shown
   await tick();
   assert.equal(t.$('.ib-err').textContent, 'That session is on another computer.');
 });
+
+// ── PR 5b ───────────────────────────────────────────────────────────────────
+test('C-D: two stacked same-folder answerable cards show distinct tags on screen and in what a screen reader says', () => {
+  const t = setup({ mode: 'page' });
+  t.show([perm({ id: 'r1', session: 'aaaa1111', tag: '1111' }), perm({ id: 'r2', session: 'bbbb2222', tag: '2222', created_at: ago(0.5) })]);
+  const labels = t.$$('.ib-proj').map((n) => n.textContent);
+  assert.deepEqual(labels.sort(), ['app (1111)', 'app (2222)']);
+  const spoken = t.$$('[data-option="allow"]').map((n) => n.getAttribute('aria-label'));
+  assert.ok(spoken.length >= 1 && spoken.every((s) => /app, session ending (1111|2222)\)/.test(s)), spoken.join(' | '));
+  assert.ok(spoken.every((s) => !/\(\d{4}\)/.test(s)), 'the digits are not read out as "one one one one" in brackets');
+  const V = require('../src/input-view.js');
+  assert.deepEqual(['1111', '2222'].map((tag) => V.spoken({ cwd: '/w/app', tag })), ['app, session ending 1111', 'app, session ending 2222']);
+});
+
+test('C-D: a session-reported permission headline drops the generic "Tool:" prefix', () => {
+  const V = require('../src/input-view.js');
+  assert.equal(V.headline({ kind: 'permission', tool: 'Tool', title: 'Needs your permission', text: '' }), 'Needs your permission');
+  assert.equal(V.headline({ kind: 'permission', tool: 'Bash', headline: 'ls', title: 't' }), 'Bash: ls');
+  assert.equal(V.headline({ kind: 'permission', tool: 'Bash', title: 'Needs your permission', text: '' }), 'Bash: Needs your permission');
+});
+
+test('C-F: a flagged Allow takes a second click as "Allow anyway"; a plain one stays one click; Deny never asks', async () => {
+  const t = setup();
+  t.show([perm({ danger: 'recursive delete', enterAllow: false })]);
+  t.$('[data-option="allow"]').click();
+  await tick();
+  assert.equal(t.calls.answer.length, 0, 'the first click only arms it');
+  const again = t.$('[data-option="allow"]');
+  assert.equal(again.textContent, 'Allow anyway');
+  again.click();
+  await tick();
+  assert.deepEqual(t.calls.answer.map((c) => c[1]), ['allow']);
+  const plain = setup();
+  plain.show([perm()]);
+  plain.$('[data-option="allow"]').click();
+  await tick();
+  assert.deepEqual(plain.calls.answer.map((c) => c[1]), ['allow'], 'one click');
+  const no = setup();
+  no.show([perm({ danger: 'recursive delete' })]);
+  no.$('[data-option="deny"]').click();
+  await tick();
+  assert.ok(no.$('.ib-reason, textarea, input[type="text"]') || no.calls.answer.length === 0, 'deny opens its own reason step, no allow-anyway');
+});
+
+test('C-F: a plan approved with auto-accept edits takes a second click; plain approve stays one', async () => {
+  const plan = (over) => perm({ kind: 'plan', tool: 'ExitPlanMode', text: 'do it', options: [{ id: 'allow', label: 'Approve' }, { id: 'allow-accept-edits', label: 'Approve, auto-accept edits' }, { id: 'deny', label: 'Keep planning' }], ...over });
+  const t = setup();
+  t.show([plan()]);
+  t.$('[data-option="allow-accept-edits"]').click();
+  await tick();
+  assert.equal(t.calls.answer.length, 0);
+  t.$('[data-option="allow-accept-edits"]').click();
+  await tick();
+  assert.deepEqual(t.calls.answer.map((c) => c[1]), ['allow-accept-edits']);
+  const one = setup();
+  one.show([plan()]);
+  one.$('[data-option="allow"]').click();
+  await tick();
+  assert.deepEqual(one.calls.answer.map((c) => c[1]), ['allow']);
+});
+
+test('C-N: the first-use notice shows once with its Turn it off link, and never again after it is dismissed', async () => {
+  const t = setup();
+  let dismissed = 0;
+  t.bubble.__api = null;
+  const text = 'You can answer Claude’s permission prompts here or in the terminal.';
+  t.show([perm({ askNotice: text })]);
+  assert.equal(t.$$('.ib-notice').length, 1);
+  assert.equal(t.$('.ib-notice').textContent.includes(text), true);
+  const off = t.$$('.ib-notice button').find((b) => b.textContent === 'Turn it off');
+  off.click();
+  assert.equal(t.calls.settings, 1, 'the link goes to the Widget tab');
+  t.$$('.ib-notice button').find((b) => b.textContent === 'Got it').click();
+  assert.equal(t.$$('.ib-notice').length, 0);
+  t.show([perm({ askNotice: text })]);
+  assert.equal(t.$$('.ib-notice').length, 0, 'not again, even if main still sends it for a moment');
+  assert.equal(dismissed, 0);
+  const plain = setup();
+  plain.show([perm()]);
+  assert.equal(plain.$$('.ib-notice').length, 0, 'an existing install\'s inputs carry no notice');
+});
+
+test('C-N: main attaches the notice only on a new install\'s pending record, with the text the constant chooses', () => {
+  const AskDefault = require('../src/ask-default.js');
+  const fs = require('fs');
+  const { testTempDir } = require('./helpers/tmp');
+  const path = require('path');
+  const fresh = testTempDir('ask-notice-');
+  AskDefault.migrate({ root: fresh, firstRun: true });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(fresh, 'config.json'), 'utf8')).askNotice, 'pending');
+  const existing = testTempDir('ask-notice-');
+  AskDefault.migrate({ root: existing, firstRun: false });
+  assert.equal(JSON.parse(fs.readFileSync(path.join(existing, 'config.json'), 'utf8')).askNotice, undefined, 'never on the existing-install branch');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(src, /config\.askFromWidget && config\.askNotice === 'pending'/);
+  assert.match(src, /askNotice: AskPolicy\.noticeText\(\)/);
+});
+
+test('C-R: a pre-hook session\'s prompt reads "restart this session to answer here" with no answer buttons', () => {
+  const t = setup();
+  t.show([{ v: 1, id: 'ask-h-s1', kind: 'permission', source: 'session', preHook: true, tool: 'Tool', cwd: '/w/app', title: 'Needs your permission', text: '', options: [], created_at: ago(1), expires_at: null, answerable: false, actions: ['open'], answering: true }]);
+  assert.match(t.root.textContent, /restart this session to answer here/);
+  assert.equal(t.$$('[data-option="allow"], [data-option="deny"]').length, 0);
+});

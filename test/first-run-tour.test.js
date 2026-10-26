@@ -226,3 +226,17 @@ test('wiring: one install line in main, preloads, pages, Help and CONTRACT rows'
   for (const ch of ['tour:step', 'tour:action', 'tour:restart']) assert.ok(contract.includes(`| \`${ch}\``), ch);
   for (const f of ['tour-coachmark.js', 'tour-host.js', 'src/first-run-tour.js', 'src/first-run-tour-main.js']) assert.doesNotMatch(read(f), /innerHTML|insertAdjacentHTML|outerHTML/, f);
 });
+
+test('C-T: the demo question\'s id is refused by the answer paths and never names a request file', () => {
+  const Main = require('../src/first-run-tour-main.js');
+  assert.equal(Main.isDemoId(Main.DEMO_INPUT.id), true);
+  assert.equal(Main.isDemoId('h-real-1'), false);
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'main.js'), 'utf8');
+  const handler = (name) => src.slice(src.indexOf(`ipcMain.handle('${name}'`)).split('\nipcMain.handle(', 2)[0];
+  for (const name of ['answer-input', 'home:answer-input']) {
+    const body = handler(name);
+    assert.ok(body.indexOf('TourMain.isDemoId') > 0 && body.indexOf('TourMain.isDemoId') < body.indexOf('readRequests()'), `${name} refuses the demo id before any request is read`);
+    assert.ok(body.indexOf('TourMain.isDemoId') < body.indexOf('writeAnswer'), `${name}: before writeAnswer`);
+  }
+  assert.match(require('fs').readFileSync(require('path').join(__dirname, '..', 'widget.js'), 'utf8'), /tourInput && id === tourInput\.id \? tourAnswered\(\)/, 'the widget answers the demo itself');
+});
