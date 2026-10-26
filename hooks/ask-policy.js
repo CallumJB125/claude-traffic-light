@@ -43,13 +43,34 @@ function lateAnswerRefusal(session, opts = {}) {
 }
 
 // (a): is the session's own terminal in front? `frontApp` is the frontmost application's name, `hostApp` the session's.
+// An exact match after the alias map: "Code" and "Xcode" are different apps.
+const ALIASES = { iterm: 'iterm2', 'iterm.app': 'iterm2', code: 'visual studio code', vscode: 'visual studio code', 'ghostty dock': 'ghostty dock', warpterminal: 'warp', apple_terminal: 'terminal' };
+const canonical = (name) => { const n = String(name || '').trim().toLowerCase().replace(/\.app$/, ''); return ALIASES[n] || n; };
 function terminalFrontmost(frontApp, hostApp) {
-  const a = String(frontApp || '').trim().toLowerCase();
-  const b = String(hostApp || '').trim().toLowerCase();
-  return !!a && !!b && (a === b || a.includes(b) || b.includes(a));
+  const a = canonical(frontApp);
+  return !!a && a === canonical(hostApp);
+}
+
+// What the environment may ask of the hook. A repo's .claude/settings.json can set environment variables for every
+// hook, so nothing here can lengthen a wait, and the policy facts come only from Plexiform's own folder.
+const MIN_ASK_MS = 0; // 0 = do not wait at all: the in-process caller and tests use it
+function clampAskMs(raw, ceilingMs) {
+  const n = Number(raw);
+  return raw === undefined || raw === '' || !Number.isFinite(n) ? ceilingMs : Math.min(ceilingMs, Math.max(MIN_ASK_MS, n));
+}
+function clampHookTimeoutMs(raw, installedMs) {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.min(installedMs, n) : installedMs;
+}
+// <root>/ask-policy.override.json: { held?: boolean, frontmostApp?: string }. Written by tests; ignored when absent or odd.
+function readOverrides(rootDir, fsImpl = require('fs')) {
+  try {
+    const o = JSON.parse(fsImpl.readFileSync(require('path').join(rootDir, 'ask-policy.override.json'), 'utf8'));
+    return o && typeof o === 'object' && !Array.isArray(o) ? o : {};
+  } catch { return {}; }
 }
 
 // G2: said at setup's Connect, where the blocking permission hook is consented to (onboarding.html carries the same words).
 const CONSENT_TEXT = 'We also add a hook that lets Plexiform show Claude’s permission prompts and wait briefly for your answer. If you don’t answer, the terminal asks as usual. Settings › Widget turns it off.';
 
-module.exports = { CONSENT_TEXT, PERMISSION_DIALOG_HELD, LATE_ALLOW_HARMFUL, TODAY_CEILING_MS, HELD_CEILING_MS, EARLY_STOP_AFTER_MS, policy, noticeText, lateAnswerRefusal, terminalFrontmost };
+module.exports = { clampAskMs, clampHookTimeoutMs, readOverrides, CONSENT_TEXT, PERMISSION_DIALOG_HELD, LATE_ALLOW_HARMFUL, TODAY_CEILING_MS, HELD_CEILING_MS, EARLY_STOP_AFTER_MS, policy, noticeText, lateAnswerRefusal, terminalFrontmost };

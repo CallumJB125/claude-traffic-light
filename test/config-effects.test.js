@@ -112,3 +112,28 @@ test('C-P/G2: before setup\'s Connect a new install installs no hook at all', ()
   assert.equal(start.holdClaude, true, 'main saves claudeAutoConnect:false, so claudeAutoConnect() is false and installHooks never runs');
   assert.equal(start.setLoginItem, false);
 });
+
+test('C-P (a): any config.json that was already there, even an empty or corrupt one with no markers, is an existing install', () => {
+  for (const body of ['{}', '{"showTasks":false}', '{not json']) {
+    const root = testTempDir('ask-default-');
+    fs.writeFileSync(path.join(root, 'config.json'), body);
+    assert.equal(AskDefault.migrate({ root, firstRun: true }), false, body);
+    assert.notEqual(written(root).askFromWidget, true, body);
+  }
+});
+
+test('C-P (b): our hook already in Claude\'s settings with the data folder gone is an existing install; foreign hooks and no settings are not', () => {
+  const home = testTempDir('ask-default-home-');
+  fs.mkdirSync(path.join(home, '.claude'));
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  const before = JSON.stringify({ hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: `node "${path.join(__dirname, '..', 'hooks', 'set-status.js')}" stop` }] }] } });
+  fs.writeFileSync(settingsFile, before);
+  const root = testTempDir('ask-default-');
+  assert.equal(AskDefault.migrate({ root, home, firstRun: true }), false);
+  assert.equal(fs.readFileSync(settingsFile, 'utf8'), before, 'detection writes nothing');
+  const foreign = testTempDir('ask-default-home-');
+  fs.mkdirSync(path.join(foreign, '.claude'));
+  fs.writeFileSync(path.join(foreign, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'echo done' }] }] } }));
+  assert.equal(AskDefault.migrate({ root: testTempDir('ask-default-'), home: foreign, firstRun: true }), true, 'someone else\'s hooks do not make it existing');
+  assert.equal(AskDefault.migrate({ root: testTempDir('ask-default-'), home: testTempDir('ask-default-home-'), firstRun: true }), true, 'a second user with no Claude settings is new');
+});

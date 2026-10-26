@@ -537,21 +537,24 @@ function askFromWidgetOn() {
   try { return !!JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'config.json'), 'utf8')).askFromWidget; } catch { return false; }
 }
 
-// The frontmost application's name (macOS lsappinfo: no permission prompt). Tests set the override.
-function frontmostApp() {
-  if (process.env.CLAUDE_TRAFFIC_LIGHT_FRONTMOST_APP !== undefined) return process.env.CLAUDE_TRAFFIC_LIGHT_FRONTMOST_APP;
+// The frontmost application's name, read locally with macOS lsappinfo (no permission prompt); nothing leaves the Mac.
+// The folder's override file lets tests name one; a repo's settings cannot reach it.
+function frontmostApp(overrides) {
+  if (typeof overrides.frontmostApp === 'string') return overrides.frontmostApp;
   if (process.platform !== 'darwin') return null;
   try {
     const { execFileSync } = require('child_process');
-    const out = execFileSync('/usr/bin/lsappinfo', ['info', '-only', 'name', execFileSync('/usr/bin/lsappinfo', ['front'], { encoding: 'utf8', timeout: 800 }).trim()], { encoding: 'utf8', timeout: 800 });
+    const front = execFileSync('/usr/bin/lsappinfo', ['front'], { encoding: 'utf8', timeout: 800 }).trim(); // privacy-flow: frontmost-app
+    const out = execFileSync('/usr/bin/lsappinfo', ['info', '-only', 'name', front], { encoding: 'utf8', timeout: 800 }); // privacy-flow: frontmost-app
     return (/"LSDisplayName"="([^"]*)"/.exec(out) || [])[1] || null;
   } catch { return null; }
 }
 
 function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
   const AskPolicy = require('./ask-policy.js');
-  const askPolicy = AskPolicy.policy(process.env.CLAUDE_TRAFFIC_LIGHT_DIALOG_HELD !== undefined ? { held: process.env.CLAUDE_TRAFFIC_LIGHT_DIALOG_HELD === '1' } : {});
-  const askMs = Math.min(Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || askPolicy.ceilingMs), maxAskMs);
+  const overrides = AskPolicy.readOverrides(ROOT_DIR);
+  const askPolicy = AskPolicy.policy(typeof overrides.held === 'boolean' ? { held: overrides.held } : {});
+  const askMs = Math.min(AskPolicy.clampAskMs(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS, askPolicy.ceilingMs), maxAskMs);
   writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
   const described = Input.describeHookInput(channel, data);
   // Nothing to bind an answer to: an unreadable payload must never become a
@@ -561,7 +564,7 @@ function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
   const Answer = require('./answer-file.js');
   // Stop waiting early enough to answer before Claude Code's own timeout
   // (the installed hook timeout) kills this hook.
-  const hookTimeoutMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_HOOK_TIMEOUT_MS) || hookTimeoutS * 1000;
+  const hookTimeoutMs = AskPolicy.clampHookTimeoutMs(process.env.CLAUDE_TRAFFIC_LIGHT_HOOK_TIMEOUT_MS, hookTimeoutS * 1000);
   const waitUntil = Math.min(Date.now() + askMs, HOOK_START + hookTimeoutMs - Answer.HOOK_MARGIN_MS);
   // Random, not a timestamp: parallel tool calls in one session would share
   // a millisecond id, and one answer would release the other call.
@@ -605,7 +608,7 @@ function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
     // C-V(a): with the terminal dialog held, stop waiting once the person is looking at that terminal.
     if (askPolicy.earlyStopWhenTerminalFrontmost && Date.now() >= nextFrontCheck) {
       nextFrontCheck = Date.now() + 1000;
-      if (AskPolicy.terminalFrontmost(frontmostApp(), hostApp)) break;
+      if (AskPolicy.terminalFrontmost(frontmostApp(overrides), hostApp)) break;
     }
     Atomics.wait(sleeper, 0, 0, 150);
   }

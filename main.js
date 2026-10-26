@@ -239,6 +239,7 @@ if (!DEMO && !RenameMigration.EPHEMERAL_PATH.test(process.execPath)) {
     const HelpFirst = require('./help.js');
     require('./src/ask-default.js').migrate({
       root: ROOT_DIR,
+      home: os.homedir(),
       firstRun: HelpFirst.shouldOnboard({ onboarded: fs.existsSync(path.join(ROOT_DIR, HelpFirst.ONBOARDED_MARKER)), helpShown: fs.existsSync(path.join(ROOT_DIR, HelpFirst.MARKER)), devRun: IS_DEV_RUN }),
       renameFound: !!renameCopy && (renameCopy.copied || renameCopy.retry === true || renameCopy.gaveUp === true),
       devRun: IS_DEV_RUN,
@@ -4968,7 +4969,7 @@ utilityHandle('mcp-set-enabled', (e) => fromUtilityPage(e, 'aitools'), (_e, on) 
   }
 });
 
-const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }) });
+const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }), onClaudeHooks: (installed) => noteAskHooks(installed && !!loadConfig().askFromWidget) });
 const aiToolsOpen = (destination) => AiTools.open(destination);
 // Find agents (src/agents-find-main.js). The ledger key lives only here: it
 // is made on the first add, peeked (never made) for reads, and Health sees it
@@ -5511,7 +5512,12 @@ function renameFollowUp() {
     steps: {
       // From a translocated copy or a disk image the hooks would point at a temporary path, and any
       // config that couldn't be rewritten still runs the old app: either way, try again next launch.
-      hooks: () => (AUTO_INSTALL_HOOKS ? RenameMigration.rewriteHooks({ home, runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget, mcpEntry: mcpOpts().entry }).every((r) => !r.error) : false),
+      hooks: () => {
+        if (!AUTO_INSTALL_HOOKS) return false;
+        const done = RenameMigration.rewriteHooks({ home, runtime: HOOK_RUNTIME, askFromWidget: !!loadConfig().askFromWidget, mcpEntry: mcpOpts().entry }).every((r) => !r.error);
+        if (done) noteAskHooks(!!loadConfig().askFromWidget);
+        return done;
+      },
       login: () => {
         if (EPHEMERAL) return false;
         if (RenameMigration.moveLoginItem({ platform: process.platform, app, loginItem: LoginItem, autoLaunchConfigured: fs.existsSync(path.join(ROOT_DIR, '.auto-launch-configured')) }) && Notification.isSupported()) new Notification({ title: `${Brand.name} opens at login`, body: `As ${RenameMigration.OLD.productName} was set to. Turn it off from the tray menu if you'd rather it didn't.`, silent: true }).show();

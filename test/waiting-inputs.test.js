@@ -387,13 +387,17 @@ test('C-V(a): with the dialog held the ceiling is 8 to 10 s and the terminal bei
   assert.equal(AskPolicy.terminalFrontmost('Ghostty', 'Ghostty'), true);
   assert.equal(AskPolicy.terminalFrontmost('Safari', 'Ghostty'), false);
   assert.equal(AskPolicy.terminalFrontmost(null, 'Ghostty'), false, 'unknown is never "in front"');
+  assert.equal(AskPolicy.terminalFrontmost('Xcode', 'Code'), false, 'Code is not Xcode');
+  assert.equal(AskPolicy.terminalFrontmost('Code', 'Visual Studio Code'), true, 'aliases');
+  assert.equal(AskPolicy.terminalFrontmost('iTerm2', 'iTerm.app'), true);
 });
 
 test('C-V(a): the hook waits the held ceiling, not 55 s, and AskUserQuestion stays at 20 s or less', async () => {
   const home = tmp();
   const app = await fakeApp(home);
   try {
-    const h = hook('permission-request', home, app.port, { session_id: 'c', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } }, { askMs: '', env: { CLAUDE_TRAFFIC_LIGHT_ASK_MS: '', CLAUDE_TRAFFIC_LIGHT_DIALOG_HELD: '1' } });
+    fs.writeFileSync(path.join(home, 'ask-policy.override.json'), JSON.stringify({ held: true }));
+    const h = hook('permission-request', home, app.port, { session_id: 'c', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } }, { askMs: '', env: { CLAUDE_TRAFFIC_LIGHT_ASK_MS: '' } });
     const req = await oneRequest(path.join(home, 'requests'));
     const window = Date.parse(req.expiresAt) - Date.parse(req.createdAt);
     assert.ok(window <= 10000 && window > 7000, `waits ${window} ms`);
@@ -405,9 +409,10 @@ test('C-V(a): held and the session\'s terminal in front → the hook gives the p
   const home = tmp();
   const app = await fakeApp(home);
   try {
+    fs.writeFileSync(path.join(home, 'ask-policy.override.json'), JSON.stringify({ held: true, frontmostApp: 'Ghostty' }));
     const started = Date.now();
     const h = hook('permission-request', home, app.port, { session_id: 'f', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } },
-      { env: { CLAUDE_TRAFFIC_LIGHT_ASK_MS: '', CLAUDE_TRAFFIC_LIGHT_DIALOG_HELD: '1', CLAUDE_TRAFFIC_LIGHT_FRONTMOST_APP: 'Ghostty', TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.mitchellh.ghostty' } });
+      { env: { CLAUDE_TRAFFIC_LIGHT_ASK_MS: '', TERM_PROGRAM: 'ghostty', __CFBundleIdentifier: 'com.mitchellh.ghostty' } });
     const { out, code } = await h.done;
     assert.equal(code, 0);
     assert.equal(out, '', 'no decision: the terminal prompt shows');
@@ -430,4 +435,23 @@ test('C-N: both first-use notices exist and one recorded constant picks between 
   assert.match(held, /^Plexiform shows Claude’s permission prompts here; your terminal still gets them if you don’t answer within 9 s\.$/);
   assert.equal(open, 'You can answer Claude’s permission prompts here or in the terminal.');
   assert.equal(AskPolicy.noticeText(), AskPolicy.PERMISSION_DIALOG_HELD ? held : open, 'the default follows the constant');
+});
+
+test('the environment cannot stretch the wait, the installed timeout, or set the policy facts', async () => {
+  assert.equal(AskPolicy.clampAskMs('999999999', 55000), 55000);
+  assert.equal(AskPolicy.clampAskMs(undefined, 55000), 55000);
+  assert.equal(AskPolicy.clampAskMs('-5', 55000), 0);
+  assert.equal(AskPolicy.clampHookTimeoutMs('999999', 60000), 60000);
+  assert.equal(AskPolicy.clampHookTimeoutMs(undefined, 60000), 60000);
+  const src = fs.readFileSync(SET_STATUS, 'utf8');
+  assert.doesNotMatch(src, /DIALOG_HELD|FRONTMOST_APP/, 'no environment override for the policy');
+  const home = tmp();
+  const app = await fakeApp(home);
+  try {
+    const h = hook('permission-request', home, app.port, { session_id: 'e', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } }, { askMs: 5000000, env: { CLAUDE_TRAFFIC_LIGHT_DIALOG_HELD: '1', CLAUDE_TRAFFIC_LIGHT_FRONTMOST_APP: 'x' } });
+    const req = await oneRequest(path.join(home, 'requests'));
+    const window = Date.parse(req.expiresAt) - Date.parse(req.createdAt);
+    assert.ok(window > 40000 && window <= 55000, `waits ${window} ms: not stretched, not set held by the environment`);
+    h.kill();
+  } finally { app.close(); }
 });
