@@ -139,7 +139,7 @@ function createFlow({ reply, speak, send, speakable = (t) => t }) {
 // from /proc); its key goes to a 0600 file behind apiKeyHelper, with the dir and /proc denied. --tools '' needs none of that.
 const hasFileTools = (args) => { const i = args.indexOf('--tools'); return i < 0 || String(args[i + 1] ?? '') !== ''; };
 const swapHaiku = (args, model) => args.map((a, i) => (args[i - 1] === '--model' && a === 'haiku' ? model : a));
-function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, maxChars = 400, setTimer = setTimeout, clearTimer = clearTimeout, carry = null }) {
+function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, maxChars = 400, setTimer = setTimeout, clearTimer = clearTimeout, carry = null, keyRoot = null }) {
   let child = null;
   let dir = null;
   let keyDir = null;
@@ -182,7 +182,7 @@ function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, ma
   };
   const none = { failure: null, env: {}, model: 'haiku' };
   if (carry && hasFileTools(args)) {
-    try { keyDir = fs.mkdtempSync(`${tmpdir.replace(/\/$/, '')}/buddy-key-`); } catch { done(null); return { promise, cancel }; }
+    try { keyDir = fs.mkdtempSync(`${(keyRoot || tmpdir).replace(/\/$/, '')}/voice-key-`); } catch { done(null); return { promise, cancel }; }
     prepareChat(carry, keyDir, `${keyDir}/api.key`).then(begin, () => begin(none));
   } else if (carry) prepareNoTool(carry).then(begin, () => begin(none));
   else begin({ failure: null, env: {}, model: 'haiku' });

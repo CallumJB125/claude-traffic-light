@@ -175,6 +175,44 @@ test('every Claude site: tool set against where the key lives (lab proc-environ-
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(keyRoot, { recursive: true, force: true }); }
 });
 
+test('the key dirs of a child with file tools live under the app data dir and a start sweeps leftovers (review 4)', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const Carry = require('../src/claude-carry.js');
+  const { ownedAdapters } = require('../src/interaction-main.js');
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'ud-'));
+  try {
+    const root = Carry.ensureKeyRoot(path.join(userData, 'run'));
+    assert.equal(fs.statSync(root).mode & 0o777, 0o700);
+    for (const n of ['chat-aaa', 'voice-key-bbb']) { fs.mkdirSync(path.join(root, n)); fs.writeFileSync(path.join(root, n, 'api.key'), KEY); }
+    fs.mkdirSync(path.join(root, 'other'));
+    assert.equal(Carry.sweepKeyDirs(root), 2);
+    assert.deepEqual(fs.readdirSync(root), ['other']);
+    assert.equal(Carry.sweepKeyDirs(path.join(userData, 'nope')), 0);
+    // a writable chat made by the owned adapters puts its key dir under the root it was given
+    const { carry } = await carryOf(GW_SETTINGS);
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+    let dir;
+    const session = createClaudeCodeSession({ bin: '/x/claude', env: { HOME: '/fx/home' }, carry, safeRoot: project, keyRoot: root, spawn: (b, a) => { dir = path.dirname(a[a.indexOf('--settings') + 1]); return child(); } });
+    await session.open({ cwd: project });
+    assert.ok(path.basename(dir).startsWith('chat-') && path.dirname(dir) === root, dir);
+    session.stop();
+    fs.rmSync(project, { recursive: true, force: true });
+    assert.equal(typeof ownedAdapters, 'function');
+  } finally { fs.rmSync(userData, { recursive: true, force: true }); }
+});
+
+test('a writable chat with no carry (plain login) still denies /proc to Read, Grep and Glob', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'proj-'));
+  try {
+    const calls = [];
+    const s = createClaudeCodeSession({ bin: '/x/claude', env: { HOME: '/fx/home' }, carry: null, safeRoot: project, spawn: (b, a, o) => { calls.push({ args: a, opts: o }); return child(); } });
+    await s.open({ cwd: project }); s.stop();
+    const deny = calls[0].args.slice(calls[0].args.indexOf('--disallowedTools') + 1);
+    for (const r of ['Read(//proc/**)', 'Read(/proc/**)', 'Grep(//proc/**)', 'Glob(/proc/**)']) assert.ok(deny.includes(r), r);
+  } finally { fs.rmSync(project, { recursive: true, force: true }); }
+});
+
 test('voice free-form (L9b): voice-helper merges the carried env and swaps haiku; the voice env keeps the person\'s config dir and proxy', async () => {
   const { carry } = await carryOf(GW_SETTINGS);
   const calls = [];

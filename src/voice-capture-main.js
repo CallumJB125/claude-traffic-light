@@ -8,7 +8,7 @@ const VoiceScreen = require('./voice-screen.js');
 const PERMISSION_TEXT = 'To use the screen, turn on Screen Recording for Plexiform in System Settings, Privacy and Security, Screen Recording. Answering without it.';
 const ASK_TIMEOUT_MS = 60000;
 
-function create({ platform = process.platform, systemPreferences, desktopCapturer, screen, fs, path, tmpdir, randomHex, askClaude, spawn, env, carry = null, log = () => {} }) {
+function create({ platform = process.platform, systemPreferences, desktopCapturer, screen, fs, path, tmpdir, randomHex, askClaude, spawn, env, carry = null, keyRoot = null, log = () => {} }) {
   function permission() {
     if (platform !== 'darwin') return 'granted';
     try { return systemPreferences.getMediaAccessStatus('screen'); } catch { return 'unknown'; }
@@ -49,7 +49,7 @@ function create({ platform = process.platform, systemPreferences, desktopCapture
       const file = path.join(dir, 'screen.png');
       fs.writeFileSync(file, shot.png, { mode: 0o600 }); // privacy-flow: voice-screen
       const run = askClaude({
-        spawn, fs, tmpdir, env, carry, timeoutMs: ASK_TIMEOUT_MS, maxChars: 800,
+        spawn, fs, tmpdir, env, carry, keyRoot, timeoutMs: ASK_TIMEOUT_MS, maxChars: 800,
         args: VoiceScreen.claudeArgs(file),
         prompt: VoiceScreen.prompt({ question, imagePath: file, width: shot.image.width, height: shot.image.height, point, snap }),
       });

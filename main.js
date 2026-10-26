@@ -1793,7 +1793,10 @@ claudeChannel.attach=async args=>{
   if(channelBoards.get(args.target)!==buddyWin?.status?.().workspace)throw new Error('Return to the workspace where this terminal connection was prepared.');
   return attachClaudeChannel(args);
 };
+// A Claude child with file tools keeps its key file here, never in /tmp; a start removes what a crash left.
+const claudeKeyRoot = (() => { const C = require('./src/claude-carry.js'); const root = path.join(app.getPath('userData'), 'run'); C.ensureKeyRoot(root); C.sweepKeyDirs(root); return root; })();
 const InteractionMain=require('./src/interaction-main').createInteractionMain({
+  keyRoot:claudeKeyRoot,
   accountScope:followupScope,
   compaction:Compaction.createSessionCompactor({settings:()=>loadConfig().compaction,ledger:CompactionLedger}),
   context:()=>buddyWin?.overviewContext?.()??null,
@@ -4435,7 +4438,7 @@ const voiceClaudeEnv = () => Voice.claudeEnv(process.env, `${path.join(os.homedi
 const VoiceCapture = require('./src/voice-capture-main.js');
 const voiceScreen = VoiceCapture.create({
   systemPreferences, desktopCapturer: require('electron').desktopCapturer, screen, fs, path, tmpdir: os.tmpdir(),
-  randomHex: () => crypto.randomBytes(6).toString('hex'), askClaude: VoiceHelper.askClaude, spawn, env: voiceClaudeEnv(), carry: require('./src/claude-carry.js').carryFor(process.env), log: console.log,
+  randomHex: () => crypto.randomBytes(6).toString('hex'), askClaude: VoiceHelper.askClaude, spawn, env: voiceClaudeEnv(), carry: require('./src/claude-carry.js').carryFor(process.env), keyRoot: claudeKeyRoot, log: console.log,
 });
 const pointer = require('./src/pointer-overlay-main.js').create({
   BrowserWindow, screen, htmlPath: path.join(__dirname, 'pointer-overlay.html'), preloadPath: path.join(__dirname, 'pointer-overlay-preload.js'),

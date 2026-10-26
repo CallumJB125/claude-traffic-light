@@ -3,6 +3,8 @@
 // children (owned chat, one-shot helpers, voice): the user's own provider and
 // auth, carried by allowlist. These children have no Bash tool, so a key may sit
 // in their env (plan C14); a run that has a shell never gets one that way.
+const fs = require('node:fs');
+const path = require('node:path');
 const { createClaudeCarry, burstOwnsPort, BURST_GATEWAY_PORT, PROC_RULES } = require('../board/shared/claude-carry.cjs');
 
 // Seam for PR 1b (src/login-shell-env.js): main calls setLoginShellEnv(readFilteredLoginShellEnv) once it exists.
@@ -59,4 +61,23 @@ async function prepareChat(carry, keyDir, keyFile) {
   return { failure: null, env: c.cliEnv, model: c.oneShotModel, userModel: c.model, settings, disallowed: c.disallowed, release: c.release };
 }
 
-module.exports = { prepareChat, NONE, prepareNoTool, defaultCarry, carryFor, setLoginShellEnv, burstOwnsPort, BURST_GATEWAY_PORT };
+// Where a child that has file tools keeps its key file: <userData>/run, a private dir of the app's own, never /tmp.
+// Each use makes chat-* / voice-key-* below it; a start removes whatever a crash left.
+const KEY_DIR_PREFIXES = ['chat-', 'voice-key-'];
+function ensureKeyRoot(root) {
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(root, 0o700); } catch { /* not ours to tighten */ }
+  return root;
+}
+function sweepKeyDirs(root) {
+  let names;
+  try { names = fs.readdirSync(root); } catch { return 0; }
+  let n = 0;
+  for (const name of names) {
+    if (!KEY_DIR_PREFIXES.some((p) => name.startsWith(p))) continue;
+    try { fs.rmSync(path.join(root, name), { recursive: true, force: true }); n++; } catch { /* gone */ }
+  }
+  return n;
+}
+
+module.exports = { ensureKeyRoot, sweepKeyDirs, KEY_DIR_PREFIXES, prepareChat, NONE, prepareNoTool, defaultCarry, carryFor, setLoginShellEnv, burstOwnsPort, BURST_GATEWAY_PORT };

@@ -41,11 +41,11 @@ const boardKey = (id) => (typeof id === 'string' && id ? `board:${crypto.createH
 // Provider registration point: Plexiform-owned Claude Code (stream-json),
 // Gemini CLI and the other ACP agents join the adapters main.js passes in. A
 // missing or unverified CLI stays listed with available:false and its reason.
-function ownedAdapters({ env = process.env } = {}) {
+function ownedAdapters({ env = process.env, keyRoot } = {}) {
   const Claude = require('./claude-code-session'), Gemini = require('./gemini-acp'), Acp = require('./acp-agents');
   const claudeBin = Claude.findClaudeBin({ env });
   return {
-    claude: Object.assign(Claude.createClaudeCodeSession({ bin: claudeBin, env }), claudeBin ? {} : { available: false, reason: 'unavailable: claude not installed' }),
+    claude: Object.assign(Claude.createClaudeCodeSession({ bin: claudeBin, env, ...(keyRoot ? { keyRoot } : {}) }), claudeBin ? {} : { available: false, reason: 'unavailable: claude not installed' }),
     gemini: Gemini.createGeminiAcp({ bin: Gemini.findGeminiBin({ env }), env }),
     // Other documented ACP agents: listed with their exact unavailable reason (src/provider-capabilities.json).
     ...Object.fromEntries(Object.keys(Acp.ACP_AGENTS).map((id) => [id, Acp.createAcpAgent(id, { env })])),
@@ -66,8 +66,8 @@ function explainCapabilities(caps, rows) {
 }
 
 // shares: () => the remote interaction host (src/remote-interaction.js) or null; team sharing goes through it.
-function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, workspace, currentBoard = () => null, accountScope = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null, shares = () => null, prepareChannel = null, tools = () => null, openAiTools = null, endpointStore = null, fetch: fetchImpl = globalThis.fetch }) { // privacy-flow: local-models
-  const adapters = { ...(owned ? owned() : {}), ...given };
+function createInteractionMain({ context, readContext = context, adapters: given, owned = ownedAdapters, keyRoot = null, workspace, currentBoard = () => null, accountScope = () => null, now, localModelsFile = null, localModels: givenLocalModels, compaction = null, shares = () => null, prepareChannel = null, tools = () => null, openAiTools = null, endpointStore = null, fetch: fetchImpl = globalThis.fetch }) { // privacy-flow: local-models
+  const adapters = { ...(owned ? owned({ keyRoot }) : {}), ...given };
   // Local models register into `adapters` as they are found.
   // The fixed loopback ports go through the detector (short timeout, backoff); endpoints the person added are probed as typed.
   const detector = givenLocalModels === undefined && typeof fetchImpl === 'function' ? createDetector({ fetch: fetchImpl }) : null;

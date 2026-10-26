@@ -95,6 +95,7 @@ test('settings.json: sandbox, permissions, git allow rules, hook shim on every e
   }
   assert.equal(s.hooks.PreToolUse[0].matcher, '*');
   assert.equal(s.apiKeyHelper, undefined);
+  for (const r of ['Read(//proc/**)', 'Read(/proc/**)']) assert.ok(buildSettings({ worktree: '/wt', tmpdir: '/t' }).permissions.deny.includes(r) && DISALLOWED_TOOLS.includes(r), `${r} with no carry and no key`);
   assert.equal(buildSettings({ worktree: '/wt', tmpdir: '/t', apiKeyFile: '/r/api.key' }).apiKeyHelper, "/bin/cat '/r/api.key'");
   const m = buildMcpConfig({ socket: '/s', token: 'T', node: '/n' });
   assert.deepEqual(m, { mcpServers: { board: { type: 'stdio', command: '/n', args: [MCP_SERVER], env: { BOARD_RUN_SOCKET: '/s', BOARD_RUN_TOKEN: 'T' } } } });

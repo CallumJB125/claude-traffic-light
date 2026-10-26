@@ -182,7 +182,8 @@ function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.
     // project, behind apiKeyHelper, with the dir and /proc denied to its file tools.
     let c0, keyDir = null, disallowed = writable ? [...PROC_RULES] : [], settingsFile = null;
     if (carry && writable) {
-      keyDir = fs.mkdtempSync(path.join(keyRoot, 'plexiform-claude-'));
+      fs.mkdirSync(keyRoot, { recursive: true, mode: 0o700 });
+      keyDir = fs.mkdtempSync(path.join(keyRoot, 'chat-'));
       c0 = await prepareChat(carry, keyDir, path.join(keyDir, 'api.key'));
       if (!c0.failure && c0.settings) {
         settingsFile = path.join(keyDir, 'settings.json');

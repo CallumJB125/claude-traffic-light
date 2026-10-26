@@ -119,6 +119,8 @@ test('engine: no carry (today\'s behaviour): the app env key still goes to api.k
     await waitFor(async () => (await stateOf(m.client, id)) === 'in_review', { label: 'in_review' });
     const settings = JSON.parse(fs.readFileSync(path.join(m.dataDir, 'run', id, 'settings.json'), 'utf8'));
     assert.match(settings.apiKeyHelper, /api\.key/);
+    const noCarryStart = fakeLog(path.join(m.dataDir, 'run', id)).find((l) => l.ev === 'start');
+    for (const r of ['Read(//proc/**)', 'Read(/proc/**)']) assert.ok(settings.permissions.deny.includes(r) && noCarryStart.argv.includes(r), `${r} even with no carry`);
     assert.ok(!('env' in settings));
   } finally { await m.close().catch(() => {}); rm(dir); }
 });
