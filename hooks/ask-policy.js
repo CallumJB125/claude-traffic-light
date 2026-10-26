@@ -24,16 +24,4 @@ function clampHookTimeoutMs(raw, installedMs) {
   return Number.isFinite(n) && n > 0 ? Math.min(installedMs, n) : installedMs;
 }
 
-// A hook that Claude Code kills (a terminal No ends it with SIGTERM ~76 ms later; the 60 s timeout does too) can't run
-// its own cleanup while it is blocked in a synchronous wait, so a tiny detached watcher removes the request once the
-// hook's process is gone. It touches only the file whose JSON id is this hook's own, and it ends as soon as the file is
-// gone after it was seen (the normal exit path removed it) or the cleanup is done. It is started before the request
-// file is created, so a kill in between still leaves it to clean up. argv: request file, answer file, id, hook pid.
-const REAPER_SOURCE = "const fs=require('fs');const [req,ans,id,pid]=process.argv.slice(1);"
-  + "const alive=()=>{try{process.kill(Number(pid),0);return true}catch(e){return e.code==='EPERM'}};"
-  + "const t0=Date.now();let seen=false;"
-  + "const tick=()=>{if(fs.existsSync(req))seen=true;else if(seen||Date.now()-t0>3000)process.exit(0);if(alive())return;"
-  + "try{if(JSON.parse(fs.readFileSync(req,'utf8')).id===id){fs.unlinkSync(req);try{fs.unlinkSync(ans)}catch(e){}}}catch(e){}process.exit(0)};"
-  + "setInterval(tick,150);tick();setTimeout(()=>process.exit(0),120000);";
-
-module.exports = { ASK_CEILING_MS, clampAskMs, clampHookTimeoutMs, noticeText, NOTICE_TEXT, CONSENT_TEXT, REAPER_SOURCE };
+module.exports = { ASK_CEILING_MS, clampAskMs, clampHookTimeoutMs, noticeText, NOTICE_TEXT, CONSENT_TEXT };

@@ -346,7 +346,7 @@ function readPrev() {
   } catch (e) {
     if (e.code === 'ENOENT') return null;
   }
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.CLAUDE_TRAFFIC_LIGHT_READ_RETRY_MS || 20));
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, (() => { const n = Number(process.env.CLAUDE_TRAFFIC_LIGHT_READ_RETRY_MS); return Number.isFinite(n) && n >= 0 ? Math.min(n, 1000) : 20; })());
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (e) {
@@ -562,7 +562,7 @@ function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
     : Object.keys(input).length ? JSON.stringify(input) : '';
   const request = {
     id, sessionId, host: HOST_TAG, cwd, tool: described.tool, kind: described.kind, channel,
-    summary: summary.slice(0, 200), toolInput: input,
+    pid: process.pid, summary: summary.slice(0, 200), toolInput: input,
     ...(described.permissionSuggestions ? { permissionSuggestions: described.permissionSuggestions } : {}),
     createdAt: new Date().toISOString(), expiresAt: new Date(waitUntil).toISOString(),
   };
@@ -577,8 +577,6 @@ function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
   if (!(askMs > 0) || !registerKey(id, key.toString('hex'))) finish();
   fs.mkdirSync(REQUESTS_DIR, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(REQUESTS_DIR, 0o700); } catch {}
-  // Claude Code kills this hook when the terminal answers No (and at its timeout): a watcher removes the request then.
-  try { require('child_process').spawn(process.execPath, ['-e', AskPolicy.REAPER_SOURCE, reqFile, ansFile, id, String(process.pid)], { detached: true, stdio: 'ignore' }).unref(); } catch { /* the 60 s request expiry still clears it */ } // privacy-flow: hook-request-cleanup
   // Complete before its name appears: readers never see half a request.
   try { if (!Answer.createExclusive(reqFile, JSON.stringify(request, null, 2))) finish(); } catch { finish(); }
   // An answer that doesn't fit this request (wrong kind, missing answers) is
@@ -591,7 +589,8 @@ function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
   // entry out of the session file. Only watched when the payload names the call and the entry is there to begin with.
   const watchId = typeof data?.tool_use_id === 'string' ? data.tool_use_id : null;
   const owner = data?.agent_id ?? null;
-  const asking = () => Machine.claudeInputEntries(readPrev()).some((r) => r.id === watchId && r.agentId === owner);
+  // Fails toward waiting: a missing or unreadable session file is not an answer.
+  const asking = () => { const prev = readPrev(); return !prev || Machine.claudeInputEntries(prev).some((r) => r.id === watchId && r.agentId === owner); };
   let watching = false;
   try { watching = !!watchId && asking(); } catch { watching = false; }
   let nextWatch = Date.now() + 1000;

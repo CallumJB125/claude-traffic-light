@@ -56,9 +56,9 @@ docs are silent, so it was measured (below).
   the hook at 60.0 s; the dialog stays on screen and stays answerable.
 
 What the hook does about it: a terminal No kills the hook, which cannot run its
-own cleanup while it is blocked in its wait, so a tiny watcher process removes
-that hook's own request file once the hook is gone (and only a file whose id is
-the hook's own). After a terminal Yes the hook is not killed; when the payload
+own cleanup while it is blocked in its wait, so the hook writes its pid into the
+request and the app drops any request whose pid is gone (and its answer file);
+an EPERM pid counts as alive, a request with no pid waits for its expiry. After a terminal Yes the hook is not killed; when the payload
 names the tool call (`tool_use_id`) and the session file shows it waiting, the
 hook stops waiting as soon as the tool's PostToolUse takes that entry out, and
 removes its card. The environment can only shorten the wait, never lengthen it
