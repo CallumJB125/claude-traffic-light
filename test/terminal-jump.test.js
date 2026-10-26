@@ -636,13 +636,16 @@ test('another host\'s session, or another platform, skips the adapters but still
 test('linux: a recorded session is focused first (tmux), then the window is looked up; reasons come back in words', async () => {
   const tmuxSession = { host: HOST, terminal: { env: { TMUX: '/tmp/tmux-1000/default,99,0', TMUX_PANE: '%1' } }, hostApp: 'GNOME Terminal' };
   const hit = jumperWith({ platform: 'linux', focusResult: { ok: true, adapter: 'tmux+kitty', exact: true } });
-  assert.deepEqual(await hit.jump(tmuxSession, 'x'), { app: 'GNOME Terminal', exact: true });
+  assert.deepEqual(await hit.jump(tmuxSession, 'x'), { app: 'GNOME Terminal', exact: false }, 'kitty\'s focus does not raise the window on Linux');
+  const wez = jumperWith({ platform: 'linux', focusResult: { ok: true, adapter: 'wezterm', exact: true } });
+  assert.deepEqual(await wez.jump({ host: HOST, terminal: { env: { WEZTERM_PANE: '3' } }, hostApp: 'WezTerm' }, 'x'), { app: 'WezTerm', exact: false }, 'a Linux WezTerm hit does not raise the window');
   assert.equal(hit.log.focus.length, 1);
   assert.equal(hit.log.activate.length, 0);
   // Selected but its terminal unknown: the window lookup gets the session.
   const sel = jumperWith({ platform: 'linux', focusResult: { ok: false, selected: true, adapter: 'tmux' } });
   assert.deepEqual(await sel.jump(tmuxSession, 'x', 'Konsole'), { app: 'Terminal', exact: false });
-  assert.deepEqual(sel.log.activate, [['x', 'Konsole', tmuxSession]]);
+  assert.deepEqual(sel.log.activate.map((a) => a.slice(0, 3)), [['x', 'Konsole', tmuxSession]]);
+  assert.equal(typeof sel.log.activate[0][3], 'function', 'the jump\'s staleness check goes along');
   // tmux can't place the pane: no title guess for a tmux session.
   const lost = jumperWith({ platform: 'linux', focusResult: { ok: false, detached: true, command: 'tmux attach -t a' } });
   const r = await lost.jump(tmuxSession, 'x');
@@ -655,7 +658,7 @@ test('linux: a session with nothing recorded still goes to the window lookup; a 
   const none = jumperWith({ platform: 'linux' });
   assert.deepEqual(await none.jump({ host: HOST, cwd: '/x' }, 'x'), { app: 'Terminal', exact: false });
   assert.equal(none.log.focus.length, 0);
-  assert.deepEqual(none.log.activate, [['x', null, null]]);
+  assert.deepEqual(none.log.activate.map((a) => a.slice(0, 3)), [['x', null, null]]);
   const bare = createJumper({
     localHost: HOST, platform: 'linux', focus: async () => ({ ok: false }),
     activate: async () => ({ cant: "wmctrl isn't installed" }), explainer: { onNeeds: () => null, onDenied: () => {} },

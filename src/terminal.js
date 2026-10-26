@@ -9,6 +9,8 @@ const { execFile } = require('child_process');
 const Rules = require('../rules.js');
 const HostApp = require('../hostapp.js');
 const Focus = require('./focus/index.js');
+const Ids = require('./focus/ids.js');
+const Tmux = require('./focus/tmux.js');
 const Permission = require('./focus/permission.js');
 const Jump = require('./focus/jump.js');
 const GhosttyDock = require('./ghostty-dock.js');
@@ -32,7 +34,7 @@ function escapeForAppleScript(str) {
 }
 
 // `preferApp`: the app the session's hook recorded (hostApp), tried first.
-function activateTerminalApp(folderHint, preferApp = null, session = null) {
+function activateTerminalApp(folderHint, preferApp = null, session = null, isCancelled = null) {
   if (IS_WIN) {
     // Best effort: AppActivate matches a window title containing the folder,
     // falling back to a terminal's own name.
@@ -49,8 +51,10 @@ function activateTerminalApp(folderHint, preferApp = null, session = null) {
     const exec = (file, args) => new Promise((resolve, reject) => execFile(file, args, { timeout: 2000 }, (err) => { // privacy-flow: terminal-jump
       if (err && err.code === 'ENOENT') reject(err); else resolve(!err);
     }));
-    const run = (file, args) => new Promise((resolve) => execFile(file, args, { timeout: 2000 }, (err, stdout) => resolve({ ok: !err, stdout: String(stdout || '') }))); // privacy-flow: terminal-jump
-    return LinuxActivate.activate(folderHint, exec, session, run);
+    const run = (file, args) => new Promise((resolve) => execFile(file, args, { timeout: 2000 }, (err, stdout) => resolve({ ok: !err, stdout: String(stdout || ''), missing: !!err && err.code === 'ENOENT' }))); // privacy-flow: terminal-jump
+    const sock = session && Ids.tmuxSocket(session);
+    const tmuxBin = sock && Focus.tmuxServerOk(sock, Ids.tmuxServerPid(session)) ? Focus.which(Tmux.BINS) : null;
+    return LinuxActivate.activate(folderHint, exec, session, run, { isCancelled, tmuxBin });
   }
   return new Promise((resolve) => {
     const hint = escapeForAppleScript((folderHint || '').toLowerCase());

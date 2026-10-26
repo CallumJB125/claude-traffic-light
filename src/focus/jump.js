@@ -9,6 +9,11 @@ const ADOPT_MS = 2500;
 // it — not the adapters, and not activating a local app either.
 const isRemote = (s) => !!(s && (s.remote || s.device || String(s.sessionId || '').startsWith('remote:')));
 
+function hitResult(r, used) {
+  const adapter = ADAPTERS.find((a) => a.id === String(r.adapter).split('+').pop());
+  return { app: r.app || used.hostApp || (adapter && adapter.app) || 'terminal', exact: !!r.exact, ...(r.byFolder ? { byFolder: true } : {}) };
+}
+
 // `adopt(session)` may answer a copy of the session to focus instead: one
 // Ghostty Dock lists under its exact id, though its hook recorded another
 // app (src/terminal.js). It answers null to leave the session as it is.
@@ -61,10 +66,7 @@ function createJumper({ localHost, platform, focus, activate, explainer, adopt =
         r = await focus(used, ctx);
         if (stale()) return null;
       }
-      if (r.ok) {
-        const adapter = ADAPTERS.find((a) => a.id === String(r.adapter).split('+').pop());
-        return { app: r.app || used.hostApp || (adapter && adapter.app) || 'terminal', exact: !!r.exact, ...(r.byFolder ? { byFolder: true } : {}) };
-      }
+      if (r.ok) return hitResult(r, used);
       log(`${r.adapter || 'no adapter'}: ${r.reason || 'failed'}; nothing switched`);
       if (r.denied) explainer.onDenied(r.needs);
       return cantJump(r, session);
@@ -83,13 +85,17 @@ function createJumper({ localHost, platform, focus, activate, explainer, adopt =
       r = await focus(session, ctx);
       if (stale()) return null;
       if (r.ok) {
-        const adapter = ADAPTERS.find((a) => a.id === String(r.adapter).split('+').pop());
-        return { app: r.app || session.hostApp || (adapter && adapter.app) || 'terminal', exact: !!r.exact, ...(r.byFolder ? { byFolder: true } : {}) };
+        // Kitty's and WezTerm's own focus calls don't raise the window on Linux.
+        const raised = !/(^|\+)(kitty|wezterm)$/.test(String(r.adapter));
+        const hit = hitResult(r, session);
+        return raised ? hit : { ...hit, exact: false };
       }
       log(`${r.adapter || 'no adapter'}: ${r.reason || 'failed'}`);
       if (Ids.inTmux(session) && !r.selected) return cantJump(r, session);
     }
-    const found = await activate(folderHint, preferApp, r && r.selected ? session : null);
+    // Only reached for a selected pane (the tmux adapter vetted its socket) or
+    // a session with nothing recorded.
+    const found = await activate(folderHint, preferApp, r && r.selected ? session : null, stale);
     if (stale()) return null;
     if (found && found.cant) return { app: null, exact: false, cant: found.cant };
     return found || cantJump(r, session);
