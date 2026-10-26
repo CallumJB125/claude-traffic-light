@@ -10,6 +10,7 @@
   const button = (label, fn, cls) => { const b = node('button', label, cls); b.type = 'button'; b.addEventListener('click', fn); return b; };
   const store = { read(k, parse) { try { return parse(localStorage.getItem(k)); } catch { return parse(null); } }, write(k, v) { try { localStorage.setItem(k, v); } catch { /* unavailable */ } } };
   const ago = ms => ms == null ? '' : ms < 60_000 ? 'just now' : ms < 3_600_000 ? `${Math.floor(ms / 60_000)} min ago` : `${Math.floor(ms / 3_600_000)} h ago`;
+  const SIMPLE_KINDS = ['approval', 'question', 'blocker'];
   let state = null, alerts = null, teamToday = null, team = [], busy = false;
   const body = section.querySelector('.body'), count = $('inbox-count'), status = $('inbox-status');
 
@@ -31,6 +32,7 @@
   function render() {
     const follow = Follow ? Follow.unseen(store.read('plexiform.follows', Follow.parse)) : [];
     const r = Inbox.compose({ needs: state?.needs, alerts, morning: state?.morning, teamToday, follow, team, now: Date.now() });
+    if (document.body.classList.contains('simple')) { r.items = r.items.filter(x => SIMPLE_KINDS.includes(x.kind)); r.total = r.items.length; }
     section.hidden = false;
     count.textContent = r.total ? `${r.total} item${r.total === 1 ? '' : 's'}` : '';
     if (!r.items.length) { body.replaceChildren(node('p', 'Nothing needs a person right now. Approvals, questions, blockers, failures and teammates’ handoffs land here with one action each.', 'muted')); return; }
@@ -49,6 +51,13 @@
           await load();
         }, `quick-option${i === 0 && /^(allow|accept|yes|approve)/i.test(opt.id) ? ' primary' : ''}`));
       }
+      if (row.resumable && typeof api.resumeCap === 'function') actions.append(button('Resume', async (ev) => {
+        const b = ev.currentTarget; b.disabled = true;
+        const r = await api.resumeCap();
+        status.textContent = r?.ok ? '' : (r?.error || 'Could not resume. Try again from Usage & cost.');
+        if (!r?.ok) b.disabled = false;
+        await load();
+      }, 'primary'));
       actions.append(button(row.action.label, () => void act(row), row.kind === 'approval' && !row.options?.length ? 'primary' : ''));
       if (row.read?.kind === 'inbox-read' && typeof api.inboxRead === 'function') actions.append(button('Mark read', async () => {
         for (const b of actions.querySelectorAll('button')) b.disabled = true;

@@ -1,5 +1,5 @@
 'use strict';
-// Home: connect banner, then Needs you, Running now, Today, the cost guard
+// Home: connect banner, then Running now, Today, the cost guard
 // card and (on a team) Your cards. Main (src/home-main.js) decides what each part holds; this file
 // renders with textContent only and gives every empty part one next step.
 (() => {
@@ -52,36 +52,6 @@
     out.append(actions);
   }
 
-  function pausedCard(p) {
-    const li = item(p.text, p.note, 'Paused', 'waiting');
-    li.id = 'needs-paused';
-    if (p.resumable) {
-      li.append(button('Resume', async (ev) => {
-        const b = ev.currentTarget; b.disabled = true;
-        const r = await api.resumeCap();
-        if (!r?.ok) { $('status').textContent = r?.error || 'Could not resume. Try again from Usage & cost.'; b.disabled = false; return; }
-        void refresh();
-      }, 'needs:resume'));
-    }
-    li.append(goButton('Raise limit', 'usage', 'needs:limit'));
-    return li;
-  }
-
-  function renderNeeds(n) {
-    const out = body('needs');
-    $('needs-count').textContent = n?.total ? `${n.total} waiting` : n?.paused ? 'Paused' : '';
-    if (!n) return out.replaceChildren(unavailable('needs'));
-    if (!n.total && !n.paused) return out.replaceChildren(empty('Nothing needs you right now. Questions and permission requests from your AI tools show up here.', goButton('Alert settings', 'settings', 'needs:settings')));
-    const list = node('ul'); list.setAttribute('aria-label', 'Needs you');
-    if (n.paused) list.append(pausedCard(n.paused));
-    n.items.forEach((i, at) => {
-      const li = item(i.headline, `${i.kind} · ${i.project}${i.age ? ` · ${i.age}` : ''}`, i.late ? 'Long wait' : null, 'waiting');
-      li.append(goButton(i.action === 'answer' ? 'Answer' : 'Open', 'waiting', `needs:${at}`)); list.append(li);
-    });
-    out.replaceChildren(list);
-    if (n.total > n.items.length) out.append(node('p', `And ${n.total - n.items.length} more.`, 'muted'));
-  }
-
   function renderRunning(r, banner) {
     const out = body('running');
     $('running-count').textContent = r?.items.length ? `${r.items.length} live` : '';
@@ -93,9 +63,9 @@
     }
     const list = node('ul'); list.setAttribute('aria-label', 'Running now');
     r.items.forEach((s, at) => {
-      const li = item(`${s.provider} · ${s.project}${s.tag ? ` (${s.tag})` : ''}`, s.collision ? `${s.collision} · Last update ${ago(s.age_ms)}` : `Last update ${ago(s.age_ms)}`, s.collision ? 'Collision' : s.status, s.collision || s.bucket === 'needs' ? 'waiting' : s.bucket === 'working' ? 'working' : '');
+      const li = item(`${s.provider} · ${s.project}${s.tag ? ` (${s.tag})` : ''}`, s.collision ? `${s.collision} · Last update ${ago(s.age_ms)}` : `Last update ${ago(s.age_ms)}`, s.collision ? 'Collision' : s.bucket === 'needs' ? null : s.status, s.collision || s.bucket === 'needs' ? 'waiting' : s.bucket === 'working' ? 'working' : '');
       const open = button('', () => go('sessions'), `running:${at}`, 'row-link');
-      open.setAttribute('aria-label', `${s.provider} in ${s.project}${s.tag ? ` (${s.tag})` : ''}: ${s.status}${s.collision ? `. ${s.collision}` : ''}. Open sessions`);
+      open.setAttribute('aria-label', `${s.provider} in ${s.project}${s.tag ? ` (${s.tag})` : ''}: ${s.bucket === 'needs' ? 'waiting' : s.status}${s.collision ? `. ${s.collision}` : ''}. Open sessions`);
       open.append(li.firstChild); li.prepend(open); list.append(li);
     });
     out.replaceChildren(list);
@@ -170,7 +140,7 @@
     const focus = document.activeElement?.dataset?.focus;
     demoOn = s.demo === true;
     document.body.classList.toggle('simple', s.simple === true);
-    renderBanner(s.banner, s.canDemo === true); renderMorning(s.morning); renderNeeds(s.needs); renderRunning(s.running, s.banner); renderToday(s.today, s.running); renderCosts(s.costs); renderCards(s.team); renderTeamwork(s.teamless === true);
+    renderBanner(s.banner, s.canDemo === true); renderMorning(s.morning); renderRunning(s.running, s.banner); renderToday(s.today, s.running); renderCosts(s.costs); renderCards(s.team); renderTeamwork(s.teamless === true);
     if (focus) [...document.querySelectorAll('[data-focus]')].find(el => el.dataset.focus === focus)?.focus();
     $('status').textContent = `Updated ${new Date(s.observed_at).toLocaleTimeString()}. Refreshes every 5 seconds.`;
   }

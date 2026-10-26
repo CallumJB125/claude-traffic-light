@@ -149,3 +149,13 @@ test('a finished piece of work is "Check it", the word every view uses', () => {
   assert.equal(LABEL.review, 'Check it');
   assert.equal(LABEL.review, W.BUCKETS.find((b) => b.id === 'check').label);
 });
+
+test('inbox: the cost-guard pause is a blocker row that navigates to Usage and carries resumable', () => {
+  const r = compose({ needs: { items: [], paused: { text: 'Paused at your $5 daily limit', note: 'Tool calls are refused.', resumable: true } }, alerts: { stuck: [{ handle: 's1', title: 'Stuck', meta: '', canOpen: true }] } });
+  assert.equal(r.items[0].key, 'paused');
+  assert.equal(r.items[0].kind, 'blocker');
+  assert.equal(r.items[0].resumable, true);
+  assert.deepEqual(r.items[0].action, { kind: 'navigate', destination: 'usage', label: 'Raise limit' });
+  assert.equal(compose({ needs: { items: [], paused: { text: 'x', resumable: false } } }).items[0].resumable, false);
+  assert.deepEqual(compose({ needs: { items: [], paused: null } }).items, []);
+});

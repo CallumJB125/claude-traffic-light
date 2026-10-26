@@ -1,0 +1,1 @@
+test-visual/__screenshots__/home-compose.spec.js/home-needs-single-darwin.png

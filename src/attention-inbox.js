@@ -42,6 +42,7 @@
   function compose({ needs = null, alerts = null, morning = null, teamToday = null, follow = [], team = [], now = Date.now() } = {}) {
     const rows = [];
     const push = r => { if (rows.length < 200) rows.push(r); };
+    if (needs?.paused && str(needs.paused.text, 200)) push({ kind: 'blocker', title: str(needs.paused.text, 200), meta: str(needs.paused.note, 400), ageMs: null, resumable: needs.paused.resumable !== false, action: { kind: 'navigate', destination: 'usage', label: 'Raise limit' }, key: 'paused' });
     for (const [i, n] of (needs?.items || []).entries()) {
       const kind = /permission|approv/i.test(n.kind) ? 'approval' : 'question';
       const requestId = str(n.id, 100);

@@ -149,3 +149,25 @@ test.describe('box hidden and the widget key taken', () => {
     await expect(row).toHaveScreenshot('widget-compose-taken.png', { ...SHOT, mask: [page.locator('#stage'), page.locator('.screen')] });
   });
 });
+
+// Q3: a waiting permission request shows once on Home, as an Inbox card with its own Allow/Deny; there is no second
+// "Needs you" list above Running now whose Answer only opened the Waiting page.
+test.describe('one Needs-you source', () => {
+  test('home-needs-single: the Inbox card answers in place and no #needs section exists', async () => {
+    const F = require('./inputs-fixtures');
+    const h = await launchApp({ config: { askFromWidget: true, tourState: { status: 'skipped', step: 0, at: null } } });
+    try {
+      const hook = F.blockingHook(h, 'permission-request', { session_id: 'vis-single', cwd: '/visual/app', tool_name: 'Bash', tool_input: { command: 'npm run build -- --prod' } });
+      const page = await embedded(h.app, 'home', 'home.html');
+      await skipTour(page);
+      await expect(page.locator('#inbox li')).toHaveCount(1, { timeout: 20000 });
+      await expect(page.locator('#needs')).toHaveCount(0);
+      await expect(page.locator('#inbox li button').first()).toBeEnabled();
+      await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' });
+      await page.mouse.move(0, 0);
+      await page.waitForTimeout(900);
+      await expect(page.locator('#inbox')).toHaveScreenshot('home-needs-single.png', { ...SHOT, mask: [page.locator('#inbox li .muted')] });
+      hook.child.kill();
+    } finally { await h.cleanup(); }
+  });
+});
