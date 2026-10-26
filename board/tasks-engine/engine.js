@@ -23,6 +23,7 @@ import {
 import { T_QUIET_MS } from '../shared/liveness.js';
 import { redact, filterPath, normalizeRemoteUrl } from '../shared/scope.js';
 import { sweepKeyFiles } from '../shared/claude-carry.cjs';
+import { TAKEOVER_TRANSLATED } from '../shared/codex-carry.cjs';
 import { untrusted, envelopeTag } from '../shared/untrusted.js';
 import { BACKENDS } from '../runner/backends/index.js';
 import { buildSettings, buildMcpConfig, buildEnv, trustedInstructions, HOOK_TOKEN_FILE, API_KEY_FILE, MCP_SERVER, DEFAULT_MAX_TURNS, DISALLOWED_TOOLS, BUS_DISALLOWED, DENY_READ } from '../runner/launch.js';
@@ -149,6 +150,8 @@ export class TasksEngine extends EventEmitter {
     this.env = opts.env ?? process.env;
     // The user's own Claude provider and auth (board/shared/claude-carry.cjs); null = carry nothing (today's behaviour).
     this.claudeCarry = opts.claudeCarry ?? null;
+    // The user's own Codex provider (board/shared/codex-carry.cjs); null = carry nothing (the built-in OpenAI provider).
+    this.codexCarry = opts.codexCarry ?? null;
     this.carries = new Map();       // taskId → the carry behind that task's run dir (api.key, refresh timer)
     this.mcpServer = opts.mcpServer ?? MCP_SERVER;
     this.epoch = crypto.randomUUID();
@@ -1181,7 +1184,15 @@ export class TasksEngine extends EventEmitter {
     const cacheDir = this.#cacheDir(task);
     ensureDir(cacheDir);
     ensureDir(path.join(cacheDir, 'tmp'));
-    if (task.ai.id === 'codex') writeFileAtomic(path.join(runDir, HOOK_TOKEN_FILE), token);
+    if (task.ai.id === 'codex') {
+      writeFileAtomic(path.join(runDir, HOOK_TOKEN_FILE), token);
+      this.#releaseCarry(task);
+      if (this.codexCarry) {
+        const carry = await this.codexCarry.prepare();
+        if (carry.failure) throw Object.assign(new Error(carry.failure.reason), { code: carry.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' });
+        if (carry.carry) this.carries.set(task.id, carry);
+      }
+    }
     if (ONE_TURN.has(task.ai.id)) return;
     const protectedWrite = task.workInPlace
       ? ['.git/config', '.git/hooks', '.claude', '.mcp.json', 'CLAUDE.md', 'AGENTS.md'].map((p) => path.join(task.worktree, p)) : [];
@@ -1259,7 +1270,7 @@ export class TasksEngine extends EventEmitter {
       permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel],
       extraDisallowed: [...['Read', 'Edit', 'Write'].flatMap((t) => this.#dataForms().map((d) => `${t}(/${d}/**)`)), ...(carry?.disallowed ?? []), ...(task.source === 'bus' ? BUS_DISALLOWED : [])],
       interruptWaitMs: this.opts.interruptWaitMs, stopGraceMs: this.opts.stopGraceMs,
-      dataDir: dataReal, cacheDir, ...gitAccess, ...(task.ai.id === 'codex' ? { taskRunDir: runDir } : {}),
+      dataDir: dataReal, cacheDir, ...gitAccess, ...(task.ai.id === 'codex' ? { taskRunDir: runDir, providerOverrides: carry?.overrides ?? [] } : {}),
     });
     run.backend = backend;
     this.#attach(task, run);
@@ -1991,14 +2002,18 @@ export class TasksEngine extends EventEmitter {
         this.#expireApprovals(task);
         if (task.openAsk && task.openAsk.kind !== 'plan') this.#closeAsk(task, null);
         const { runDir, socketPath } = await this.#ensureIdleIpc(task);
+        if (task.ai.id === 'codex' && this.carries.get(task.id)?.translated) { this.#releaseCarry(task); throw new ApiError('NOT_AVAILABLE', TAKEOVER_TRANSLATED); }
         this.#setState(task, 'handed_over');
         if (task.ai.id === 'codex') {
           const env = buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart });
           if (this.env.CODEX_HOME) env.CODEX_HOME = this.env.CODEX_HOME;
           env.TMPDIR = path.join(this.#cacheDir(task), 'tmp');
+          // The provider's -c values go on the command; its key values never do (the terminal's own env supplies env_key).
+          const codexCarry = this.carries.get(task.id) ?? null;
           const options = { bin: info.bin, cwd: task.worktree, env, runDir, sessionId: task.sessionId, resume: task.sessionStarted,
             dataDir: fs.realpathSync(this.dataDir), cacheDir: this.#cacheDir(task), ...await this.#gitAccess(task),
-            permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel], model: task.ai.model };
+            permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel], model: task.ai.model ?? codexCarry?.model ?? undefined,
+            providerOverrides: codexCarry?.overrides ?? [] };
           writeFileAtomic(path.join(runDir, 'codex-instructions.md'), this.#brief(task));
           return { takeover: { argv: [info.bin, ...new this.backends.codex(options).argv()], cwd: task.worktree,
             env: { TMPDIR: env.TMPDIR, ...(env.CODEX_HOME ? { CODEX_HOME: env.CODEX_HOME } : {}) }, mode: payload.mode ?? 'print', sessionId: task.sessionId, resumed: task.sessionStarted,

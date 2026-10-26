@@ -327,3 +327,59 @@ test('Review: an effect is dropped when the document lost focus while a reap was
   assert.equal(main.hub.list('overview:9:2').length, 0);
   main.close();
 });
+
+// ── PR 3 (A8, L7): the owned Codex chat carries the user's own provider instead of a hard-coded openai ──
+const { createCodexCarry } = require('../board/shared/codex-carry.cjs');
+const PLEXLAB_KEY = 'plexlab-fake-key-0123456789abcdef';
+const PLEXLAB_TOML = 'model = "glm-5.3-flash"\nmodel_provider = "plexlab"\n[model_providers.plexlab]\nbase_url = "http://10.0.0.5:4001/v1"\nenv_key = "PLEXLAB_KEY"\n';
+function fixtureCodexCarry(text, { env = { PLEXLAB_KEY }, probeOk = true } = {}) {
+  return createCodexCarry({ env, home: '/home/fixture', platform: 'linux', readFile: (f) => (f === '/home/fixture/.codex/config.toml' ? text : null), probe: async () => probeOk, burstOwnsPort: async () => false });
+}
+function recordingSpawn() {
+  const calls = [];
+  return { calls, spawn: (bin, args, opts) => { calls.push({ args, env: opts.env }); return spawnProviderFixture(bin, args, opts); } };
+}
+
+test('L7: the owned Codex chat uses the carried provider and model, the key only in its env; the openai default is gone', async () => {
+  const r = recordingSpawn();
+  const adapter = createCodexAppServer({ bin: FAKE, spawn: r.spawn, env: { HOME: '/home/fixture', PATH: '/bin' }, carry: fixtureCodexCarry(PLEXLAB_TOML) });
+  try {
+    await adapter.open({ cwd: '/tmp' });
+    const { args, env } = r.calls[0];
+    assert.ok(!args.includes('model_provider="openai"'));
+    for (const c of ['model_provider="plexlab"', 'model_providers.plexlab.env_key="PLEXLAB_KEY"', 'model="glm-5.3-flash"', 'shell_environment_policy.inherit="none"', 'mcp_servers={}']) assert.equal(args[args.indexOf(c) - 1], '-c', c);
+    assert.ok(args.includes('--disable') && args.includes('shell_tool'), 'still no shell tool');
+    assert.equal(env.PLEXLAB_KEY, PLEXLAB_KEY);
+    assert.ok(!args.some((a) => a.includes(PLEXLAB_KEY)));
+  } finally { adapter.stop(); }
+});
+
+test('L7: no provider in config.toml keeps the openai default; a config that does not parse fails loud before any spawn', async () => {
+  const none = recordingSpawn();
+  const a = createCodexAppServer({ bin: FAKE, spawn: none.spawn, env: { HOME: '/home/fixture' }, carry: fixtureCodexCarry('model = "gpt-6.1"\n') });
+  try { await a.open({ cwd: '/tmp' }); assert.deepEqual(none.calls[0].args, APP_SERVER_ARGS); } finally { a.stop(); }
+  const bad = recordingSpawn();
+  const b = createCodexAppServer({ bin: FAKE, spawn: bad.spawn, env: { HOME: '/home/fixture' }, carry: fixtureCodexCarry('model_provider = "x\n[') });
+  await assert.rejects(b.open({ cwd: '/tmp' }), (e) => e.code === 'PROVIDER' && /not valid TOML/.test(e.message));
+  assert.equal(bad.calls.length, 0, 'never the openai default');
+  assert.equal(b.alive(), false);
+});
+
+test('L7: a missing env_key value refuses the chat (auth), naming the variable; a later start retries the check', async () => {
+  const r = recordingSpawn();
+  const env = {};
+  const a = createCodexAppServer({ bin: FAKE, spawn: r.spawn, env: { HOME: '/home/fixture' }, carry: fixtureCodexCarry(PLEXLAB_TOML, { env }) });
+  try {
+    await assert.rejects(a.open({ cwd: '/tmp' }), (e) => e.code === 'AUTH' && /\$PLEXLAB_KEY/.test(e.message));
+    assert.equal(r.calls.length, 0);
+    env.PLEXLAB_KEY = PLEXLAB_KEY;
+    await a.open({ cwd: '/tmp' });
+    assert.equal(r.calls.length, 1);
+  } finally { a.stop(); }
+});
+
+test('L7: a test env never reaches the developer\'s Codex config (no carry unless injected)', async () => {
+  const r = recordingSpawn();
+  const a = createCodexAppServer({ bin: FAKE, spawn: r.spawn, env: { HOME: '/home/fixture' } });
+  try { await a.open({ cwd: '/tmp' }); assert.deepEqual(r.calls[0].args, APP_SERVER_ARGS); } finally { a.stop(); }
+});

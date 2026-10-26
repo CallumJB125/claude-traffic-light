@@ -8,7 +8,7 @@ import { CodexBackend } from '../backends/codex.js';
 import { GATE_G_MS } from '../../shared/liveness.js';
 const fixture = fileURLToPath(new URL('./fixtures/fake-board-codex.js', import.meta.url));
 const q = (s) => `'${s.replaceAll("'", "'\\''")}'`;
-async function rig({ scenario = {}, plan = false } = {}) {
+async function rig({ scenario = {}, plan = false, codexCarry = null } = {}) {
   const dir = tmpDir('px-bc-'), repo = makeRepo(dir), home = path.join(dir, 'board');
   fs.writeFileSync(path.join(repo.checkout, 'AGENTS.md'), 'Trusted Codex instructions.\n');
   fs.writeFileSync(path.join(repo.checkout, 'test.js'), "const assert = require('node:assert/strict'); assert.equal(2+2,4);\n");
@@ -20,7 +20,7 @@ async function rig({ scenario = {}, plan = false } = {}) {
   hub.rpcReply = (f) => ({ ok: true, result: f.method === 'runner_plan_status' ? { required: true, decision, permission_request_id: 'plan-1', answered_by: { member_id: OWNER, name: 'Owner' } } : f.method === 'board_attach_evidence' ? { evidence_id: f.params.kind } : f.method === 'board_complete' ? { state: 'in_review' } : {} });
   const clock = fakeClock();
   const sup = await startRunner({ hub, home, repo, clock, env: { HOME: dir, CODEX_HOME: path.join(dir, 'auth'), PATH: process.env.PATH, ANTHROPIC_API_KEY: 'DO-NOT-INHERIT' },
-    policyExtra: { ai_ids: ['codex'] }, opts: { detectAis: async () => [{ id: 'codex', ...CodexBackend.describe(), installed: true, signedIn: true, bin }] } });
+    policyExtra: { ai_ids: ['codex'] }, opts: { codexCarry, detectAis: async () => [{ id: 'codex', ...CodexBackend.describe(), installed: true, signedIn: true, bin }] } });
   const offer = { ...offerFor(), ai: 'codex', budget_usd: null, max_turns: null, require_plan_approval: plan };
   return { dir, repo, sup, hub, clock, offer, home, configFile, log, set(s) { fs.writeFileSync(configFile, JSON.stringify(s)); }, decide(d) { decision = d; }, read() { return fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse) : []; }, async close() { await sup.shutdown(); await hub.close(); rm(dir); } };
 }
@@ -135,5 +135,34 @@ test('host commit publication rejects foreign hashes, changed branches and an or
     finally { h.repo.git('config', 'remote.origin.url', origin); }
     assert.throws(() => h.repo.gitIn(h.repo.bare, 'rev-parse', '--verify', run.gitAccess.gitRef), 'no unauthorized publication occurred');
     assert.equal(h.repo.git('rev-parse', 'HEAD'), sha);
+  } finally { await h.close(); }
+});
+
+// PR 3 (A8): board Codex runs carry the user's provider; a failed preflight gives the hub a fixed sentence only.
+const PLEXLAB_KEY = 'plexlab-fake-key-0123456789abcdef';
+const fakeCarry = (r) => ({ prepare: async () => ({ release() {}, ...r }) });
+
+test('A8 board run: the provider -c values and model ride on argv, the key only in the Codex CLI env', async () => {
+  const overrides = ['model_provider="plexlab"', 'model_providers.plexlab.base_url="http://10.0.0.5:4001/v1"', 'model_providers.plexlab.env_key="PLEXLAB_KEY"'];
+  const h = await rig({ codexCarry: fakeCarry({ carry: true, failure: null, overrides, model: 'glm-5.3-flash', cliEnv: { PLEXLAB_KEY } }) });
+  try {
+    const run = await claimRun(h.sup, h.hub, h.offer); await waitFor(() => run.localState === 'idle');
+    const first = starts(h)[0];
+    for (const o of overrides) assert.equal(first.argv[first.argv.indexOf(o) - 1], '-c', o);
+    assert.equal(first.argv[first.argv.indexOf('--model') + 1], 'glm-5.3-flash');
+    assert.equal(first.env.PLEXLAB_KEY, PLEXLAB_KEY);
+    assert.ok(!first.argv.some((a) => a.includes(PLEXLAB_KEY)));
+    assert.ok(!first.argv.find((a) => a.startsWith('shell_environment_policy.set=')).includes('PLEXLAB_KEY'));
+  } finally { await h.close(); }
+});
+
+test('board run: a failed Codex provider check sends the hub a fixed sentence; the variable name and host stay local', async () => {
+  const h = await rig({ codexCarry: fakeCarry({ carry: true, failure: { kind: 'auth', reason: 'Codex provider "plexlab" reads its key from $PLEXLAB_KEY, which Plexiform can\'t see.' } }) });
+  try {
+    await claimRun(h.sup, h.hub, h.offer);
+    const failed = await waitFor(() => h.hub.outs('prep.failed')[0], { what: 'prep.failed' });
+    assert.equal(failed.cause, 'spawn: Codex auth check failed on this machine');
+    assert.ok(!h.hub.raw.some((s) => s.includes('PLEXLAB_KEY')));
+    assert.equal(starts(h).length, 0, 'Codex never started');
   } finally { await h.close(); }
 });

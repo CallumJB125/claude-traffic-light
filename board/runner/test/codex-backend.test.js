@@ -70,3 +70,35 @@ test('Codex Git writes are restricted to objects, private metadata and the autho
   assert.ok(!invalid.includes('"/repo/.git/refs/heads/'), gitRef);
  }
 });
+
+// PR 3 (A8, C16, D26): the user's provider rides as -c values; its key value only in the CLI env.
+test('Codex provider overrides: -c after the profile, key value only in the CLI process env, never in a tool shell or the board MCP env', async () => {
+ const dir = tmpDir('px-codex-');
+ try {
+  const KEY = 'plexlab-fake-key-0123456789abcdef';
+  const providerOverrides = ['model_provider="plexlab"', 'model_providers.plexlab.base_url="http://10.0.0.5:4001/v1"', 'model_providers.plexlab.env_key="PLEXLAB_KEY"'];
+  const f = setup(dir, { text: 'done' }, { providerOverrides, model: 'glm-5.3-flash', boardRunDir: path.join(dir, 'run') });
+  f.backend.env = { ...f.backend.env, PLEXLAB_KEY: KEY };
+  const argv = f.backend.argv();
+  for (const o of providerOverrides) assert.equal(argv[argv.indexOf(o) - 1], '-c', o);
+  assert.ok(argv.indexOf(providerOverrides[0]) > argv.findIndex((a) => a.startsWith('shell_environment_policy.set=')), 'the profile comes first');
+  assert.deepEqual(argv.slice(argv.indexOf('--model'), argv.indexOf('--model') + 2), ['--model', 'glm-5.3-flash']);
+  assert.ok(!argv.some((a) => a.includes(KEY)), 'no key value on argv');
+  const set = argv.find((a) => a.startsWith('shell_environment_policy.set='));
+  assert.ok(argv.includes('shell_environment_policy.inherit="none"'));
+  assert.ok(!set.includes('PLEXLAB_KEY') && !set.includes(KEY), 'the tool shell env is the explicit set only');
+  const mcpEnv = argv.find((a) => a.startsWith('mcp_servers.board.env='));
+  assert.ok(mcpEnv && !mcpEnv.includes('PLEXLAB_KEY'));
+  assert.ok(argv.includes('mcp_servers.board.env_vars=[]'));
+  f.backend.start('go');
+  await waitFor(() => f.backend.exited, { what: 'Codex completion' });
+  assert.equal(f.read().find((x) => x.kind === 'start').env.PLEXLAB_KEY, KEY, 'the CLI process itself gets the key');
+ } finally { rm(dir); }
+});
+
+test('Codex profile on Linux reads distro-packaged npm tools (C17); macOS is unchanged', () => {
+ const linux = codexConfig({ cwd: '/w', env: { HOME: '/home/u' }, platform: 'linux' }).join('\n');
+ assert.ok(linux.includes('"/usr/lib/node_modules"="read"'));
+ const mac = codexConfig({ cwd: '/w', env: { HOME: '/Users/u' }, platform: 'darwin' }).join('\n');
+ assert.ok(!mac.includes('/usr/lib/node_modules'));
+});

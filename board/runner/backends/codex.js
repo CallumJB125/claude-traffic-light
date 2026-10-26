@@ -33,6 +33,8 @@ export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitR
   // OS minimal permissions omit common installed tool runtimes. Grant read
   // only (never their caches/configuration or arbitrary home directories).
   for (const d of (platform === 'win32' ? [] : ['/opt/homebrew/bin', '/opt/homebrew/Cellar', '/opt/homebrew/lib', '/opt/homebrew/share', '/usr/local/bin', '/usr/local/lib', '/usr/local/Cellar', '/usr/local/share', '/Library/Developer/CommandLineTools', '/Applications/Xcode.app/Contents/Developer'])) filesystem[d] = 'read';
+  // Distro-packaged global npm tools (A8 Linux, C17).
+  if (platform === 'linux') filesystem['/usr/lib/node_modules'] = 'read';
   if (cacheDir) filesystem[cacheDir] = 'write';
   // Shared Git refs belong to other tasks and user checkouts. Commits need
   // object storage and only this task's authorized branch, never all refs.
@@ -120,8 +122,10 @@ export class CodexBackend extends EventEmitter {
   argv() {
     const instructionsFile = path.join(this.runDir, 'codex-instructions.md');
     const config = codexConfig({ ...this, readOnly: this.permissionMode === 'plan', instructionsFile });
+    // The user's provider (board/shared/codex-carry.cjs): keys under model_provider and model_providers.<id>.*
+    // only, disjoint from the profile's, so their place in argv can't matter (C16).
     return ['exec', '--json', '--ignore-user-config', '--ignore-rules', '--strict-config', '-C', this.cwd,
-      ...config.flatMap((c) => ['-c', c]), ...(this.model ? ['--model', this.model] : []),
+      ...config.flatMap((c) => ['-c', c]), ...(this.providerOverrides ?? []).flatMap((c) => ['-c', c]), ...(this.model ? ['--model', this.model] : []),
       ...(this.resume ? ['resume', this.sessionId] : ['--skip-git-repo-check']), '-'];
   }
   start(prompt) {

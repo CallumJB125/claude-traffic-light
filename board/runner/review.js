@@ -41,13 +41,16 @@ export function scrubDiff(diff, { home = null } = {}) {
  * config, rules, MCP servers, hooks or web search.
  * UNVERIFIED against a real Codex CLI: the exec flags follow backends/codex.js;
  * --sandbox read-only is documented but not exercised here.
+ * provider: the user's Codex provider (board/shared/codex-carry.cjs) → its -c values and model. Its key values
+ * travel in the CLI env only, and the shell gets none of that env (inherit="none").
  */
-export function reviewArgs(ai, { model = null, budgetUsd = null, cwd } = {}) {
+export function reviewArgs(ai, { model = null, budgetUsd = null, cwd, provider = null } = {}) {
   if (ai === 'claude') return DiffReview.buildArgs({ model, maxBudgetUsd: budgetUsd }).map((a) => (a === 'text' ? 'json' : a));
   if (ai === 'codex') {
     return ['exec', '--json', '--ignore-user-config', '--ignore-rules', '--strict-config', '--skip-git-repo-check', '--sandbox', 'read-only', '-C', cwd,
       ...['approval_policy="never"', 'web_search="disabled"', 'mcp_servers={}', 'project_doc_max_bytes=0', 'hooks={}', 'notify=[]',
-        'features.apps=false', 'features.multi_agent=false', 'features.hooks=false'].flatMap((c) => ['-c', c]), '-'];
+        'features.apps=false', 'features.multi_agent=false', 'features.hooks=false', 'shell_environment_policy.inherit="none"',
+        ...(provider?.overrides ?? []), ...(provider?.model ? [`model=${JSON.stringify(provider.model)}`] : [])].flatMap((c) => ['-c', c]), '-'];
   }
   throw Object.assign(new Error(`${ai} cannot run reviews`), { code: 'NOT_AVAILABLE' });
 }
@@ -73,13 +76,14 @@ export function readReply(ai, stdout) {
 }
 
 /** Starts the reviewer CLI with the prompt on stdin. Never throws. */
-export async function invokeReviewer({ ai, prompt, model, budgetUsd, bin, env = process.env, spawn = childProcess.spawn, timeoutMs = REVIEW_RUN_TIMEOUT_MS }) {
+export async function invokeReviewer({ ai, prompt, model, budgetUsd, bin, env = process.env, provider = null, spawn = childProcess.spawn, timeoutMs = REVIEW_RUN_TIMEOUT_MS }) {
   if (!bin) return { ok: false, error: `${ai} is not installed on this machine` };
-  const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
+  const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    ...(ai === 'codex' ? provider?.env : null) };
   let dir;
   try { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-board-review-')); } catch { return { ok: false, error: 'could not make a temporary folder' }; }
   try {
-    const args = reviewArgs(ai, { model, budgetUsd, cwd: dir });
+    const args = reviewArgs(ai, { model, budgetUsd, cwd: dir, provider: ai === 'codex' ? provider : null });
     return await new Promise((resolve) => {
       let out = '', done = false, timer = null, child;
       const finish = (r) => { if (!done) { done = true; clearTimeout(timer); resolve(r); } };
@@ -123,7 +127,7 @@ const fetchBoardRefs = (localPath, key) => runnerGit(localPath, ['fetch', '--qui
  * offer: a review.offer frame. → the review.result body
  * {ok, output?, cost_usd?, files?, signals?, truncated?, model?, error?}. Never throws.
  */
-export async function runReview(offer, { localPath, home = null, bin, env = process.env, git = CheckpointGit.createGit(), fetchRefs = fetchBoardRefs, invoke = invokeReviewer, nonce = crypto.randomBytes(16).toString('hex') } = {}) {
+export async function runReview(offer, { localPath, home = null, bin, env = process.env, provider = null, git = CheckpointGit.createGit(), fetchRefs = fetchBoardRefs, invoke = invokeReviewer, nonce = crypto.randomBytes(16).toString('hex') } = {}) {
   const fail = (error) => ({ ok: false, error: String(error).slice(0, 300) });
   try {
     if (!REVIEW_PROVIDERS.includes(offer.ai)) return fail(`${offer.ai} cannot run reviews`);
@@ -144,7 +148,7 @@ export async function runReview(offer, { localPath, home = null, bin, env = proc
     const signals = injectionSignals(scrubbed).map(({ file, line }) => ({ file, line }));
     const { text, truncated } = boundDiff(scrubbed);
     const prompt = buildReviewPrompt({ diff: text, goal: offer.goal, acceptance: offer.acceptance, tests: offer.tests, files, truncated, nonce });
-    const r = await invoke({ ai: offer.ai, prompt, model: offer.model ?? null, budgetUsd: offer.budget_usd ?? null, bin, env });
+    const r = await invoke({ ai: offer.ai, prompt, model: offer.model ?? null, budgetUsd: offer.budget_usd ?? null, bin, env, provider });
     if (!r.ok) return { ...fail(r.error ?? 'the review did not finish'), ...(Number.isFinite(r.cost_usd) ? { cost_usd: r.cost_usd } : {}) };
     return { ok: true, output: String(r.text).slice(0, REVIEW_OUTPUT_MAX), cost_usd: Number.isFinite(r.cost_usd) ? r.cost_usd : null, files, signals, truncated, model: offer.model ?? null };
   } catch (e) {

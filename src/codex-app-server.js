@@ -9,6 +9,7 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { codexActivityLabel } = require('./session-activity');
+const { productionCodexCarry } = require('../board/shared/codex-carry.cjs');
 
 // Owned threads are text-only: no shell/exec, image viewing, skills,
 // plugins, MCP servers, hooks, browser/computer use, web search, memories,
@@ -19,13 +20,18 @@ const DISABLED_FEATURES = ['shell_tool', 'unified_exec', 'unified_exec_tty', 'sh
   'browser_use_full_cdp_access', 'in_app_browser', 'in_app_local_automation', 'chronicle', 'memories', 'multi_agent',
   'image_generation', 'realtime_conversation', 'tool_suggest', 'skill_mcp_dependency_install', 'code_mode_host',
   'workspace_dependencies', 'worktrees', 'goals', 'sleep_tool', 'daemon_auto_start'];
-// Explicit overrides win over the user's ~/.codex/config.toml: the built-in
-// OpenAI provider, no MCP servers/plugins/project trust entries, no notify,
-// no inherited environment for any command.
-const CONFIG_OVERRIDES = ['model_provider="openai"', 'mcp_servers={}', 'plugins={}', 'projects={}', 'hooks={}', 'notify=[]',
+// Explicit overrides win over the user's ~/.codex/config.toml: the provider
+// (the user's own, carried by board/shared/codex-carry.cjs, else the built-in
+// OpenAI one), no MCP servers/plugins/project trust entries, no notify, no
+// inherited environment for any command.
+const OPENAI_PROVIDER = 'model_provider="openai"';
+const CONFIG_OVERRIDES = [OPENAI_PROVIDER, 'mcp_servers={}', 'plugins={}', 'projects={}', 'hooks={}', 'notify=[]',
   'web_search="disabled"', 'project_doc_max_bytes=0', 'include_apply_patch_tool=false', 'shell_environment_policy.inherit="none"'];
-const APP_SERVER_ARGS = Object.freeze(['app-server', '--listen', 'stdio://',
-  ...CONFIG_OVERRIDES.flatMap((c) => ['-c', c]), ...DISABLED_FEATURES.flatMap((f) => ['--disable', f])]);
+function appServerArgs(provider = null) {
+  const overrides = provider ? [...provider.overrides, ...(provider.model ? [`model=${JSON.stringify(provider.model)}`] : []), ...CONFIG_OVERRIDES.filter((c) => c !== OPENAI_PROVIDER)] : CONFIG_OVERRIDES;
+  return ['app-server', '--listen', 'stdio://', ...overrides.flatMap((c) => ['-c', c]), ...DISABLED_FEATURES.flatMap((f) => ['--disable', f])];
+}
+const APP_SERVER_ARGS = Object.freeze(appServerArgs());
 const ENV_KEYS = ['HOME', 'PATH', 'LANG', 'TMPDIR', 'TZ', 'CODEX_HOME'];
 const MAX_LINE = 4 * 1024 * 1024;
 const REQUEST_MS = 30_000;
@@ -41,7 +47,9 @@ function findCodexBin({ env = process.env, exists = (p) => { try { fs.accessSync
 
 const inputText = (content) => (Array.isArray(content) ? content : []).filter((c) => c?.type === 'text' && typeof c.text === 'string').map((c) => c.text).join('');
 
-function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spawn, clientVersion = '0' } = {}) {
+// carry: the user's Codex provider; undefined = the app's own (only for the app's own env), null = none.
+function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spawn, clientVersion = '0', carry } = {}) {
+  const codexCarry = carry !== undefined ? carry : env === process.env ? productionCodexCarry() : null;
   const events = new EventEmitter();
   const pending = new Map();
   let child = null, ready = null, nextId = 1, exited = false, skipping = false;
@@ -112,8 +120,29 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
     if (ready && !exited) return ready;
     if (!bin) return Promise.reject(new Error('Codex CLI not found'));
     exited = false;
-    const childEnv = Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]]));
-    child = spawn(bin, APP_SERVER_ARGS, { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] }); // privacy-flow: owned-codex-session
+    // With no carry the launch stays synchronous, as before.
+    const attempt = (codexCarry ? preflight().then((provider) => launch(provider)) : launch(null)).catch((error) => {
+      if (ready === attempt) ready = null;
+      throw error;
+    });
+    ready = attempt;
+    return ready;
+  }
+
+  // The provider check runs before every launch: a missing env_key value, an unreadable config or a gateway that
+  // doesn't answer fails here with a reason that names no value, instead of Codex waiting on the network forever.
+  async function preflight() {
+    if (!codexCarry) return null;
+    let c;
+    try { c = await codexCarry.prepare(); } catch { return null; }
+    if (c.failure) throw Object.assign(new Error(c.failure.reason), { code: c.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' });
+    return c.carry ? c : null;
+  }
+
+  function launch(provider) {
+    // Key values (env_key, translated headers) go in this process's env only; no command inherits it.
+    const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), ...provider?.cliEnv };
+    child = spawn(bin, provider ? appServerArgs(provider) : APP_SERVER_ARGS, { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] }); // privacy-flow: owned-codex-session
     const self = child;
     let buffer = '';
     child.stdout.setEncoding('utf8');
@@ -136,15 +165,12 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
     const ended = () => { if (child !== self || exited) return; exited = true; fail(new Error('Codex app-server exited')); events.emit('event', { kind: 'exit' }); };
     child.on('error', ended);
     child.on('exit', ended);
-    const attempt = request('initialize', { clientInfo: { name: 'plexiform', title: 'Plexiform', version: String(clientVersion) } })
+    return request('initialize', { clientInfo: { name: 'plexiform', title: 'Plexiform', version: String(clientVersion) } })
       .then(() => { write({ method: 'initialized' }); })
       .catch((error) => {
-        if (ready === attempt) ready = null;
         if (child === self) { child = null; exited = true; kill(self); }
         throw error;
       });
-    ready = attempt;
-    return ready;
   }
 
   async function open({ cwd }) {
@@ -189,4 +215,4 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
   };
 }
 
-module.exports = { createCodexAppServer, findCodexBin, APP_SERVER_ARGS, DISABLED_FEATURES, CONFIG_OVERRIDES };
+module.exports = { createCodexAppServer, findCodexBin, appServerArgs, APP_SERVER_ARGS, DISABLED_FEATURES, CONFIG_OVERRIDES };

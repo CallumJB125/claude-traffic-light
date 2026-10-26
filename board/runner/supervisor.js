@@ -139,6 +139,8 @@ export class Supervisor extends EventEmitter {
     // The user's own Claude provider and auth (board/shared/claude-carry.cjs); null = carry nothing. Hosted
     // runs never use it: the hub config is their only source.
     this.claudeCarry = opts.claudeCarry ?? null;
+    // The user's own Codex provider (board/shared/codex-carry.cjs); null = the built-in OpenAI provider. Never for hosted runs.
+    this.codexCarry = opts.codexCarry ?? null;
   }
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
@@ -601,7 +603,14 @@ export class Supervisor extends EventEmitter {
     const scope = await this.#scopeForRepo(m.repo_id);
     if (!scope || scope.repo_id !== m.repo_id) return reply({ ok: false, error: 'the repository does not match this board on this machine' });
     const bin = m.ai === 'claude' ? this.claudeBin : this.ais?.find((a) => a.id === m.ai)?.bin;
-    const body = await (this.opts.runReview ?? runReview)(m, { localPath: repo.local_path, home: this.env.HOME ?? null, bin, env: this.env });
+    let provider = null;
+    if (m.ai === 'codex' && !this.hosted && this.codexCarry) {
+      const c = await this.codexCarry.prepare();
+      // The hub gets a fixed sentence: the detail (paths, a gateway address) stays on this machine.
+      if (c.failure) { this.log.warn('review provider check failed', { kind: c.failure.kind }); return reply({ ok: false, error: `Codex ${c.failure.kind === 'auth' ? 'auth' : 'provider'} check failed on this machine` }); }
+      if (c.carry) provider = { overrides: c.overrides, model: c.model, env: c.cliEnv };
+    }
+    const body = await (this.opts.runReview ?? runReview)(m, { localPath: repo.local_path, home: this.env.HOME ?? null, bin, env: this.env, provider });
     return reply(body);
   }
 
@@ -684,7 +693,7 @@ export class Supervisor extends EventEmitter {
       this.log.error('spawn failed', { err: e.message });
       // The hub gets a fixed sentence: the detail (paths, a gateway address) stays on this machine.
       const local = e.code === 'AUTH' || e.code === 'PROVIDER';
-      await run.prepFailed(local ? `spawn: Claude ${e.code === 'AUTH' ? 'auth' : 'provider'} check failed on this machine` : `spawn: ${e.message}`);
+      await run.prepFailed(local ? `spawn: ${e.ai === 'codex' ? 'Codex' : 'Claude'} ${e.code === 'AUTH' ? 'auth' : 'provider'} check failed on this machine` : `spawn: ${e.message}`);
     }
     this.notifyLocal({ event: 'run_started', run_id: run.run_id, key });
     return run;
@@ -716,6 +725,12 @@ export class Supervisor extends EventEmitter {
       run.carry = carry;
       if (this.runs.get(run.run_id) !== run || run.ending || run.ended || run.fenced || !run.gateState().open) return null;
     }
+    if (ai === 'codex' && !this.hosted && this.codexCarry) {
+      carry = await this.codexCarry.prepare();
+      if (carry.failure) throw Object.assign(new Error(carry.failure.reason), { code: carry.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER', ai });
+      if (!carry.carry) carry = null;
+      if (this.runs.get(run.run_id) !== run || run.ending || run.ended || run.fenced || !run.gateState().open) return null;
+    }
     const anthropicKey = hosted?.anthropicKey ?? this.env.ANTHROPIC_API_KEY;
     const apiKeyFile = carry ? carry.apiKeyFile : !oneTurn && anthropicKey ? path.join(run.runDir, API_KEY_FILE) : null;
     if (apiKeyFile && !carry) writeFileAtomic(apiKeyFile, anthropicKey);
@@ -742,8 +757,8 @@ export class Supervisor extends EventEmitter {
     const backend = new Backend({
       bin: hosted?.bin ?? realBin, cwd: run.worktree, env, runDir: run.runDir, sessionId: run.sessionId, resume,
       budgetUsd: budget.usd, maxTurns: run.offer.max_turns, systemPrompt, model: hosted?.model ?? repo.model ?? carry?.model ?? undefined,
-      log: this.log, boardHome, ...(carry ? { extraDisallowed: carry.disallowed } : {}), interruptWaitMs: this.opts.interruptWaitMs ?? INTERRUPT_WAIT_MS, stopGraceMs: this.opts.stopGraceMs ?? STOP_GRACE_MS,
-      ...(oneTurn ? { ...run.gitAccess, cacheDir, boardRunDir: run.runDir, permissionMode: run.readOnly ? 'plan' : 'acceptEdits',
+      log: this.log, boardHome, ...(carry?.disallowed ? { extraDisallowed: carry.disallowed } : {}), interruptWaitMs: this.opts.interruptWaitMs ?? INTERRUPT_WAIT_MS, stopGraceMs: this.opts.stopGraceMs ?? STOP_GRACE_MS,
+      ...(oneTurn ? { ...run.gitAccess, cacheDir, boardRunDir: run.runDir, permissionMode: run.readOnly ? 'plan' : 'acceptEdits', providerOverrides: carry?.overrides ?? [],
         denyPaths: [repo.local_path, this.l.device, this.l.policy, this.l.ledger, this.l.outboxDir, path.join(home, 'run'), ...(hosted?.denyRead ?? [])], } : {}),
     });
     if (oneTurn) backend.oneTurn = true;

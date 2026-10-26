@@ -23,7 +23,7 @@ function capturingLog() {
   return { log: makeLogger(stream), text: () => lines.join('') };
 }
 
-async function hostedRig({ scenario, caps = {}, rpc, tokenAnswer = null, claudeCarry } = {}) {
+async function hostedRig({ scenario, caps = {}, rpc, tokenAnswer = null, claudeCarry, codexCarry } = {}) {
   const root = tmpDir('hst-');
   const repo = makeRepo(root);
   // What GitHub is to the Pi: the clone URL reaches the local bare repo.
@@ -55,7 +55,7 @@ async function hostedRig({ scenario, caps = {}, rpc, tokenAnswer = null, claudeC
   const clock = fakeClock();
   const bin = fakeClaudeBin(root, scenario);
   const sup = new Supervisor({
-    home: hosted.boardHome, device: hosted.device, hubUrl: hub.url, clock, claudeBin: bin, autoTick: false, hosted, log: cap.log, claudeCarry,
+    home: hosted.boardHome, device: hosted.device, hubUrl: hub.url, clock, claudeBin: bin, autoTick: false, hosted, log: cap.log, claudeCarry, codexCarry,
     env: hosted.childEnv({ HOME: path.join(home, 'cli-home'), USER: process.env.USER ?? 'runner', PATH: process.env.PATH, TMPDIR: process.platform === 'darwin' ? '/tmp' : os.tmpdir(), LANG: 'en_US.UTF-8' }),
     interruptWaitMs: 500, stopGraceMs: 800, gitleaks: null, rand: () => 0, reconnectDelayFn: () => 30, keepRunFiles: false, buddyHome: null, detectAis: async () => null,
     controlSocket: false,
@@ -222,12 +222,15 @@ test('no GitHub App installation for the repo: the offer is declined with the hu
 test('C6: a hosted run carries nothing from the service user\'s own Claude config; the hub config is the only source', { skip: !posix }, async () => {
   let asked = 0;
   const claudeCarry = { prepare: async () => { asked++; return { carry: true, failure: null, settingsEnv: { ANTHROPIC_BASE_URL: 'https://service-user.example/v1' }, model: 'service-user-model', disallowed: [], denyRead: [], cliEnv: {}, apiKeyFile: null, release() {} }; } };
-  const rig = await hostedRig({ scenario: { steps: [{ result: 'success' }] }, claudeCarry });
+  let codexAsked = 0;
+  const codexCarry = { prepare: async () => { codexAsked++; return { carry: true, failure: null, overrides: ['model_provider="service-user"'], model: 'service-user-model', cliEnv: {}, release() {} }; } };
+  const rig = await hostedRig({ scenario: { steps: [{ result: 'success' }] }, claudeCarry, codexCarry });
   try {
     const run = await claimRun(rig.sup, rig.hub, offerFor());
     const start = readFakeLog(run.runDir).find((e) => e.ev === 'start');
     const settings = JSON.parse(fs.readFileSync(path.join(run.runDir, 'settings.json'), 'utf8'));
     assert.equal(asked, 0, 'the carry was never consulted');
+    assert.equal(codexAsked, 0, 'nor the Codex carry');
     assert.ok(!('env' in settings), 'no routing in the run settings');
     assert.equal(start.argv[start.argv.indexOf('--model') + 1], 'claude-hosted-model', 'the hub\'s model, not the service user\'s');
     assert.ok(!JSON.stringify(start).includes('service-user'));
