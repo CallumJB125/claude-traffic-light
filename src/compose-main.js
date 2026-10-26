@@ -19,9 +19,9 @@ function peersKeyOf(preflight) {
 }
 
 /** What a row tells the card: no paths, no branch, no cost. */
-function cardRow(t) {
+function cardRow(t, activityMs = null) {
   if (!t) return null;
-  return { state: t.state, label: String(t.label || '').slice(0, 60), reason: String(t.reason || '').slice(0, 300), ai: { id: t.ai?.id ?? null }, actions: Array.isArray(t.actions) ? t.actions.slice(0, 20) : [], stateSinceMs: t.stateSinceMs };
+  return { state: t.state, label: String(t.label || '').slice(0, 60), reason: String(t.reason || '').slice(0, 300), ai: { id: t.ai?.id ?? null }, actions: Array.isArray(t.actions) ? t.actions.slice(0, 20) : [], stateSinceMs: t.stateSinceMs, lastActivityMs: Number.isFinite(activityMs) ? activityMs : null };
 }
 
 /**
@@ -80,7 +80,7 @@ function register(deps) {
     const own = started && d && started.wcId === e.sender.id && started.doc === d.doc ? started : null;
     const row = own ? (snap.tasks || []).find((t) => t.id === own.last) : null;
     return { hidden: false, connected, ais, folder, recent, shortcut: deps.shortcut?.() ?? null,
-      task: own ? { id: own.last, title: own.title, row: cardRow(row) } : null };
+      task: own ? { id: own.last, title: own.title, row: cardRow(row, own.activityAt) } : null };
   });
 
   ipcMain.handle('compose:pick-folder', async (e, ...args) => {
@@ -122,7 +122,7 @@ function register(deps) {
     if (!same(before)) return r?.ok ? { ok: false, code: 'STARTED_ELSEWHERE', id: r.id, text: "Started. It's in Tasks." } : refused('CONFLICT', MOVED);
     if (!r?.ok) return r;
     if (!started || started.wcId !== e.sender.id || started.doc !== before.document) started = { wcId: e.sender.id, doc: before.document, ids: new Set(), last: null, title: '' };
-    started.ids.add(r.id); started.last = r.id; started.title = String(req.text).trim().slice(0, 200);
+    started.ids.add(r.id); started.last = r.id; started.activityAt = now(); started.title = String(req.text).trim().slice(0, 200);
     try { await s.openTask(r.id, e.sender.id); } catch { /* the card still follows the list snapshot */ }
     return { ok: true, id: r.id };
   });
@@ -167,13 +167,14 @@ function register(deps) {
   function onEvent(wcId, id, event) {
     if (!started || wcId !== started.wcId) return false;
     if (!mine(wcId) || !started.ids.has(id)) return true;
+    started.activityAt = now();
     const line = CV.eventLine(event);
     const wc = homeWc();
-    if (line && wc && wc.id === wcId) wc.send('compose:event', { id, line });
+    if (line && wc && wc.id === wcId) wc.send('compose:event', { id, line, at: started.activityAt });
     return true;
   }
 
-  let lastRow = '', lastConn = null;
+  let lastRow = '', lastConn = null, lastState = null;
   function onChange(snap) {
     // The helper connecting or going away: Home asks for its info again (the box was offline, or is now).
     const conn = snap?.conn?.status ?? null;
@@ -181,7 +182,9 @@ function register(deps) {
     if (!started) return;
     const wc = homeWc();
     if (!wc || !mine(wc.id)) return;
-    const row = cardRow((snap?.tasks || []).find((t) => t && t.id === started.last));
+    const found = (snap?.tasks || []).find((t) => t && t.id === started.last);
+    if (found && found.state !== lastState) { lastState = found.state; started.activityAt = now(); }
+    const row = cardRow(found, started.activityAt);
     const msg = { id: started.last, row, connected: snap?.conn?.status === 'connected' };
     const json = JSON.stringify(msg);
     if (json === lastRow) return;

@@ -5,6 +5,7 @@
 // opaque card handle, never a path, URL or command.
 const InputView = require('./input-view.js');
 const SessionOverview = require('./session-overview.js');
+const { sessionTags } = require('./pending-inputs.js');
 const Organise = require('./work-organise.js');
 const { finding } = require('../usage-waste-view.js');
 const { summary } = require('./ai-tools.js');
@@ -60,10 +61,10 @@ function needs(inputs, now, paused = null) {
 
 // Live = reported in the last 90 s and not ended; the rest are only counted.
 function running(sessions, now, collisions = null) {
-  const snap = SessionOverview.snapshot({ sessions, now, collisions });
+  const snap = SessionOverview.snapshot({ sessions, now, collisions, tags: sessionTags(sessions) });
   const open = snap.sessions.filter((s) => s.detail !== 'Ended');
   const live = open.filter((s) => s.freshness === 'recent');
-  return { quiet: open.length - live.length, items: live.slice(0, LIST_MAX).map((s) => ({ provider: s.provider, project: s.project, status: s.status, bucket: s.bucket, age_ms: s.age_ms, ...(s.collisions ? { collision: s.collisions[0].text } : {}) })) };
+  return { quiet: open.length - live.length, items: live.slice(0, LIST_MAX).map((s) => ({ provider: s.provider, project: s.project, ...(s.tag ? { tag: s.tag } : {}), status: s.status, bucket: s.bucket, age_ms: s.age_ms, ...(s.collisions ? { collision: s.collisions[0].text } : {}) })) };
 }
 
 function today(spend, inputs, now) {

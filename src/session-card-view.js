@@ -104,4 +104,32 @@ function sessionCard(session, { now = Date.now(), spend = null, teammate = null,
     recap, deploy: mate ? '' : deployLine(deploy), help, helpWhy: help.length ? str(ex.why, 100) : '', nudgesPaused: paused };
 }
 
-module.exports = { deployLine, sessionCard, titleOf, words, initials, WAITING, IDLE };
+// A short tag per row when two or more rows share a provider and project, so
+// two "Claude Code · notes-app" cards can be told apart before one is answered
+// or opened. rows: [{provider, project, tmux?, title?, id?, startedAt?}].
+// → one string per row ('' when its provider+project is unique). The tag is the
+// first of tmux window/pane, terminal title, 4-character session id, start
+// time that tells every row in the group apart; the id is the fallback.
+const TAG_SOURCES = [
+  (r) => str(r.tmux, 24),
+  (r) => str(r.title, 24),
+  (r) => str(r.id, 200).replace(/[^A-Za-z0-9]/g, '').slice(-4),
+  (r) => { const t = stamp(r.startedAt); return t ? new Date(t).toISOString().slice(11, 16) : ''; },
+];
+function disambiguate(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const groups = new Map();
+  list.forEach((r, i) => {
+    const key = `${r && r.provider}\u0000${r && r.project}`;
+    groups.set(key, [...(groups.get(key) || []), i]);
+  });
+  const tags = list.map(() => '');
+  for (const at of groups.values()) {
+    if (at.length < 2) continue;
+    const pick = TAG_SOURCES.find((f) => { const v = at.map((i) => f(list[i])); return v.every(Boolean) && new Set(v).size === v.length; }) || TAG_SOURCES[2];
+    for (const i of at) tags[i] = pick(list[i]);
+  }
+  return tags;
+}
+
+module.exports = { deployLine, disambiguate, sessionCard, titleOf, words, initials, WAITING, IDLE };

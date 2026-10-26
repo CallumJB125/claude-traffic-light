@@ -114,7 +114,9 @@
     const state = row?.state || 'queued';
     const live = isLive(state);
     const needs = state === 'blocked';
-    const since = row && Number.isFinite(row.stateSinceMs) && now ? Math.max(0, now - row.stateSinceMs) : null;
+    // A quiet task is measured from its last sign of life: its state may have changed long ago, or just now.
+    const from = state === 'quiet' && Number.isFinite(row?.lastActivityMs) ? row.lastActivityMs : row?.stateSinceMs;
+    const since = Number.isFinite(from) && now ? Math.max(0, now - from) : null;
     const age = since === null ? '' : since < 60_000 ? ' · under a minute' : ` · ${Math.floor(since / 60_000)} min`;
     return {
       title: (task.title || '').split('\n')[0].slice(0, 120) || 'New task',

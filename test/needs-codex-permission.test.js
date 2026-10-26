@@ -44,3 +44,42 @@ test('one input per session: a request file or a real ask covers it', () => {
   const ask = { kind: 'notification', title: 't', message: 'm', at: iso(5) };
   assert.equal(PendingInputs.collect({ sessions: [codexAsk({ ask })], now: NOW }).length, 1);
 });
+
+// U5
+const CardView = require('../src/session-card-view.js');
+test('disambiguate: only a provider+project collision gets a tag; id is the fallback', () => {
+  const rows = [
+    { provider: 'Claude Code', project: 'notes-app', id: 'aaaa1111' }, { provider: 'Claude Code', project: 'notes-app', id: 'bbbb2222' },
+    { provider: 'Codex', project: 'notes-app', id: 'cccc3333' }, { provider: 'Claude Code', project: 'other', id: 'dddd4444' },
+  ];
+  assert.deepEqual(CardView.disambiguate(rows), ['1111', '2222', '', '']);
+  const tmux = rows.map((r, i) => ({ ...r, tmux: i < 2 ? `win${i}` : undefined }));
+  assert.deepEqual(CardView.disambiguate(tmux).slice(0, 2), ['win0', 'win1']);
+  const same = rows.map((r) => ({ ...r, tmux: 'w' }));
+  assert.deepEqual(CardView.disambiguate(same).slice(0, 2), ['1111', '2222']);
+  assert.deepEqual(CardView.disambiguate([]), []);
+});
+
+test('two same-folder sessions read differently on Needs you and Running now', () => {
+  const sessions = [codexAsk({ sessionId: 'aaaa1111', cwd: '/w/notes-app' }), codexAsk({ sessionId: 'bbbb2222', cwd: '/w/notes-app' })];
+  const inputs = PendingInputs.collect({ sessions, now: NOW });
+  const projects = Home.needs(inputs, NOW).items.map((i) => i.project);
+  assert.equal(new Set(projects).size, 2);
+  assert.ok(projects.every((p) => /notes-app \(\w{4}\)/.test(p)), projects.join());
+  const run = Home.running(sessions.map((s) => ({ ...s, updatedAt: iso(1000) })), NOW);
+  assert.equal(new Set(run.items.map((i) => i.tag)).size, 2);
+  const solo = Home.running([{ ...sessions[0], updatedAt: iso(1000) }], NOW);
+  assert.equal(solo.items[0].tag, undefined);
+});
+
+// A7
+const CV = require('../src/compose-view.js');
+const { cardRow } = require('../src/compose-main.js');
+test('a quiet task counts from its last activity, not its last state change', () => {
+  const row = { state: 'quiet', label: 'Quiet', stateSinceMs: NOW - 1000, lastActivityMs: NOW - 12 * 60_000 };
+  assert.match(CV.cardView({ title: 't', ai: 'claude', row }, NOW).status, /12 min/);
+  assert.match(CV.cardView({ title: 't', ai: 'claude', row: { ...row, state: 'running', stateSinceMs: NOW - 5 * 60_000 } }, NOW).status, /5 min/);
+  assert.match(CV.cardView({ title: 't', ai: 'claude', row }, NOW + 30 * 60_000).status, /42 min/);
+  assert.equal(cardRow({ state: 'quiet' }, NOW).lastActivityMs, NOW);
+  assert.equal(cardRow({ state: 'quiet' }).lastActivityMs, null);
+});

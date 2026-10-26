@@ -92,7 +92,7 @@ function policyOf(fn, row) {
     return { policy: { name: text(p.name, 80), source: p.source === 'repo' || p.source === 'default' ? p.source : null, warning: text(p.warning, 300), blocked: object(p.blocked) && text(p.blocked.text, 400) ? { text: text(p.blocked.text, 400), tool: text(p.blocked.tool, 80), at: Number.isFinite(p.blocked.at) ? p.blocked.at : null } : null } };
   } catch { return {}; }
 }
-function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null, handover = null, info = null, sharedTrees = null, collisions = null, policy = null, group = null } = {}) {
+function snapshot({ sessions = [], activity = {}, available = true, now = Date.now(), enrich = null, handover = null, info = null, sharedTrees = null, collisions = null, policy = null, group = null, tags = null } = {}) {
   const time = Number.isFinite(now) && now >= 0 ? now : Date.now();
   let latest = null, omitted = 0;
   const rows = [];
@@ -118,6 +118,7 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
       // Claude Code's own hook (set-status.js) writes no source field.
       provider: row.source == null ? PROVIDERS.claude : typeof row.source === 'string' && Object.hasOwn(PROVIDERS, row.source) ? PROVIDERS[row.source] : 'Local AI',
       project: projectName(row.cwd),
+      ...(tags && tags.get(row.sessionId) ? { tag: tags.get(row.sessionId) } : {}),
       ...groupOf(group, row),
       ...sessionStatus(row, presented, stuck, time),
       ...(stuck ? { stuck: { tool: stuck.tool || null, since_ms: stuck.sinceMs } } : {}),

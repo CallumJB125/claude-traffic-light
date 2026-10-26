@@ -231,6 +231,7 @@
   api.onFocus(() => { if (s.hidden) return; (s.task ? $('compose-new') : $('compose-text'))?.focus(); });
   api.onEvent((m) => {
     if (!s.task || !m || m.id !== s.task.id || typeof m.line !== 'string') return;
+    if (s.task.row && Number.isFinite(m.at)) s.task.row.lastActivityMs = m.at;
     s.task.lines.push(m.line.slice(0, 200)); if (s.task.lines.length > LINES_MAX) s.task.lines.shift();
     renderCard();
   });
@@ -239,6 +240,11 @@
     s.task.row = m.row || null; s.connected = m.connected !== false;
     renderCard();
   });
+  // The card's elapsed time is read off the clock, so its status line is refreshed without waiting for an event (and without rebuilding the buttons).
+  setInterval(() => {
+    const line = s.task && !document.hidden ? document.querySelector('.compose-card-status') : null, c = line && CV.cardView(s.task, Date.now());
+    if (c) line.textContent = c.status;
+  }, 30_000);
   api.onChanged?.(() => { void load(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) void load(); });
   void load();
