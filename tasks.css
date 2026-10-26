@@ -13,7 +13,7 @@ h1 { margin: 0; font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.
 .list-empty { margin: 0; padding: 12px 16px; color: var(--muted); font-size: var(--text-sm); }
 
 .btn { border: 1px solid var(--line-strong); background: var(--panel-2); border-radius: var(--radius); padding: 5px 11px; min-height: 28px; transition: background-color var(--t-fast); }
-.btn:focus-visible, .row:focus-visible, .tab:focus-visible, .chip:focus-visible { outline: none; box-shadow: var(--focus); }
+.btn:focus-visible, .row:focus-visible, .tab:focus-visible, .chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; box-shadow: var(--focus); }
 @media (hover: hover) { .btn:hover:not(:disabled) { background: var(--line); } }
 .btn:disabled { opacity: 0.5; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
@@ -94,7 +94,7 @@ body.standalone .main { padding-top: 24px; }
 .send .hint { flex: 1; color: var(--faint); font-size: var(--text-xs); }
 
 textarea, input[type=text], select { background: var(--bg); border: 1px solid var(--line-input); border-radius: var(--radius); padding: 6px 8px; }
-textarea:focus-visible, input:focus-visible, select:focus-visible { outline: none; box-shadow: var(--focus); }
+textarea:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; box-shadow: var(--focus); }
 textarea { resize: vertical; }
 
 dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0 0 14px; }

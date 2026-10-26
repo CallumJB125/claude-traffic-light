@@ -1454,3 +1454,7 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 .mention-pick .mention-option { display: block; width: 100%; text-align: left; border: 0; background: none; color: var(--text); font: inherit; padding: 4px 8px; border-radius: var(--radius-sm); cursor: pointer; }
 .mention-pick [aria-selected="true"] .mention-option, .mention-pick .mention-option:hover, .mention-pick .mention-option:focus-visible { background: color-mix(in oklab, var(--accent) 12%, transparent); }
 @media (max-width: 720px) { .pin { grid-template-columns: 1fr auto; } .pin-kind, .pin-value, .pin-by { grid-column: 1; } .pin-remove { grid-column: 2; grid-row: 1; } .pin-form { grid-template-columns: 1fr 1fr; } }
+
+@media (forced-colors: active) {
+  .filter-input:focus-visible, .pal-input:focus-visible, .drawer-title:focus-visible, .card-open:focus-visible { outline: 2px solid Highlight; }
+}

@@ -140,3 +140,7 @@ h1 { font-size: 24px; letter-spacing: -.03em; }
 .btn:active:enabled { transform: scale(.98); }
 @media (prefers-reduced-motion: reduce) { .btn:active:enabled { transform: none; } }
 .approval.focused { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 8px; }
+
+@media (forced-colors: active) {
+  h1:focus { outline: 2px solid Highlight; }
+}

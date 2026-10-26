@@ -1,0 +1,7 @@
+test-visual/__screenshots__/find-agents.spec.js/find-agents-forced-colors-darwin.png
+test-visual/__screenshots__/find-agents.spec.js/find-agents-grid-dark-darwin.png
+test-visual/__screenshots__/find-agents.spec.js/find-agents-grid-light-darwin.png
+test-visual/__screenshots__/find-agents.spec.js/find-agents-no-key-darwin.png
+test-visual/__screenshots__/find-agents.spec.js/find-agents-search-dark-darwin.png
+test-visual/__screenshots__/find-agents.spec.js/find-agents-search-light-darwin.png
+test-visual/__screenshots__/inputs.spec.js/lights-auto-rules-darwin.png

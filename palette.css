@@ -3,7 +3,7 @@
 .palette[hidden] { display: none; }
 .palette-dialog { width: min(640px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); box-shadow: 0 24px 60px color-mix(in oklab, var(--bg) 60%, transparent); overflow: hidden; animation: palette-in var(--t-fast); }
 .palette-dialog input { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--text-lg); color: var(--text); background: var(--panel); border: 0; border-bottom: 1px solid var(--line); padding: 14px 16px; outline: none; }
-.palette-dialog input:focus-visible { box-shadow: inset var(--focus); }
+.palette-dialog input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .palette-list { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow: auto; }
 .palette-item { display: grid; grid-template-columns: 92px 1fr; column-gap: 12px; align-items: baseline; padding: 10px 12px; border-radius: var(--radius); cursor: pointer; }
 .palette-item[aria-selected="true"] { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }

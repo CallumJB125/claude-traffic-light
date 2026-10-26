@@ -41,12 +41,18 @@
   --text-lg: 16px;
   --text-xl: 22px;
 
-  --focus: 0 0 0 2px var(--accent);
+  /* Two-tone focus ring: an outline (survives forced-colors) with a 2px halo filling the offset gap. Today's accent. */
+  --focus-ring: var(--accent);
+  --focus-halo: var(--bg);
+  --focus: 0 0 0 2px var(--focus-halo);
   --t: 160ms ease;
   --t-fast: 120ms ease;
 }
 
-:focus-visible { outline: none; box-shadow: var(--focus); }
+:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; box-shadow: var(--focus); }
+@media (forced-colors: active) {
+  :focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+}
 
 /* Native pages follow the system appearance; status ink stays readable on paper.
    The widget's chrome is always dark, so index.html opts out with data-theme="dark". */

@@ -63,3 +63,48 @@ test('setup asks who it is for, then gives a test prompt and says why nothing sh
   await expect(setup.locator('#not-showing')).toBeVisible();
   await setup.screenshot(shot('setup-signal.png'));
 });
+
+// Q13 M1: the sidebar and account controls whose base rule is `all: unset` must still draw an outline when
+// reached by keyboard, in normal and forced colours. shell.css is shared by sidebar.html and account.html, so
+// the account controls (.acct-link, .switch) and the sign-out link are probed as buttons added to the sidebar.
+for (const forcedColors of ['none', 'active']) {
+  test(`keyboard focus on sidebar and account controls is outlined (forced colours: ${forcedColors})`, async () => {
+    const sidebar = await windowByFile(h.app, 'sidebar.html');
+    await sidebar.emulateMedia({ forcedColors });
+    try {
+      await sidebar.evaluate(() => {
+        const box = document.createElement('div');
+        box.id = 'q13-probes';
+        for (const cls of ['ws-signout', 'acct-link', 'switch']) {
+          const b = document.createElement('button');
+          b.type = 'button'; b.className = cls; b.textContent = cls; b.dataset.probe = cls;
+          if (cls === 'switch') { b.setAttribute('role', 'switch'); b.setAttribute('aria-checked', 'false'); }
+          box.append(b);
+        }
+        document.body.append(box);
+        document.activeElement?.blur?.();
+      });
+      const seen = [];
+      for (let i = 0; i < 40; i += 1) {
+        await sidebar.keyboard.press('Tab');
+        const f = await sidebar.evaluate(() => {
+          const e = document.activeElement;
+          if (!e || e === document.body) return null;
+          const cs = getComputedStyle(e);
+          return { key: e.dataset.probe || (e.classList.contains('nav-item') ? `nav:${e.dataset.section || e.dataset.page || e.textContent.trim()}` : null),
+            style: cs.outlineStyle, width: cs.outlineWidth, focusVisible: e.matches(':focus-visible') };
+        });
+        if (!f || !f.key) continue;
+        expect(f.focusVisible).toBe(true);
+        expect(f.style, `${f.key} outline-style`).not.toBe('none');
+        expect(parseFloat(f.width), `${f.key} outline-width`).toBeGreaterThan(0);
+        seen.push(f.key);
+      }
+      for (const p of ['ws-signout', 'acct-link', 'switch']) expect(seen).toContain(p);
+      expect(seen.filter((k) => k.startsWith('nav:')).length).toBeGreaterThan(2);
+    } finally {
+      await sidebar.evaluate(() => document.getElementById('q13-probes')?.remove());
+      await sidebar.emulateMedia({ forcedColors: 'none' });
+    }
+  });
+}
