@@ -20,7 +20,7 @@ const { tcpProbe, burstOwnsPort, PROBE_MS } = require('./claude-carry.cjs');
 const TRANSLATED = /^PLEXIFORM_PROVIDER_/;
 const LOOPBACK = (host) => host === 'localhost' || host === '::1' || host === '[::1]' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 const BARE_ID = /^[A-Za-z0-9_-]+$/;
-const EMPTY = Object.freeze({ carry: false, failure: null, providerId: null, overrides: [], model: null, cliEnv: {}, burst: false, translated: false });
+const EMPTY = Object.freeze({ carry: false, failure: null, providerId: null, overrides: [], model: null, cliEnv: {}, burst: false, translated: false, codexHome: null });
 
 // C16: a provider override may only set these key paths, which are disjoint from codexConfig's.
 function overrideKeyAllowed(override, providerId) {
@@ -72,14 +72,16 @@ function createCodexCarry({
 
   /**
    * → { carry, failure:{kind:'auth'|'provider', reason}|null, providerId, overrides, model, cliEnv,
-   *     burst, translated, release() }. carry:false = no provider set: the caller behaves as before (OpenAI).
+   *     burst, translated, codexHome, release() }. carry:false = no provider set: the caller behaves as before (OpenAI).
+   * codexHome (every result without a failure): the CODEX_HOME this config was read from, possibly the login
+   * shell's. Callers set it as the CLI's CODEX_HOME and deny it to tool shells, so the run and the deny list agree.
    */
   async function prepare() {
     let p;
     // carry:false means only "config read, no model_provider"; an unreadable config must never fall back to OpenAI.
     try { p = await resolve(); } catch { return fail('provider', 'Codex settings could not be read'); }
     if (p.unsupported.length) return fail('provider', `Codex settings: ${p.unsupported[0].message}`);
-    if (!p.providerId) return { ...EMPTY, release() {} };
+    if (!p.providerId) return { ...EMPTY, codexHome: p.codexHome, release() {} };
     // codex splits a -c key path on every '.', so a quoted id can't be addressed; refuse it rather than misroute.
     if (!BARE_ID.test(p.providerId)) return fail('provider', 'Codex provider ids with characters other than letters, digits, - and _ aren\'t carried yet');
     // Without its sign-in the run would reach the gateway unauthenticated and fail late with a 401.
@@ -102,11 +104,19 @@ function createCodexCarry({
     }
     return {
       carry: true, failure: null, providerId: p.providerId, overrides, model: p.model, cliEnv: { ...p.cliEnv }, burst,
-      translated: Object.keys(p.cliEnv).some((k) => TRANSLATED.test(k)), release() {},
+      translated: Object.keys(p.cliEnv).some((k) => TRANSLATED.test(k)), codexHome: p.codexHome, release() {},
     };
   }
 
   return { prepare, resolve };
+}
+
+// The login-shell names main must read for the Codex carry (src/login-env-hub.js): CODEX_HOME, then the variables
+// the provider in that CODEX_HOME's config.toml names (env_key, env_http_headers). Names only, never values.
+function codexLoginNames({ env = process.env, loginEnv = {}, home = os.homedir(), readFile = (file) => boundedReadFile(file, CONFIG_TOML_MAX_BYTES) } = {}) {
+  let p;
+  try { p = codexProvider({ env, loginEnv, home, readFile }); } catch { return ['CODEX_HOME']; }
+  return ['CODEX_HOME', ...p.envNames];
 }
 
 // The carry the app's own processes use. Under the no-real-cli guard (tests) there is none, so a test that
@@ -119,4 +129,4 @@ function productionCodexCarry(opts = {}) {
 // A Codex takeover runs in the user's own terminal: a value Plexiform translated out of config.toml can't follow it.
 const TAKEOVER_TRANSLATED = 'This Codex provider has its key written in config.toml, which a terminal takeover can\'t carry. Move it to env_key with the variable exported in your shell, then take over again.';
 
-module.exports = { createCodexCarry, productionCodexCarry, overrideKeyAllowed, gatewayOf, TAKEOVER_TRANSLATED };
+module.exports = { createCodexCarry, productionCodexCarry, codexLoginNames, overrideKeyAllowed, gatewayOf, TAKEOVER_TRANSLATED };

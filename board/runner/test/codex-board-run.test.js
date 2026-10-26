@@ -166,3 +166,19 @@ test('board run: a failed Codex provider check sends the hub a fixed sentence; t
     assert.equal(starts(h).length, 0, 'Codex never started');
   } finally { await h.close(); }
 });
+
+// Review item 4: the CODEX_HOME the carry read (here a login-shell one) is the run's, and tool shells are denied it
+// as well as the default ~/.codex; with no provider it still applies.
+test('board run: CODEX_HOME is the carry\'s codexHome, denied to tool shells along with ~/.codex', async () => {
+  for (const carried of [true, false]) {
+    const h = await rig({ codexCarry: fakeCarry(carried ? { carry: true, failure: null, overrides: ['model_provider="plexlab"'], model: null, cliEnv: {}, codexHome: '/fx/login-codex' } : { carry: false, failure: null, overrides: [], model: null, cliEnv: {}, codexHome: '/fx/login-codex' }) });
+    try {
+      const run = await claimRun(h.sup, h.hub, h.offer); await waitFor(() => run.localState === 'idle');
+      const first = starts(h)[0];
+      assert.equal(first.env.CODEX_HOME, '/fx/login-codex', `carry:${carried}`);
+      const fsTable = first.argv.find((a) => a.startsWith('permissions.plexiform.filesystem='));
+      assert.ok(fsTable.includes('"/fx/login-codex"="deny"'));
+      assert.ok(fsTable.includes(`${JSON.stringify(path.join(h.dir, '.codex'))}="deny"`), 'the default one too');
+    } finally { await h.close(); }
+  }
+});

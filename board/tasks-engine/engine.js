@@ -1174,12 +1174,13 @@ export class TasksEngine extends EventEmitter {
 
   // A fresh read of the user's Codex provider (board/shared/codex-carry.cjs) for each launch, never a cached one:
   // a takeover of a task that never ran here, or after a restart or a config change, must not fall back to OpenAI.
-  // → the carry, or null for no provider; a failed preflight throws AUTH or PROVIDER with its reason.
+  // → the prepare result (carry:false = no provider, still with its codexHome), or null with no carry configured;
+  // a failed preflight throws AUTH or PROVIDER with its reason.
   async #codexProvider() {
     if (!this.codexCarry) return null;
     const c = await this.codexCarry.prepare();
     if (c.failure) throw Object.assign(new Error(c.failure.reason), { code: c.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' });
-    return c.carry ? c : null;
+    return c;
   }
 
   #releaseCarry(task) {
@@ -1233,17 +1234,20 @@ export class TasksEngine extends EventEmitter {
     };
     run.exited = new Promise((r) => { run.resolveExited = r; });
     await this.#writeRunFiles(task, runDir, socketPath, token);
+    let codexHome = null;
     if (task.ai.id === 'codex') {
       this.#releaseCarry(task);
       const c = await this.#codexProvider();
-      if (c) this.carries.set(task.id, c);
+      codexHome = c?.codexHome ?? null;
+      if (c?.carry) this.carries.set(task.id, c);
     }
     if (task.ai.id !== 'gemini') run.ipc = await startIpcServer({ socketPath, token, log: this.log, handler: this.#ipcHandler(task, run) });
     if (this.closing || this.closed) { await run.ipc?.close(); return; }
     this.runs.set(task.id, run);
     const carry = this.carries.get(task.id) ?? null;
     const env = { ...buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart }), ...carry?.cliEnv };
-    if (task.ai.id === 'codex' && this.env.CODEX_HOME) env.CODEX_HOME = this.env.CODEX_HOME;
+    // The CODEX_HOME the carry read (maybe the login shell's): codexConfig denies this same folder to tool shells.
+    if (task.ai.id === 'codex' && (codexHome || this.env.CODEX_HOME)) env.CODEX_HOME = codexHome || this.env.CODEX_HOME;
     // Package-manager caches live in a per-task dir, never the user's global caches.
     const cacheDir = this.#cacheDir(task);
     fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
@@ -2002,10 +2006,13 @@ export class TasksEngine extends EventEmitter {
         if (!['claude', 'codex'].includes(task.ai.id)) throw new ApiError('CAPABILITY_MISSING', 'This AI does not support a managed terminal handover.');
         const info = this.#aiInfo(task.ai.id);
         // Checked before a live run is stopped, so a refusal leaves it running.
-        let codexCarry = null;
+        let codexCarry = null, codexHome = null;
         if (task.ai.id === 'codex') {
-          try { codexCarry = await this.#codexProvider(); } catch (e) { throw new ApiError('NOT_AVAILABLE', e.message); }
-          if (codexCarry?.translated) throw new ApiError('NOT_AVAILABLE', TAKEOVER_TRANSLATED);
+          let c;
+          try { c = await this.#codexProvider(); } catch (e) { throw new ApiError('NOT_AVAILABLE', e.message); }
+          if (c?.translated) throw new ApiError('NOT_AVAILABLE', TAKEOVER_TRANSLATED);
+          codexCarry = c?.carry ? c : null;
+          codexHome = c?.codexHome ?? null;
         }
         if (run) {
           this.#setState(task, 'handing_over');
@@ -2018,7 +2025,7 @@ export class TasksEngine extends EventEmitter {
         this.#setState(task, 'handed_over');
         if (task.ai.id === 'codex') {
           const env = buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart });
-          if (this.env.CODEX_HOME) env.CODEX_HOME = this.env.CODEX_HOME;
+          if (codexHome || this.env.CODEX_HOME) env.CODEX_HOME = codexHome || this.env.CODEX_HOME;
           env.TMPDIR = path.join(this.#cacheDir(task), 'tmp');
           // The provider's -c values go on the command; its key values never do (the terminal's own env supplies env_key).
           const options = { bin: info.bin, cwd: task.worktree, env, runDir, sessionId: task.sessionId, resume: task.sessionStarted,

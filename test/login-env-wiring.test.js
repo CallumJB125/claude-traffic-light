@@ -209,3 +209,90 @@ test('review 5: focus refreshes are at most one a minute; invalidate is not limi
   await hub.focus();
   assert.equal(reads, 2);
 });
+
+// ── PR 3 (Codex, review item 4): CODEX_HOME and env_key names from the login shell ──
+const { createCodexCarry, productionCodexCarry } = require('../board/shared/codex-carry.cjs');
+const { carryNames } = require('../src/login-env-hub.js');
+const CodexAppServer = require('../src/codex-app-server.js');
+const CODEX_KEY = 'codex-fake-key-0123456789abcdef';
+const codexToml = (envKey) => `model_provider = "gw"\n[model_providers.gw]\nbase_url = "http://10.0.0.5:4001/v1"\nenv_key = "${envKey}"\n`;
+const codexFiles = { '/fx/home/.codex/config.toml': codexToml('APP_GW_KEY'), '/fx/alt/config.toml': codexToml('DEEPSEEK_API_KEY') };
+
+test('carryNames: the Claude names plus CODEX_HOME and the env_key the Codex config in force names', () => {
+  const readFile = (f) => codexFiles[f] ?? null;
+  const first = carryNames(null, { env: { HOME: '/fx/home' }, home: '/fx/home', readFile });
+  for (const n of [...CARRY_NAMES, 'CODEX_HOME', 'APP_GW_KEY']) assert.ok(first.includes(n), n);
+  assert.ok(!first.includes('DEEPSEEK_API_KEY'));
+  const second = carryNames({ CODEX_HOME: '/fx/alt' }, { env: { HOME: '/fx/home' }, home: '/fx/home', readFile });
+  assert.ok(second.includes('DEEPSEEK_API_KEY'), 'a login-shell CODEX_HOME points at a config naming another variable');
+  assert.deepEqual(carryNames(null, { env: { HOME: '/fx/home' }, home: '/fx/home', readFile: () => { throw new Error('denied'); } }), [...new Set(CARRY_NAMES)], 'an unreadable config adds no names (CODEX_HOME is already one) and never throws');
+});
+
+test('the hub reads env_key names on demand: a second read only when the login CODEX_HOME names new ones; values never logged', async () => {
+  const asked = [];
+  const logs = [];
+  const shell = { CODEX_HOME: '/fx/alt', DEEPSEEK_API_KEY: CODEX_KEY };
+  const read = async ({ names }) => { asked.push([...names]); return { ok: true, env: Object.fromEntries(names.filter((n) => n in shell).map((n) => [n, shell[n]])), reason: null }; };
+  const readFile = (f) => codexFiles[f] ?? null;
+  const hub = createLoginEnvHub({ read, names: (lv) => carryNames(lv, { env: { HOME: '/fx/home' }, home: '/fx/home', readFile }), log: (m) => logs.push(m) });
+  await hub.refresh();
+  assert.equal(asked.length, 2);
+  assert.ok(!asked[0].includes('DEEPSEEK_API_KEY') && asked[1].includes('DEEPSEEK_API_KEY'));
+  assert.deepEqual(await hub.read({ names: ['CODEX_HOME', 'DEEPSEEK_API_KEY'] }), shell);
+  assert.ok(!JSON.stringify(logs).includes(CODEX_KEY));
+  // Nothing new to read: one shell start.
+  const once = [];
+  const plain = createLoginEnvHub({ read: async ({ names }) => { once.push(names); return { ok: true, env: {}, reason: null }; }, names: (lv) => carryNames(lv, { env: { HOME: '/fx/home' }, home: '/fx/home', readFile }) });
+  await plain.refresh();
+  assert.equal(once.length, 1);
+  // A names function that throws falls back to the fixed Claude names.
+  const fixed = [];
+  const broken = createLoginEnvHub({ read: async ({ names }) => { fixed.push(names); return { ok: true, env: {}, reason: null }; }, names: () => { throw new Error('x'); } });
+  await broken.refresh();
+  assert.deepEqual(fixed[0], CARRY_NAMES);
+});
+
+test('a helper\'s Codex carry gets CODEX_HOME and the env_key value from the store, and reports that CODEX_HOME', async () => {
+  const store = createLoginEnvStore();
+  store.accept(loginEnvMessage({ CODEX_HOME: '/fx/alt', DEEPSEEK_API_KEY: CODEX_KEY }));
+  const carry = createCodexCarry({ env: { HOME: '/fx/home' }, home: '/fx/home', platform: 'linux', loginShellEnv: store.loginShellEnv, readFile: (f) => codexFiles[f] ?? null, probe: async () => true, burstOwnsPort: async () => false });
+  const r = await carry.prepare();
+  assert.equal(r.failure, null);
+  assert.equal(r.codexHome, '/fx/alt');
+  assert.equal(r.cliEnv.DEEPSEEK_API_KEY, CODEX_KEY);
+  for (const f of ['board/runner/app-entry.js', 'board/tasks-engine/utility-entry.js']) {
+    assert.match(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), /productionCodexCarry\(\{.*loginShellEnv: loginEnv\.loginShellEnv/, f);
+  }
+});
+
+test('main wires the hub into the owned Codex chat and reads Codex names: setLoginShellEnv and carryNames', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(src, /CodexAppServer\.setLoginShellEnv\(loginEnvHub\.read\)/);
+  assert.match(src, /names: \(lv\) => LoginEnvHub\.carryNames\(lv\)/);
+});
+
+test('the owned Codex chat\'s default carry asks the hub seam, and its CODEX_HOME is the one the config came from', async () => {
+  const net = require('node:net');
+  const gw = net.createServer((s) => s.destroy());
+  await new Promise((res) => gw.listen(0, '127.0.0.1', res));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pxcx-')), alt = path.join(home, 'alt');
+  fs.mkdirSync(alt);
+  fs.writeFileSync(path.join(alt, 'config.toml'), codexToml('DEEPSEEK_API_KEY').replace('http://10.0.0.5:4001/v1', `http://127.0.0.1:${gw.address().port}/v1`));
+  const asked = [];
+  CodexAppServer.setLoginShellEnv(async ({ names }) => { asked.push(...names); return { CODEX_HOME: alt, DEEPSEEK_API_KEY: CODEX_KEY }; });
+  const calls = [];
+  const spawn = (bin, args, opts) => { calls.push({ args, env: opts.env }); const p = new EventEmitter(); throw Object.assign(new Error('stop here'), { p }); };
+  let a;
+  // The guard nulls the production carry; lift it only while the adapter is built. HOME is a temp dir, so the real
+  // ~/.codex is never read, and the spawn is a recorder that never starts anything.
+  globalThis.__plexiformNoRealCli = false;
+  try { a = CodexAppServer.createCodexAppServer({ bin: '/nonexistent/codex', spawn, env: { HOME: home, PATH: '/bin' } }); } finally { globalThis.__plexiformNoRealCli = true; }
+  try {
+    await a.open({ cwd: '/tmp' }).catch(() => {});
+    assert.ok(asked.includes('CODEX_HOME') && asked.includes('DEEPSEEK_API_KEY'));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].env.CODEX_HOME, alt);
+    assert.equal(calls[0].env.DEEPSEEK_API_KEY, CODEX_KEY);
+    assert.equal(calls[0].args[calls[0].args.indexOf('model_provider="gw"') - 1], '-c');
+  } finally { CodexAppServer.setLoginShellEnv(null); try { a.stop(); } catch { /* never started */ } gw.close(); fs.rmSync(home, { recursive: true, force: true }); }
+});

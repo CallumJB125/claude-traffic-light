@@ -608,7 +608,9 @@ export class Supervisor extends EventEmitter {
       const c = await this.codexCarry.prepare();
       // The hub gets a fixed sentence: the detail (paths, a gateway address) stays on this machine.
       if (c.failure) { this.log.warn('review provider check failed', { kind: c.failure.kind }); return reply({ ok: false, error: `Codex ${c.failure.kind === 'auth' ? 'auth' : 'provider'} check failed on this machine` }); }
-      if (c.carry) provider = { overrides: c.overrides, model: c.model, env: c.cliEnv };
+      const home = c.codexHome ? { CODEX_HOME: c.codexHome } : {};
+      if (c.carry) provider = { overrides: c.overrides, model: c.model, env: { ...c.cliEnv, ...home } };
+      else if (c.codexHome) provider = { overrides: [], model: null, env: home };
     }
     const body = await (this.opts.runReview ?? runReview)(m, { localPath: repo.local_path, home: this.env.HOME ?? null, bin, env: this.env, provider });
     return reply(body);
@@ -725,9 +727,11 @@ export class Supervisor extends EventEmitter {
       run.carry = carry;
       if (this.runs.get(run.run_id) !== run || run.ending || run.ended || run.fenced || !run.gateState().open) return null;
     }
+    let codexHome = null;
     if (ai === 'codex' && !this.hosted && this.codexCarry) {
       carry = await this.codexCarry.prepare();
       if (carry.failure) throw Object.assign(new Error(carry.failure.reason), { code: carry.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER', ai });
+      codexHome = carry.codexHome ?? null;
       if (!carry.carry) carry = null;
       if (this.runs.get(run.run_id) !== run || run.ending || run.ended || run.fenced || !run.gateState().open) return null;
     }
@@ -748,6 +752,8 @@ export class Supervisor extends EventEmitter {
     const cacheDir = path.join(home, 'cache', run.run_id);
     if (oneTurn) { ensureDir(cacheDir); ensureDir(path.join(cacheDir, 'tmp')); }
     const env = { ...(oneTurn ? buildCodexEnv(this.env, cacheDir) : buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart, buddyOwned })), ...carry?.cliEnv, ...hosted?.env };
+    // The CODEX_HOME the carry read (maybe the login shell's): codexConfig denies this same folder to tool shells.
+    if (codexHome) env.CODEX_HOME = codexHome;
     const brief = boardBrief({ key: run.key, fence: run.fence, nonce: run.nonce, trusted: trustedInstructions(repo.local_path, 20000, oneTurn ? 'codex' : ai) });
     const systemPrompt = hosted?.briefNote ? `${brief}\n\n${hosted.briefNote}` : brief;
     const Backend = this.opts.Backend ?? BACKENDS[ai] ?? ClaudeBackend;

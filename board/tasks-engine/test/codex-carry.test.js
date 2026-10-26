@@ -175,3 +175,26 @@ test('a run whose provider became an inline key since it started refuses the tak
     assert.equal(h.task(id).state, 'running', 'checked before the run is stopped');
   } finally { await h.cleanup(); }
 });
+
+// Review item 4: a CODEX_HOME found only in the login shell is the run's and the takeover's, and is denied to tool shells.
+test('a login-shell CODEX_HOME is the run\'s and the takeover\'s CODEX_HOME and is in the deny list', { skip: !posix }, async () => {
+  const ALT = '/home/fixture/alt-codex';
+  const c = createCodexCarry({
+    env: { PLEXLAB_KEY: KEY }, home: HOME, platform: 'linux',
+    loginShellEnv: async ({ names }) => (names.includes('CODEX_HOME') ? { CODEX_HOME: ALT } : {}),
+    readFile: (f) => (f === `${ALT}/config.toml` ? PLEXLAB : null),
+    probe: async () => true, burstOwnsPort: async () => false,
+  });
+  const h = await setup({ wait: true, waitFirstOnly: true }, { codexCarry: c });
+  try {
+    const { id } = await h.client.createTask({ text: 'Take this over', cwd: h.repo.checkout, ai: 'codex', permissionLevel: 'auto-edits' });
+    await waitFor(() => h.task(id)?.sessionStarted && h.task(id).state === 'running');
+    const start = h.log().find((x) => x.kind === 'start');
+    assert.equal(start.env.CODEX_HOME, ALT);
+    assert.ok(carriesPlexlab(start.argv), 'the provider came from the login-shell CODEX_HOME');
+    assert.ok(start.argv.find((a) => a.startsWith('permissions.plexiform.filesystem=')).includes(`"${ALT}"="deny"`));
+    const r = await h.client.act(id, 'takeover', { mode: 'print' });
+    assert.equal(r.takeover.env.CODEX_HOME, ALT);
+    assert.ok(r.takeover.argv.find((a) => a.startsWith('permissions.plexiform.filesystem=')).includes(`"${ALT}"="deny"`));
+  } finally { await h.cleanup(); }
+});

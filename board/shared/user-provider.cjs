@@ -302,7 +302,7 @@ function tomlValue(v) {
 }
 
 function blankCodex(codexHome, unsupported = []) {
-  return { codexHome, providerId: null, model: null, baseUrl: null, overrides: [], cliEnv: {}, missingEnv: [], burst: { detected: false }, unsupported, dropped: [] };
+  return { codexHome, providerId: null, model: null, baseUrl: null, overrides: [], cliEnv: {}, missingEnv: [], envNames: [], burst: { detected: false }, unsupported, dropped: [] };
 }
 
 function codexProvider({ env = {}, loginEnv = {}, home, readFile }) {
@@ -347,6 +347,7 @@ function codexProvider({ env = {}, loginEnv = {}, home, readFile }) {
     const bad = (name) => typeof name !== 'string' || !ENV_NAME.test(name);
     const envValue = (name) => { const v = env[name] ?? loginEnv[name]; return typeof v === 'string' && v !== '' ? v : null; };
     const need = (name) => {
+      if (!out.envNames.includes(name)) out.envNames.push(name);
       const v = envValue(name);
       if (v == null) { if (!out.missingEnv.includes(name)) out.missingEnv.push(name); } else out.cliEnv[name] = v;
     };

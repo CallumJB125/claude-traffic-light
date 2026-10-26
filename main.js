@@ -1801,8 +1801,10 @@ const claudeKeyRoot = () => require('./src/claude-carry.js').ensureKeyRoot(path.
 // ~/.zshrc). Read once in the background by the instance that holds the lock; until it lands (or if it fails) every
 // spawn uses the app's own env. Subscribers are the Tasks helper and the team runners, over their parentPort.
 const LoginShellEnv = require('./src/login-shell-env.js');
-const loginEnvHub = require('./src/login-env-hub.js').createLoginEnvHub({ read: (a) => LoginShellEnv.readLoginShellEnv(a), invalidate: LoginShellEnv.invalidate, log: (m) => console.warn('[claude]', m) });
+const LoginEnvHub = require('./src/login-env-hub.js');
+const loginEnvHub = LoginEnvHub.createLoginEnvHub({ read: (a) => LoginShellEnv.readLoginShellEnv(a), invalidate: LoginShellEnv.invalidate, names: (lv) => LoginEnvHub.carryNames(lv), log: (m) => console.warn('[claude]', m) });
 require('./src/claude-carry.js').setLoginShellEnv(loginEnvHub.read);
+CodexAppServer.setLoginShellEnv(loginEnvHub.read);
 loginEnvHub.subscribe((values) => { try { tasksProcess?.sendLoginEnv(values); } catch { /* helper exiting */ } try { buddyWin?.sendLoginEnv?.(values); } catch { /* window gone */ } });
 const InteractionMain=require('./src/interaction-main').createInteractionMain({
   accountScope:followupScope,

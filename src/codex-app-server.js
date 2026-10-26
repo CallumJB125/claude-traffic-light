@@ -47,10 +47,15 @@ function findCodexBin({ env = process.env, exists = (p) => { try { fs.accessSync
 
 const inputText = (content) => (Array.isArray(content) ? content : []).filter((c) => c?.type === 'text' && typeof c.text === 'string').map((c) => c.text).join('');
 
+// Main sets this to the login-env hub's read (src/login-env-hub.js), as for src/claude-carry.js: a Dock-launched app
+// then finds CODEX_HOME and env_key values the user exports only in their shell profile.
+let loginShellEnv = null;
+function setLoginShellEnv(fn) { loginShellEnv = typeof fn === 'function' ? fn : null; }
+
 // carry: the user's Codex provider; undefined = the app's own, read with this env (a copied or filtered env must not
 // lose the user's provider and silently go to OpenAI), null = none.
 function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spawn, clientVersion = '0', carry } = {}) {
-  const codexCarry = carry !== undefined ? carry : productionCodexCarry({ env });
+  const codexCarry = carry !== undefined ? carry : productionCodexCarry({ env, loginShellEnv: (a) => (loginShellEnv ? loginShellEnv(a) : {}) });
   const events = new EventEmitter();
   const pending = new Map();
   let child = null, ready = null, nextId = 1, exited = false, skipping = false;
@@ -137,13 +142,15 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
     let c;
     try { c = await codexCarry.prepare(); } catch { throw Object.assign(new Error('Codex settings could not be read'), { code: 'PROVIDER' }); }
     if (c.failure) throw Object.assign(new Error(c.failure.reason), { code: c.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' });
-    return c.carry ? c : null;
+    return c;
   }
 
   function launch(provider) {
     // Key values (env_key, translated headers) go in this process's env only; no command inherits it.
-    const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), ...provider?.cliEnv };
-    child = spawn(bin, provider ? appServerArgs(provider) : APP_SERVER_ARGS, { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] }); // privacy-flow: owned-codex-session
+    // CODEX_HOME is the one the config was read from (maybe the login shell's), with or without a provider.
+    const carried = provider?.carry ? provider : null;
+    const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), ...carried?.cliEnv, ...(provider?.codexHome ? { CODEX_HOME: provider.codexHome } : {}) };
+    child = spawn(bin, carried ? appServerArgs(carried) : APP_SERVER_ARGS, { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] }); // privacy-flow: owned-codex-session
     const self = child;
     let buffer = '';
     child.stdout.setEncoding('utf8');
@@ -216,4 +223,4 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
   };
 }
 
-module.exports = { createCodexAppServer, findCodexBin, appServerArgs, APP_SERVER_ARGS, DISABLED_FEATURES, CONFIG_OVERRIDES };
+module.exports = { createCodexAppServer, findCodexBin, appServerArgs, APP_SERVER_ARGS, DISABLED_FEATURES, CONFIG_OVERRIDES, setLoginShellEnv };

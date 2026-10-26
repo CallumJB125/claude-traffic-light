@@ -221,3 +221,17 @@ test('review item 7: a provider that signs in with an auth command (or aws) fail
   const w = await carry('model_provider = "gw"\n[model_providers.gw]\nbase_url = "http://10.0.0.5:4001/v1"\n[model_providers.gw.aws]\nprofile = "p"\n').c.prepare();
   assert.equal(w.failure.kind, 'auth');
 });
+
+test('review item 4: every result without a failure reports the CODEX_HOME it read, the login shell\'s when only it has one', async () => {
+  assert.equal((await carry(null).c.prepare()).codexHome, `${HOME}/.codex`, 'no provider still says where it looked');
+  assert.equal((await carry(PLEXLAB, { env: { PLEXLAB_KEY: KEY } }).c.prepare()).codexHome, `${HOME}/.codex`);
+  const login = createCodexCarry({ env: {}, home: HOME, platform: 'linux', loginShellEnv: async () => ({ CODEX_HOME: '/fx/alt' }), readFile: () => null, probe: async () => true });
+  assert.equal((await login.prepare()).codexHome, '/fx/alt');
+  assert.equal((await carry(PLEXLAB).c.prepare()).codexHome, null, 'a failure carries none');
+});
+
+test('codexConfig denies both the run\'s CODEX_HOME and ~/.codex', () => {
+  const c = codexConfig({ cwd: '/w', env: { HOME: '/home/u', CODEX_HOME: '/fx/alt' }, platform: 'linux' });
+  const fsTable = c.find((x) => x.startsWith('permissions.plexiform.filesystem='));
+  assert.ok(fsTable.includes('"/fx/alt"="deny"') && fsTable.includes('"/home/u/.codex"="deny"'));
+});
