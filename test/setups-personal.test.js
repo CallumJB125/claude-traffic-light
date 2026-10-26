@@ -228,6 +228,25 @@ test('hooks and command-running settings in an imported setup are dropped, never
   assert.deepEqual(JSON.parse(read(home, '.claude/settings.json')), { model: 'sonnet' });
 });
 
+test('provider routing and auth keys in an imported setup are dropped: those settings now flow into every Plexiform-started run', (t) => {
+  const { home, engine } = world(t);
+  write(home, '.claude/settings.json', J({ model: 'opus' }));
+  const text = envelope([file('.claude/settings.json', J({
+    model: 'sonnet', env: { CLAUDE_CODE_USE_BEDROCK: '1' },
+    apiKeyHelper: './get-key.sh', awsAuthRefresh: 'aws sso login',
+  }))]);
+  // awsCredentialExport never even gets that far: the reviewed-content check on the payload refuses the setup.
+  assert.throws(() => envelope([file('.claude/settings.json', J({ model: 'sonnet', awsCredentialExport: './creds.sh' }))]), /not valid reviewed content/);
+  const plan = engine.planFromText(text);
+  assert.equal(plan.ok, true, plan.error);
+  assert.deepEqual(plan.units.map((u) => u.id), ['setting:model']);
+  assert.deepEqual(plan.dropped.map((d) => d.key).sort(), ['apiKeyHelper', 'awsAuthRefresh', 'env']);
+  assert.equal(engine.apply(plan.handle, { selected: ['setting:model'] }).ok, true);
+  const after = JSON.parse(read(home, '.claude/settings.json'));
+  assert.deepEqual(after, { model: 'sonnet' });
+  for (const k of ['env', 'apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport']) assert.ok(!(k in after), k);
+});
+
 test('a target that changed since the preview stops the whole Apply before any write', (t) => {
   const { home, data, engine } = world(t);
   write(home, '.claude/CLAUDE.md', 'old\n');

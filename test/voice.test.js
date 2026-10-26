@@ -136,9 +136,9 @@ test('free-form asks haiku with no settings, tools, MCP servers or saved session
   assert.ok(!args.some((a) => a.includes('Question:')), 'the question goes on stdin, never argv');
 });
 
-test('free-form env: only HOME, PATH, USER, LANG, TMPDIR, and auto-memory off', () => {
-  const env = V.claudeEnv({ HOME: '/h', PATH: '/bin', USER: 'u', LANG: 'en', TMPDIR: '/t', CLAUDE_CONFIG_DIR: '/x', ANTHROPIC_API_KEY: 'k', ANTHROPIC_BASE_URL: 'http://evil', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', NODE_OPTIONS: '--require x' }, '/opt/homebrew/bin');
-  assert.deepEqual(env, { HOME: '/h', PATH: '/bin:/opt/homebrew/bin', USER: 'u', LANG: 'en', TMPDIR: '/t', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' });
+test('free-form env: the login-finding names only (the person\'s own config dir and proxy included), auto-memory off; provider and keys come from the carry', () => {
+  const env = V.claudeEnv({ HOME: '/h', PATH: '/bin', USER: 'u', LANG: 'en', TMPDIR: '/t', CLAUDE_CONFIG_DIR: '/x', HTTPS_PROXY: 'http://proxy:8080', ANTHROPIC_API_KEY: 'k', ANTHROPIC_BASE_URL: 'http://evil', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', NODE_OPTIONS: '--require x' }, '/opt/homebrew/bin');
+  assert.deepEqual(env, { HOME: '/h', PATH: '/bin:/opt/homebrew/bin', USER: 'u', LANG: 'en', TMPDIR: '/t', CLAUDE_CONFIG_DIR: '/x', HTTPS_PROXY: 'http://proxy:8080', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' });
 });
 
 test('spoken text never starts like an option', () => {

@@ -286,9 +286,11 @@ function claudeArgs() {
 function claudePrompt(question, snap) {
   return `Snapshot:\n${JSON.stringify(snap)}\n\nQuestion: ${String(question).slice(0, 500)}`;
 }
-// Only what the CLI needs to find the user's login; nothing that could point
-// it at another config dir, account, key or parent Claude Code session.
-const CLAUDE_ENV_KEYS = ['HOME', 'PATH', 'USER', 'LANG', 'TMPDIR'];
+// Only what the CLI needs to find the user's login (their own CLAUDE_CONFIG_DIR and proxy included); nothing
+// that could point it at another account, key or parent Claude Code session. Their provider routing and key
+// are added by src/claude-carry.js.
+const CLAUDE_ENV_KEYS = ['HOME', 'PATH', 'USER', 'LANG', 'TMPDIR', 'CLAUDE_CONFIG_DIR',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'NODE_EXTRA_CA_CERTS'];
 function claudeEnv(env = process.env, extraPath = '') {
   const out = {};
   for (const k of CLAUDE_ENV_KEYS) if (env[k]) out[k] = env[k];

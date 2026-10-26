@@ -36,7 +36,7 @@ export const POLICY_LABELS = Object.freeze(['never_auto', PLAN_APPROVAL_LABEL]);
 export const isReservedLabel = (name) => typeof name === 'string'
   && (/^via:/i.test(name.trim()) || POLICY_LABELS.includes(name.trim().toLowerCase()));
 export const BLOCKED_KINDS = Object.freeze(['permission', 'question', 'clarify', 'decision', 'plan', 'conflict', 'loop']);
-export const FAIL_KINDS = Object.freeze(['network', 'limit', 'error', 'budget', 'stopped', 'released']);
+export const FAIL_KINDS = Object.freeze(['network', 'limit', 'error', 'budget', 'stopped', 'released', 'provider']);
 // What a runner may report through run_failed; stopped/released have their own events.
 export const RUNNER_FAIL_KINDS = Object.freeze(['network', 'limit', 'error', 'budget']);
 export const RESUME_TO = Object.freeze(['quiet', 'blocked', 'claimed']);

@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const Hatch = require('../characters/hatch.js');
+const { NONE, prepareNoTool, carryFor } = require('./claude-carry');
 
 const TOOL = Object.freeze({ id: 'claude', label: 'Claude Code' });
 const MODEL = 'sonnet';
@@ -45,11 +46,11 @@ function consentDialog() {
   };
 }
 
-function buildArgs(system) {
+function buildArgs(system, model = MODEL) {
   return ['-p', '--output-format', 'json', '--no-session-persistence',
     '--setting-sources', '', '--safe-mode', '--strict-mcp-config', '--disable-slash-commands',
     '--tools', '', '--permission-mode', 'dontAsk',
-    '--model', MODEL, '--max-budget-usd', String(ATTEMPT_BUDGET_USD), '--system-prompt', system];
+    '--model', model, '--max-budget-usd', String(ATTEMPT_BUDGET_USD), '--system-prompt', system];
 }
 
 function userMessage(request, errors) {
@@ -61,9 +62,12 @@ function userMessage(request, errors) {
 const fatal = (message) => Object.assign(new Error(message), { fatal: true });
 
 // generate() for Hatch.runHatch: → { text, costUsd }. Any failure to get an answer stops the run.
-function makeGenerate({ bin, env = process.env, spawn = childProcess.spawn, timeoutMs = TIMEOUT_MS }) {
-  const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
+function makeGenerate({ bin, env = process.env, spawn = childProcess.spawn, timeoutMs = TIMEOUT_MS, carry = carryFor(env) }) {
   return async function generate({ request, errors, signal }) {
+    // The user's own provider and auth (a no-tool child may hold a key in its env).
+    const c = carry ? await prepareNoTool(carry) : NONE;
+    if (c.failure) throw fatal(`${TOOL.label} is not set up: ${c.failure.reason}`);
+    const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), ...c.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', DISABLE_TELEMETRY: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
     let dir;
     try { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-hatch-')); } catch { throw fatal('could not make a temporary folder'); }
     try {
@@ -97,7 +101,7 @@ function makeGenerate({ bin, env = process.env, spawn = childProcess.spawn, time
 }
 
 // → { ok: true, character, params } | { ok: false, error }. Never throws.
-async function describe({ params, bin, consented, askConsent, env, spawn, timeoutMs, signal }) {
+async function describe({ params, bin, consented, askConsent, env, spawn, timeoutMs, signal, carry }) {
   if (!bin) return { ok: false, error: availability({ bin }).reason };
   const p = Hatch.normalizeParams(params);
   if (!p.description) return { ok: false, error: 'Write a short description first.' };
@@ -108,7 +112,7 @@ async function describe({ params, bin, consented, askConsent, env, spawn, timeou
   }
   let r;
   try {
-    r = await Hatch.runHatch({ params: p, generate: makeGenerate({ bin, env, spawn, timeoutMs }), maxAttempts: MAX_ATTEMPTS, maxCostUsd: TOTAL_BUDGET_USD, signal });
+    r = await Hatch.runHatch({ params: p, generate: makeGenerate({ bin, env, spawn, timeoutMs, ...(carry !== undefined ? { carry } : {}) }), maxAttempts: MAX_ATTEMPTS, maxCostUsd: TOTAL_BUDGET_USD, signal });
   } catch (e) { return { ok: false, error: `Could not hatch it: ${e.message}` }; }
   if (r.ok && r.source === 'ai') return { ok: true, character: r.character, params: r.params };
   if (r.source === 'cancelled') return { ok: false, error: 'Stopped.' };

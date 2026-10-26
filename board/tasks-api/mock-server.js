@@ -970,7 +970,9 @@ export async function startMockServer(opts = {}) {
     const runDir = `~/.board/run/${task.id}`;
     return {
       argv: ['claude', '--resume', task.sessionId, '--setting-sources', '', '--settings', `${runDir}/settings.json`,
-        '--strict-mcp-config', '--mcp-config', `${runDir}/mcp.json`, '--permission-mode', 'acceptEdits'],
+        '--strict-mcp-config', '--mcp-config', `${runDir}/mcp.json`, '--permission-mode', 'acceptEdits',
+        // Kept in step with the engine's takeover (engine.js): the user's own model rides along when the task set none.
+        ...(opts.carriedModel && !task.ai?.model ? ['--model', opts.carriedModel] : [])],
       cwd: task.worktree, env: { BUDDY_TASK_ID: task.id }, mode, sessionId: task.sessionId, resumed: true,
       note: `Resumes the same session with the same isolation flags. Handover v${task.handover?.version ?? 0} is saved.`,
     };

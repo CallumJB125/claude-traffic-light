@@ -194,6 +194,10 @@ launchers.
   as sources. The runner's whole isolation profile (sandbox, hooks, allow
   rules) already depends on the flag file loading, and that was verified by
   the board spikes on 2.1.285.
+- The user's own provider (lab fixes PR 2): routing and the model ride in the
+  same single `--settings` file as `env` (only the last `--settings` counts);
+  a key is only ever a 0600 `api.key` behind `apiKeyHelper: /bin/cat`, because
+  a settings `env` value reaches Bash tool commands. See CONTRACT D15/D26.
 - Permission prompts: `--permission-prompt-tool mcp__board__approval` is on
   every launch (new, resume, any model), and tests pin it.
 - `BUDDY_OWNED`: see above.

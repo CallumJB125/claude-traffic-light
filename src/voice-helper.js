@@ -5,6 +5,8 @@
 // The helper keeps audio in memory only; this side only ever sees text.
 const readline = require('readline');
 const path = require('path');
+const { prepareNoTool, prepareChat, keyDirPrefix, resolveKeyRoot } = require('./claude-carry');
+const { denyRules } = require('../board/shared/claude-carry.cjs');
 
 // Where the helper binary is. A packaged app only ever uses its own bundled copy.
 // A dev or test run may name another with PLEXIFORM_VOICE_HELPER_PATH (absolute
@@ -131,9 +133,17 @@ function createFlow({ reply, speak, send, speakable = (t) => t }) {
 // memory applies, an allowlisted env, the question on stdin, never in argv.
 // A screen question (src/voice-capture-main.js) passes its own args, which
 // allow Read on the one screenshot file, and room for its POINT tags.
-function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, maxChars = 400, setTimer = setTimeout, clearTimer = clearTimeout }) {
+// carry (src/claude-carry.js): the user's own provider and auth. The child has no Bash tool, so a key may be in
+// its env, and the `haiku` default becomes the provider's small model on a gateway. Without it nothing is carried.
+// A child with any file tool (the screen question's Read) never has a key in its launch env (Grep could read it back
+// from /proc); its key goes to a 0600 file behind apiKeyHelper, with the dir and /proc denied. --tools '' needs none of that.
+const hasFileTools = (args) => { const i = args.indexOf('--tools'); return i < 0 || String(args[i + 1] ?? '') !== ''; };
+const swapHaiku = (args, model) => args.map((a, i) => (args[i - 1] === '--model' && a === 'haiku' ? model : a));
+function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, maxChars = 400, setTimer = setTimeout, clearTimer = clearTimeout, carry = null, keyRoot = null }) {
   let child = null;
   let dir = null;
+  let keyDir = null;
+  let release = null;
   let settled = false;
   let resolveFn;
   const promise = new Promise((r) => { resolveFn = r; });
@@ -141,21 +151,43 @@ function askClaude({ spawn, fs, tmpdir, args, env, prompt, timeoutMs = 30000, ma
     if (settled) return;
     settled = true;
     clearTimer(timer);
-    if (dir) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
+    for (const d of [dir, keyDir]) if (d) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ } }
+    if (release) release();
     resolveFn(value);
   };
   const cancel = () => { if (child) { try { child.kill('SIGKILL'); } catch { /* gone */ } } done(null); };
   const timer = setTimer(cancel, timeoutMs);
-  try {
-    dir = fs.mkdtempSync(`${tmpdir.replace(/\/$/, '')}/buddy-ask-`);
-    child = spawn('claude', args, { cwd: dir, env, stdio: ['pipe', 'pipe', 'ignore'] }); // privacy-flow: voice-ask
-  } catch { done(null); return { promise, cancel }; }
-  let out = '';
-  child.stdout.on('data', (d) => { if (out.length < 256 * 1024) out += d; });
-  child.on('error', () => done(null));
-  child.on('close', (code) => done(code === 0 ? String(out).trim().slice(0, maxChars) || null : null));
-  child.stdin.on('error', () => {});
-  child.stdin.end(prompt);
+  const begin = (c) => {
+    if (settled) return;
+    if (c.failure) { done(null); return; }
+    release = c.release || null;
+    try {
+      dir = fs.mkdtempSync(`${tmpdir.replace(/\/$/, '')}/buddy-ask-`);
+      let extra = [];
+      if (keyDir && c.settings) {
+        const settingsFile = `${keyDir}/settings.json`;
+        fs.writeFileSync(settingsFile, JSON.stringify(c.settings), { mode: 0o600 });
+        let real = keyDir;
+        try { real = fs.realpathSync(keyDir); } catch { /* as made */ }
+        extra = ['--settings', settingsFile, '--disallowedTools', ...c.disallowed, ...denyRules([...new Set([real, keyDir])])];
+      }
+      child = spawn('claude', [...swapHaiku(args, c.model), ...extra], { cwd: dir, env: Object.keys(c.env).length ? { ...env, ...c.env } : env, stdio: ['pipe', 'pipe', 'ignore'] }); // privacy-flow: voice-ask
+    } catch { done(null); return; }
+    let out = '';
+    child.stdout.on('data', (d) => { if (out.length < 256 * 1024) out += d; });
+    child.on('error', () => done(null));
+    child.on('close', (code) => done(code === 0 ? String(out).trim().slice(0, maxChars) || null : null));
+    child.stdin.on('error', () => {});
+    child.stdin.end(prompt);
+  };
+  const none = { failure: null, env: {}, model: 'haiku' };
+  if (carry && hasFileTools(args)) {
+    // No private folder of the app's own: fail closed (no spawn) rather than put a key in /tmp.
+    const root = resolveKeyRoot(keyRoot);
+    try { if (!root) throw new Error('no key root'); keyDir = fs.mkdtempSync(`${root.replace(/\/$/, '')}/${keyDirPrefix('voice-key')}`); } catch { done(null); return { promise, cancel }; }
+    prepareChat(carry, keyDir, `${keyDir}/api.key`).then(begin, () => begin(none));
+  } else if (carry) prepareNoTool(carry).then(begin, () => begin(none));
+  else begin({ failure: null, env: {}, model: 'haiku' });
   return { promise, cancel };
 }
 

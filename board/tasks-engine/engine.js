@@ -22,6 +22,7 @@ import {
 } from '../tasks-api/protocol.js';
 import { T_QUIET_MS } from '../shared/liveness.js';
 import { redact, filterPath, normalizeRemoteUrl } from '../shared/scope.js';
+import { sweepKeyFiles } from '../shared/claude-carry.cjs';
 import { untrusted, envelopeTag } from '../shared/untrusted.js';
 import { BACKENDS } from '../runner/backends/index.js';
 import { buildSettings, buildMcpConfig, buildEnv, trustedInstructions, HOOK_TOKEN_FILE, API_KEY_FILE, MCP_SERVER, DEFAULT_MAX_TURNS, DISALLOWED_TOOLS, BUS_DISALLOWED, DENY_READ } from '../runner/launch.js';
@@ -146,6 +147,9 @@ export class TasksEngine extends EventEmitter {
     this.log = opts.log;
     this.now = opts.now ?? Date.now;
     this.env = opts.env ?? process.env;
+    // The user's own Claude provider and auth (board/shared/claude-carry.cjs); null = carry nothing (today's behaviour).
+    this.claudeCarry = opts.claudeCarry ?? null;
+    this.carries = new Map();       // taskId → the carry behind that task's run dir (api.key, refresh timer)
     this.mcpServer = opts.mcpServer ?? MCP_SERVER;
     this.epoch = crypto.randomUUID();
     this.startedAt = this.now();
@@ -689,7 +693,15 @@ export class TasksEngine extends EventEmitter {
   // Background runs can't be re-adopted (their stdio pipes died with the old
   // engine): a CLI still alive is killed (pid + lstart must match), and the
   // task becomes orphaned with its session resumable. Nothing restarts on its own.
+  // The real path and the path as given (/var vs /private/var, a user symlink): the agent may ask for either.
+  #dataForms() {
+    return [...new Set([fs.realpathSync(this.dataDir), path.resolve(this.dataDir)])];
+  }
+
   #recover() {
+    // No background run survives an engine restart, so its key file is not needed. A takeover (handed_over) runs in the
+    // person's terminal and outlives the engine: its settings.json still reads <run>/api.key.
+    sweepKeyFiles(path.join(this.dataDir, 'run'), (id) => this.tasks.get(id)?.state === 'handed_over');
     for (const task of this.tasks.values()) {
       const had = task.run;
       if (had?.kind === 'windows-job' || String(had?.lstart ?? '').startsWith('win32:') || task.windowsStopUnconfirmed) {
@@ -1095,6 +1107,9 @@ export class TasksEngine extends EventEmitter {
         this.#save(task); this.#schedule(); return;
       }
       if (e.code === 'WORKTREE_MISSING') this.#emit(task, 'error', { code: 'NOT_FOUND', message: 'worktree deleted', fatal: true });
+      // Preflight (board/shared/claude-carry.cjs): the reason is already free of keys and command output.
+      if (e.code === 'AUTH') { this.#park(task, 'auth', null, e.message); return; }
+      if (e.code === 'PROVIDER') { this.#failTask(task, 'provider', e.message); return; }
       const why = e.code === 'NOT_AVAILABLE' ? 'this AI is not available yet'
         : e.code === 'SOCKET_PATH_TOO_LONG' ? "the data folder path is too long for the run's socket"
           : e.code === 'REPO_CONFIG' ? "the repo's own git config defines filters or includes, which could run code; not started"
@@ -1154,8 +1169,13 @@ export class TasksEngine extends EventEmitter {
     return { commonGitDir, gitDir, gitRef };
   }
 
+  #releaseCarry(task) {
+    this.carries.get(task.id)?.release();
+    this.carries.delete(task.id);
+  }
+
   /** settings.json, mcp.json and hook.token for a run (or a takeover) in the 0700 run dir. */
-  #writeRunFiles(task, runDir, socketPath, token) {
+  async #writeRunFiles(task, runDir, socketPath, token) {
     ensureDir(runDir);
     ensureDir(path.join(runDir, 'shell'));
     const cacheDir = this.#cacheDir(task);
@@ -1165,11 +1185,18 @@ export class TasksEngine extends EventEmitter {
     if (ONE_TURN.has(task.ai.id)) return;
     const protectedWrite = task.workInPlace
       ? ['.git/config', '.git/hooks', '.claude', '.mcp.json', 'CLAUDE.md', 'AGENTS.md'].map((p) => path.join(task.worktree, p)) : [];
-    const apiKeyFile = this.env.ANTHROPIC_API_KEY ? path.join(runDir, API_KEY_FILE) : null;
-    if (apiKeyFile) writeFileAtomic(apiKeyFile, this.env.ANTHROPIC_API_KEY);
+    this.#releaseCarry(task);
+    let carry = null;
+    if (this.claudeCarry) {
+      carry = await this.claudeCarry.prepare({ mode: 'bash', keyFile: path.join(runDir, API_KEY_FILE) });
+      if (carry.failure) throw Object.assign(new Error(carry.failure.reason), { code: carry.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' });
+      if (carry.carry) this.carries.set(task.id, carry); else carry = null;
+    }
+    const apiKeyFile = carry ? carry.apiKeyFile : this.env.ANTHROPIC_API_KEY ? path.join(runDir, API_KEY_FILE) : null;
+    if (apiKeyFile && !carry) writeFileAtomic(apiKeyFile, this.env.ANTHROPIC_API_KEY);
     writeJsonAtomic(path.join(runDir, 'settings.json'), buildSettings({
-      worktree: task.worktree, tmpdir: path.join(cacheDir, 'tmp'), repo: {}, apiKeyFile, extraDenyRead: [fs.realpathSync(this.dataDir)],
-      extraDenyWrite: [fs.realpathSync(this.dataDir), ...protectedWrite],
+      worktree: task.worktree, tmpdir: path.join(cacheDir, 'tmp'), repo: {}, apiKeyFile, env: carry?.settingsEnv, extraDenyRead: [...this.#dataForms(), ...(carry?.denyRead ?? [])],
+      extraDenyWrite: [...this.#dataForms(), ...protectedWrite],
       level: task.planFirst && !task.planApproved ? 'plan' : task.permissionLevel, cacheWrite: [cacheDir], bus: task.source === 'bus',
     }));
     writeJsonAtomic(path.join(runDir, 'mcp.json'), buildMcpConfig({ socket: socketPath, token, server: this.mcpServer }));
@@ -1192,11 +1219,12 @@ export class TasksEngine extends EventEmitter {
       exited: null,
     };
     run.exited = new Promise((r) => { run.resolveExited = r; });
-    this.#writeRunFiles(task, runDir, socketPath, token);
+    await this.#writeRunFiles(task, runDir, socketPath, token);
     if (task.ai.id !== 'gemini') run.ipc = await startIpcServer({ socketPath, token, log: this.log, handler: this.#ipcHandler(task, run) });
     if (this.closing || this.closed) { await run.ipc?.close(); return; }
     this.runs.set(task.id, run);
-    const env = buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart });
+    const carry = this.carries.get(task.id) ?? null;
+    const env = { ...buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart }), ...carry?.cliEnv };
     if (task.ai.id === 'codex' && this.env.CODEX_HOME) env.CODEX_HOME = this.env.CODEX_HOME;
     // Package-manager caches live in a per-task dir, never the user's global caches.
     const cacheDir = this.#cacheDir(task);
@@ -1227,9 +1255,9 @@ export class TasksEngine extends EventEmitter {
     const backend = new B({
       bin: info.bin, cwd: task.worktree, env, runDir, sessionId: task.sessionId, resume,
       budget: remaining != null ? { amount: remaining, unit: 'usd' } : null, maxTurns: ONE_TURN.has(task.ai.id) ? undefined : DEFAULT_MAX_TURNS,
-      systemPrompt: this.#brief(task), model: task.ai.model ?? undefined, log: this.log, boardHome: null,
+      systemPrompt: this.#brief(task), model: task.ai.model ?? carry?.model ?? undefined, log: this.log, boardHome: null,
       permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel],
-      extraDisallowed: [...['Read', 'Edit', 'Write'].map((t) => `${t}(/${dataReal}/**)`), ...(task.source === 'bus' ? BUS_DISALLOWED : [])],
+      extraDisallowed: [...['Read', 'Edit', 'Write'].flatMap((t) => this.#dataForms().map((d) => `${t}(/${d}/**)`)), ...(carry?.disallowed ?? []), ...(task.source === 'bus' ? BUS_DISALLOWED : [])],
       interruptWaitMs: this.opts.interruptWaitMs, stopGraceMs: this.opts.stopGraceMs,
       dataDir: dataReal, cacheDir, ...gitAccess, ...(task.ai.id === 'codex' ? { taskRunDir: runDir } : {}),
     });
@@ -1474,6 +1502,7 @@ export class TasksEngine extends EventEmitter {
     run.approvals.clear();
     task.run = null;
     run.toolInFlight = null;
+    if (!this.idleIpc.has(task.id)) this.#releaseCarry(task);
     await run.ipc?.close();
     this.#save(task);
   }
@@ -1536,7 +1565,7 @@ export class TasksEngine extends EventEmitter {
     this.#setState(task, 'blocked', { blockedKind: 'plan' });
   }
 
-  #park(task, reason, resetsAt) {
+  #park(task, reason, resetsAt, detail = null) {
     this.#setState(task, 'handing_over');
     this.#writeHandover(task, 'checkpoint_complete');
     this.#expireApprovals(task);
@@ -1551,12 +1580,12 @@ export class TasksEngine extends EventEmitter {
         ? { id: 'wait_reset', label: 'Wait for the reset', action: 'resume', payload: { when: 'reset' } }
         : { id: 'resume_now', label: 'Try again now', action: 'resume', payload: { when: 'now' } }];
     } else {
-      text = `${ai} is logged out. Log in again, then resume.`;
+      text = detail ? `${detail}. Then resume.` : `${ai} is logged out. Log in again, then resume.`;
       choices = [{ id: 'resume_now', label: 'I logged in: resume', action: 'resume', payload: { when: 'now' } }];
     }
     task.openAsk = { askId, kind: reason, text, options: null, choices, at: this.now() };
     this.#emit(task, 'ask', { askId, phase: 'asked', kind: reason, text, options: null, choices, answer: null });
-    this.#setState(task, 'parked', { parkReason: reason });
+    this.#setState(task, 'parked', { parkReason: reason, ...(detail ? { failReason: detail } : {}) });
     this.#schedule();
   }
 
@@ -1764,7 +1793,10 @@ export class TasksEngine extends EventEmitter {
     if (this.idleIpc.has(task.id)) return this.idleIpc.get(task.id);
     const { runDir, socketPath } = this.#runFiles(task);
     const token = crypto.randomBytes(24).toString('base64url');
-    this.#writeRunFiles(task, runDir, socketPath, token);
+    try { await this.#writeRunFiles(task, runDir, socketPath, token); } catch (e) {
+      if (e.code === 'AUTH' || e.code === 'PROVIDER') throw new ApiError('NOT_AVAILABLE', e.message);
+      throw e;
+    }
     if (ONE_TURN.has(task.ai.id)) return { runDir, socketPath };
     const ipc = await startIpcServer({ socketPath, token, log: this.log, handler: this.#ipcHandler(task, null) });
     const entry = { ipc, runDir, socketPath };
@@ -1776,6 +1808,7 @@ export class TasksEngine extends EventEmitter {
     const e = this.idleIpc.get(task.id);
     if (!e) return;
     this.idleIpc.delete(task.id);
+    this.#releaseCarry(task);
     await e.ipc.close();
   }
 
@@ -1972,15 +2005,16 @@ export class TasksEngine extends EventEmitter {
             note: 'Continues this Codex task with the same sandbox in your terminal. Type the next instruction, then press Ctrl-D to run it. Exit the command before handing it back.' } };
         }
         const mode = task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel];
+        const takeoverCarry = this.carries.get(task.id) ?? null;
         return {
           takeover: {
             argv: [info.bin, ...(task.sessionStarted ? ['--resume', task.sessionId] : ['--session-id', task.sessionId]),
               '--setting-sources', '', '--settings', path.join(runDir, 'settings.json'),
               '--strict-mcp-config', '--mcp-config', path.join(runDir, 'mcp.json'),
-              '--disallowedTools', ...DISALLOWED_TOOLS, ...['Read', 'Edit', 'Write'].map((t) => `${t}(/${fs.realpathSync(this.dataDir)}/**)`),
-              '--permission-mode', mode],
+              '--disallowedTools', ...DISALLOWED_TOOLS, ...['Read', 'Edit', 'Write'].flatMap((t) => this.#dataForms().map((d) => `${t}(/${d}/**)`)), ...(takeoverCarry?.disallowed ?? []),
+              '--permission-mode', mode, ...(!task.ai.model && takeoverCarry?.model ? ['--model', takeoverCarry.model] : [])],
             cwd: task.worktree,
-            env: { TMPDIR: path.join(this.#cacheDir(task), 'tmp'), BOARD_RUN_SOCKET: socketPath, BOARD_SUPERVISOR_PID: String(process.pid), BOARD_SUPERVISOR_LSTART: this.lstart ?? '', BUDDY_TASK_ID: task.id },
+            env: { ...takeoverCarry?.cliEnv, TMPDIR: path.join(this.#cacheDir(task), 'tmp'), BOARD_RUN_SOCKET: socketPath, BOARD_SUPERVISOR_PID: String(process.pid), BOARD_SUPERVISOR_LSTART: this.lstart ?? '', BUDDY_TASK_ID: task.id },
             mode: payload.mode ?? 'tab', sessionId: task.sessionId, resumed: task.sessionStarted,
             note: task.sessionStarted ? `Resumes the same session with the background run's settings, MCP config and deny rules (no --tools allowlist or budget: you drive). Handover v${task.handover.version} is saved.`
               : 'Starts the session in your terminal; nothing ran in the background yet.',
@@ -2263,6 +2297,8 @@ export class TasksEngine extends EventEmitter {
       this.#setState(task, 'orphaned');
     }
     this.closed = true;
+    if (!leaveRuns) for (const c of this.carries.values()) c.release();
+    this.carries.clear();
     for (const run of this.runs.values()) await run.ipc?.close();
     for (const e of this.idleIpc.values()) await e.ipc.close();
     this.runs.clear();

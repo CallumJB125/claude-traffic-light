@@ -1793,8 +1793,12 @@ claudeChannel.attach=async args=>{
   if(channelBoards.get(args.target)!==buddyWin?.status?.().workspace)throw new Error('Return to the workspace where this terminal connection was prepared.');
   return attachClaudeChannel(args);
 };
+// A Claude child with file tools keeps its key file here, never in /tmp; a start removes what a crash left.
+// Resolved on first use, after the dev profile is set; swept only by the instance that holds the lock (see gotLock).
+const claudeKeyRoot = () => require('./src/claude-carry.js').ensureKeyRoot(path.join(app.getPath('userData'), 'run'));
 const InteractionMain=require('./src/interaction-main').createInteractionMain({
   accountScope:followupScope,
+  keyRoot:claudeKeyRoot,
   compaction:Compaction.createSessionCompactor({settings:()=>loadConfig().compaction,ledger:CompactionLedger}),
   context:()=>buddyWin?.overviewContext?.()??null,
   readContext:()=>buddyWin?.overviewReadContext?.()??null,
@@ -4435,7 +4439,7 @@ const voiceClaudeEnv = () => Voice.claudeEnv(process.env, `${path.join(os.homedi
 const VoiceCapture = require('./src/voice-capture-main.js');
 const voiceScreen = VoiceCapture.create({
   systemPreferences, desktopCapturer: require('electron').desktopCapturer, screen, fs, path, tmpdir: os.tmpdir(),
-  randomHex: () => crypto.randomBytes(6).toString('hex'), askClaude: VoiceHelper.askClaude, spawn, env: voiceClaudeEnv(), log: console.log,
+  randomHex: () => crypto.randomBytes(6).toString('hex'), askClaude: VoiceHelper.askClaude, spawn, env: voiceClaudeEnv(), carry: require('./src/claude-carry.js').carryFor(process.env), keyRoot: claudeKeyRoot, log: console.log,
 });
 const pointer = require('./src/pointer-overlay-main.js').create({
   BrowserWindow, screen, htmlPath: path.join(__dirname, 'pointer-overlay.html'), preloadPath: path.join(__dirname, 'pointer-overlay-preload.js'),
@@ -4486,7 +4490,7 @@ async function voiceReply(text, onCancel) {
   if (free) {
     const ask = VoiceHelper.askClaude({
       spawn, fs, tmpdir: os.tmpdir(), args: Voice.claudeArgs(), prompt: Voice.claudePrompt(text, Voice.snapshot(ctx)),
-      env: voiceClaudeEnv(),
+      env: voiceClaudeEnv(), carry: require('./src/claude-carry.js').carryFor(process.env),
     });
     onCancel(ask.cancel);
     const said = await ask.promise;
@@ -5467,6 +5471,7 @@ app.whenReady().then(() => {
   // Release CI: start, install hooks, run one, open the window, quit (src/smoke.js).
   const smokeReport = Smoke.reportPathFrom(process.argv);
   // An AppImage's copies for older versions go only once this is the one running instance.
+  if (gotLock) { try { require('./src/claude-carry.js').sweepKeyDirs(path.join(app.getPath('userData'), 'run')); } catch (err) { console.warn('[claude] could not tidy old key folders:', err.message); } }
   if (gotLock) { try { HookPaths.prune(HOOK_PATHS); } catch (err) { console.warn('[hooks] could not tidy old copies:', err.message); } }
   if (smokeReport) { Smoke.run({ app, installHooks, areHooksInstalled, createWindow, getWindow: () => win, settingsPath: CLAUDE_SETTINGS_PATH, sessionsDir: SESSIONS_DIR, reportPath: smokeReport }); return; }
   if (fs.existsSync(path.join(nativeBoardDir(), 'connections.bin'))) {

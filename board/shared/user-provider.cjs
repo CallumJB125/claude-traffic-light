@@ -121,11 +121,26 @@ function localGatewayOf(baseUrl) {
   return { host, port: u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80 };
 }
 
+// Every gateway host:port the run would talk to (probed with a bare connect, nothing sent).
+function gatewaysOf(routing) {
+  const out = [];
+  for (const k of ['ANTHROPIC_BASE_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'ANTHROPIC_VERTEX_BASE_URL', 'ANTHROPIC_FOUNDRY_BASE_URL']) {
+    if (!routing[k]) continue;
+    let u;
+    try { u = new URL(routing[k]); } catch { continue; }
+    if (!/^https?:$/.test(u.protocol)) continue;
+    const host = u.hostname.replace(/^\[|\]$/g, '');
+    const port = u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80;
+    if (!out.some((g) => g.host === host && g.port === port)) out.push({ host, port });
+  }
+  return out;
+}
+
 function blankClaude(base, carryOffReason, unsupported = []) {
   return {
     ...base, carry: false, carryOffReason, sources: [], notes: [], routing: {}, pathVars: {}, model: null, smallModel: null,
     auth: { kind: 'oauth-or-none', secret: null, secretName: null, helper: null, awsAuthRefresh: null, awsCredentialExport: null, rejected: false, origin: null },
-    noToolSecrets: {}, localGateway: null, denyRead: [], unsupported, dropped: [],
+    noToolSecrets: {}, localGateway: null, gateways: [], denyRead: [], unsupported, dropped: [],
   };
 }
 
@@ -265,9 +280,11 @@ function claudeProvider({ env = {}, loginEnv = {}, home, platform, readFile, rea
       kind, secret, secretName, helper: helper?.value ?? null,
       awsAuthRefresh: awsAuthRefresh?.value ?? null, awsCredentialExport: awsCredentialExport?.value ?? null,
       rejected, origin, managedHelper: helper?.origin === 'managed',
+      awsCredentialExportOrigin: awsCredentialExport?.origin ?? null,
     },
     noToolSecrets,
     localGateway: routing.ANTHROPIC_BASE_URL ? localGatewayOf(routing.ANTHROPIC_BASE_URL) : null,
+    gateways: gatewaysOf(routing),
     denyRead: [...new Set(denyRead)],
     unsupported,
     dropped,

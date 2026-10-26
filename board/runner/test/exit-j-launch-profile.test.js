@@ -23,6 +23,9 @@ test('argv is exactly the contract profile; resume keeps every isolation flag', 
     '--disallowedTools', 'WebFetch', 'WebSearch', 'Bash(git push --force*)', 'Bash(git push -f*)', 'Bash(git push * +*)',
     'Read(~/.ssh/**)', 'Read(~/.aws/**)', 'Read(~/.config/gh/**)', 'Read(~/.claude/**)', 'Read(~/.claude.json)',
     'Read(~/.claude-traffic-light/**)', 'Read(~/.codex/**)', 'Read(~/Library/Keychains/**)',
+    'Read(~/.config/gcloud/**)', 'Read(~/.azure/**)',
+    // Lab 2026-10-26: Grep follows a symlink to /proc/self/environ; a Read deny rule covers it.
+    'Read(//proc/**)', 'Read(/proc/**)', 'Grep(//proc/**)', 'Grep(/proc/**)', 'Glob(//proc/**)', 'Glob(/proc/**)',
     'Read(~/.board/*.json)', 'Read(~/.board/run/**)', 'Read(~/.board/outbox/**)',
     'Edit(~/.board/*.json)', 'Edit(~/.board/run/**)', 'Edit(~/.board/outbox/**)',
     'Write(~/.board/*.json)', 'Write(~/.board/run/**)', 'Write(~/.board/outbox/**)',
@@ -35,7 +38,7 @@ test('argv is exactly the contract profile; resume keeps every isolation flag', 
   const r = buildArgv({ runDir: RUN_DIR, sessionId: 'S', resume: true, budgetUsd: 2.5, maxTurns: 40, systemPrompt: 'BRIEF' });
   assert.deepEqual(r.filter((x) => x !== '--resume' && x !== '--session-id'), a.filter((x) => x !== '--resume' && x !== '--session-id'));
   assert.equal(r[r.indexOf('--resume') + 1], 'S');
-  assert.equal(DISALLOWED_TOOLS.length, 13);
+  assert.equal(DISALLOWED_TOOLS.length, 21);
   // A non-default BOARD_HOME is denied by absolute path ("//" prefix); worktrees under it stay readable.
   const t = buildArgv({ runDir: RUN_DIR, sessionId: 'S', boardHome: '/tmp/bh' });
   assert.ok(t.includes('Read(//tmp/bh/run/**)') && t.includes('Write(//tmp/bh/*.json)'));
@@ -76,6 +79,7 @@ test('settings.json: sandbox, permissions, git allow rules, hook shim on every e
     filesystem: {
       allowWrite: ['/wt', '/tmp/x/', '~/.npm', '~/.cache', '~/Library/Caches', '~/Library/pnpm', '~/.yarn', '~/.m2'],
       denyRead: ['~/.ssh', '~/.aws', '~/.config/gh', '~/Library/Keychains', '~/.claude', '~/.claude.json', '~/.codex', '~/.claude-traffic-light',
+        '~/.config/gcloud', '~/.azure',
         '~/.board/device.json', '~/.board/policy.json', '~/.board/ledger.json', '~/.board/outbox', '~/.board/run'],
       denyWrite: ['~/.local/state/ghostty-dock', '~/.local/bin/ghostty-dock', '~/.local/bin/ghostty-dock-open'],
     },
@@ -91,6 +95,7 @@ test('settings.json: sandbox, permissions, git allow rules, hook shim on every e
   }
   assert.equal(s.hooks.PreToolUse[0].matcher, '*');
   assert.equal(s.apiKeyHelper, undefined);
+  for (const r of ['Read(//proc/**)', 'Read(/proc/**)']) assert.ok(buildSettings({ worktree: '/wt', tmpdir: '/t' }).permissions.deny.includes(r) && DISALLOWED_TOOLS.includes(r), `${r} with no carry and no key`);
   assert.equal(buildSettings({ worktree: '/wt', tmpdir: '/t', apiKeyFile: '/r/api.key' }).apiKeyHelper, "/bin/cat '/r/api.key'");
   const m = buildMcpConfig({ socket: '/s', token: 'T', node: '/n' });
   assert.deepEqual(m, { mcpServers: { board: { type: 'stdio', command: '/n', args: [MCP_SERVER], env: { BOARD_RUN_SOCKET: '/s', BOARD_RUN_TOKEN: 'T' } } } });
@@ -206,4 +211,21 @@ test('packaged app (D82): under Electron the hook shim and the board MCP server 
     delete process.versions.electron;
   }
   assert.equal(process.versions.electron, undefined);
+});
+
+test('carried routing: settings env holds only allowlisted non-secret names, apiKeyHelper is only /bin/cat <run>/api.key, no env means no env key', () => {
+  const plain = buildSettings({ worktree: '/wt', tmpdir: '/tmp/x/' });
+  assert.ok(!('env' in plain) && !('apiKeyHelper' in plain), 'nothing carried: the profile is the old one');
+  const s = buildSettings({ worktree: '/wt', tmpdir: '/tmp/x/', apiKeyFile: `${RUN_DIR}/api.key`, env: { ANTHROPIC_BASE_URL: 'https://gw/v1', ANTHROPIC_MODEL: 'm' }, extraDenyRead: ['/fx/aws/creds'] });
+  assert.deepEqual(s.env, { ANTHROPIC_BASE_URL: 'https://gw/v1', ANTHROPIC_MODEL: 'm' });
+  assert.equal(s.apiKeyHelper, `/bin/cat '${RUN_DIR}/api.key'`);
+  assert.ok(s.sandbox.filesystem.denyRead.includes('/fx/aws/creds'));
+  for (const k of ['~/.config/gcloud', '~/.azure']) assert.ok(s.sandbox.filesystem.denyRead.includes(k), k);
+  assert.ok(!Object.keys(s.env).some((k) => /KEY|TOKEN|SECRET|PASSWORD/.test(k)), 'no secret name in settings env');
+});
+
+test('CLAUDE_CONFIG_DIR is on the runner env allowlist (a custom config dir keeps its OAuth login)', () => {
+  const env = buildEnv({ HOME: '/h', PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/h/.cfg', ANTHROPIC_API_KEY: 'k' }, { runDir: RUN_DIR });
+  assert.equal(env.CLAUDE_CONFIG_DIR, '/h/.cfg');
+  assert.ok(!('ANTHROPIC_API_KEY' in env));
 });
