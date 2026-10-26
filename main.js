@@ -1797,8 +1797,8 @@ claudeChannel.attach=async args=>{
 // Resolved on first use, after the dev profile is set; swept only by the instance that holds the lock (see gotLock).
 const claudeKeyRoot = () => require('./src/claude-carry.js').ensureKeyRoot(path.join(app.getPath('userData'), 'run'));
 const InteractionMain=require('./src/interaction-main').createInteractionMain({
-  keyRoot:claudeKeyRoot,
   accountScope:followupScope,
+  keyRoot:claudeKeyRoot,
   compaction:Compaction.createSessionCompactor({settings:()=>loadConfig().compaction,ledger:CompactionLedger}),
   context:()=>buddyWin?.overviewContext?.()??null,
   readContext:()=>buddyWin?.overviewReadContext?.()??null,

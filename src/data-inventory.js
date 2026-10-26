@@ -60,7 +60,7 @@ const PENDING = '.pending-deletion.json';
 // Not personal, or needed to start: listed so nothing is silently skipped.
 const KEEP = Object.freeze({
   data: { [RECEIPTS]: 'Deletion receipts (no personal content)', [PENDING]: 'A deletion waiting for the next start', bin: 'Hook launcher your AI tools run' },
-  userData: { SingletonLock: 'App lock', SingletonCookie: 'App lock', SingletonSocket: 'App lock', updates: 'Update files', 'rename-migration.json': 'Rename record' },
+  userData: { SingletonLock: 'App lock', SingletonCookie: 'App lock', SingletonSocket: 'App lock', updates: 'Update files', 'rename-migration.json': 'Rename record', run: 'Temporary key folders (chat-<pid>-*, voice-key-<pid>-*; 0700, deleted when the chat or question ends, swept at start)' },
 });
 // Other tools' folders that turn up inside a data folder are theirs, not ours.
 const FOREIGN = new Set(['.omc', '.claude', '.codex', '.gemini', '.cursor', '.git', '.vscode', '.DS_Store']);
