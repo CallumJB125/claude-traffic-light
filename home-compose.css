@@ -1,0 +1,25 @@
+/* Home's task box (home-compose.js). Tokens only, light and dark from tokens.css. */
+#compose { grid-column: 1 / -1; border-left: 3px solid var(--accent); }
+.compose-form { display: grid; gap: 10px; margin-top: 8px; }
+#compose-text { width: 100%; min-height: 56px; resize: vertical; font: inherit; color: inherit; padding: 10px 12px; border: 1px solid var(--line-input); border-radius: var(--radius); background: var(--panel-2); }
+#compose-text:focus-visible, .compose-chips select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.compose-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.compose-chips select { font: inherit; font-size: var(--text-sm); color: inherit; min-height: 32px; max-width: 100%; padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: var(--panel-2); }
+.compose-route { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 24px; color: var(--muted); }
+.compose-route.routed .compose-route-text { color: var(--text); }
+.compose-route.ask .compose-route-text, .compose-route.refused .compose-route-text { color: var(--amber); }
+.compose-choices { display: flex; gap: 8px; flex-wrap: wrap; width: 100%; }
+button.choice { min-height: 32px; text-align: left; }
+button.choice[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+button.link { border: 0; background: none; padding: 0 4px; min-height: 0; color: var(--accent); text-decoration: underline; }
+.compose-peers, .compose-held { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.compose-peers:empty, .compose-held:empty { display: none; }
+.compose-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.compose-error { color: var(--red); }
+button:disabled { opacity: .55; cursor: default; }
+.compose-card { margin-top: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); }
+.compose-card.waiting { border-color: var(--amber); }
+.compose-card .title { display: block; overflow-wrap: anywhere; }
+.compose-lines { margin-top: 6px; }
+.compose-lines li { display: block; padding: 4px 0; font-size: var(--text-sm); color: var(--muted); overflow-wrap: anywhere; }
+.compose-approval { font-weight: 600; }

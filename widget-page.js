@@ -24,6 +24,14 @@
     $('snap').value = c.widgetSnap || 'corners';
     $('wsize').value = c.widgetSize || 'normal';
     if (document.activeElement !== $('shortcut')) $('shortcut').value = c.widgetShortcut || '';
+    // The task box's shortcut (off unless turned on): main says what it registered and why not.
+    if (document.activeElement !== $('compose-shortcut')) $('compose-shortcut').value = c.composeShortcut || '';
+    if (s.compose) {
+      $('compose-shortcut-on').textContent = `Turn on ${s.compose.suggestedLabel}`;
+      $('compose-shortcut-on').hidden = !!c.composeShortcut;
+      $('compose-shortcut-hint').textContent = `${s.compose.editorNote} Home and the menu bar's New task… work without it.`;
+      $('compose-shortcut-note').textContent = s.compose.line || '';
+    }
     const size = $('size');
     size.min = String(s.limits.minWidth);
     size.max = String(s.limits.maxWidth);
@@ -63,6 +71,9 @@
   for (const b of document.querySelectorAll('.corner')) b.addEventListener('click', () => send(api.move(b.dataset.corner), 'where-note'));
   $('snap').addEventListener('change', () => send(api.set({ widgetSnap: $('snap').value }), 'where-note'));
   $('wsize').addEventListener('change', () => send(api.set({ widgetSize: $('wsize').value }), 'size-note'));
+  const composeSaved = (r) => { $('compose-shortcut-note').textContent = r && r.ok ? (r.state?.compose?.line || '') : 'That shortcut is not one the system accepts. Try something like CmdOrCtrl+Shift+Space.'; };
+  $('compose-shortcut-save').addEventListener('click', () => send(api.set({ composeShortcut: $('compose-shortcut').value.trim() }), 'compose-shortcut-note').then(composeSaved));
+  $('compose-shortcut-on').addEventListener('click', () => { if (st?.compose) send(api.set({ composeShortcut: st.compose.suggested }), 'compose-shortcut-note').then(composeSaved); });
   $('shortcut-save').addEventListener('click', () => send(api.set({ widgetShortcut: $('shortcut').value.trim() }), 'where-note').then((r) => {
     if (r && !r.ok) $('where-note').textContent = 'That shortcut is not one the system accepts. Try something like CmdOrCtrl+Shift+Space.';
   }));

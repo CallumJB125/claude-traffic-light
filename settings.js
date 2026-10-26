@@ -68,6 +68,7 @@
       document.getElementById('busyIcsUrl').value = config.busyIcsUrl || '';
       document.getElementById('busyFocusShortcut').value = config.busyFocusShortcut || '';
       document.getElementById('simpleMode').checked = config.simpleMode === true;
+      document.getElementById('homeComposer').checked = config.homeComposer !== false;
       document.body.classList.toggle('simple', config.simpleMode === true);
       showBusy();
     }
@@ -240,6 +241,7 @@
         remoteInteractionHost: document.getElementById('remoteInteractionHost').checked,
         codexDaemonMessaging: document.getElementById('codexDaemonMessaging').checked,
         simpleMode: document.getElementById('simpleMode').checked,
+        homeComposer: document.getElementById('homeComposer').checked,
       });
       setTimeout(showInteractionHost, 1500);
       setTimeout(showBusy, 1500);

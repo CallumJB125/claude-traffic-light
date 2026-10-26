@@ -196,8 +196,8 @@ test('the default tray menu is 20 items or fewer, with debug controls only in de
   const build = (from, devRun = false) => {
     const ctx = { buddyWin: { captureState: () => ({ enabled: true }) }, refreshTrayMenu: () => {}, IS_DEV_RUN: devRun, IS_MAC: true, BuddyPages, AppMenu: require('../src/app-menu.js'), SimpleMode: require('../src/simple-mode.js'), UsagePopOut: require('../src/usage-popout.js'), usageMemo: { turns: [] }, getUsageTurns: () => Promise.resolve(), Usage: { modelMix: () => ({ today: null }) }, BRAND: { OPEN_MENU_LABEL: 'Open Plexiform…' },
       Menu: { buildFromTemplate: (t) => t }, budgetItems: () => [], scopeItem: () => [], BurstIpc: { trayItems: () => [] }, AgentBusMain: { trayItems: () => [] }, quietItems: () => [{ label: 'Snooze Notifications' }], WidgetPolish: { menuItems: () => [{ label: 'Quiet for 30 minutes' }] },
-      loadConfig: () => ({ showWidget: true, menuBarMode: false }), LoginItem: { get: () => true }, updaterTrayItems: () => [{ label: 'Check for Updates…' }], hooksLabel: 'Reinstall Claude Code Hooks' };
-    for (const fn of ['openBuddy', 'createFeedbackWindow', 'createHelpWindow', 'showHealth', 'knockNow', 'resizeBy', 'installHooks', 'createTray', 'setManual', 'clearManual', 'saveConfig', 'createWindow', 'applyWidgetVisibility', 'broadcastStatus', 'updateTrayMode']) ctx[fn] = () => {};
+      loadConfig: () => ({ showWidget: true, menuBarMode: false }), LoginItem: { get: () => true }, updaterTrayItems: () => [{ label: 'Check for Updates…' }], hooksLabel: 'Reinstall Claude Code Hooks', ComposeShortcut: { held: null } };
+    for (const fn of ['openBuddy', 'createFeedbackWindow', 'createHelpWindow', 'showHealth', 'knockNow', 'resizeBy', 'installHooks', 'createTray', 'setManual', 'clearManual', 'saveConfig', 'createWindow', 'applyWidgetVisibility', 'broadcastStatus', 'updateTrayMode', 'openCompose']) ctx[fn] = () => {};
     return vm.runInNewContext(`${slice('  const sectionItems = ', '\n  // Rebuilt in place')}\nbuildMenu(${JSON.stringify(from)});`, ctx).filter((i) => i.type !== 'separator');
   };
   const tray = build('tray');
@@ -207,7 +207,10 @@ test('the default tray menu is 20 items or fewer, with debug controls only in de
   assert.equal(labels.filter((l) => /^Open .+…$/.test(l) && l !== 'Open Plexiform…').length, BuddyPages.sectionsFor().filter((sec) => sec.menu === undefined).length, 'one Open item per sidebar section that is in the menu');
   const more = tray.filter(item => item.label === 'More');
   assert.equal(more.length, 1, 'secondary sections have one More submenu');
-  assert.deepEqual(Array.from(more[0].submenu, item => item.label).filter(l => l && l.startsWith('Open ')), BuddyPages.sectionsFor().filter(sec => sec.menu === 'more').map(sec => `Open ${sec.title}…`), 'every secondary section remains reachable');
+  assert.deepEqual(Array.from(more[0].submenu, item => item.label).filter(l => l && l.startsWith('Open ') && l !== 'Open Claude'), BuddyPages.sectionsFor().filter(sec => sec.menu === 'more').map(sec => `Open ${sec.title}…`), 'every secondary section remains reachable');
+  assert.ok(labels.includes('New task…'), 'New task… is in the tray');
+  assert.ok(!labels.includes('Open Claude'), 'Open Claude is not top-level in the tray');
+  assert.ok(more[0].submenu.some((i) => i.label === 'Open Claude'), 'Open Claude is reachable under More even with the widget off');
   assert.deepEqual(more[0].submenu.at(-1).submenu.map((i) => [i.label.slice(2), i.enabled]), require('../src/colour-legend.js').LEGEND.map((e) => [`${e.label}: ${e.meaning}`, false]), 'the colour key sits at the foot of More');
   assert.equal(labels.filter(label => /^Open .+…$/.test(label) && label !== 'Open Plexiform…').length, 6, 'the tray keeps six primary sections');
   for (const kept of ['Open at Login', 'Quit', 'Floating Widget', 'What does this mean?…']) assert.ok(labels.includes(kept), kept);
@@ -220,8 +223,8 @@ test('the tray pauses and resumes automatic work cards, and turning them on the 
     const ctx = { buddyWin: { captureState: () => capture, setCapture: (on) => { calls.push(['setCapture', on]); return true; } }, refreshTrayMenu: () => calls.push(['refresh']),
       IS_DEV_RUN: false, IS_MAC: true, BuddyPages, AppMenu: require('../src/app-menu.js'), SimpleMode: require('../src/simple-mode.js'), UsagePopOut: require('../src/usage-popout.js'), usageMemo: { turns: [] }, getUsageTurns: () => Promise.resolve(), Usage: { modelMix: () => ({ today: null }) }, BRAND: { OPEN_MENU_LABEL: 'Open Plexiform…' },
       Menu: { buildFromTemplate: (t) => t }, budgetItems: () => [], scopeItem: () => [], BurstIpc: { trayItems: () => [] }, AgentBusMain: { trayItems: () => [] }, quietItems: () => [], WidgetPolish: { menuItems: () => [] },
-      loadConfig: () => ({ showWidget: true, menuBarMode: false, ...config }), LoginItem: { get: () => true }, updaterTrayItems: () => [], hooksLabel: 'x' };
-    for (const fn of ['openBuddy', 'createFeedbackWindow', 'createHelpWindow', 'showHealth', 'knockNow', 'resizeBy', 'installHooks', 'createTray', 'setManual', 'clearManual', 'saveConfig', 'createWindow', 'applyWidgetVisibility', 'broadcastStatus', 'updateTrayMode']) ctx[fn] = (...a) => calls.push([fn, ...a]);
+      loadConfig: () => ({ showWidget: true, menuBarMode: false, ...config }), LoginItem: { get: () => true }, updaterTrayItems: () => [], hooksLabel: 'x', ComposeShortcut: { held: null } };
+    for (const fn of ['openBuddy', 'createFeedbackWindow', 'createHelpWindow', 'showHealth', 'knockNow', 'resizeBy', 'installHooks', 'createTray', 'setManual', 'clearManual', 'saveConfig', 'createWindow', 'applyWidgetVisibility', 'broadcastStatus', 'updateTrayMode', 'openCompose']) ctx[fn] = (...a) => calls.push([fn, ...a]);
     const items = vm.runInNewContext(`${slice('  const sectionItems = ', '\n  // Rebuilt in place')}\nbuildMenu('tray');`, ctx);
     return { item: items.find((i) => /automatic cards/.test(i.label || '')), calls: { get list() { return JSON.parse(JSON.stringify(calls)); } } };
   };

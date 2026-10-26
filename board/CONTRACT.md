@@ -1242,6 +1242,22 @@ Local Electron IPC only; nothing reaches a hub. The one outbound flow is `voice-
 | `pointer:play` | main → pointer overlay (`pointer-overlay-preload.js`) | `{reduced, ms, from:{x,y}\|null, points:[{x, y, label ≤40}] ≤3}` in the display's own coordinates | One transparent, frameless, `focusable:false`, click-through (`setIgnoreMouseEvents(true)`) window per display with a point; main destroys every window by 6 s. The page sends nothing back |
 | `voice-status` (extended) | Preferences | none | adds `preset: 'Control+Alt+Space'` and `screenAccess` (`granted`\|`denied`\|`not-determined`\|`restricted`\|`unsupported`) |
 
+## Home IPC: the task box (`src/compose-main.js`, plan-orchestrator O4)
+
+Local Electron IPC only, from the Home page's own top frame (`home-preload.js` → `window.composeApi`). Folders are handles from main's shared Tasks pool, never paths. With `homeComposer: false` (Preferences → "Show the task box on Home") `compose:info` answers `{hidden: true}` and every other channel refuses.
+
+| Channel | Who may call | Payload | Answer / effect |
+|---|---|---|---|
+| `compose:info` | Home | none | `{hidden, connected, ais:[{id,label,usable}], folder, recent, shortcut, task}`; read-only |
+| `compose:pick-folder` | Home | none | a folder handle or null (native folder dialog) |
+| `compose:route` | Home | `{text, folder, ai, permissionLevel}` | `{ok, route:{decision run\|ask\|refuse, ai, reason, alternatives, code?, canOverride?}}`; the helper's read-only `route`, never a create |
+| `compose:preflight` | Home | `{folder}` | the Tasks preflight plus main's own peers `key` |
+| `compose:run` | the foreground Home document only | `{text, folder, ai, permissionLevel, expectAi?, requestId, peersKey, overrideBudget?}` | the only channel that creates a task. Main re-runs the preflight (a failed one is CONFLICT; changed peers PEERS_CHANGED), then `tasks.create` with `expectAi` (only with `ai:'auto'`; the engine refuses with CONFLICT if routing changed). Bound to the Home document across every await |
+| `compose:stop` | the foreground Home document only | exactly `{id, confirmed}` | stop, only for a task this Home document started (keyed by its webContents and document) |
+| `compose:open-in-tasks` | Home | a task id it started | opens Tasks and selects it |
+
+Main → page: `compose:focus` (the menu bar's New task… or the shortcut; once, after load, only to the selected Home page), `compose:event` `{id, line}` and `compose:task` `{id, row}` for a task this document started, `compose:changed` (the helper connected or went away). Main → Tasks: `tasks:compose` (New task… with the box hidden; not while a Tasks dialog is open) and `tasks:reveal` (an id). Nothing here approves, denies or answers: approvals are answered in Tasks. The shortcut (`composeShortcut` in config, set on the Widget page) is off by default and never takes the widget's or the voice key.
+
 ## Home IPC: project safety (`src/guardrails-main.js`)
 
 Local Electron IPC only. Findings never carry a secret (redacted preview only), a session id or an absolute path; ids are opaque hex. Restoring files asks in a native dialog first; "Make a new key" opens only a fixed provider URL from `src/guardrails.js`.

@@ -255,3 +255,11 @@ test('validateCreate: "when reset" is free; "tonight" needs the Plus window feat
   assert.deepEqual(ok.window, { from: '22:00', to: '07:00' });
   assert.equal(G.validateCreate(base, '/tmp/x').spec.window, undefined);
 });
+
+test('O4 finding 1: expectAi only with ai "auto" and a known AI; anywhere else it is refused, never dropped', () => {
+  assert.equal(G.validateCreate({ text: 'do it', ai: 'auto', expectAi: 'codex' }, '/p').spec.expectAi, 'codex');
+  assert.equal(G.validateCreate({ text: 'do it', ai: 'claude', expectAi: 'claude' }, '/p').code, 'VALIDATION', 'an explicit pick needs no expectAi');
+  assert.equal(G.validateCreate({ text: 'do it', expectAi: 'skynet', ai: 'auto' }, '/p').code, 'VALIDATION');
+  assert.equal(G.validateCreate({ text: 'do it', ai: 'auto', expectAi: null }, '/p').code, 'VALIDATION');
+  assert.equal('expectAi' in G.validateCreate({ text: 'do it', ai: 'auto' }, '/p').spec, false, 'the Tasks page’s create is unchanged');
+});

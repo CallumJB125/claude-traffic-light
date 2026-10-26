@@ -21,7 +21,8 @@
   const isSimple = (config) => !!config && config.simpleMode === true;
 
   // Home sections a simple-mode person sees; everything else on Home is hidden.
-  const HOME_ESSENTIALS = Object.freeze(['banner', 'alerts', 'needs', 'running', 'today', 'guardrails', 'explain', 'deploys']);
+  // The task box (compose) stays: it is how a simple-mode person starts work.
+  const HOME_ESSENTIALS = Object.freeze(['banner', 'alerts', 'compose', 'needs', 'running', 'today', 'guardrails', 'explain', 'deploys']);
 
   // What setup asks the person to paste into Claude Code. Harmless: it only
   // asks a question, so it starts a session without touching their files.

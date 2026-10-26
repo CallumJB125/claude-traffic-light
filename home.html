@@ -7,6 +7,7 @@
   <title>Home</title>
   <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="home.css">
+  <link rel="stylesheet" href="home-compose.css">
   <link rel="stylesheet" href="page.css">
   <link rel="stylesheet" href="demo-banner.css">
 <link rel="stylesheet" href="tour-coachmark.css">
@@ -19,6 +20,7 @@
     <p>Pick up where you left off. See what needs you and keep your team moving.</p>
     <div class="home-actions actions"><button type="button" id="open-tasks" class="primary">Open Tasks</button><button type="button" id="open-projects">Open projects</button></div>
   </div></header>
+  <section id="compose" aria-labelledby="compose-title" hidden><div class="section-header"><h2 id="compose-title">Give Plexiform a task</h2><p id="compose-hint" class="muted"></p></div><div class="body"></div><p id="compose-status" class="muted" role="status" aria-live="polite"></p></section>
   <div id="banner" class="banner" role="region" aria-label="Connect your AI tools" hidden></div>
   <section id="starter" aria-labelledby="starter-title" hidden><div class="section-header"><h2 id="starter-title">Start with a pack</h2></div><div class="body"></div></section>
   <section id="morning" aria-labelledby="morning-title" hidden><div class="section-header"><h2 id="morning-title">While you were away</h2><p id="morning-count" class="muted"></p></div><div class="body"></div></section>
@@ -45,6 +47,8 @@
 <script src="tour-coachmark.js"></script>
 <script src="tour-host.js"></script>
 <script src="home.js"></script>
+<script src="src/compose-view.js"></script>
+<script src="home-compose.js"></script>
 <script src="home-inbox-view.js"></script>
 <script src="home-alerts-view.js"></script>
 <script src="home-guardrails-view.js"></script>

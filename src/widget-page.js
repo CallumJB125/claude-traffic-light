@@ -98,6 +98,9 @@ function cleanPatch(v, current = {}) {
   if (SIZES.includes(v.widgetSize)) out.widgetSize = v.widgetSize;
   if (v.widgetShortcut === '') out.widgetShortcut = '';
   else if (cleanAccelerator(v.widgetShortcut)) out.widgetShortcut = cleanAccelerator(v.widgetShortcut);
+  // The task box's shortcut (O4): off unless the person sets one; '' turns it off again.
+  if (v.composeShortcut === '') out.composeShortcut = '';
+  else if (cleanAccelerator(v.composeShortcut)) out.composeShortcut = cleanAccelerator(v.composeShortcut);
   if ('projectColours' in v) { const c = cleanColours(v.projectColours, current.projectColours); if (c) out.projectColours = c; }
   if (v.agentKinds && typeof v.agentKinds === 'object' && !Array.isArray(v.agentKinds)) {
     const kinds = { ...(current.agentKinds || {}) };
@@ -136,6 +139,7 @@ function configView(c) {
     widgetSnap: SNAPS.includes(c.widgetSnap) ? c.widgetSnap : 'corners',
     widgetSize: SIZES.includes(c.widgetSize) ? c.widgetSize : 'normal',
     widgetShortcut: cleanAccelerator(c.widgetShortcut) || '',
+    composeShortcut: cleanAccelerator(c.composeShortcut) || '',
     projectColours: savedColours(c.projectColours),
   };
 }
@@ -163,6 +167,7 @@ function register(ctx) {
       // A bubble, budget note or recap hangs under Claude: moving or resizing waits for it.
       held: WidgetStrip.blocksTravel(s) || !!ctx.busy(),
       platform: ctx.platform,
+      compose: ctx.composeShortcut ? ctx.composeShortcut() : null,
     };
   }
 

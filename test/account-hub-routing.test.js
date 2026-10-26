@@ -49,7 +49,7 @@ function fixture(t, { restored = false, ensureGate = null, gateLoads = false, re
   const store = createWorkspaceStore(workspaceFile, { signedIn: () => !!marker });
   const views = [], loads = [], attachments = [], pushes = [], bearerOrigins = [], cookies = [];
   const ctx = {
-    URL, Promise, Set, store, selected: 'board', setupLocalGeneration: 0, tasksGeneration: 0,
+    URL, Promise, Set, store, selected: 'board', setupLocalGeneration: 0, tasksGeneration: 0, homeGeneration: 0,
     hubInfo: null, hubBinding: null, hubView: null, hubLoading: null, hubLoadingBinding: null,
     content: null, gen: 0, connectEpoch: 0, viewError: null, hubStatus: { state: 'ready' },
     win: {}, accountView: null, stopping: false, resumeRequested: false, resumedHubs: new Set(),

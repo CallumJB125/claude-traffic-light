@@ -700,6 +700,36 @@ function createTasksService(opts) {
     } catch { return unavailable(); }
   }
 
+  // What createTask would pick for this draft and why (O1's read-only `route` op; local rules, no AI call). Home's
+  // composer shows it before Run. req = {text, folder, ai, permissionLevel}: a folder handle, never a path.
+  const ROUTE_REFUSALS = new Set(['AI_UNAVAILABLE', 'CAPABILITY_MISSING', 'BUDGET_EXCEEDED', 'POLICY_DENIED']);
+  async function route(req, extra = {}) {
+    const keys = ['text', 'folder', 'ai', 'permissionLevel'];
+    if (!req || typeof req !== 'object' || Object.keys(req).some((k) => !keys.includes(k))) return failure({ code: 'VALIDATION' });
+    if (!connected()) return failure({ code: 'SUPERVISOR_UNREACHABLE' });
+    const channel = client, current = () => connected() && client === channel && (!extra.current || extra.current() === true);
+    const cwd = folders.get(typeof req.folder === 'string' ? req.folder : '');
+    const v = guard.validateCreate({ text: req.text, ai: req.ai, permissionLevel: req.permissionLevel }, cwd);
+    if (!v.ok || !(await isDir(cwd))) return failure({ code: 'VALIDATION' });
+    if (!current()) return failure({ code: 'CONFLICT' });
+    const clean = (s, n = 200) => (typeof s === 'string' ? s.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, n) : '');
+    const { text, cwd: dir, ai, permissionLevel } = v.spec;
+    try {
+      const r = await channel.route({ text, cwd: dir, ai, ...(permissionLevel ? { permissionLevel } : {}), source: 'local' });
+      if (!current()) return failure({ code: 'CONFLICT' });
+      const alternatives = (Array.isArray(r?.alternatives) ? r.alternatives : []).filter((a) => api.P.AIS.includes(a?.ai)).slice(0, 4)
+        .map((a) => ({ ai: a.ai, reason: clean(a.reason), usable: a.usable === true }));
+      if (r?.decision === 'ask') return { ok: true, route: { decision: 'ask', ai: null, reason: clean(r.reason), alternatives } };
+      if (r?.decision !== 'run' || !api.P.AIS.includes(r.ai)) return failure({ code: 'INTERNAL' });
+      return { ok: true, route: { decision: 'run', ai: r.ai, reason: clean(r.reason), alternatives } };
+    } catch (e) {
+      const code = codeOf(e);
+      // The router's refusal is its own one-line reason (plan §3.2), shown as is; anything else gets the plain words.
+      if (ROUTE_REFUSALS.has(code)) return { ok: true, route: { decision: 'refuse', ai: null, code, reason: clean(e?.message) || TV.errorText(code), canOverride: code === 'BUDGET_EXCEEDED' && e?.details?.canOverride === true, alternatives: [] } };
+      return failure(e);
+    }
+  }
+
   // The helper runs only some AIs; any other AI found on this Mac (src/ai-tools.js
   // quick(), via opts.detectedTools) is still listed, marked as not in Tasks yet.
   function withDetected(list) {
@@ -775,7 +805,7 @@ function createTasksService(opts) {
     return { handle, label };
   }
 
-  return { start, stop, retryNow, snapshot, openTask, closeTask, act, saveCheckpoint, copyTakeover, openTerminal, create, preflight, composerInfo, registerFolder, markSeen, folderOf: (handle) => folders.get(handle) ?? null, folderPaths: () => [...folders.values()], bus };
+  return { start, stop, retryNow, snapshot, openTask, closeTask, act, saveCheckpoint, copyTakeover, openTerminal, create, preflight, route, composerInfo, registerFolder, markSeen, folderOf: (handle) => folders.get(handle) ?? null, folderPaths: () => [...folders.values()], bus };
 }
 
 module.exports = { createTasksService, OFFLINE };

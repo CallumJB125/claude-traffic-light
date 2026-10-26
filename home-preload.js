@@ -47,3 +47,20 @@ contextBridge.exposeInMainWorld('demoApi', {
 
 // First-run tour (src/first-run-tour-main.js): main pushes the step; the page answers Next / Skip / missing.
 contextBridge.exposeInMainWorld('tourApi', { onStep: (cb) => ipcRenderer.on('tour:step', (e, step) => cb(step)), action: (kind, id) => ipcRenderer.invoke('tour:action', String(kind), String(id)) });
+
+// Home's task box (src/compose-main.js). Folder handles and fixed shapes only; main resolves and checks everything.
+// run is the only call that starts a task, and the page sends it only for Run or ⌘↩. No approve, deny or answer here.
+const plain = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+contextBridge.exposeInMainWorld('composeApi', {
+  info: () => ipcRenderer.invoke('compose:info'),
+  pickFolder: () => ipcRenderer.invoke('compose:pick-folder'),
+  route: (req) => { const r = plain(req); return ipcRenderer.invoke('compose:route', { text: r.text, folder: r.folder, ai: r.ai, permissionLevel: r.permissionLevel }); },
+  preflight: (folder) => ipcRenderer.invoke('compose:preflight', { folder: typeof folder === 'string' ? folder : '' }),
+  run: (draft) => { const d = plain(draft); const out = {}; for (const k of ['text', 'folder', 'ai', 'permissionLevel', 'expectAi', 'requestId', 'peersKey', 'overrideBudget']) if (d[k] !== undefined) out[k] = d[k]; return ipcRenderer.invoke('compose:run', out); },
+  stop: (id, confirmed) => ipcRenderer.invoke('compose:stop', { id: String(id), confirmed: confirmed === true }),
+  openInTasks: (id) => ipcRenderer.invoke('compose:open-in-tasks', String(id)),
+  onFocus: (cb) => ipcRenderer.on('compose:focus', () => cb()),
+  onEvent: (cb) => ipcRenderer.on('compose:event', (_e, m) => cb(m)),
+  onTask: (cb) => ipcRenderer.on('compose:task', (_e, m) => cb(m)),
+  onChanged: (cb) => ipcRenderer.on('compose:changed', () => cb()),
+});

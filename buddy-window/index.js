@@ -124,7 +124,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, homeBusy = () => false, onHomeRetired = () => {} } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -235,7 +235,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // Pages with forms, an open dispatch dialog or session ownership are never reclaimed while the window is open.
   const KEEP_ALIVE = new Set(['setups', 'overview', 'tasks', 'feedback', 'hatch']);
   const lifecycle = createViewLifecycle({
-    isProtected: (id) => KEEP_ALIVE.has(id),
+    // Home only while a task its box started is live (src/compose-main.js busy(): an allowlist of states).
+    isProtected: (id) => KEEP_ALIVE.has(id) || (id === 'home' && (() => { try { return homeBusy() === true; } catch { return false; } })()),
     isConstrained: () => { try { return !!isConstrained(); } catch { return false; } },
     destroy(id) {
       const v = localViews.get(id);
@@ -248,6 +249,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   const setupIdentityListeners=new Set(),activeListeners=new Set();let setupIdentityMarkers=[],activeMarker=null;
   let overviewDocument=0,setupSourcesGeneration=0,setupLocalGeneration=0,setupCurrentSources=[],setupModalTicket=null;
   let tasksDocument=0,tasksGeneration=0,tasksModalTicket=null;
+  let homeDocument=0,homeGeneration=0,homeModalTicket=null; // Home's task box: the same document and focus rule as Tasks
+  const pendingSends=new Map(); // page id → the one pending main → page readiness send (focusComposer, tasks:compose, tasks:reveal)
   let selected = 'board';
   let hubStatus = { state: 'stopped' };
   let hubInfo = null; // {url, origin, accessTeam, partition, team, bearer, org}
@@ -461,7 +464,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   }
 
   function pushState() {
-    if(activeMarker!==store.active().id){tasksGeneration++;activeMarker=store.active().id;for(const listener of activeListeners)listener();}
+    if(activeMarker!==store.active().id){tasksGeneration++;homeGeneration++;activeMarker=store.active().id;for(const listener of activeListeners)listener();}
     const markers=store.hubs().map(origin=>[origin,vault(origin).load()]);
     if(markers.length!==setupIdentityMarkers.length || markers.some((value,index)=>value[0]!==setupIdentityMarkers[index]?.[0]||value[1]!==setupIdentityMarkers[index]?.[1])) {
       setupSourcesGeneration++;setupCurrentSources=[];
@@ -537,6 +540,13 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
         // Overview also counts documents (not focus changes) for session ownership.
         const retire=page.id==='overview'?()=>{overviewDocument++;retireSetupDocument();try{onOverviewRetired();}catch{/* never blocks retirement */}}:retireSetupDocument;
         // A same-document navigation (hash/pushState) keeps the document, so it must not end sessions.
+        v.webContents.on('did-start-navigation',d=>{if(d.isMainFrame&&!d.isSameDocument)retire();});
+        v.webContents.on('render-process-gone',retire);
+        v.webContents.once('destroyed',retire);
+      }
+      if(page.id==='home'){
+        const wcId=v.webContents.id;
+        const retire=()=>{homeDocument++;try{onHomeRetired(wcId);}catch{/* never blocks retirement */}};
         v.webContents.on('did-start-navigation',d=>{if(d.isMainFrame&&!d.isSameDocument)retire();});
         v.webContents.on('render-process-gone',retire);
         v.webContents.once('destroyed',retire);
@@ -953,6 +963,28 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     if (win && myGen === gen && selected === page.id && view === hubView && !viewError && hubBindingCurrent(binding)) attach(view);
   }
 
+  function sendWhenReady(pageId, channel, payload) {
+    const v=localViews.get(pageId),wc=v?.webContents;
+    if(!win||win.isDestroyed()||!wc||wc.isDestroyed())return false;
+    const docOf=()=>pageId==='home'?homeDocument:tasksDocument;
+    const ready=()=>win&&!win.isDestroyed()&&win.isVisible()&&!win.isMinimized()&&selected===pageId&&localViews.get(pageId)===v&&!wc.isDestroyed()&&!wc.isLoading()&&!(pageId==='tasks'&&tasksModalTicket);
+    const prior=pendingSends.get(pageId);if(prior)prior.cancel();
+    const loading=wc.isLoading()||wc.getURL()==='';
+    // A load in progress may start its navigation after this call: that one navigation is the document awaited.
+    let doc=docOf(),navigations=0,done=false;
+    const onNav=d=>{if(!d.isMainFrame||d.isSameDocument)return;navigations++;doc=docOf();if(!loading||navigations>1)cancel();};
+    // did-finish-load can arrive while isLoading() is still true; did-stop-loading follows it (as notifyOverviewReady).
+    let finished=false;
+    const onLoad=()=>{if(done)return;finished=true;if(wc.isLoading())return;const ok=ready()&&docOf()===doc;cancel();if(ok){try{wc.send(channel,payload);}catch{/* closed */}}};
+    const onStop=()=>{if(!done&&finished)onLoad();};
+    function cancel(){if(done)return;done=true;if(pendingSends.get(pageId)===entry)pendingSends.delete(pageId);wc.removeListener('did-start-navigation',onNav);wc.removeListener('did-finish-load',onLoad);wc.removeListener('did-stop-loading',onStop);}
+    const entry={cancel};
+    if(!loading){if(!ready())return false;try{wc.send(channel,payload);}catch{return false;}return true;}
+    pendingSends.set(pageId,entry);
+    wc.on('did-start-navigation',onNav);wc.on('did-finish-load',onLoad);wc.on('did-stop-loading',onStop);
+    return true;
+  }
+
   // ── selection ───────────────────────────────────────────────────────────
 
   function select(id) {
@@ -961,6 +993,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     if (page.kind === 'window') { openWindow(page.window); return; }
     setupLocalGeneration++;
     tasksGeneration++;
+    homeGeneration++;
     if (page.localScreen && !getTeamHub()) { flow.show(page.localScreen); return; }
     if (page.kind === 'local' && page.screen) { flow.show(page.screen); return; }
     flow.leftAccountPages();
@@ -1148,11 +1181,13 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     win.on('resize', layout);
     win.on('blur',()=>{if(!setupModalTicket)setupLocalGeneration++;});
     win.on('blur',()=>{if(!tasksModalTicket)tasksGeneration++;});
-    win.on('hide',()=>{tasksGeneration++;});
-    win.on('minimize',()=>{tasksGeneration++;});
+    win.on('blur',()=>{if(!homeModalTicket)homeGeneration++;});
+    win.on('hide',()=>{tasksGeneration++;homeGeneration++;});
+    win.on('minimize',()=>{tasksGeneration++;homeGeneration++;});
     win.on('closed', () => {
       setupLocalGeneration++;
       tasksGeneration++;
+      homeGeneration++;
       // Close every page: detached views otherwise keep running (and the board
       // page keeps its socket). The hub keeps running while the app runs, so
       // reopening is instant; it stops with the app.
@@ -1203,7 +1238,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     },
     async tasksConfirm(show) {
       const before=this.tasksContext();
-      if(typeof show!=='function'||!before?.foreground||tasksModalTicket||setupModalTicket)return null;
+      if(typeof show!=='function'||!before?.foreground||tasksModalTicket||setupModalTicket||homeModalTicket)return null;
       const ticket={...before,frame:before.contents.mainFrame};tasksModalTicket=ticket;
       try {
         const answer=await show(before.window),after=this.tasksContext();
@@ -1212,6 +1247,31 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       }finally{if(tasksModalTicket===ticket)tasksModalTicket=null;}
     },
     setupSources,
+    // Home's task box (src/compose-main.js). The same document and focus authority as tasksContext.
+    homeContext() {
+      const v=localViews.get('home'),wc=v?.webContents;
+      if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='home'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized())return null;
+      const expected=pathToFileURL(path.join(DIR,'..','home.html')).href;
+      if(wc.getURL()!==expected||wc.mainFrame?.url!==expected||wc.isLoading())return null;
+      return {window:win,contents:wc,generation:homeGeneration,document:homeDocument,account:setupSourcesGeneration,workspace:store.active()?.id,foreground:win.isFocused()};
+    },
+    // Home's current document, selected or not, for delivering a started task's events to the document that started it.
+    homeDocument() { const wc=localViews.get('home')?.webContents; return wc&&!wc.isDestroyed()?{wcId:wc.id,doc:homeDocument}:null; },
+    async homeConfirm(show) {
+      const before=this.homeContext();
+      if(typeof show!=='function'||!before?.foreground||homeModalTicket||tasksModalTicket||setupModalTicket)return null;
+      const ticket={...before,frame:before.contents.mainFrame};homeModalTicket=ticket;
+      try {
+        const answer=await show(before.window),after=this.homeContext();
+        if(homeModalTicket!==ticket||!after?.foreground||after.contents.mainFrame!==ticket.frame||['window','contents','generation','document','account','workspace'].some(key=>after[key]!==ticket[key]))return null;
+        return answer;
+      }finally{if(homeModalTicket===ticket)homeModalTicket=null;}
+    },
+    // main → page readiness sends (review finding 11 and R3): one pending per page, after did-finish-load, only while
+    // that page is still selected in a visible window and its document is the one loading when this was asked.
+    focusComposer() { return sendWhenReady('home', 'compose:focus', null); },
+    tasksCompose() { return sendWhenReady('tasks', 'tasks:compose', null); },
+    tasksReveal(id) { return typeof id === 'string' && id.length <= 128 ? sendWhenReady('tasks', 'tasks:reveal', id) : false; },
     // Main-only identities. No renderer receives a sealed marker or window.
     setupsActorCurrent(actor) {
       return !!actor && setupCurrentSources.some(s=>s.current() && s.userId===actor.account && s.teamId===actor.team && s.memberId===actor.member && s.deviceId===actor.device);
@@ -1225,7 +1285,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     },
     async setupsConfirm(show) {
       const before=this.setupsContext();
-      if(typeof show!=='function' || !before?.foreground || setupModalTicket)return null;
+      if(typeof show!=='function' || !before?.foreground || setupModalTicket || homeModalTicket)return null;
       const ticket={window:before.window,contents:before.contents,generation:before.generation};setupModalTicket=ticket;
       try {
         const answer=await show(before.window);

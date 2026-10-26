@@ -256,6 +256,12 @@ function createGuard({ P, taskFace }) {
     if (!text(draft.text, TV.LIMITS.taskText)) return fail('VALIDATION');
     const spec = { text: draft.text.trim(), cwd, source: 'local', ai: pick(draft.ai, P.AI_CHOICES, 'auto'), surface: pick(draft.surface, SURFACES_UI, 'background') };
     if (PERMS_UI.includes(draft.permissionLevel)) spec.permissionLevel = draft.permissionLevel;
+    // The AI the person saw on the route line (Home's composer). Only with "Choose for me": the engine then refuses with
+    // CONFLICT if routing changed since, and runs a tie as the pick. Present anywhere else, it is refused, never dropped.
+    if (draft.expectAi !== undefined) {
+      if (spec.ai !== 'auto' || !P.AIS.includes(draft.expectAi)) return fail('VALIDATION');
+      spec.expectAi = draft.expectAi;
+    }
     if (draft.planFirst === true) spec.planFirst = true;
     // A spend cap for this one task: the AI stops itself at it (native cap), the task ends "stopped at cap".
     if (draft.budgetUsd !== undefined && draft.budgetUsd !== null && draft.budgetUsd !== '') {
