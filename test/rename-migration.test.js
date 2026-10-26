@@ -887,7 +887,7 @@ test('follow-up: a hook rewrite that reports an error keeps hooks pending, so Re
   assert.deepEqual(M.pending(userData), []);
   assert.equal(dialogs.length, 2, 'offered once hooks are done (both old app paths)');
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  assert.match(src, /hooks: \(\) => \(AUTO_INSTALL_HOOKS \? RenameMigration\.rewriteHooks\(\{[^}]*\}\)\.every\(\(r\) => !r\.error\) : false\)/);
+  assert.match(src, /hooks: \(\) => \{\s*if \(!AUTO_INSTALL_HOOKS\) return false;\s*const done = RenameMigration\.rewriteHooks\(\{[^}]*\}\)\.every\(\(r\) => !r\.error\);\s*if \(done\) noteAskHooks\(!!loadConfig\(\)\.askFromWidget\);\s*return done;\s*\}/);
   fs.rmSync(home, { recursive: true, force: true });
   fs.rmSync(hooksHome.home, { recursive: true, force: true });
 });
