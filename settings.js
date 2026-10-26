@@ -532,6 +532,11 @@
             : intro;
       };
       show({ taken: st.hotkeyTaken });
+      // The one-click preset only exists where the helper does; its wording follows the platform main reports.
+      const keys = st.presetKeys || 'Control + Option + Space';
+      preset.textContent = `Hold ${keys} to talk`;
+      preset.title = `Sets the key to ${keys}: hold all three while you ask, let go to send`;
+      preset.hidden = !st.available;
       if (!st.available) for (const el of [hotkey, longPress, askClaude, screenOn, point, preset]) el.disabled = true;
       // Pointing starts on with the screen switch; turning the screen on resets it to on.
       screenOn.addEventListener('change', () => { if (screenOn.checked) point.checked = true; });

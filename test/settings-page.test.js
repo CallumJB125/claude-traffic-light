@@ -10,7 +10,7 @@ const html = fs.readFileSync(path.join(ROOT, 'settings.html'), 'utf8');
 const script = fs.readFileSync(path.join(ROOT, 'settings.js'), 'utf8');
 const tick = () => new Promise((r) => setTimeout(r, 5));
 
-async function open(url = 'file:///app/settings.html', config = {}) {
+async function open(url = 'file:///app/settings.html', config = {}, voice = { hotkeys: [], available: false, reason: 'x' }) {
   const dom = new JSDOM(html.replace(/<script src[^>]*><\/script>/g, ''), { url, runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
   const saves = [];
@@ -20,7 +20,7 @@ async function open(url = 'file:///app/settings.html', config = {}) {
   w.settingsApi = new Proxy({
     getConfig: async () => config,
     saveConfig: async (c) => { saves.push(c); return c; },
-    voiceStatus: async () => ({ hotkeys: [], available: false, reason: 'x' }),
+    voiceStatus: async () => voice,
     compactionStats: none, spend: none, remoteDevices: none, interactionHostStatus: none, mcpStatus: async () => ({ installed: false }),
     signalEndpoint: async () => ({ port: 1, emit: 'e', token: 't' }), gitStatus: none, privacyText: none, busyStatus: async () => ({ calendar: {}, focus: {}, ics: {} }),
     onShowSection(cb) { w.__show = cb; },
@@ -154,4 +154,18 @@ test('settings has sub-page navigation, no Save button, and a first screen of at
   const first = doc.querySelector('.pane:not([hidden])');
   const controls = first.querySelectorAll('input:not([type=hidden]), select, textarea').length;
   assert.ok(controls <= 10, `${controls} controls on the first screen`);
+});
+
+test('Q9: no voice helper, so no "Hold … to talk" call to action; the reason stays', async () => {
+  const { doc } = await open();
+  assert.equal(doc.getElementById('voice-preset').hidden, true);
+  assert.equal(doc.getElementById('voice-hint').textContent, 'x');
+});
+
+test('Q9: voice helper built, so the call to action stays and its keys follow the platform', async () => {
+  const mk = async (presetKeys) => (await open('file:///app/settings.html', {}, { hotkeys: [], available: true, reason: null, presetKeys })).doc.getElementById('voice-preset');
+  const mac = await mk('Control + Option + Space');
+  assert.equal(mac.hidden, false);
+  assert.equal(mac.textContent, 'Hold Control + Option + Space to talk');
+  assert.equal((await mk('Ctrl + Alt + Space')).textContent, 'Hold Ctrl + Alt + Space to talk');
 });

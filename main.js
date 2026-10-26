@@ -4611,6 +4611,7 @@ utilityHandle('voice-status', settingsOnly, () => ({
   hotkeys: Voice.HOTKEYS.map(({ accelerator, label }) => ({ accelerator, label })),
   hotkeyTaken: voiceHotkeyTaken,
   preset: Voice.PRESET_HOTKEY,
+  presetKeys: IS_MAC ? 'Control + Option + Space' : 'Ctrl + Alt + Space',
   screenAccess: IS_MAC ? voiceScreen.permission() : 'unsupported',
 }));
 
