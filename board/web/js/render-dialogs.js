@@ -8,6 +8,7 @@ import { paletteDialog } from './render-palette.js';
 import { SENT_TEXT, VIEWER_TEXT } from './feedback-send.js';
 import { tackleChoices, readinessText } from './tackle.js';
 import { workflowDialog } from './render-workflows.js';
+import { machine } from '../../shared/brand.js';
 
 function shell(kind, title, content, { wide = false, describedBy = null } = {}) {
   return h('dialog', { class: `modal${wide ? ' modal-wide' : ''}`, 'data-dialog': kind, 'aria-labelledby': `dlg-${kind}-title`, 'aria-describedby': describedBy },
@@ -92,6 +93,8 @@ export function giveDialog(dlg, model) {
   const targetMember = model.members.get(target);
   const isMe = target === meId;
   const repos = dlg.repos ?? [];
+  // dlg.repos is null until /api/repos answers; an empty list is an answer, not a wait.
+  const noRepos = Array.isArray(dlg.repos) && !repos.length;
   const repoId = dlg.repo_id || (repos.length === 1 ? repos[0].id : '');
   const busy = dlg.busy;
   const moving = dlg.mode === 'redispatch' && view.handover_hold;
@@ -105,8 +108,9 @@ export function giveDialog(dlg, model) {
   const deviceLimit = dlg.mode === 'retry' && view.run?.budget_stop === 'device';
   const repoField = field('give-repo', 'Repo',
     h('select', { id: 'give-repo', name: 'repo_id', class: 'input', required: true, 'data-change': 'give-repo', disabled: moving || null },
-      h('option', { value: '', selected: !repoId }, repos.length ? 'Choose a repo' : 'Loading repos…'),
-      repos.map((r) => h('option', { key: r.id, value: r.id, selected: repoId === r.id }, r.short_name ?? r.canonical_url))));
+      h('option', { value: '', selected: !repoId }, repos.length ? 'Choose a repo' : noRepos ? 'No repos yet' : 'Loading repos…'),
+      repos.map((r) => h('option', { key: r.id, value: r.id, selected: repoId === r.id }, r.short_name ?? r.canonical_url))),
+    noRepos ? h('button', { type: 'button', class: 'link', id: 'give-add-repo', 'data-action': 'give-add-repo' }, 'Add one with the GitHub integration') : null);
 
   return shell('give', title, h('form', { class: 'modal-body', 'data-form': 'give', 'data-card': view.id },
     h('p', { class: 'modal-lede' }, view.title),
@@ -115,7 +119,7 @@ export function giveDialog(dlg, model) {
     uncapped && view.budget?.cap_usd != null ? h('p', { class: 'hint' }, `This assignment removes the current ${fmtUsd(view.budget.cap_usd)} card budget.`) : null,
     field('give-ai', 'AI', h('select', { id: 'give-ai', name: 'ai', class: 'input', 'data-change': 'give-ai', disabled: waiting || null },
       providers.map((p) => h('option', { value: p.id, selected: p.id === ai.id, disabled: !p.available || null }, `${p.label}${p.available && !dlg.preview?.runners?.length ? '' : p.reason ? ` · ${readinessText(p.reason)}` : ''}`))),
-      !cloud && !waiting && !dlg.preview?.error && !dlg.preview?.runners?.length ? 'The machine is offline. Work queues until a compatible signed-in runner connects.' : null),
+      !cloud && !waiting && !dlg.preview?.error && !dlg.preview?.runners?.length ? (model.local ? `This ${machine()}’s runner isn’t connected yet. Work queues until it connects.` : 'The machine is offline. Work queues until a compatible signed-in runner connects.') : null),
     cloudChoice(dlg),
     capNotice(ai, dlg, uncapped, view),
     // A required repo with no default stays in view; a chosen one waits in Advanced.

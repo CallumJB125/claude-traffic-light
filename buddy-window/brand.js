@@ -8,6 +8,8 @@
 const Brand = require('../brand');
 
 const NAME = Brand.name;
+// "Mac" on macOS, "computer" elsewhere (A2); main's own platform, sent to the renderers like the rest.
+const MACHINE = Brand.machine();
 
 module.exports = Object.freeze({
   NAME,
@@ -19,6 +21,9 @@ module.exports = Object.freeze({
   SCHEMES: Object.freeze([Brand.scheme, ...Brand.legacySchemes]),
   // The hosted team hub: the sign-in screen's default until the member uses another.
   DEFAULT_HUB: Brand.urls.hub,
+  MACHINE,
+  // The local board's name wherever it is listed (sidebar switcher, My Day, Home, work capture).
+  LOCAL_BOARD: `My board (this ${MACHINE})`,
   WINDOW_TITLE: NAME,
   CONNECT_TITLE: 'Connect',
   OPEN_MENU_LABEL: Brand.label('Open {name}…'),
@@ -32,7 +37,7 @@ module.exports = Object.freeze({
     restarting: 'Board restarting…',
     failed: 'Board unavailable',
     team: 'Team board',
-    local: 'Board on this Mac',
+    local: `Board on this ${MACHINE}`,
     running: 'Running team tasks for {teams}',
   }),
   COPY: Object.freeze({
@@ -42,5 +47,8 @@ module.exports = Object.freeze({
     notAHub: `That address answered, but it isn’t a ${NAME} team address.`,
     notASignIn: `That address redirects somewhere that isn’t a ${NAME} sign-in.`,
     startingBoard: `${NAME} is starting the board…`,
+    // T0 option (a): workspaces.js normalizeHubUrl takes https on a dotted public name (self-hosted included);
+    // links also refuse private address literals (normalizeLinkHub).
+    hubScope: 'Team hubs need a public https:// address. Local-network and http hubs aren’t supported yet.',
   }),
 });

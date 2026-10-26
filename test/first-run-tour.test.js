@@ -136,10 +136,10 @@ test('coachmark: text stays text, Enter advances, Esc skips, Tab stays inside, a
   window.close();
 });
 
-function harness({ connected = false, widgetShown = true } = {}) {
+function harness({ connected = false, widgetShown = true, setupOpen = () => false, initial = {} } = {}) {
   const c = fakeClock();
   const handlers = {}, sent = [], opened = [];
-  let cfg = {};
+  let cfg = { ...initial };
   let demoOn = false;
   const wc = (name) => ({ isDestroyed: () => false, isLoading: () => false, send: (ch, p) => sent.push([name, ch, p]) });
   const bw = (name) => ({ isDestroyed: () => false, webContents: wc(name) });
@@ -148,7 +148,7 @@ function harness({ connected = false, widgetShown = true } = {}) {
     ipcMain: { handle: (ch, fn) => { handlers[ch] = fn; } },
     config: () => cfg, saveConfig: (p) => { cfg = { ...cfg, ...p }; return cfg; },
     demo: { active: () => demoOn, start: () => { demoOn = true; } },
-    hasConnectedTool: () => connected,
+    hasConnectedTool: () => connected, setupOpen,
     windows: { widget: () => widget, widgetShown: () => widgetShown, lights: () => lights, openLights: () => opened.push('lights'), openPage: (id) => opened.push(id), sendToPage: (id, ch, p) => { sent.push([id, ch, p]); return true; } },
     allowed: { widget: (e) => e === 'widget', lights: (e) => e === 'lights', page: (e, id) => e === id },
     now: c.now, setTimeout: c.setTimeout, clearTimeout: c.clearTimeout,
@@ -239,4 +239,54 @@ test('C-T: the demo question\'s id is refused by the answer paths and never name
     assert.ok(body.indexOf('TourMain.isDemoId') < body.indexOf('writeAnswer'), `${name}: before writeAnswer`);
   }
   assert.match(require('fs').readFileSync(require('path').join(__dirname, '..', 'widget.js'), 'utf8'), /tourInput && id === tourInput\.id \? tourAnswered\(\)/, 'the widget answers the demo itself');
+});
+
+test('one tour at a time (A5): Home is told the widget tour\'s status, and first-run setup opens over Home', async () => {
+  const Home = require('../src/home-main.js');
+  const Teammate = require('../src/teammate-tour.js');
+  const handlers = new Map();
+  let status = 'running';
+  Home.register({
+    ipcMain: { handle: (c, f) => handlers.set(c, f) }, allowed: () => true, now: () => 5000,
+    state: () => ({ sessions: [], inputs: [], spend: null }), localSessions: (x) => x, tools: () => [],
+    myDay: { snapshot: async () => ({ sources: [] }), open: async () => true }, morning: () => null,
+    openPage() {}, openAiTools() {}, firstRunTour: () => status,
+  });
+  const home = await handlers.get('home:state')({});
+  assert.equal(home.firstRunTour, 'running');
+  assert.equal(Teammate.decide(Teammate.parse(null), home, null), 'wait', 'Home\'s tour waits while the widget tour runs');
+  status = 'skipped';
+  assert.equal(Teammate.decide(Teammate.parse(null), await handlers.get('home:state')({}), null), 'dismiss', 'and is done when it was skipped');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(main, /require\('\.\/src\/home-main\.js'\)\.register\(\{[^\n]*firstRunTour: \(\) => FirstRunTour\.homeStatus\(\)/);
+  assert.match(main, /setupOpen: \(\) => !!onboardingWin/);
+  const auto = main.slice(main.indexOf('function maybeAutoShowHelp()'));
+  assert.ok(auto.indexOf('openBuddy(homePage())') > 0 && auto.indexOf('openBuddy(homePage())') < auto.indexOf('createOnboardingWindow()'), 'setup opens over Home');
+});
+
+test('M1: a \'running\' left by an earlier launch is \'interrupted\', so Home\'s tour shows; this launch\'s run is \'running\'', () => {
+  const Teammate = require('../src/teammate-tour.js');
+  const h = harness({ initial: { tourState: { status: 'running', step: 2, at: 1 } } });
+  assert.equal(h.api.homeStatus(), 'interrupted');
+  assert.equal(Teammate.decide(Teammate.parse(null), { team: null, firstRunTour: h.api.homeStatus() }, null), 'show');
+  h.api.restart();
+  assert.equal(h.api.homeStatus(), 'running');
+  assert.equal(Teammate.decide(Teammate.parse(null), { team: null, firstRunTour: h.api.homeStatus() }, null), 'wait');
+  h.invoke('tour:action', 'widget', 'skip', h.api.state().status === 'running' ? require('../src/first-run-tour.js').STEPS[h.api.state().step].id : '');
+  assert.equal(h.api.homeStatus(), 'skipped');
+});
+
+test('S1: \'pending\' while first-run setup is open or the widget tour\'s start is scheduled, so Home\'s tour never shows and then vanishes', () => {
+  const Teammate = require('../src/teammate-tour.js');
+  let open = true;
+  const h = harness({ setupOpen: () => open });
+  const decide = () => Teammate.decide(Teammate.parse(null), { team: null, firstRunTour: h.api.homeStatus() }, null);
+  assert.equal(h.api.homeStatus(), 'pending'); assert.equal(decide(), 'wait', 'setup open');
+  open = false; h.api.onboardingClosed();
+  assert.equal(h.api.homeStatus(), 'pending'); assert.equal(decide(), 'wait', 'start scheduled');
+  h.c.tick(30_000);
+  assert.equal(h.api.homeStatus(), 'running'); assert.equal(decide(), 'wait');
+  const seen = harness({ setupOpen: () => true, initial: { tourState: { status: 'finished', step: 4, at: 1 } } });
+  assert.equal(seen.api.homeStatus(), 'finished', 'setup reopened later does not block someone who has seen the tour');
+  assert.equal(harness().api.homeStatus(), 'not-started', 'an older install whose tour never ran still shows Home\'s tour');
 });

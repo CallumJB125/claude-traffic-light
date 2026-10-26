@@ -133,7 +133,7 @@ test('This Mac page: clicking Install on a mod row opens one dialog and sends pa
   const dom = new JSDOM('<!doctype html><main id="acct"></main>', { url: 'file:///account.html?screen=thismac', runScripts: 'outside-only', pretendToBeVisual: true });
   const unexpected = [];
   dom.window.buddyAccount = new Proxy({
-    state: async () => ({ ok: true, brand: { name: 'Plexiform', copy: {}, defaultHost: 'app.plexiform.dev' }, signedInHubs: [], accounts: [], hubs: [], workCapture: null }),
+    state: async () => ({ ok: true, brand: { name: 'Plexiform', copy: {}, defaultHost: 'app.plexiform.dev', machine: 'Mac', localBoard: 'My board (this Mac)' }, signedInHubs: [], accounts: [], hubs: [], workCapture: null }),
     onChanged() {},
     burstStatus: () => handlers['burst:status']({}),
     burstAction: (kind, mode, args) => handlers['burst:action']({}, { kind: String(kind), mode: String(mode), ...(args && typeof args === 'object' ? { args } : {}) }),
@@ -185,7 +185,7 @@ test('This Mac page: the Burst card root carries class dimmed when the view is, 
   const stale = { ok: true, kind: 'gateway_stale', headline: 'Burst is not responding', detail: 'Showing the last known state from 9 s ago.', chip: { tone: 'amber', label: 'Not responding' }, actions: [{ kind: 'repair', label: 'Repair', primary: true }], action: { kind: 'repair', label: 'Repair' }, dimmed: true, compaction: null, keepAwake: null, remoteControl: null, mods: null, nextPollMs: 0 };
   const dom = new JSDOM('<!doctype html><main id="acct"></main>', { url: 'file:///account.html?screen=thismac', runScripts: 'outside-only', pretendToBeVisual: true });
   dom.window.buddyAccount = new Proxy({
-    state: async () => ({ ok: true, brand: { name: 'Plexiform', copy: {}, defaultHost: 'app.plexiform.dev' }, signedInHubs: [], accounts: [], hubs: [], workCapture: null }),
+    state: async () => ({ ok: true, brand: { name: 'Plexiform', copy: {}, defaultHost: 'app.plexiform.dev', machine: 'Mac', localBoard: 'My board (this Mac)' }, signedInHubs: [], accounts: [], hubs: [], workCapture: null }),
     onChanged() {}, burstStatus: async () => stale, keepAwakeGet: async () => ({ on: false, label: '' }), macView: async () => null,
   }, { get: (t, k) => t[k] ?? (async () => ({ ok: true })) });
   dom.window.eval(read('buddy-window/account.js'));

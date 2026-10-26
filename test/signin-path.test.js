@@ -18,7 +18,7 @@ async function page(state) {
   const calls = [];
   const dom = new JSDOM('<!doctype html><main id="acct"></main>', { url: `file:///account.html?screen=${state.screen}`, runScripts: 'outside-only' });
   const spy = (name) => async (...a) => { calls.push([name, ...a]); return { ok: true }; };
-  dom.window.buddyAccount = new Proxy({ state: async () => ({ ok: true, brand: { name: 'Plexiform', copy: {}, defaultHost: 'app.plexiform.dev' }, signedInHubs: [], accounts: [], ...state }), onChanged() {} }, { get: (t, k) => t[k] ?? spy(k) });
+  dom.window.buddyAccount = new Proxy({ state: async () => ({ ok: true, brand: { name: 'Plexiform', copy: {}, defaultHost: 'app.plexiform.dev', machine: 'Mac', localBoard: 'My board (this Mac)' }, signedInHubs: [], accounts: [], ...state }), onChanged() {} }, { get: (t, k) => t[k] ?? spy(k) });
   dom.window.eval(read(DIR, 'account.js'));
   await tick(); await tick();
   const doc = dom.window.document;

@@ -23,7 +23,9 @@ const artifact = (ext) => `${Brand.name}-\${version}-\${os}-\${arch}.${ext}`;
 module.exports = {
   ...base,
   forceCodeSigning: signing.required,
-  extraMetadata: { ...base.extraMetadata, plexiformSignedMac: process.platform === 'darwin' && signing.notarize },
+  // homepage: the .deb (fpm) refuses to build without one, and electron-builder
+  // reads it only from the app's metadata, not from the linux or deb blocks.
+  extraMetadata: { ...base.extraMetadata, homepage: Brand.urls.site, plexiformSignedMac: process.platform === 'darwin' && signing.notarize },
   files: [...base.files, '!board/shared/test-support/**'],
   asarUnpack: [...base.asarUnpack, 'board/runner/windows-job.js'],
   // The board launcher runs unpacked ESM under Electron's Node mode. ESM

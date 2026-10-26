@@ -66,7 +66,7 @@ function productionBroker() {
   const workspaces = [{ id: 'local', kind: 'local' }, { id: 'team-ws', kind: 'team', hub: origin, teamId: 't1' }];
   let active = workspaces[0];
   const { pageById, hubPageUrl } = require('../buddy-window/pages');
-  const context = { createMyDayBroker, setupLocalGeneration:0, store: { hubs: () => [origin], list: () => workspaces }, vault: key => ({ load: () => markers.get(key) }), userOf: key => markers.get(key)?.user, hostOf: url => new URL(url).host,
+  const context = { createMyDayBroker, BRAND: require('../buddy-window/brand'), setupLocalGeneration:0, store: { hubs: () => [origin], list: () => workspaces }, vault: key => ({ load: () => markers.get(key) }), userOf: key => markers.get(key)?.user, hostOf: url => new URL(url).host,
     clientFor: key => ({ myDay: async () => { reads.push(key); return fixture(); } }), supervisor: { ensure: async () => launch, launchCurrent: captured => launches.current === captured, myDay: async () => local },
     switchWorkspace(id) { active = workspaces.find(w => w.id === id); }, selected: 'myday', flow: { leftAccountPages() {} }, pageById, hubPageUrl, URL,
     hubView: { webContents: { loadURL: async url => { urls.push(url); } } }, hubInfo: null, async showHubPage() { context.hubInfo = active.kind === 'team' ? { origin, org: active.teamId, team: true } : { url: launch.url, team: false }; }, pushState() {},

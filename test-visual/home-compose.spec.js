@@ -12,12 +12,12 @@ const SHOT = { threshold: 0.05, stylePath: path.join(__dirname, 'no-hover-chrome
 const api = (f) => pathToFileURL(path.join(__dirname, '..', 'board', 'tasks-api', f)).href;
 const window = { resetsAt: Date.now() + 3600e3, status: 'allowed' };
 
-// Home's teammate tour (home-inbox-view.js) shows once per browser profile; it is not what these shots are about.
+// These launches start with the first-run (widget) tour skipped, so Home's own teammate tour is done
+// too (A5: one tour at a time, and skipping one skips both): no tour dialog opens at all.
 async function skipTour(page) {
   await expect(page.locator('#status')).toContainText('Updated', { timeout: 20000 });
-  const skip = page.getByRole('button', { name: 'Skip tour' });
-  await skip.waitFor({ state: 'visible', timeout: 5000 }).then(() => skip.click(), () => {});
   await expect(page.locator('.tour')).toHaveCount(0);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 }
 
 // The folder chip names a per-run temp folder, so it is masked.

@@ -54,8 +54,9 @@
   button.persona span { color: var(--muted); font-size: var(--text-sm); }
   button.persona:hover { border-color: var(--accent); }
   .howto { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; }
-  .prompt-row { display: flex; gap: 8px; margin-top: 6px; }
-  .prompt-row input { flex: 1; min-width: 0; font: inherit; min-height: 36px; padding: 6px 8px; color: var(--text); background: var(--panel); border: 1px solid var(--line-input); border-radius: var(--radius); }
+  .prompt-row { display: flex; gap: 8px; margin-top: 6px; align-items: flex-start; }
+  /* The whole prompt shows, wrapped: nothing is cut off at the box's edge. */
+  .prompt-row textarea { flex: 1; min-width: 0; resize: none; overflow-wrap: anywhere; font: inherit; min-height: 36px; padding: 6px 8px; color: var(--text); background: var(--panel); border: 1px solid var(--line-input); border-radius: var(--radius); }
   .diagnosis { padding: 12px 14px; background: var(--panel); border: 1px solid var(--amber); border-radius: var(--radius); display: flex; flex-direction: column; gap: 8px; }
   .diagnosis h2 { margin: 0; }
   [hidden] { display: none !important; }
@@ -99,9 +100,9 @@
   <h1 id="signal-title" tabindex="-1"></h1>
   <ol class="howto">
     <li><span>Copy this test prompt.</span>
-      <div class="prompt-row"><input type="text" id="test-prompt" readonly aria-label="Test prompt"><button type="button" id="copy-prompt">Copy</button></div></li>
+      <div class="prompt-row"><textarea id="test-prompt" readonly rows="3" aria-label="Test prompt"></textarea><button type="button" id="copy-prompt">Copy</button></div></li>
     <li><span id="howto-open">Open Terminal, type <code>claude</code> and press Return.</span></li>
-    <li><span>Paste the prompt and press Return. It shows up here as soon as Claude starts.</span></li>
+    <li><span id="howto-paste">Paste the prompt and press Return. It shows up here as soon as Claude starts.</span></li>
   </ol>
   <p id="copy-status" class="note" role="status" aria-live="polite"></p>
   <p id="waiting" class="waiting" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>Waiting for Claude to start…</span></p>
@@ -128,9 +129,9 @@
   <div id="team-box">
     <h2>Working with a team?</h2>
     <div class="row" style="margin-top:8px"><button type="button" id="join">Join with an invite</button><button type="button" id="create-team">Create a team</button></div>
-    <p class="note" style="margin-top:6px">Optional: your board stays on this Mac until you do.</p>
+    <p class="note" id="team-note" style="margin-top:6px">Optional: your board stays on this Mac until you do.</p>
   </div>
   <p id="extras-status" class="error" role="status" aria-live="polite"></p>
   <div class="actions"><button type="button" class="link" id="back">Back</button><button type="button" class="primary" id="finish">Open Home</button></div>
 </section>
-</main><script src="src/colour-legend.js"></script><script src="src/simple-mode.js"></script><script src="onboarding.js"></script></body></html>
+</main><script src="brand.js"></script><script src="src/colour-legend.js"></script><script src="src/simple-mode.js"></script><script src="onboarding.js"></script></body></html>

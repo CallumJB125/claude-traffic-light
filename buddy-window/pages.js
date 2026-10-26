@@ -13,7 +13,7 @@
 //             a page with no working feature is left out, not shown with a pill.)
 'use strict';
 
-const { NAME } = require('./brand');
+const { NAME, MACHINE } = require('./brand');
 const { isPrivateHost } = require('./workspaces');
 
 const PAGES = [
@@ -52,7 +52,7 @@ const PAGES = [
   { id: 'optimiser', title: 'Usage optimiser', icon: 'chart', kind: 'local', file: 'optimiser.html', preload: 'optimiser-preload.js', query: { embedded: '1' }, group: 'you' },
   { id: 'clients', title: 'Client billing', icon: 'chart', kind: 'local', file: 'clients-local.html', preload: 'clients-preload.js', group: 'you' },
   { id: 'setups', title: 'Setups', icon: 'layers', kind: 'local', file: 'setups.html', preload: 'setups-preload.js', group: 'you', hidden: true },
-  { id: 'thismac', title: 'This Mac', icon: 'laptop', kind: 'local', screen: 'thismac', group: 'you' },
+  { id: 'thismac', title: `This ${MACHINE}`, icon: 'laptop', kind: 'local', screen: 'thismac', group: 'you' },
   // Phone approvals and pairing (src/remote-approvals-main.js serves its IPC; Plus shows an upsell otherwise).
   { id: 'phone', title: 'Phone', icon: 'bell', kind: 'local', file: 'phone-pairing.html', preload: 'phone-pairing-preload.js', group: 'you' },
   { id: 'account', title: 'Account', icon: 'user', kind: 'local', screen: 'account', group: 'you' },

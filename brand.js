@@ -91,5 +91,21 @@
   // "Open Plexiform…": a label with the name in it
   const label = (text) => String(text).replace(/\{name\}/g, brand.name).replace(/\{short\}/g, brand.shortName);
 
-  return Object.freeze({ ...brand, inviteUrl, deepLink, parseDeepLink, email, label });
+  // Platform words. `platform` is a Node id ('darwin', 'linux', 'win32'); left out, it is the running
+  // one: process.platform in Node, the page's own navigator report in a renderer.
+  // board/shared/brand.js has the same two for the board (test/platform-words.test.js keeps them equal).
+  function hostPlatform() {
+    if (typeof process === 'object' && process && typeof process.platform === 'string') return process.platform;
+    const nav = typeof navigator === 'object' && navigator ? String((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '') : '';
+    return /mac/i.test(nav) ? 'darwin' : /win/i.test(nav) ? 'win32' : 'linux';
+  }
+  // The machine is a "Mac" on macOS and a "computer" elsewhere: `this ${Brand.machine()}`.
+  const machine = (platform = hostPlatform()) => (platform === 'darwin' ? 'Mac' : 'computer');
+  // Shortcut words: ⌘K and Return on a Mac, Ctrl+K and Enter elsewhere.
+  function keys(platform = hostPlatform()) {
+    const mac = platform === 'darwin';
+    return Object.freeze({ mod: mac ? '⌘' : 'Ctrl', combo: (key) => (mac ? `⌘${key}` : `Ctrl+${key}`), enter: mac ? 'Return' : 'Enter' });
+  }
+
+  return Object.freeze({ ...brand, inviteUrl, deepLink, parseDeepLink, email, label, machine, keys });
 });

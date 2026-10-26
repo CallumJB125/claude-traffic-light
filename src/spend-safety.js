@@ -9,6 +9,7 @@
 // estimate: the API-price equivalent of local turns against a rough per-plan
 // reference. It is labelled as an estimate everywhere it shows.
 const { costOf } = require('../usage.js');
+const Brand = require('../brand.js');
 
 const HOUR_MS = 3600000;
 const FIVE_HOURS_MS = 5 * HOUR_MS;
@@ -156,7 +157,7 @@ function limitEstimate(turns, plan, now = Date.now()) {
     fiveHour: row(openWindow(sorted, FIVE_HOURS_MS, now), ref.fiveHour, '5-hour window'),
     week: row(openWindow(sorted, WEEK_MS, now), ref.week, 'Weekly window'),
     estimate: true,
-    note: 'Estimate only. Worked out from the Claude Code transcripts on this Mac, so use on other devices or claude.ai is not counted, and Anthropic does not publish the exact limits. You are not charged per token on this plan.',
+    note: `Estimate only. Worked out from the Claude Code transcripts on this ${Brand.machine()}, so use on other devices or claude.ai is not counted, and Anthropic does not publish the exact limits. You are not charged per token on this plan.`,
   };
 }
 

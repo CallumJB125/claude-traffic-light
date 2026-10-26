@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const { DEFAULT_HUB } = require('./brand');
+const { DEFAULT_HUB, COPY } = require('./brand');
 
 const LOCAL = Object.freeze({ id: 'local', name: 'My board', kind: 'local' });
 const TEAM_ID_RE = /^[A-Za-z0-9_.-]{1,100}$/;
@@ -31,8 +31,8 @@ function normalizeHubUrl(input, { allowOrigins = [] } = {}) {
   try { u = new URL(s); } catch { throw new Error('That is not a web address.'); }
   if (u.username || u.password) throw new Error('Leave the user name and password out of the address.');
   if (allowOrigins.includes(u.origin)) return u.origin;
-  if (u.protocol !== 'https:') throw new Error('Team hubs must use https://');
-  if (!u.hostname.includes('.') || /^(localhost|127\.|0\.|\[?::1)/i.test(u.hostname)) throw new Error('Use the team hub’s public address.');
+  if (u.protocol !== 'https:') throw new Error(`Team hubs must use https://. ${COPY.hubScope}`);
+  if (!u.hostname.includes('.') || /^(localhost|127\.|0\.|\[?::1)/i.test(u.hostname)) throw new Error(`Use the team hub’s public address. ${COPY.hubScope}`);
   return u.origin;
 }
 
@@ -53,7 +53,7 @@ function isPrivateHost(hostname) {
  */
 function normalizeLinkHub(input, { allowOrigins = [] } = {}) {
   const origin = normalizeHubUrl(input, { allowOrigins });
-  if (!allowOrigins.includes(origin) && isPrivateHost(new URL(origin).hostname)) throw new Error('Use the team hub’s public address.');
+  if (!allowOrigins.includes(origin) && isPrivateHost(new URL(origin).hostname)) throw new Error(`Use the team hub’s public address. ${COPY.hubScope}`);
   return origin;
 }
 

@@ -7,6 +7,9 @@ const node = (tag, text, className) => { const el = document.createElement(tag);
 const button = (text, className) => { const b = node('button', text, className); b.type = 'button'; return b; };
 const Simple = window.PlexiformSimple;
 const Legend = window.PlexiformLegend;
+// Platform words (A2): the HTML carries the Mac wording.
+const Brand = window.Brand;
+const MACHINE = Brand.machine(), KEYS = Brand.keys(), TERMINAL = MACHINE === 'Mac' ? 'Terminal' : 'a terminal';
 const NOT_SHOWING_MS = 20000;
 
 let view = null;
@@ -77,7 +80,7 @@ function draw() {
   const found = view.rows.length > 0;
   $('connect-body').hidden = !found;
   const names = view.rows.map((r) => r.label);
-  $('connect-body').textContent = `We found ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]} on this Mac. We add a small note-taker to ${names.length > 1 ? 'each' : 'it'} so we know when it's busy or waiting for you. It never reads what you and your AI say. Undo with one click.`;
+  $('connect-body').textContent = `We found ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]} on this ${MACHINE}. We add a small note-taker to ${names.length > 1 ? 'each' : 'it'} so we know when it's busy or waiting for you. It never reads what you and your AI say. Undo with one click.`;
   $('tools').replaceChildren(...view.rows.map(toolRow));
   $('none').hidden = found;
   $('see-changes').parentElement.hidden = !found;
@@ -191,12 +194,16 @@ $('persona-simple').addEventListener('click', () => act(() => choosePersona('sim
 $('persona-developer').addEventListener('click', () => act(() => choosePersona('developer')));
 $('connect-back').addEventListener('click', () => show('persona'));
 $('test-prompt').value = Simple.TEST_PROMPT;
+const code = node('code', 'claude');
+$('howto-open').replaceChildren(`Open ${TERMINAL}, type `, code, ` and press ${KEYS.enter}.`);
+$('howto-paste').textContent = `Paste the prompt and press ${KEYS.enter}. It shows up here as soon as Claude starts.`;
+$('team-note').textContent = `Optional: your board stays on this ${MACHINE} until you do.`;
 $('legend-line').textContent = `That's your widget. ${Legend.SENTENCE}.`;
 $('copy-prompt').addEventListener('click', async () => {
   let ok = false;
   try { await navigator.clipboard.writeText(Simple.TEST_PROMPT); ok = true; } catch { /* selected below instead */ }
   if (!ok) $('test-prompt').select?.();
-  $('copy-status').textContent = ok ? 'Copied. Now open Terminal.' : 'Press Command-C to copy it.';
+  $('copy-status').textContent = ok ? `Copied. Now open ${TERMINAL}.` : `Press ${MACHINE === 'Mac' ? 'Command-C' : KEYS.combo('C')} to copy it.`;
 });
 $('diagnosis-action').addEventListener('click', () => {
   const d = diagnosisGoesTo;

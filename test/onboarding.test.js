@@ -176,16 +176,18 @@ test('budget writes the Spend daily budget; navigation is a short allow-list and
   assert.equal(r.ctx.onboardingWin.closed, true);
 });
 
-test('first run opens setup (not Help) once; an install that already saw Help is left alone', () => {
-  const run = ({ markers = [], devRun = false }) => {
+test('first run opens setup (not Help) once, over Home when the window is open; an install that already saw Help is left alone', () => {
+  const run = ({ markers = [], devRun = false, windowOpen = false }) => {
     const dir = testTempDir('plex-onboard-root-');
     for (const m of markers) fs.writeFileSync(path.join(dir, m), 'x');
     const shown = [];
-    const ctx = { fs, path, ROOT_DIR: dir, Help, IS_DEV_RUN: devRun, console, createOnboardingWindow: () => shown.push('setup'), createHelpWindow: () => shown.push('help') };
+    const ctx = { fs, path, ROOT_DIR: dir, Help, IS_DEV_RUN: devRun, console, createOnboardingWindow: () => shown.push('setup'), createHelpWindow: () => shown.push('help'),
+      buddyWin: windowOpen ? { isOpen: () => true } : null, homePage: () => 'home', openBuddy: (page) => shown.push(`window:${page}`) };
     vm.runInNewContext(`${slice('\nfunction maybeAutoShowHelp()', '\n// ── Notifications')}\nmaybeAutoShowHelp();`, ctx);
     return { shown, marker: fs.existsSync(path.join(dir, '.onboarded')) };
   };
   assert.deepEqual(run({}), { shown: ['setup'], marker: true });
+  assert.deepEqual(run({ windowOpen: true }), { shown: ['window:home', 'setup'], marker: true }, 'setup opens over Home, not the board');
   assert.deepEqual(run({ markers: ['.onboarded'] }), { shown: [], marker: true });
   assert.deepEqual(run({ markers: ['.help-shown'] }), { shown: [], marker: false });
   assert.deepEqual(run({ devRun: true }), { shown: [], marker: false });
@@ -262,7 +264,7 @@ function page(r) {
     ipcRenderer: { on: (ch, cb) => { if (ch === 'status-changed') statusCb = cb; }, invoke: async (ch, ...a) => { calls.push([ch, ...a]); return r.call(ch, ...a); } },
   }) });
   const document = { getElementById: (id) => els.get(id), createElement: () => el(), querySelectorAll: () => [], querySelector: () => ({ focus() {} }) };
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'onboarding.js'), 'utf8'), { window: { onboardingApi: api, PlexiformSimple: require('../src/simple-mode.js'), PlexiformLegend: require('../src/colour-legend.js') }, document, console, setTimeout, clearTimeout, Date });
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'onboarding.js'), 'utf8'), { window: { onboardingApi: api, PlexiformSimple: require('../src/simple-mode.js'), PlexiformLegend: require('../src/colour-legend.js'), Brand: require('../brand.js') }, document, console, setTimeout, clearTimeout, Date });
   const settle = () => new Promise((res) => setTimeout(res, 20));
   return { els, calls, settle, click: async (id) => { await els.get(id).listeners.click(); await settle(); }, status: async () => { statusCb(); await settle(); } };
 }

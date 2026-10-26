@@ -10,3 +10,18 @@ export const BRAND = Object.freeze({
   downloadUrlDefault: null,                 // no public download yet: set BOARD_DOWNLOAD_URL
   supportEmail: null,
 });
+
+// Platform words, as in the app's brand.js (test/platform-words.test.js keeps the two equal).
+// `platform` is a Node id; left out, the running one (process.platform, or the browser's report).
+function hostPlatform() {
+  if (typeof process === 'object' && process && typeof process.platform === 'string') return process.platform;
+  const nav = typeof navigator === 'object' && navigator ? String(navigator.userAgentData?.platform || navigator.platform || '') : '';
+  return /mac/i.test(nav) ? 'darwin' : /win/i.test(nav) ? 'win32' : 'linux';
+}
+// The machine is a "Mac" on macOS and a "computer" elsewhere.
+export const machine = (platform = hostPlatform()) => (platform === 'darwin' ? 'Mac' : 'computer');
+// ⌘K and Return on a Mac, Ctrl+K and Enter elsewhere.
+export function keys(platform = hostPlatform()) {
+  const mac = platform === 'darwin';
+  return Object.freeze({ mod: mac ? '⌘' : 'Ctrl', combo: (key) => (mac ? `⌘${key}` : `Ctrl+${key}`), enter: mac ? 'Return' : 'Enter' });
+}

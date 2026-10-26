@@ -21,7 +21,7 @@ const projects = rowsFor(routing).map(({ repo, short, goesTo, note, change }) =>
 function page(saved) {
   const dom = new JSDOM('<!doctype html><main id="acct"></main>', { url: 'file:///account.html?screen=thismac', runScripts: 'outside-only', pretendToBeVisual: true });
   dom.window.buddyAccount = new Proxy({
-    state: async () => ({ ok: true, screen: 'thismac', brand: { name: 'Plexiform', copy: {}, defaultHost: 'app.plexiform.dev' }, signedInHubs: [], accounts: [], hubs: [],
+    state: async () => ({ ok: true, screen: 'thismac', brand: { name: 'Plexiform', copy: {}, defaultHost: 'app.plexiform.dev', machine: 'Mac', localBoard: 'My board (this Mac)' }, signedInHubs: [], accounts: [], hubs: [],
       workCapture: { enabled: true, notice: null, tasks: [], projects } }),
     onChanged() {},
     captureDefault: async (repo, key) => { saved.push([repo, key]); return { ok: true }; },

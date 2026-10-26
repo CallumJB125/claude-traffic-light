@@ -310,6 +310,7 @@ const SCREENS = {
         submit: 'Continue', busy: 'Checking…',
         fn: (v) => api.hub(v.url),
       }),
+      el('p', { class: 'acct-hint' }, s.brand.copy.hubScope),
       s.forInvite ? null : el('p', { class: 'acct-foot' }, 'Have an invite? ', link('Join with it', () => api.go('join'))),
     ];
   },
@@ -424,7 +425,7 @@ const SCREENS = {
   team(s) {
     if (!s.team && !s.signedInHubs.length) {
       return [
-        heading('Work with a team', 'Share one board with your teammates and see what their AI sessions are working on. My board stays on this Mac; only team boards are shared.'),
+        heading('Work with a team', `Share one board with your teammates and see what their AI sessions are working on. My board stays on this ${s.brand.machine}; only team boards are shared.`),
         signedOutActions(),
       ];
     }
@@ -500,6 +501,7 @@ const SCREENS = {
           submit: 'Continue', busy: 'Checking…',
           fn: (v) => api.joinCode(v.code),
         }),
+        el('p', { class: 'acct-hint' }, s.brand.copy.hubScope),
         el('section', { class: 'acct-section' }, el('h2', {}, 'Have a code?'),
           el('p', { class: 'acct-hint' }, 'An invite also comes with an 8-letter code. It works when you’re signed in with the email address it was made for.'),
           form({
@@ -583,9 +585,9 @@ const SCREENS = {
   },
 
   thismac(s) {
-    const out = [heading('This Mac', 'Keep this Mac awake and see how it takes part in your team.')];
+    const out = [heading(`This ${s.brand.machine}`, `Keep this ${s.brand.machine} awake and see how it takes part in your team.`)];
     const solo = !s.hubs.length || s.hubs.every((h) => !h.teams.length);
-    if (solo) out.push(el('p', { class: 'acct-hint' }, 'Join a team to let this Mac run your team’s tasks. ',
+    if (solo) out.push(el('p', { class: 'acct-hint' }, `Join a team to let this ${s.brand.machine} run your team’s tasks. `,
       el('button', { type: 'button', class: 'btn btn-quiet', onclick: () => api.go('team') }, 'Join')));
     out.push(keepAwakeSection(), burstSection(), macStatusSection());
     if (s.workCapture) {
@@ -610,7 +612,7 @@ const SCREENS = {
             }) : null))))));
       }
       for (const t of s.workCapture.tasks) {
-        const d = t.destination, destination = d.kind === 'team' ? `${d.team_name || 'Team'} · ${d.board_name || 'Board'}` : 'My board (this Mac)';
+        const d = t.destination, destination = d.kind === 'team' ? `${d.team_name || 'Team'} · ${d.board_name || 'Board'}` : s.brand.localBoard;
         const status = t.untracked ? 'Tracking stopped' : !t.card_id ? 'Waiting to sync' : (STATUS[t.status] ?? 'Active');
         const row = el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' },
           el('span', { class: 'acct-name' }, t.title), el('span', { class: 'acct-mail' }, `${destination} · ${status}`),

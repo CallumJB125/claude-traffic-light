@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { openBusLog, DEAD_AFTER } from './local-log.js';
 import { createNotes } from './notes.js';
+import { machine } from '../../shared/brand.js';
 import { admit, strictSettings, dayOf } from './guard.js';
 import { runCost } from './pricing.js';
 import { BUS_VERSION, Envelope, HelloArgs, HandoffArgs, ReadArgs, WaitArgs, StatusArgs, RunHandoffArgs, ResultArgs, LIMITS, issue } from '../../shared/bus-schema.js';
@@ -187,7 +188,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   function taskText(ev) {
     const d = ev.data;
     const body = [d.title, ev.body, d.files.length ? `Files: ${d.files.join(', ')}` : '', d.branch ? `Branch: ${d.branch}` : ''].filter(Boolean).join('\n\n');
-    const who = { kind: 'session', name: ev.source.tier === 'run_capability' ? 'A Plexiform run' : 'This Mac', provider: ev.source.provider };
+    const who = { kind: 'session', name: ev.source.tier === 'run_capability' ? 'A Plexiform run' : `This ${machine()}`, provider: ev.source.provider };
     return frame({ kind: 'handoff', source: who, card_id: ev.card_id, body, afterNote: d.after_note === true }, crypto.randomBytes(9).toString('hex'));
   }
 
@@ -371,7 +372,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     const worker = result ? ev.data?.provider ?? ev.to?.provider ?? null : null;
     const from = result ? { provider: worker ?? 'agent', tier: 'run_capability' } : { provider: ev.source.provider, tier: ev.source.tier };
     // Nothing ran for an expired or never-started handoff: the result is Plexiform's own.
-    const who = !result ? { kind: 'session', name: 'This Mac', provider: ev.source.provider }
+    const who = !result ? { kind: 'session', name: `This ${machine()}`, provider: ev.source.provider }
       : { kind: 'run', name: ev.data?.task_id ? `${AI_NAME[worker] ?? 'An AI'} running in Plexiform` : 'Plexiform' };
     return { offset: ev.offset, topic: ev.topic, kind: ev.kind, handoff_id: ev.handoff_id, card_id: ev.card_id, hop: ev.hop, at: ev.created_at,
       from, title: ev.data?.title ?? null,
