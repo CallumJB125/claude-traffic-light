@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   // main has given the bubble that much room (until then it may be clipped).
   onStripApplied: (cb) => ipcRenderer.on('strip-applied', (e, px) => cb(px)),
   openWaiting: () => ipcRenderer.invoke('open-waiting'),
+  openWidgetSettings: () => ipcRenderer.invoke('open-widget-settings'),
   // Lights → Auto-answer, prefilled from an input ({inputId}) or a nudge ({nudgeKey}).
   openAutoRule: (from) => ipcRenderer.invoke('open-auto-rule', from),
   nudgeMute: (key) => ipcRenderer.invoke('nudge-mute', key),

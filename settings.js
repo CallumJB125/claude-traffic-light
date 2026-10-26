@@ -279,6 +279,7 @@
       try { history.replaceState(null, '', `?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), section: id })}`); } catch { /* embedded pages may refuse */ }
     }
     window.showSettingsSection = showSection;
+    document.getElementById('go-widget-answering')?.addEventListener('click', () => { showSection('widget'); document.getElementById('askFromWidget')?.focus(); });
     for (const b of document.querySelectorAll('#section-nav button')) b.addEventListener('click', () => { showSection(b.dataset.go); document.body.scrollTop = 0; });
     showSection(new URLSearchParams(location.search).get('section') || location.hash.slice(1));
 

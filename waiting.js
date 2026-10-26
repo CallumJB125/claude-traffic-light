@@ -17,6 +17,7 @@
       explainStatus: () => api.explainStatus(),
       copyCommand: (id) => api.copyInputCommand(id),
       openAutoRule: (id) => api.openAutoRule({ inputId: id }),
+      openWidgetSettings: () => api.openWidgetSettings(),
       nudgeRule: (key) => api.openAutoRule({ nudgeKey: key }),
       nudgeMute: (key) => api.nudgeMute(key),
       setSessionScope: (id, mode) => api.setSessionScope(id, mode),
@@ -37,6 +38,7 @@
       ? `${inputs.length} waiting${late ? ` · ${late} for 5 min or more` : ''}`
       : 'Nothing is waiting on you.';
   }
+  document.getElementById('turn-on-answering').addEventListener('click', () => { api.openWidgetSettings(); });
   document.addEventListener('keydown', (e) => { list.keydown(e); });
   api.onStatusChanged(refresh);
   // In the Plexiform window nothing pushes status here: poll while shown.

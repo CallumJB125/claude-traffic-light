@@ -6,9 +6,9 @@
 // A click sends an option id; main rebuilds the answer from the request
 // file. One answer per input: its buttons lock the moment one is clicked.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./src/input-view.js'), require('./src/work-scope-view.js'));
-  else root.InputBubble = factory(root.InputView, root.WorkScopeView);
-})(typeof self !== 'undefined' ? self : this, function (V, W) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./src/input-view.js'), require('./src/work-scope-view.js'), require('./src/answerability.js'));
+  else root.InputBubble = factory(root.InputView, root.WorkScopeView, root.PlexiformAnswerability);
+})(typeof self !== 'undefined' ? self : this, function (V, W, A) {
   const SVGNS = 'http://www.w3.org/2000/svg';
   const ICONS = {
     permission: 'M8 1.8l5 2v3.6c0 3.1-2.1 5.7-5 6.8-2.9-1.1-5-3.7-5-6.8V3.8z',
@@ -141,7 +141,7 @@
 
     async function send(input, optionId, more) {
       if (!input || sending.has(input.id) || answered.has(input.id)) return;
-      if (!V.canAnswer(input, now())) { setError(input.id, 'The hook stopped waiting: answer in the terminal.'); return; }
+      if (!V.canAnswer(input, now())) { setError(input.id, A.reasonText('expired')); return; }
       sending.add(input.id);
       errors.delete(input.id);
       render();
@@ -154,7 +154,12 @@
         for (const i of live_()) noAutoExpand.add(i.id);
         live.textContent = 'Answer sent';
         if (r.nudge) showNudge(r.nudge);
-      } else errors.set(input.id, (r && r.error) || 'Could not send: answer it in the terminal.');
+      } else {
+        const words = A.errorText(r && r.error);
+        // The generic sentence is only the last resort: say which code reached it.
+        if (words === A.LAST_RESORT && typeof console !== 'undefined') console.warn('[answer] no words for error:', r && r.error);
+        errors.set(input.id, words);
+      }
       render();
     }
 
@@ -163,7 +168,7 @@
       let r;
       try { r = await api.openInput(input.id); } catch { r = null; }
       if (r && r.command) commands.set(input.id, r.command); else commands.delete(input.id);
-      if (!r || !r.ok) setError(input.id, r && r.error === 'gone' ? 'It is no longer waiting.' : (r && r.note) || 'Could not find its terminal.');
+      if (!r || !r.ok) setError(input.id, A.openErrorText(r));
     }
 
     function optionButton(input, o, extra, onClick) {
@@ -177,7 +182,7 @@
       return b;
     }
 
-    function openButton(input, label = 'Open it') {
+    function openButton(input, label = 'Open in terminal') {
       const b = el('button', 'ib-opt tone-plain ib-open', label);
       b.type = 'button';
       b.setAttribute('aria-label', `${label}: go to the terminal for ${V.project(input)}`);
@@ -230,7 +235,7 @@
         box.appendChild(legend);
         const opts = el('div', 'ib-opts');
         for (const o of q.options || []) {
-          if (!answerable) { opts.appendChild(el('span', 'ib-readonly', o.label)); continue; }
+          if (!answerable) continue;
           if (single) { opts.appendChild(optionButton(input, o)); continue; }
           const on = [].concat(sel[q.id] || []).includes(o.id);
           const b = el('button', `ib-opt tone-plain${on ? ' on' : ''}`, o.label);
@@ -247,6 +252,8 @@
           });
           opts.appendChild(b);
         }
+        // Not answerable here: the choices are one plain sentence, not chips that look clickable.
+        if (!answerable) { const s = A.optionsSentence((q.options || []).map((o) => o.label)); if (s) opts.appendChild(el('div', 'ib-hint', s)); }
         box.appendChild(opts);
         if (answerable && input.freeText) {
           const f = el('input', 'ib-field');
@@ -437,8 +444,20 @@
         default: readOnlyOptions(input, body);
       }
       if (input.kind !== 'blocked' && (!V.canAnswer(input, t)) && V.canOpen(input)) {
+        const why = A.answerability(input, { now: t }).reason;
+        if (why === 'setting-off') {
+          const line = el('div', 'ib-hint', `${A.reasonText(why)} · `);
+          if (api.openWidgetSettings) {
+            const turnOn = el('button', 'ib-link', 'Turn it on');
+            turnOn.type = 'button';
+            turnOn.setAttribute('aria-label', 'Turn on answering from the widget in Settings');
+            turnOn.addEventListener('click', (e) => { e.stopPropagation(); api.openWidgetSettings(); });
+            line.appendChild(turnOn);
+          }
+          body.appendChild(line);
+        } else if (why === 'session-reported') body.appendChild(el('div', 'ib-hint', A.reasonText(why)));
         const row = el('div', 'ib-opts');
-        row.appendChild(openButton(input, V.expired(input, t) ? 'Open the terminal' : 'Open it'));
+        row.appendChild(openButton(input));
         body.appendChild(row);
       }
       const err = errors.get(input.id);

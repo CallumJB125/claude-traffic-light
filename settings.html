@@ -76,6 +76,7 @@
   .pane > h2:first-child { border-top: none; margin-top: 0; padding-top: 0; }
   .pane { display: flex; flex-direction: column; gap: 18px; }
   .pane[hidden] { display: none; }
+  button.link { background: none; border: none; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
   #section-nav { display: flex; flex-wrap: wrap; gap: 6px; }
   #section-nav button { background: var(--panel-2); color: var(--text); border: 1px solid var(--line-input); font-weight: 500; padding: 5px 12px; }
   #section-nav button[aria-current="page"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
@@ -354,8 +355,7 @@
 
   <h2>Permission prompts</h2>
   <div class="field">
-    <label class="row"><input type="checkbox" id="askFromWidget" /> Answer permission prompts from the widget</label>
-    <div class="hint">When Claude asks to run a tool, Allow / Deny buttons appear under the widget and the request text above it. If you don't answer within a minute, the normal terminal prompt takes over. Restart open Claude Code sessions after changing this.</div>
+    <div class="hint" id="askFromWidget-moved">Answering permission prompts from the widget moved to the <button type="button" class="link" id="go-widget-answering">Widget</button> tab. Read-only requests can still be allowed with one key, below.</div>
   </div>
 
   <div class="field">
@@ -543,6 +543,12 @@
     <div class="group-label" id="legend-title">What the lights mean</div>
     <ul class="legend" id="legend" aria-labelledby="legend-title"></ul>
     <div class="hint">To change what the widget does for each, open <b>Settings → Widget rules</b> in the sidebar.</div>
+  </div>
+
+  <h2 id="answering-title">Permission prompts</h2>
+  <div class="field">
+    <label class="row"><input type="checkbox" id="askFromWidget" /> Answer permission prompts from the widget</label>
+    <div class="hint">When Claude asks to run a tool, Allow / Deny buttons appear under the widget and the request text above it. If you don't answer within a minute, the normal terminal prompt takes over. Restart open Claude Code sessions after changing this.</div>
   </div>
   </div>
 

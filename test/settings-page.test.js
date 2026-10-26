@@ -85,6 +85,9 @@ test('each setting has one home: no Burst card, connect buttons, or Account sect
   const ids = [...d.querySelectorAll('[id]')].map((e) => e.id);
   assert.deepEqual(ids.filter((id, i) => ids.indexOf(id) !== i), []);
   assert.equal(d.querySelector('#askFromWidget').closest('.field').querySelector('#oneKeyApprove'), null, 'askFromWidget field is closed before oneKeyApprove');
+  assert.equal(d.querySelectorAll('#askFromWidget').length, 1, 'one toggle, on the Widget pane');
+  assert.equal(d.querySelector('#askFromWidget').closest('.pane').dataset.section, 'widget');
+  assert.equal(d.querySelector('#askFromWidget-moved').closest('.pane').dataset.section, 'notifications', 'a pointer is left where it used to be');
 });
 
 test('every config key the old page saved is still saved', async () => {
@@ -108,9 +111,9 @@ test('each old section moved to its sub-page, and no heading says just Agents', 
   const home = (id) => d.getElementById(id).closest('.pane').dataset.section;
   const where = {
     general: ['workingStaleMinutes', 'stuckMinutes', 'waitingStaleHours', 'voice-hotkey', 'voice-longPress', 'voice-askClaude'],
-    notifications: ['sounds', 'notifyOnStates', 'quietEnabled', 'mutedProjects', 'askFromWidget', 'oneKeyApprove', 'busyHold', 'busyIcsUrl', 'busyFocusShortcut'],
+    notifications: ['sounds', 'notifyOnStates', 'quietEnabled', 'mutedProjects', 'oneKeyApprove', 'busyHold', 'busyIcsUrl', 'busyFocusShortcut'],
     spend: ['spend-mode', 'spend-daily', 'spend-weekly', 'spend-warn', 'spend-runaway-dollars', 'spend-notify-runaway', 'spend-notify-budget-exceeded'],
-    widget: ['showWidget', 'menuBarMode', 'lowPower', 'showAgents', 'kind-ralph', 'agentChipSize'],
+    widget: ['showWidget', 'menuBarMode', 'lowPower', 'askFromWidget', 'showAgents', 'kind-ralph', 'agentChipSize'],
     privacy: ['privacy', 'crash-reports', 'crash-opt-in', 'backups', 'teamSessionSharing', 'teamBrief', 'remoteInteractionHost', 'codexDaemonMessaging'],
     advanced: ['native-board-app', 'gitSignals', 'compact-enabled', 'remote-devices', 'remote-name', 'remoteTailscale', 'connect-hint', 'health'],
   };

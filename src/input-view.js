@@ -12,6 +12,7 @@
 
   // The project name and the "needs you" words come from src/work-organise.js, as in every view.
   const Organise = typeof module === 'object' && module.exports && typeof require === 'function' ? require('./work-organise.js') : (typeof self !== 'undefined' ? self : globalThis).PlexiformWorkOrganise;
+  const Answerability = typeof module === 'object' && module.exports && typeof require === 'function' ? require('./answerability.js') : (typeof self !== 'undefined' ? self : globalThis).PlexiformAnswerability;
   const NEEDS = Organise.headingOf('needs');
   const KIND_LABEL = {
     permission: 'Permission',
@@ -67,7 +68,8 @@
     return Number.isFinite(t) && t <= now;
   }
 
-  const canAnswer = (input, now = Date.now()) => !!input?.answerable && (input.actions || []).includes('answer') && !expired(input, now);
+  // One rule for every surface (src/answerability.js): buttons only where main would take the answer.
+  const canAnswer = (input, now = Date.now()) => Answerability.answerability(input, { now }).answerable;
   const canOpen = (input) => (input?.actions || []).includes('open') || input?.kind === 'blocked';
 
   // What Enter does. Never the riskiest choice: never a session-wide grant,
@@ -194,5 +196,5 @@
     return `${KIND_LABEL[input?.kind] || NEEDS} in ${project(input)}: ${headline(input)}${age ? `, ${age}` : ''}${expired(input, now) ? ', answer in terminal' : ''}`;
   }
 
-  return { ESCALATE_MS, KIND_LABEL, project, headline, ageMs, ageText, escalated, expired, canAnswer, canOpen, primary, denyOption, optionTone, questionAnswer, formFields, formContent, visible, queue, step, rowLabel };
+  return { ESCALATE_MS, KIND_LABEL, answerability: (input, now = Date.now()) => Answerability.answerability(input, { now }), project, headline, ageMs, ageText, escalated, expired, canAnswer, canOpen, primary, denyOption, optionTone, questionAnswer, formFields, formContent, visible, queue, step, rowLabel };
 });

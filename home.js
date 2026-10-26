@@ -76,7 +76,7 @@
     if (n.paused) list.append(pausedCard(n.paused));
     n.items.forEach((i, at) => {
       const li = item(i.headline, `${i.kind} · ${i.project}${i.age ? ` · ${i.age}` : ''}`, i.late ? 'Long wait' : null, 'waiting');
-      li.append(goButton('Answer', 'waiting', `needs:${at}`)); list.append(li);
+      li.append(goButton(i.action === 'answer' ? 'Answer' : 'Open', 'waiting', `needs:${at}`)); list.append(li);
     });
     out.replaceChildren(list);
     if (n.total > n.items.length) out.append(node('p', `And ${n.total - n.items.length} more.`, 'muted'));

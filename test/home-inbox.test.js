@@ -76,7 +76,7 @@ test('Home tour: shown once for a new account, labelled, four steps, dismissal p
 });
 
 test('Home Inbox: a wait with simple options is a quick decision card; a click answers by request id and option id', async () => {
-  const quick = { ...state, needs: { total: 1, items: [{ id: 'req-9', headline: 'Allow git push?', kind: 'permission', project: 'app', age: '2 min', late: false, options: [{ id: 'allow', label: 'Allow once' }, { id: 'deny', label: 'Deny' }] }] } };
+  const quick = { ...state, needs: { total: 1, items: [{ id: 'req-9', headline: 'Allow git push?', kind: 'permission', project: 'app', age: '2 min', late: false, action: 'answer', options: [{ id: 'allow', label: 'Allow once' }, { id: 'deny', label: 'Deny' }] }] } };
   const calls = [];
   const s = setup({ calls, st: quick, answerInput: async (id, optionId) => { calls.push(['answer', id, optionId]); return { ok: true }; } });
   try {

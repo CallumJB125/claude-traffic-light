@@ -926,7 +926,8 @@ function computeState(opts = {}) {
   const sessions = withScope(readSessions(config, requests.map((r) => r.sessionId)).concat(readRemoteSessions(config)));
   const pending = config.askFromWidget ? requests : [];
   const tasks = config.showTasks ? sumTasks(sessions.filter((s) => !WAITING_SIGNALS.has(s.signal) && s.signal !== 'idle-nudge')) : null;
-  const inputs = withDanger(PendingInputs.collect({ requests: pending, sessions, dialogs: paneDialogs }), pending);
+  // `answering` rides on each input so every surface asks src/answerability.js the same question.
+  const inputs = withDanger(PendingInputs.collect({ requests: pending, sessions, dialogs: paneDialogs }), pending).map((i) => ({ ...i, answering: !!config.askFromWidget }));
   if (previewLook && Date.now() < previewLook.expiresAt) {
     return { look: previewLook.look, reason: 'preview', sessions, fired: [], pending: [], tasks: null };
   }
@@ -4688,6 +4689,8 @@ if (typeof WorkScope?.setSessionScope === 'function' && typeof WorkScope?.setRep
   }
 }
 ipcMain.handle('open-waiting', (e) => { if (!inputSenderOk(e)) return false; createWaitingWindow(); return true; });
+// "Turn it on": Preferences at the Widget tab, where the answering setting lives.
+ipcMain.handle('open-widget-settings', (e) => { if (!inputSenderOk(e)) return false; openBuddy('settings'); buddyWin?.sendToPage('settings', 'show-section', 'widget'); return true; });
 ipcMain.handle('nudge-mute', (e, key) => (inputSenderOk(e) ? nudger.mute(String(key)) : false));
 
 // Lights → Auto-answer, prefilled. From a nudge the rule is the one main
