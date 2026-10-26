@@ -31,11 +31,18 @@ const CLAUDE_SECRET_KEYS = Object.freeze(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_T
 const CLAUDE_READ_NAMES = Object.freeze([...CLAUDE_ROUTING_KEYS, ...CLAUDE_PATH_KEYS, ...CLAUDE_SECRET_KEYS, 'CLAUDE_CONFIG_DIR', 'CODEX_HOME']);
 
 const CODEX_TOP_KEYS = Object.freeze(['profile', 'model_provider', 'model', 'profiles', 'model_providers']);
-// Verify against the pinned codex before PR 3 relies on it.
-const CODEX_PROVIDER_FIELDS = Object.freeze(['name', 'base_url', 'wire_api', 'env_key', 'env_key_instructions', 'env_http_headers', 'query_params', 'requires_openai_auth', 'request_max_retries', 'stream_max_retries', 'stream_idle_timeout_ms']);
-const CODEX_BUILTIN_PROVIDER_IDS = Object.freeze(['openai', 'oss', 'ollama', 'lmstudio']);
-// Provider id Burst writes for `claude-burst codex enable` (fixture reconstructed from the Burst binary).
+// codex-cli 0.164 (DGX lab 2026-10-26, dogfood-lab/fixtures s8/e). Not carried: the `auth` and `aws` sub-tables
+// (`auth` runs a command; Plexiform runs no user command for Codex), so they land in `dropped`.
+const CODEX_PROVIDER_FIELDS = Object.freeze(['name', 'base_url', 'wire_api', 'env_key', 'env_key_instructions', 'env_http_headers', 'query_params', 'requires_openai_auth', 'request_max_retries', 'stream_max_retries', 'stream_idle_timeout_ms', 'websocket_connect_timeout_ms', 'supports_websockets']);
+// The ids codex 0.164 resolves without a table (same lab probe); `oss` is not one of them.
+const CODEX_BUILTIN_PROVIDER_IDS = Object.freeze(['openai', 'ollama', 'lmstudio', 'amazon-bedrock']);
+// What `claude-burst codex enable` writes (real capture, claude-burst 0.20.36, fixture burst-codex-enable.redacted.toml):
+// model_provider = "claude-burst" inside a "# BEGIN claude-burst (…)" … "# END claude-burst" block. The BEGIN line
+// carries a suffix, so only its prefix is matched.
 const BURST_CODEX_MARKERS = Object.freeze(['claude-burst']);
+const BURST_CODEX_BEGIN = '# BEGIN claude-burst';
+const BURST_CODEX_END = '# END claude-burst';
+const burstBlock = (text) => { const lines = String(text).split(/\r?\n/).map((l) => l.trim()); return lines.some((l) => l.startsWith(BURST_CODEX_BEGIN)) && lines.includes(BURST_CODEX_END); };
 const CONFIG_TOML_MAX_BYTES = 262144;
 const CLAUDE_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
@@ -300,7 +307,7 @@ function tomlValue(v) {
 }
 
 function blankCodex(codexHome, unsupported = []) {
-  return { codexHome, providerId: null, model: null, overrides: [], cliEnv: {}, missingEnv: [], burst: { detected: false }, unsupported, dropped: [] };
+  return { codexHome, providerId: null, model: null, baseUrl: null, overrides: [], cliEnv: {}, missingEnv: [], envNames: [], burst: { detected: false, block: false }, unsupported, dropped: [] };
 }
 
 function codexProvider({ env = {}, loginEnv = {}, home, readFile }) {
@@ -308,7 +315,8 @@ function codexProvider({ env = {}, loginEnv = {}, home, readFile }) {
   if (!path.isAbsolute(codexHome)) return blankCodex(codexHome, [{ code: 'codex_home_relative', message: 'CODEX_HOME is not an absolute path' }]);
   const file = path.join(codexHome, 'config.toml');
   let text;
-  try { text = readFile(file); } catch { text = null; }
+  // readFile returns null for a missing file; a file that is there but can't be read is not "no config".
+  try { text = readFile(file); } catch { return blankCodex(codexHome, [{ code: 'codex_config_unreadable', message: `${file} could not be read` }]); }
   if (text == null) return blankCodex(codexHome);
   if (Buffer.byteLength(text) > CONFIG_TOML_MAX_BYTES) return blankCodex(codexHome, [{ code: 'codex_config_too_large', message: `${file} is larger than ${CONFIG_TOML_MAX_BYTES} bytes` }]);
   let doc;
@@ -344,6 +352,7 @@ function codexProvider({ env = {}, loginEnv = {}, home, readFile }) {
     const bad = (name) => typeof name !== 'string' || !ENV_NAME.test(name);
     const envValue = (name) => { const v = env[name] ?? loginEnv[name]; return typeof v === 'string' && v !== '' ? v : null; };
     const need = (name) => {
+      if (!out.envNames.includes(name)) out.envNames.push(name);
       const v = envValue(name);
       if (v == null) { if (!out.missingEnv.includes(name)) out.missingEnv.push(name); } else out.cliEnv[name] = v;
     };
@@ -379,19 +388,23 @@ function codexProvider({ env = {}, loginEnv = {}, home, readFile }) {
     }
 
     for (const [f, v] of Object.entries(fields)) {
-      if (f !== 'env_key' && (isObj(v) ? Object.entries(v).some(([k, x]) => findSecrets(`${k}=${x}`).length || secretish(String(x))) : secretish(v))) {
+      // env_key and env_http_headers hold variable names (checked against ENV_NAME above), never values.
+      if (f !== 'env_key' && f !== 'env_http_headers' && (isObj(v) ? Object.entries(v).some(([k, x]) => findSecrets(`${k}=${x}`).length || secretish(String(x))) : secretish(v))) {
         out.unsupported.push({ code: 'codex_secret_in_field', message: `model_providers.${providerId}.${f} carries a credential` });
         continue;
       }
       const t = tomlValue(v);
       if (t == null) { if (!out.dropped.includes(f)) out.dropped.push(f); continue; }
       out.overrides.push(`${prefix}.${f}=${t}`);
+      if (f === 'base_url' && typeof v === 'string') out.baseUrl = v;
     }
     const hay = [providerId, ...Object.values(fields).filter((v) => typeof v === 'string')];
     out.burst.detected = BURST_CODEX_MARKERS.some((m) => hay.some((h) => h === m || h.includes(m)));
   } else if (providerId) {
     out.burst.detected = BURST_CODEX_MARKERS.includes(providerId);
   }
+  out.burst.block = burstBlock(text);
+  if (providerId && out.burst.block && BURST_CODEX_MARKERS.includes(providerId)) out.burst.detected = true;
   return out;
 }
 
@@ -399,5 +412,5 @@ module.exports = {
   claudeProvider, codexProvider, boundedReadFile, readDirOrNull,
   CLAUDE_ROUTING_KEYS, CLAUDE_PATH_KEYS, CLAUDE_SECRET_KEYS, CLAUDE_READ_NAMES,
   CODEX_PROVIDER_FIELDS, CODEX_BUILTIN_PROVIDER_IDS, CODEX_TOP_KEYS,
-  BURST_CODEX_MARKERS, CONFIG_TOML_MAX_BYTES, CLAUDE_JSON_MAX_BYTES,
+  BURST_CODEX_MARKERS, BURST_CODEX_BEGIN, BURST_CODEX_END, CONFIG_TOML_MAX_BYTES, CLAUDE_JSON_MAX_BYTES,
 };

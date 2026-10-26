@@ -16,6 +16,10 @@ import { TASK_TOOL_NAMES } from '../../mcp/task-tools.js';
 export class NotAvailableError extends Error {
   constructor(message = 'this AI capability is not available') { super(message); this.code = 'NOT_AVAILABLE'; }
 }
+// codex 0.164 stderr when model_providers.<id>.auth.command can't run: "Failed to resolve external auth: provider
+// auth command `…` failed to start: …". Mapped to a fixed auth reason (the engine parks auth on "authentication").
+const AUTH_COMMAND_FAILED = /Failed to resolve external auth|provider auth command `[^`\n]*` failed/;
+export const AUTH_COMMAND_REASON = 'Codex provider authentication failed: the key command could not start, so the provider was never reached.';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const table = (entries) => `{${Object.entries(entries).map(([k, v]) => `${JSON.stringify(k)}=${JSON.stringify(v)}`).join(',')}}`;
 const ownedRef = (ref) => typeof ref === 'string' && ref.startsWith('refs/heads/')
@@ -33,6 +37,8 @@ export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitR
   // OS minimal permissions omit common installed tool runtimes. Grant read
   // only (never their caches/configuration or arbitrary home directories).
   for (const d of (platform === 'win32' ? [] : ['/opt/homebrew/bin', '/opt/homebrew/Cellar', '/opt/homebrew/lib', '/opt/homebrew/share', '/usr/local/bin', '/usr/local/lib', '/usr/local/Cellar', '/usr/local/share', '/Library/Developer/CommandLineTools', '/Applications/Xcode.app/Contents/Developer'])) filesystem[d] = 'read';
+  // Distro-packaged global npm tools (A8 Linux, C17).
+  if (platform === 'linux') filesystem['/usr/lib/node_modules'] = 'read';
   if (cacheDir) filesystem[cacheDir] = 'write';
   // Shared Git refs belong to other tasks and user checkouts. Commits need
   // object storage and only this task's authorized branch, never all refs.
@@ -60,7 +66,8 @@ export function codexConfig({ cwd, cacheDir, dataDir, gitDir, commonGitDir, gitR
   if (dataDir) filesystem[dataDir] = 'deny';
   if (taskRunDir) filesystem[taskRunDir] = 'deny';
   for (const d of denyPaths) filesystem[d] = 'deny';
-  for (const d of [env.CODEX_HOME || (env.HOME && paths.join(env.HOME, '.codex')), ...['.ssh', '.aws', '.config/gh', '.claude', '.claude.json', '.claude-traffic-light', 'Library/Keychains', '.local/state/ghostty-dock', '.local/bin/ghostty-dock', '.local/bin/ghostty-dock-open'].map((n) => env.HOME && paths.join(env.HOME, n))].filter(Boolean)) filesystem[d] = 'deny';
+  // Both the run's CODEX_HOME (maybe the login shell's, from the carry) and the default one: either can hold a login.
+  for (const d of [env.CODEX_HOME, env.HOME && paths.join(env.HOME, '.codex'), ...['.ssh', '.aws', '.config/gh', '.claude', '.claude.json', '.claude-traffic-light', 'Library/Keychains', '.local/state/ghostty-dock', '.local/bin/ghostty-dock', '.local/bin/ghostty-dock-open'].map((n) => env.HOME && paths.join(env.HOME, n))].filter(Boolean)) filesystem[d] = 'deny';
   const shellEnv = {};
   for (const k of ['HOME', 'PATH', 'LANG', 'TMPDIR', 'TZ', ...(platform === 'win32' ? ['SystemRoot', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP', 'COMSPEC', 'PATHEXT'] : []), 'npm_config_cache', 'XDG_CACHE_HOME', 'PIP_CACHE_DIR', 'UV_CACHE_DIR']) if (env[k]) shellEnv[k] = env[k];
   return [
@@ -115,13 +122,15 @@ export class CodexBackend extends EventEmitter {
   constructor(opts = {}) {
     super(); Object.assign(this, { platform: process.platform }, opts);
     this.child = null; this.pid = null; this.lstart = null; this.pgid = null; this.exited = true;
-    this.turnActive = false; this.sawResult = false; this.lastText = ''; this.leftovers = []; this.error = null;
+    this.turnActive = false; this.sawResult = false; this.lastText = ''; this.leftovers = []; this.error = null; this.authCommandFailed = false;
   }
   argv() {
     const instructionsFile = path.join(this.runDir, 'codex-instructions.md');
     const config = codexConfig({ ...this, readOnly: this.permissionMode === 'plan', instructionsFile });
+    // The user's provider (board/shared/codex-carry.cjs): keys under model_provider and model_providers.<id>.*
+    // only, disjoint from the profile's, so their place in argv can't matter (C16).
     return ['exec', '--json', '--ignore-user-config', '--ignore-rules', '--strict-config', '-C', this.cwd,
-      ...config.flatMap((c) => ['-c', c]), ...(this.model ? ['--model', this.model] : []),
+      ...config.flatMap((c) => ['-c', c]), ...(this.providerOverrides ?? []).flatMap((c) => ['-c', c]), ...(this.model ? ['--model', this.model] : []),
       ...(this.resume ? ['resume', this.sessionId] : ['--skip-git-repo-check']), '-'];
   }
   start(prompt) {
@@ -151,8 +160,15 @@ export class CodexBackend extends EventEmitter {
       if (Buffer.byteLength(buf) > 2 * 1024 * 1024) { this.kill(); return; }
       let nl; while ((nl = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, nl); buf = buf.slice(nl + 1); try { this.onEvent(JSON.parse(line)); } catch { /* non-event output */ } }
     });
-    // CLI stderr may contain auth/network details; it never reaches app logs.
-    child.stderr.on('data', () => {});
+    // CLI stderr may contain auth/network details; it never reaches app logs. It is only matched against the one
+    // line that says the provider's key command could not run (lab, codex-auth-command.md): --json then shows only
+    // "Reconnecting… high demand" and turn.failed, so that line is the only real cause. Nothing of it is kept.
+    let tail = '';
+    child.stderr.on('data', (d) => {
+      if (this.authCommandFailed) return;
+      tail = (tail + d).slice(-4096);
+      if (AUTH_COMMAND_FAILED.test(tail)) { this.authCommandFailed = true; tail = ''; }
+    });
     child.on('error', () => { this.error = 'Codex could not start'; this.exit(null, null); });
     child.on('exit', (code, signal) => this.exit(code, signal));
   }
@@ -188,10 +204,10 @@ export class CodexBackend extends EventEmitter {
       this.emit('result', { subtype: 'success', is_error: false, result: this.lastText, total_cost_usd: null, num_turns: 1, terminal_reason: null });
     } else if (e.type === 'turn.failed') {
       this.turnActive = false; this.sawResult = true;
-      this.emit('result', { subtype: 'error', is_error: true, result: String(e.error?.message ?? 'Codex turn failed').slice(0, 4000), total_cost_usd: null, num_turns: 1 });
+      this.emit('result', { subtype: 'error', is_error: true, result: this.authCommandFailed ? AUTH_COMMAND_REASON : String(e.error?.message ?? 'Codex turn failed').slice(0, 4000), total_cost_usd: null, num_turns: 1 });
     }
   }
-  exit(code, signal) { if (this.exited) return; if (this.platform === 'win32' && code !== 0 && !this.sawResult) this.error = 'Codex could not complete its Windows launch. Check the native CLI installation and elevated sandbox setup; the task restrictions were not relaxed.'; this.exited = true; this.turnActive = false; this.emit('exit', { code, signal, error: this.error, sawResult: this.sawResult }); }
+  exit(code, signal) { if (this.exited) return; if (this.authCommandFailed && !this.sawResult) this.error = AUTH_COMMAND_REASON; if (this.platform === 'win32' && code !== 0 && !this.sawResult) this.error = 'Codex could not complete its Windows launch. Check the native CLI installation and elevated sandbox setup; the task restrictions were not relaxed.'; this.exited = true; this.turnActive = false; this.emit('exit', { code, signal, error: this.error, sawResult: this.sawResult }); }
   send() { return false; }
   interrupt() { return Promise.resolve(false); }
   endInput() { this.child?.stdin?.end(); }

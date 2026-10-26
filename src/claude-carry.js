@@ -62,9 +62,9 @@ async function prepareChat(carry, keyDir, keyFile) {
 }
 
 // Where a child that has file tools keeps its key file: <userData>/run, a private dir of the app's own, never /tmp.
-// Each use makes chat-<pid>-* / voice-key-<pid>-* below it; a start removes what a crash left, never a dir whose
+// Each use makes chat-<pid>-* / voice-key-<pid>-* / codex-<pid>-* (the owned Codex chat's key file) below it; a start removes what a crash left, never a dir whose
 // process is alive (a second instance, a dev run sharing the folder).
-const KEY_DIR_KINDS = ['chat', 'voice-key'];
+const KEY_DIR_KINDS = ['chat', 'voice-key', 'codex'];
 const keyDirPrefix = (kind, pid = process.pid) => `${kind}-${pid}-`;
 function ensureKeyRoot(root) {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -90,7 +90,7 @@ function sweepKeyDirs(root, { alive = pidAlive, startedAt = pidStartedAt } = {})
   try { names = fs.readdirSync(root); } catch { return 0; }
   let n = 0;
   for (const name of names) {
-    const m = /^(chat|voice-key)-(?:(\d+)-)?/.exec(name);
+    const m = /^(chat|voice-key|codex)-(?:(\d+)-)?/.exec(name);
     if (!m) continue;
     if (m[2] && alive(Number(m[2]))) {
       let older = false;

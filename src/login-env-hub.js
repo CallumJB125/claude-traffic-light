@@ -7,9 +7,19 @@
 // Values are never logged: only fixed reason codes.
 const { CLAUDE_READ_NAMES } = require('../board/shared/user-provider.cjs');
 const { LOGIN_ENV_MESSAGE } = require('../board/shared/login-env-store.cjs');
+const { codexLoginNames } = require('../board/shared/codex-carry.cjs');
 
 // What the Claude carry asks for (board/shared/claude-carry.cjs resolveWith).
 const CARRY_NAMES = Object.freeze([...CLAUDE_READ_NAMES, 'CLAUDE_CODE_OAUTH_TOKEN']);
+
+// What the Claude and Codex carries ask for (PR 3). A Codex env_key is any name the user picked, so the set is
+// read from the Codex config in the CODEX_HOME that applies: the app's, or (second pass) the login shell's.
+// loginValues: what the login shell gave so far (null before the first read). Names only, never values.
+function carryNames(loginValues, { env = process.env, home, readFile } = {}) {
+  let codex = [];
+  try { codex = codexLoginNames({ env, loginEnv: loginValues ?? {}, ...(home ? { home } : {}), ...(readFile ? { readFile } : {}) }); } catch { codex = []; }
+  return [...new Set([...CARRY_NAMES, ...codex])];
+}
 
 // Only whether the OAuth token is set is ever needed (the carry words an auth failure differently), so the value
 // itself never leaves the reader: it becomes '1'.
@@ -29,12 +39,26 @@ function createLoginEnvHub({ read, invalidate = () => {}, names = CARRY_NAMES, l
   const subscribers = new Set();
   const publish = () => { for (const fn of [...subscribers]) { try { fn(values); } catch { /* a subscriber's error is its own */ } } };
 
+  // names: a fixed list, or (loginValues) => list for names that depend on what the login shell says (carryNames).
+  const namesFor = (lv) => { try { const n = typeof names === 'function' ? names(lv) : names; return Array.isArray(n) ? n : CARRY_NAMES; } catch { return CARRY_NAMES; } };
+  const good = (r) => !!r && r.ok === true && r.env && typeof r.env === 'object';
+
   async function refresh() {
     const mine = ++seq;
     let res;
-    try { res = await read({ names }); } catch { res = null; }
+    const asked = namesFor(null);
+    try { res = await read({ names: asked }); } catch { res = null; }
+    // A login-shell CODEX_HOME can point at a config naming other variables: one more read, only then.
+    if (good(res) && typeof names === 'function') {
+      const more = namesFor(res.env).filter((n) => !asked.includes(n));
+      if (more.length) {
+        let again;
+        try { again = await read({ names: [...asked, ...more] }); } catch { again = null; }
+        if (good(again)) res = again;
+      }
+    }
     if (mine !== seq) return values;   // a newer refresh is in flight
-    const ok = !!res && res.ok === true && res.env && typeof res.env === 'object';
+    const ok = good(res);
     const env = ok ? { ...res.env } : {};
     if (typeof env[PRESENCE_ONLY] === 'string') { if (env[PRESENCE_ONLY] !== '') env[PRESENCE_ONLY] = '1'; else delete env[PRESENCE_ONLY]; }
     const next = Object.freeze(env);
@@ -83,4 +107,4 @@ function createLoginEnvHub({ read, invalidate = () => {}, names = CARRY_NAMES, l
 /** The message a helper process gets: the values only, as an own plain object. */
 const loginEnvMessage = (values) => ({ type: LOGIN_ENV_MESSAGE, values: { ...values } });
 
-module.exports = { createLoginEnvHub, loginEnvMessage, CARRY_NAMES };
+module.exports = { createLoginEnvHub, loginEnvMessage, carryNames, CARRY_NAMES };

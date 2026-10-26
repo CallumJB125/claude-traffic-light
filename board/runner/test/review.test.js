@@ -196,3 +196,71 @@ test('supervisor: review.offer → one review.result over the serializer; repeat
     rm(root);
   }
 });
+
+// PR 3 (A8): a Codex review carries the user's provider; the key rides in the CLI env, and no tool shell inherits it.
+test('reviewArgs/invokeReviewer: codex takes the provider -c values and model; its shell inherits nothing; the key is in the CLI env only', async () => {
+  const KEY = 'plexlab-fake-key-0123456789abcdef';
+  const provider = { overrides: ['model_provider="plexlab"', 'model_providers.plexlab.env_key="PLEXLAB_KEY"'], model: 'glm-5.3-flash', env: { PLEXLAB_KEY: KEY } };
+  const a = reviewArgs('codex', { cwd: '/tmp/x', provider });
+  for (const o of [...provider.overrides, 'model="glm-5.3-flash"', 'shell_environment_policy.inherit="none"']) assert.equal(a[a.indexOf(o) - 1], '-c', o);
+  assert.ok(reviewArgs('codex', { cwd: '/tmp/x' }).includes('shell_environment_policy.inherit="none"'), 'even with no provider');
+  const { spawn, calls } = fakeSpawn({ stdout: JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } }) });
+  await invokeReviewer({ ai: 'codex', prompt: 'p', bin: '/x/codex', env: { HOME: '/tmp/h', PATH: '/bin' }, provider, spawn });
+  assert.equal(calls[0].opts.env.PLEXLAB_KEY, KEY);
+  assert.ok(!calls[0].args.some((x) => x.includes(KEY)));
+  // Review L6: the shell keeps HOME/PATH/LANG/TMPDIR so read-only git and rg work, and nothing else.
+  const set = calls[0].args.find((x) => x.startsWith('shell_environment_policy.set='));
+  assert.equal(calls[0].args[calls[0].args.indexOf(set) - 1], '-c');
+  assert.equal(set, 'shell_environment_policy.set={HOME="/tmp/h",PATH="/bin"}');
+  assert.ok(reviewArgs('codex', { cwd: '/tmp/x', env: { HOME: '/h', PATH: '/p', LANG: 'C', TMPDIR: '/t', TZ: 'UTC', PLEXLAB_KEY: KEY } })
+    .includes('shell_environment_policy.set={HOME="/h",PATH="/p",LANG="C",TMPDIR="/t"}'));
+  const claude = fakeSpawn({ stdout: JSON.stringify({ result: 'ok' }) });
+  await invokeReviewer({ ai: 'claude', prompt: 'p', bin: '/x/claude', env: { HOME: '/tmp/h', PATH: '/bin' }, provider, spawn: claude.spawn });
+  assert.equal(claude.calls[0].opts.env.PLEXLAB_KEY, undefined, 'a Claude review never takes the Codex provider');
+});
+
+test('supervisor: a codex review gets the carried provider; a failed check answers the hub with a fixed sentence', async () => {
+  const root = tmpDir();
+  const hub = await startFakeHub();
+  const { repo, head } = fixture(root);
+  const home = path.join(root, 'home');
+  const calls = [];
+  let carry = { carry: true, failure: null, overrides: ['model_provider="plexlab"'], model: 'glm-5.3-flash', cliEnv: { PLEXLAB_KEY: 'k' }, release() {} };
+  const sup = await startRunner({ hub, home, repo, env: { HOME: home, PATH: process.env.PATH, TMPDIR: root }, policyExtra: { ai_ids: ['codex'] }, opts: {
+    detectAis: async () => [{ id: 'codex', installed: true, signedIn: true, startable: true, bin: '/x/codex' }],
+    codexCarry: { prepare: async (o) => { (globalThis.__reviewPrepareArgs ??= []).push(o); return carry; } },
+    runReview: async (o, ctx) => { calls.push(ctx); return { ok: true, output: '{"verdict":"needs_human"}', cost_usd: null, files: [], signals: [], truncated: false, model: null }; },
+  } });
+  try {
+    await waitFor(() => hub.of('advertise').length, { what: 'advertise' });
+    hub.send(offer({ ai: 'codex', model: null, heads: [head] }));
+    await waitFor(() => hub.of('review.result')[0], { what: 'review.result' });
+    assert.deepEqual(calls[0].provider, { overrides: ['model_provider="plexlab"'], model: 'glm-5.3-flash', env: { PLEXLAB_KEY: 'k' } });
+    carry = { carry: true, failure: { kind: 'provider', reason: "the gateway at 10.0.0.5:4001 isn't answering" }, release() {} };
+    hub.send(offer({ review_id: 'rv-9', ai: 'codex', model: null, heads: [head] }));
+    const r = await waitFor(() => hub.of('review.result').find((f) => f.review_id === 'rv-9'), { what: 'refusal' });
+    assert.deepEqual({ ok: r.ok, error: r.error }, { ok: false, error: 'Codex provider check failed on this machine' });
+    assert.ok(!hub.raw.some((s) => s.includes('10.0.0.5')));
+    assert.equal(calls.length, 1);
+  } finally {
+    await sup.shutdown();
+    await hub.close();
+    rm(root);
+  }
+});
+
+test('the review asked the carry for a no-shell site', () => {
+  assert.ok((globalThis.__reviewPrepareArgs ?? []).length > 0);
+  assert.ok(globalThis.__reviewPrepareArgs.every((o) => o?.mode === 'noshell'));
+});
+
+// Lead decision (DGX /proc lab): the Codex reviewer gets no command tool at all, so nothing in it can read the CLI env.
+test('reviewArgs: codex review disables every shell and exec tool and sub-agents, before the stdin marker', () => {
+  const a = reviewArgs('codex', { cwd: '/tmp/x' });
+  for (const f of ['shell_tool', 'unified_exec', 'unified_exec_tty', 'shell_snapshot', 'code_mode_host', 'multi_agent']) assert.equal(a[a.indexOf(f) - 1], '--disable', f);
+  // Lab: include_apply_patch_tool is an unknown field under --strict-config (exit 1, nothing runs).
+  assert.ok(a.includes('--strict-config'));
+  assert.ok(!a.some((x) => x.includes('include_apply_patch_tool')));
+  assert.equal(a.at(-1), '-');
+  assert.ok(a.includes('--sandbox') && a[a.indexOf('--sandbox') + 1] === 'read-only', 'the read-only sandbox stays as a second layer');
+});

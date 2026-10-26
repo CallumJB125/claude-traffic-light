@@ -9,6 +9,7 @@ import { desktopProviders } from './desktop-providers.js';
 import { parentBus, BUS_REQUEST } from './parent-bus.js';
 import { productionCarry } from '../shared/claude-carry.cjs';
 import { createLoginEnvStore } from '../shared/login-env-store.cjs';
+import { productionCodexCarry } from '../shared/codex-carry.cjs';
 
 // The app's enforced spend cap (src/spend-enforce.js writes it; hooks/spend-gate.js reads it, fail-open). The
 // router skips every AI while it holds.
@@ -57,6 +58,7 @@ try {
     dataDir: process.env.PLEXIFORM_TASKS_DATA_DIR,
     ...desktopProviders(),
     claudeCarry: productionCarry({ log: () => {}, loginShellEnv: loginEnv.loginShellEnv }),
+    codexCarry: productionCodexCarry({ log: () => {}, loginShellEnv: loginEnv.loginShellEnv }),
     spendGate: () => SpendGate.readGate(appRoot),
     log: makeLogger(process.stderr, { quiet: true }),
     stopGraceMs: 1500,

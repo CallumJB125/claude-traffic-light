@@ -23,6 +23,7 @@ import {
 import { T_QUIET_MS } from '../shared/liveness.js';
 import { redact, filterPath, normalizeRemoteUrl } from '../shared/scope.js';
 import { sweepKeyFiles } from '../shared/claude-carry.cjs';
+import { TAKEOVER_TRANSLATED, CODEX_KEY_FILE, CODEX_TAKEOVER_KEY_FILE } from '../shared/codex-carry.cjs';
 import { untrusted, envelopeTag } from '../shared/untrusted.js';
 import { BACKENDS } from '../runner/backends/index.js';
 import { buildSettings, buildMcpConfig, buildEnv, trustedInstructions, HOOK_TOKEN_FILE, API_KEY_FILE, MCP_SERVER, DEFAULT_MAX_TURNS, DISALLOWED_TOOLS, BUS_DISALLOWED, DENY_READ } from '../runner/launch.js';
@@ -149,6 +150,9 @@ export class TasksEngine extends EventEmitter {
     this.env = opts.env ?? process.env;
     // The user's own Claude provider and auth (board/shared/claude-carry.cjs); null = carry nothing (today's behaviour).
     this.claudeCarry = opts.claudeCarry ?? null;
+    // The user's own Codex provider (board/shared/codex-carry.cjs); null = carry nothing (the built-in OpenAI provider).
+    this.codexCarry = opts.codexCarry ?? null;
+    this.takeoverKeys = new Map();  // taskId → a Codex takeover's carry (codex-takeover.key), released at handback
     this.carries = new Map();       // taskId → the carry behind that task's run dir (api.key, refresh timer)
     this.mcpServer = opts.mcpServer ?? MCP_SERVER;
     this.epoch = crypto.randomUUID();
@@ -1169,6 +1173,22 @@ export class TasksEngine extends EventEmitter {
     return { commonGitDir, gitDir, gitRef };
   }
 
+  // A fresh read of the user's Codex provider (board/shared/codex-carry.cjs) for each launch, never a cached one:
+  // a takeover of a task that never ran here, or after a restart or a config change, must not fall back to OpenAI.
+  // → the prepare result (carry:false = no provider, still with its codexHome), or null with no carry configured;
+  // a failed preflight throws AUTH or PROVIDER with its reason.
+  async #codexProvider(opts) {
+    if (!this.codexCarry) return null;
+    const c = await this.codexCarry.prepare(opts);
+    if (c.failure) throw Object.assign(new Error(c.failure.reason), { code: c.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' });
+    return c;
+  }
+
+  #releaseTakeoverKey(task) {
+    this.takeoverKeys.get(task.id)?.release();
+    this.takeoverKeys.delete(task.id);
+  }
+
   #releaseCarry(task) {
     this.carries.get(task.id)?.release();
     this.carries.delete(task.id);
@@ -1220,12 +1240,21 @@ export class TasksEngine extends EventEmitter {
     };
     run.exited = new Promise((r) => { run.resolveExited = r; });
     await this.#writeRunFiles(task, runDir, socketPath, token);
+    let codexHome = null;
+    if (task.ai.id === 'codex') {
+      this.#releaseCarry(task);
+      // A Tasks run has a tool shell: a key goes only through a file in the denied run dir (or is refused).
+      const c = await this.#codexProvider({ mode: 'shell', keyFile: path.join(runDir, CODEX_KEY_FILE) });
+      codexHome = c?.codexHome ?? null;
+      if (c?.carry) this.carries.set(task.id, c);
+    }
     if (task.ai.id !== 'gemini') run.ipc = await startIpcServer({ socketPath, token, log: this.log, handler: this.#ipcHandler(task, run) });
     if (this.closing || this.closed) { await run.ipc?.close(); return; }
     this.runs.set(task.id, run);
     const carry = this.carries.get(task.id) ?? null;
     const env = { ...buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart }), ...carry?.cliEnv };
-    if (task.ai.id === 'codex' && this.env.CODEX_HOME) env.CODEX_HOME = this.env.CODEX_HOME;
+    // The CODEX_HOME the carry read (maybe the login shell's): codexConfig denies this same folder to tool shells.
+    if (task.ai.id === 'codex' && (codexHome || this.env.CODEX_HOME)) env.CODEX_HOME = codexHome || this.env.CODEX_HOME;
     // Package-manager caches live in a per-task dir, never the user's global caches.
     const cacheDir = this.#cacheDir(task);
     fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
@@ -1259,7 +1288,7 @@ export class TasksEngine extends EventEmitter {
       permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel],
       extraDisallowed: [...['Read', 'Edit', 'Write'].flatMap((t) => this.#dataForms().map((d) => `${t}(/${d}/**)`)), ...(carry?.disallowed ?? []), ...(task.source === 'bus' ? BUS_DISALLOWED : [])],
       interruptWaitMs: this.opts.interruptWaitMs, stopGraceMs: this.opts.stopGraceMs,
-      dataDir: dataReal, cacheDir, ...gitAccess, ...(task.ai.id === 'codex' ? { taskRunDir: runDir } : {}),
+      dataDir: dataReal, cacheDir, ...gitAccess, ...(task.ai.id === 'codex' ? { taskRunDir: runDir, providerOverrides: carry?.overrides ?? [] } : {}),
     });
     run.backend = backend;
     this.#attach(task, run);
@@ -1983,6 +2012,21 @@ export class TasksEngine extends EventEmitter {
       case 'takeover': {
         if (!['claude', 'codex'].includes(task.ai.id)) throw new ApiError('CAPABILITY_MISSING', 'This AI does not support a managed terminal handover.');
         const info = this.#aiInfo(task.ai.id);
+        // Checked before a live run is stopped, so a refusal leaves it running.
+        let codexCarry = null, codexHome = null;
+        if (task.ai.id === 'codex') {
+          let c;
+          // The key goes to codex-takeover.key in the run dir (denied below), read by Codex's auth command, and lives
+          // until handback. Without a key file the terminal's own env supplies env_key; a translated key is refused.
+          this.#releaseTakeoverKey(task);
+          const keyDir = this.#runFiles(task).runDir;
+          ensureDir(keyDir);
+          try { c = await this.#codexProvider({ mode: 'takeover', keyFile: path.join(keyDir, CODEX_TAKEOVER_KEY_FILE) }); } catch (e) { throw new ApiError('NOT_AVAILABLE', e.message); }
+          if (c?.translated) { c.release(); throw new ApiError('NOT_AVAILABLE', TAKEOVER_TRANSLATED); }
+          if (c?.keyFile) this.takeoverKeys.set(task.id, c);
+          codexCarry = c?.carry ? c : null;
+          codexHome = c?.codexHome ?? null;
+        }
         if (run) {
           this.#setState(task, 'handing_over');
           await this.#stopRun(task, run);
@@ -1994,11 +2038,13 @@ export class TasksEngine extends EventEmitter {
         this.#setState(task, 'handed_over');
         if (task.ai.id === 'codex') {
           const env = buildEnv(this.env, { runDir, socket: socketPath, supervisorPid: process.pid, supervisorLstart: this.lstart });
-          if (this.env.CODEX_HOME) env.CODEX_HOME = this.env.CODEX_HOME;
+          if (codexHome || this.env.CODEX_HOME) env.CODEX_HOME = codexHome || this.env.CODEX_HOME;
           env.TMPDIR = path.join(this.#cacheDir(task), 'tmp');
+          // The provider's -c values go on the command; its key values never do (the terminal's own env supplies env_key).
           const options = { bin: info.bin, cwd: task.worktree, env, runDir, sessionId: task.sessionId, resume: task.sessionStarted,
             dataDir: fs.realpathSync(this.dataDir), cacheDir: this.#cacheDir(task), ...await this.#gitAccess(task),
-            permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel], model: task.ai.model };
+            permissionMode: task.planFirst && !task.planApproved ? 'plan' : MODE_OF[task.permissionLevel], model: task.ai.model ?? codexCarry?.model ?? undefined,
+            providerOverrides: codexCarry?.overrides ?? [], denyPaths: [...new Set([runDir, fs.realpathSync(runDir)])] };
           writeFileAtomic(path.join(runDir, 'codex-instructions.md'), this.#brief(task));
           return { takeover: { argv: [info.bin, ...new this.backends.codex(options).argv()], cwd: task.worktree,
             env: { TMPDIR: env.TMPDIR, ...(env.CODEX_HOME ? { CODEX_HOME: env.CODEX_HOME } : {}) }, mode: payload.mode ?? 'print', sessionId: task.sessionId, resumed: task.sessionStarted,
@@ -2027,6 +2073,9 @@ export class TasksEngine extends EventEmitter {
           throw new ApiError('SESSION_BUSY', 'the session is still open in your terminal; exit it first');
         }
         await this.#closeIdleIpc(task);
+        // The takeover's key file goes now; after a restart there is no carry in memory, so remove it by path too.
+        this.#releaseTakeoverKey(task);
+        try { fs.rmSync(path.join(this.#runFiles(task).runDir, CODEX_TAKEOVER_KEY_FILE), { force: true }); } catch { /* gone */ }
         const note = payload.note ? `\n${untrusted('note from the user', payload.note, task.nonce)}` : '';
         this.#requeue(task, { resume: task.sessionStarted, prompt: this.#withPending(task, `The user handed the task back to you after working on it in their terminal.${note}\nCheck the current state of the files, then continue.`) });
         return {};

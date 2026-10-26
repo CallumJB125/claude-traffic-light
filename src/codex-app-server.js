@@ -9,6 +9,8 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { codexActivityLabel } = require('./session-activity');
+const { productionCodexCarry, CODEX_KEY_FILE } = require('../board/shared/codex-carry.cjs');
+const { keyDirPrefix, resolveKeyRoot } = require('./claude-carry');
 
 // Owned threads are text-only: no shell/exec, image viewing, skills,
 // plugins, MCP servers, hooks, browser/computer use, web search, memories,
@@ -19,13 +21,18 @@ const DISABLED_FEATURES = ['shell_tool', 'unified_exec', 'unified_exec_tty', 'sh
   'browser_use_full_cdp_access', 'in_app_browser', 'in_app_local_automation', 'chronicle', 'memories', 'multi_agent',
   'image_generation', 'realtime_conversation', 'tool_suggest', 'skill_mcp_dependency_install', 'code_mode_host',
   'workspace_dependencies', 'worktrees', 'goals', 'sleep_tool', 'daemon_auto_start'];
-// Explicit overrides win over the user's ~/.codex/config.toml: the built-in
-// OpenAI provider, no MCP servers/plugins/project trust entries, no notify,
-// no inherited environment for any command.
-const CONFIG_OVERRIDES = ['model_provider="openai"', 'mcp_servers={}', 'plugins={}', 'projects={}', 'hooks={}', 'notify=[]',
+// Explicit overrides win over the user's ~/.codex/config.toml: the provider
+// (the user's own, carried by board/shared/codex-carry.cjs, else the built-in
+// OpenAI one), no MCP servers/plugins/project trust entries, no notify, no
+// inherited environment for any command.
+const OPENAI_PROVIDER = 'model_provider="openai"';
+const CONFIG_OVERRIDES = [OPENAI_PROVIDER, 'mcp_servers={}', 'plugins={}', 'projects={}', 'hooks={}', 'notify=[]',
   'web_search="disabled"', 'project_doc_max_bytes=0', 'include_apply_patch_tool=false', 'shell_environment_policy.inherit="none"'];
-const APP_SERVER_ARGS = Object.freeze(['app-server', '--listen', 'stdio://',
-  ...CONFIG_OVERRIDES.flatMap((c) => ['-c', c]), ...DISABLED_FEATURES.flatMap((f) => ['--disable', f])]);
+function appServerArgs(provider = null) {
+  const overrides = provider ? [...provider.overrides, ...(provider.model ? [`model=${JSON.stringify(provider.model)}`] : []), ...CONFIG_OVERRIDES.filter((c) => c !== OPENAI_PROVIDER)] : CONFIG_OVERRIDES;
+  return ['app-server', '--listen', 'stdio://', ...overrides.flatMap((c) => ['-c', c]), ...DISABLED_FEATURES.flatMap((f) => ['--disable', f])];
+}
+const APP_SERVER_ARGS = Object.freeze(appServerArgs());
 const ENV_KEYS = ['HOME', 'PATH', 'LANG', 'TMPDIR', 'TZ', 'CODEX_HOME'];
 const MAX_LINE = 4 * 1024 * 1024;
 const REQUEST_MS = 30_000;
@@ -41,7 +48,17 @@ function findCodexBin({ env = process.env, exists = (p) => { try { fs.accessSync
 
 const inputText = (content) => (Array.isArray(content) ? content : []).filter((c) => c?.type === 'text' && typeof c.text === 'string').map((c) => c.text).join('');
 
-function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spawn, clientVersion = '0' } = {}) {
+// Main sets this to the login-env hub's read (src/login-env-hub.js), as for src/claude-carry.js: a Dock-launched app
+// then finds CODEX_HOME and env_key values the user exports only in their shell profile.
+let loginShellEnv = null;
+function setLoginShellEnv(fn) { loginShellEnv = typeof fn === 'function' ? fn : null; }
+
+// carry: the user's Codex provider; undefined = the app's own, read with this env (a copied or filtered env must not
+// lose the user's provider and silently go to OpenAI), null = none.
+// keyRoot: <userData>/run (a path or a getter). Each launch with a keyed provider makes codex-<pid>-* there for the
+// key file its auth command reads; it goes when that process ends, and a start sweeps what a crash left.
+function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spawn, clientVersion = '0', carry, keyRoot = null } = {}) {
+  const codexCarry = carry !== undefined ? carry : productionCodexCarry({ env, loginShellEnv: (a) => (loginShellEnv ? loginShellEnv(a) : {}) });
   const events = new EventEmitter();
   const pending = new Map();
   let child = null, ready = null, nextId = 1, exited = false, skipping = false;
@@ -112,8 +129,41 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
     if (ready && !exited) return ready;
     if (!bin) return Promise.reject(new Error('Codex CLI not found'));
     exited = false;
-    const childEnv = Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]]));
-    child = spawn(bin, APP_SERVER_ARGS, { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] }); // privacy-flow: owned-codex-session
+    // With no carry the launch stays synchronous, as before.
+    const attempt = (codexCarry ? preflight().then((provider) => launch(provider)) : launch(null)).catch((error) => {
+      if (ready === attempt) ready = null;
+      throw error;
+    });
+    ready = attempt;
+    return ready;
+  }
+
+  // The provider check runs before every launch: a missing env_key value, an unreadable config or a gateway that
+  // doesn't answer fails here with a reason that names no value, instead of Codex waiting on the network forever.
+  let keyDir = null;
+  const dropKeyDir = () => { if (keyDir) { try { fs.rmSync(keyDir, { recursive: true, force: true }); } catch { /* gone */ } keyDir = null; } };
+  async function preflight() {
+    if (!codexCarry) return null;
+    dropKeyDir();
+    let keyFile = null;
+    const root = resolveKeyRoot(keyRoot);
+    if (root) {
+      try { keyDir = fs.mkdtempSync(path.join(root, keyDirPrefix('codex'))); fs.chmodSync(keyDir, 0o700); keyFile = path.join(keyDir, CODEX_KEY_FILE); } catch { dropKeyDir(); }
+    }
+    let c;
+    // Owned threads have no command tool (DISABLED_FEATURES), so a key may sit in this process's env.
+    try { c = await codexCarry.prepare({ mode: 'noshell', keyFile }); } catch { dropKeyDir(); throw Object.assign(new Error('Codex settings could not be read'), { code: 'PROVIDER' }); }
+    if (c.failure) { dropKeyDir(); throw Object.assign(new Error(c.failure.reason), { code: c.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' }); }
+    if (!c.keyFile) dropKeyDir();
+    return c;
+  }
+
+  function launch(provider) {
+    // Key values (env_key, translated headers) go in this process's env only; no command inherits it.
+    // CODEX_HOME is the one the config was read from (maybe the login shell's), with or without a provider.
+    const carried = provider?.carry ? provider : null;
+    const childEnv = { ...Object.fromEntries(ENV_KEYS.filter((k) => env[k]).map((k) => [k, env[k]])), ...carried?.cliEnv, ...(provider?.codexHome ? { CODEX_HOME: provider.codexHome } : {}) };
+    child = spawn(bin, carried ? appServerArgs(carried) : APP_SERVER_ARGS, { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] }); // privacy-flow: owned-codex-session
     const self = child;
     let buffer = '';
     child.stdout.setEncoding('utf8');
@@ -133,18 +183,15 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
     // stderr can carry account or network detail; it is never kept.
     child.stderr.on('data', () => {});
     child.stdin.on('error', () => {});
-    const ended = () => { if (child !== self || exited) return; exited = true; fail(new Error('Codex app-server exited')); events.emit('event', { kind: 'exit' }); };
+    const ended = () => { if (child !== self || exited) return; exited = true; dropKeyDir(); fail(new Error('Codex app-server exited')); events.emit('event', { kind: 'exit' }); };
     child.on('error', ended);
     child.on('exit', ended);
-    const attempt = request('initialize', { clientInfo: { name: 'plexiform', title: 'Plexiform', version: String(clientVersion) } })
+    return request('initialize', { clientInfo: { name: 'plexiform', title: 'Plexiform', version: String(clientVersion) } })
       .then(() => { write({ method: 'initialized' }); })
       .catch((error) => {
-        if (ready === attempt) ready = null;
-        if (child === self) { child = null; exited = true; kill(self); }
+        if (child === self) { child = null; exited = true; kill(self); dropKeyDir(); }
         throw error;
       });
-    ready = attempt;
-    return ready;
   }
 
   async function open({ cwd }) {
@@ -178,7 +225,7 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
     const timer = setTimeout(() => { if (proc.exitCode === null && proc.signalCode === null) { try { proc.kill('SIGKILL'); } catch { /* gone */ } } }, KILL_MS);
     timer.unref?.();
   }
-  function stop() { if (child && !exited) kill(child); }
+  function stop() { if (child && !exited) kill(child); dropKeyDir(); }
 
   return {
     provider: 'codex', label: 'Codex',
@@ -189,4 +236,4 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
   };
 }
 
-module.exports = { createCodexAppServer, findCodexBin, APP_SERVER_ARGS, DISABLED_FEATURES, CONFIG_OVERRIDES };
+module.exports = { createCodexAppServer, findCodexBin, appServerArgs, APP_SERVER_ARGS, DISABLED_FEATURES, CONFIG_OVERRIDES, setLoginShellEnv };

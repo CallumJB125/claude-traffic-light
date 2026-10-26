@@ -1,11 +1,4 @@
-# Fixture: a Codex config.toml as written by `claude-burst codex enable`.
-# Reconstructed from the template strings in the installed claude-burst binary
-# (~/.local/bin/claude-burst), not captured from a live write: Burst is macOS-only
-# and is not in the DGX lab. The default listen is 127.0.0.1:7777. No secrets:
-# Burst uses requires_openai_auth (the ChatGPT login in CODEX_HOME), not env_key.
-model = "gpt-6.1-sol"
-
 # BEGIN claude-burst (Codex through Claude Burst: delete down to END to undo, or run claude-burst codex disable)
 model_provider = "claude-burst"
-model_providers.claude-burst = { name = "Claude Burst", base_url = "http://127.0.0.1:7777/backend-api/codex", wire_api = "responses", requires_openai_auth = true }
+model_providers.claude-burst = { name = "Claude Burst", base_url = "http://127.0.0.1:7779/backend-api/codex", wire_api = "responses", requires_openai_auth = true }
 # END claude-burst

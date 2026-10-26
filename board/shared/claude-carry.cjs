@@ -20,8 +20,10 @@ const {
 const { runUserCommand } = require('./key-helper.cjs');
 
 const PROBE_MS = 2000;
-// The default listen of Burst's gateway (fixture board/shared/test/fixtures/codex-config/burst-codex-enable.redacted.toml).
+// Burst's default listens: 7777 is its Claude gateway; 7779 its Codex gateway (real capture of `claude-burst codex
+// enable`, board/shared/test/fixtures/codex-config/burst-codex-enable.redacted.toml).
 const BURST_GATEWAY_PORT = 7777;
+const BURST_CODEX_GATEWAY_PORT = 7779;
 const DEFAULT_TTL_MS = 5 * 60_000;
 const NOT_LOGGED_IN = 'Claude is not logged in. Run claude in a terminal and sign in with /login, then resume.';
 const OAUTH_TOKEN_NOTE = " (a CLAUDE_CODE_OAUTH_TOKEN in your shell doesn't reach runs yet)";
@@ -55,8 +57,8 @@ function tcpProbe({ host, port, timeoutMs = PROBE_MS, connect = net.connect }) {
 }
 
 // Burst owns a loopback port when it is installed (its binary is in place) and the port is its gateway's.
-async function burstOwnsPort(port, { home = os.homedir(), platform = process.platform } = {}) {
-  if (platform !== 'darwin' || port !== BURST_GATEWAY_PORT) return false;
+async function burstOwnsPort(port, { home = os.homedir(), platform = process.platform, burstPort = BURST_GATEWAY_PORT } = {}) {
+  if (platform !== 'darwin' || port !== burstPort) return false;
   try { fs.accessSync(path.join(home, '.local', 'bin', 'claude-burst'), fs.constants.X_OK); return true; } catch { return false; }
 }
 
@@ -268,7 +270,8 @@ function parseCredentials(text) {
   return { AWS_ACCESS_KEY_ID: id, AWS_SECRET_ACCESS_KEY: secret, ...(typeof c.SessionToken === 'string' && c.SessionToken ? { AWS_SESSION_TOKEN: c.SessionToken } : {}) };
 }
 
-// Deletes api.key (and a half-written api.key.*.tmp) from every <runRoot>/<id>/ except those `keep(id)` names.
+// Deletes api.key and Codex's codex-provider.key / codex-takeover.key (and a half-written *.tmp of any) from every <runRoot>/<id>/
+// except those `keep(id)` names.
 // For a start after a crash: carry state is in memory, so a key left on disk would otherwise stay forever.
 function sweepKeyFiles(runRoot, keep = () => false) {
   let ids;
@@ -279,7 +282,7 @@ function sweepKeyFiles(runRoot, keep = () => false) {
     let names;
     try { names = fs.readdirSync(path.join(runRoot, id)); } catch { continue; }
     for (const f of names) {
-      if (f !== 'api.key' && !/^api\.key\..*\.tmp$/.test(f)) continue;
+      if (f !== 'api.key' && f !== 'codex-provider.key' && f !== 'codex-takeover.key' && !/^(?:api|codex-provider|codex-takeover)\.key\..*\.tmp$/.test(f)) continue;
       try { fs.rmSync(path.join(runRoot, id, f), { force: true }); n++; } catch { /* gone */ }
     }
   }
@@ -293,4 +296,4 @@ function productionCarry(opts = {}) {
   return createClaudeCarry({ env: process.env, ...opts });
 }
 
-module.exports = { PROC_RULES, createClaudeCarry, productionCarry, sweepKeyFiles, burstOwnsPort, BURST_GATEWAY_PORT, denyRules, tcpProbe, oneShotModel, NOT_LOGGED_IN, PROBE_MS };
+module.exports = { PROC_RULES, createClaudeCarry, productionCarry, sweepKeyFiles, burstOwnsPort, BURST_GATEWAY_PORT, BURST_CODEX_GATEWAY_PORT, denyRules, tcpProbe, oneShotModel, NOT_LOGGED_IN, PROBE_MS };
