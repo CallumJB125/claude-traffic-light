@@ -251,3 +251,14 @@ test('20 no secret-classed key ever lands in routing or pathVars', () => {
   assert.ok(!JSON.stringify(r.routing).match(/k-1|t-1|b-1/));
   assert.equal(r.routing.ANTHROPIC_BASE_URL, 'https://gw');
 });
+
+test('21 unparseable managed settings fail closed, without throwing', () => {
+  for (const bad of [{ [MANAGED]: '{ nope' }, { [MANAGED_D + '/10-a.json']: '[1,' }]) {
+    const { r } = run({ ...bad, [`${CFG}/settings.json`]: settings({ ANTHROPIC_BASE_URL: 'https://user', ANTHROPIC_API_KEY: 'k' }) }, { dirs: { [MANAGED_D]: ['10-a.json'] } });
+    assert.equal(r.carry, false);
+    assert.equal(r.carryOffReason, 'managed_settings_unreadable');
+    assert.ok(r.unsupported.some((u) => u.code === 'claude_settings_unreadable'));
+    assert.deepEqual(r.routing, {});
+    assert.equal(r.auth.secret, null);
+  }
+});

@@ -102,6 +102,7 @@ function claudeProvider({ env = {}, loginEnv = {}, home, platform, readFile, rea
   try { dropIns = readDir(p.join(managedDir, 'managed-settings.d')); } catch { dropIns = null; }
   for (const n of [...(Array.isArray(dropIns) ? dropIns : [])].filter((f) => typeof f === 'string' && f.endsWith('.json')).sort()) managedFiles.push(p.join(managedDir, 'managed-settings.d', n));
   const managed = { env: {} };
+  const unsupportedBefore = unsupported.length;
   let managedSeen = false;
   for (const f of managedFiles) {
     const j = readJson(readFile, f, unsupported);
@@ -110,6 +111,9 @@ function claudeProvider({ env = {}, loginEnv = {}, home, platform, readFile, rea
     for (const k of ['model', 'apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport']) if (str(j[k]) != null) managed[k] = str(j[k]);
     if (isObj(j.env)) Object.assign(managed.env, j.env);
   }
+
+  // An unreadable company policy must not be bypassed by carrying the user's own routing.
+  if (unsupported.length > unsupportedBefore) return blankClaude(base, 'managed_settings_unreadable', unsupported);
 
   const userPath = p.join(configDir, 'settings.json');
   const user = readJson(readFile, userPath, unsupported);
