@@ -838,3 +838,25 @@ test('PR B: the roster and bus_peers carry where the caller\'s own cards go, as 
   const excluded = await aw.build();
   assert.deepEqual(excluded.self['claude|X'], { allowed: false }, 'an excluded session carries no board');
 });
+
+test('9a: bus_status says binding:"unsupported" off macOS and nothing extra on macOS', async (t) => {
+  const linux = world(t, { platform: 'linux' }).make();
+  const r = await linux.relay('status', {}, { provider: 'claude', cwd: '/x' }, {}, { forward: async () => ({ state: 'idle' }) });
+  assert.equal(r.binding, 'unsupported');
+  assert.equal(r.state, 'idle');
+  assert.match(r.binding_note, /cannot tell which AI session is calling/);
+  const mac = world(t).make();
+  assert.deepEqual(await mac.relay('status', {}, { provider: 'claude', cwd: '/x' }, {}, { forward: async () => ({ state: 'idle' }) }), { state: 'idle' });
+});
+
+test('T2: bus_handoff takes no bus_peers handle as to.agent_id: a clear refusal, nothing forwarded; a plain provider handoff goes through', async (t) => {
+  const w = world(t);
+  const aw = w.make();
+  let forwarded = 0;
+  const forward = async () => { forwarded += 1; return { handoff_id: 'h1' }; };
+  const refused = await aw.relay('handoff', { title: 'x', to: { agent_id: 'claude-api-3fa9' } }, { provider: 'claude', cwd: w.repoA }, w.call(300), { forward });
+  assert.equal(refused.reason, 'VALIDATION');
+  assert.match(refused.message, /not a bus_peers handle.*fresh run/s);
+  assert.equal(forwarded, 0);
+  assert.equal((await aw.relay('handoff', { title: 'x', to: { provider: 'codex' } }, { provider: 'claude', cwd: w.repoA }, w.call(300), { forward })).handoff_id, 'h1');
+});

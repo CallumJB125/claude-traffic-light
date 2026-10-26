@@ -32,6 +32,7 @@ const { allowedExe } = require('./agent-awareness.js');
 const NAME = McpInstall.BUS_NAME;
 const hashOf = (v) => crypto.createHash('sha256').update(JSON.stringify(v)).digest('hex').slice(0, 16);
 const effective = (c) => !!c && (c.agentAwareness?.enabled !== false || c.agentBus?.enabled !== false) && c.mcpBusUserOff !== true;
+const UNSUPPORTED_PLATFORM = Object.freeze({ state: 'unsupported', reason: 'UNSUPPORTED_PLATFORM', message: 'Plexiform can only tell which AI session is calling on a Mac, so the agent bus tools are not added on this computer.' });
 const claudeOn = (c) => effective(c) && c.mcpUserOff !== true;
 
 // The codex main runs (findCodexBin()), only when it is the real, signed binary: ~/.local/bin and Homebrew's
@@ -51,7 +52,7 @@ async function trustedCodex(bin, { home, codexHome, run, platform = process.plat
  * home: where ~/.claude.json and ~/.codex live (a sandbox in dev runs). codexBin(): findCodexBin().
  * codexEnv: the environment `codex` runs with (CODEX_HOME set to the sandbox in dev runs).
  */
-function create({ rootDir, home, config, launch, codexBin, codexEnv = process.env, execFile, fsp = fs.promises, mcpInstall = McpInstall, codexAdapter = Codex, now = () => Date.now(), log = () => {},
+function create({ rootDir, home, config, launch, codexBin, platform = process.platform, codexEnv = process.env, execFile, fsp = fs.promises, mcpInstall = McpInstall, codexAdapter = Codex, now = () => Date.now(), log = () => {},
   trustCodexBin = (bin) => trustedCodex(bin, { home, codexHome: codexEnv.CODEX_HOME || path.join(home, '.codex'), fsp,
     run: (file, args) => new Promise((resolve, reject) => { require('child_process').execFile(file, args, { timeout: 5000, windowsHide: true }, (err, out) => (err ? reject(err) : resolve(String(out)))); }) }) }) { // privacy-flow: agent-bus-tools-local
   const recordFile = path.join(rootDir, 'mcp-auto.json');
@@ -177,7 +178,10 @@ function create({ rootDir, home, config, launch, codexBin, codexEnv = process.en
     if (c && c.mcpUserOff !== true) {
       try { if (upgradeFull()) log('[mcp-auto] the full server re-registered with --disable-sigusr1'); } catch { /* unreadable or changing: next start */ }
     }
-    if (effective(c)) {
+    if (platform !== 'darwin') {
+      // No caller binding here (src/peer-pid.js): tools that could not tell their caller are not added, and nothing is announced.
+      state = { claude: UNSUPPORTED_PLATFORM, codex: UNSUPPORTED_PLATFORM, codexHook: UNSUPPORTED_PLATFORM };
+    } else if (effective(c)) {
       let claude;
       if (claudeOn(c)) {
         try { claude = addClaude(rec); } catch { claude = { state: 'error' }; }

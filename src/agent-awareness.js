@@ -932,6 +932,13 @@ function boardAnswer(board) {
       if (op === 'session' && ident.hook === true && r && r.bound && r.provider === 'codex') Promise.resolve().then(onCodexSession).catch(() => {});
       return r;
     }
+    if (op === 'handoff' && args && typeof args === 'object' && args.to && typeof args.to === 'object' && Hook.HANDLE.test(String(args.to.agent_id || ''))) {
+      return { reason: 'VALIDATION', message: 'to.agent_id is not a bus_peers handle. bus_handoff starts a fresh run for the provider you name (to.provider); it does not hand work to a live session. Use bus_note to tell a live session something.' };
+    }
+    if (op === 'status') {
+      const r = await forward(op, args, caller);
+      return Peer.supported || !r || typeof r !== 'object' || Array.isArray(r) ? r : { ...r, binding: 'unsupported', binding_note: 'Plexiform cannot tell which AI session is calling on this platform, so bus_peers, bus_note and bus_card_add are not available here.' };
+    }
     if (op === 'handoff' || op === 'hello') {
       const b = await bindCaller(ident);
       if (b.bound) caller = { ...caller, provider: b.provider, ...(op === 'handoff' && noteReaders.has(b.key) ? { after_note: true } : {}) };

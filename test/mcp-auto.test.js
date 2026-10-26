@@ -28,7 +28,7 @@ function world(t, { launch = PACKAGED, config = ON, codex = true, mode = '' } = 
   const bin = Fake.write(path.join(dir, 'bin'));
   const state = { config: { ...config } };
   const logs = [];
-  const make = (o = {}) => McpAuto.create({ rootDir: root, home, config: () => state.config, launch: o.launch || launch, codexBin: () => (codex ? bin : null),
+  const make = (o = {}) => McpAuto.create({ rootDir: root, home, config: () => state.config, launch: o.launch || launch, platform: 'darwin', codexBin: () => (codex ? bin : null),
     codexEnv: { PATH: '/usr/bin:/bin', CODEX_HOME: codexHome, FAKE_CODEX_MODE: o.mode ?? mode }, log: (m) => logs.push(m),
     // The fake CLI stands in for OpenAI's signed codex; the real check (trustedCodex) has its own test below.
     ...(o.realTrust ? {} : { trustCodexBin: async (b) => b }), ...(o.extra || {}) });
@@ -334,4 +334,21 @@ test('review #12: Home actions and the hook-seen mark wait for a running sync, s
   assert.equal(rec.codex && rec.codex.name, 'plexiform-bus', 'the sync\'s Codex entry is recorded');
   assert.equal(rec.hookNoticeDismissed, true, 'the dismissal is kept');
   assert.match(String(rec.codexHookSeenAt), /^\d{4}-/, 'the hook-seen mark is kept');
+});
+
+test('T1/9a: on a platform that cannot bind the caller nothing is added, no notice is offered, and the reason is UNSUPPORTED_PLATFORM', async (t) => {
+  const w = world(t);
+  for (const platform of ['linux', 'win32']) {
+    const auto = w.make({ extra: { platform } });
+    const s = await auto.sync();
+    for (const k of ['claude', 'codex', 'codexHook']) {
+      assert.equal(s[k].state, 'unsupported');
+      assert.equal(s[k].reason, 'UNSUPPORTED_PLATFORM');
+    }
+    assert.match(s.claude.message, /only tell which AI session is calling on a Mac/);
+    assert.equal(w.claudeJson(), null, 'no ~/.claude.json written');
+    assert.deepEqual(w.codexServers(), {}, 'Codex untouched');
+    assert.deepEqual(w.codexCalls(), []);
+    assert.deepEqual(auto.notices(), [], 'no Inbox "added" item');
+  }
 });
