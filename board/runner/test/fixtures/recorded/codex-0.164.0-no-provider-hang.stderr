@@ -1,0 +1,33 @@
+WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir "/tmp" (codex_home: AbsolutePathBuf("/tmp/fx-home/.codex"))
+Reading additional input from stdin...
+OpenAI Codex v0.164.0
+--------
+workdir: /tmp/fx-work
+model: gpt-6.1-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: none
+reasoning summaries: none
+session id: <UUID-28>
+--------
+user
+Reply with the single word: ok
+warning: Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/concepts/sandboxing#prerequisites. Codex will use the bundled bubblewrap in the meantime.
+2026-10-26T16:42:46.249780Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: IO error: failed to lookup address information: Try again, url: wss://api.openai.com/v1/responses
+2026-10-26T16:42:51.279091Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: IO error: failed to lookup address information: Try again, url: wss://api.openai.com/v1/responses
+2026-10-26T16:42:56.502191Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: IO error: failed to lookup address information: Try again, url: wss://api.openai.com/v1/responses
+ERROR: Reconnecting... 2/5
+2026-10-26T16:43:01.924427Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: IO error: failed to lookup address information: Try again, url: wss://api.openai.com/v1/responses
+ERROR: Reconnecting... 3/5
+2026-10-26T16:43:07.691296Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: IO error: failed to lookup address information: Try again, url: wss://api.openai.com/v1/responses
+ERROR: Reconnecting... 4/5
+2026-10-26T16:43:14.237141Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: IO error: failed to lookup address information: Try again, url: wss://api.openai.com/v1/responses
+ERROR: Reconnecting... 5/5
+2026-10-26T16:43:22.207297Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: IO error: failed to lookup address information: Try again, url: wss://api.openai.com/v1/responses
+warning: Falling back from WebSockets to HTTPS transport. stream disconnected before completion: failed to lookup address information: Try again
+ERROR: Reconnecting... waiting for network
+ERROR: Reconnecting... waiting for network
+ERROR: Reconnecting... waiting for network
+ERROR: Reconnecting... waiting for network
+ERROR: Reconnecting... waiting for network

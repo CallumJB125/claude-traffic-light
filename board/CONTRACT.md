@@ -391,7 +391,7 @@ The web renders handover markdown as **text** (escape everything; only headings,
 |---|---|---|
 | `activity` | `source` (`init`\|`tool_start`\|`assistant`\|`tool_end`\|`mcp`) | `step(activity)` (#`4`, #`7`). Throttled by the runner to ≤ 1 per 5 s per run |
 | `facts` | `items:[Fact]` | Merge into `runs.facts`/`touched_paths`, feed, overlap recompute (debounced `OVERLAP_DEBOUNCE_MS`) |
-| `run.failed` | `fail_kind` ∈ `RUNNER_FAIL_KINDS`, `reason`, `resets_in_ms?` (`limit`: from the stream's `rate_limit_event.resetsAt`) | `step(run_failed)` (#`22`); `resets_in_ms` feeds `CardView.limit_resets_in_ms` |
+| `run.failed` | `fail_kind` ∈ `RUNNER_FAIL_KINDS` (`network`, `limit`, `error`, `budget`, `provider`), `reason` (a fixed sentence per kind, `board/shared/failure.js` `KIND_SENTENCE`; never the CLI's own text), `resets_in_ms?` (`limit`: from the stream's `rate_limit_event.resetsAt`) | `step(run_failed)` (#`22`); `resets_in_ms` feeds `CardView.limit_resets_in_ms` |
 | `prep.failed` | `cause` | `step(prep_failed)` (#`5`) |
 | `handover.complete` | — | `step(handover_complete)` (#`27b`) — after the final snapshot push + release |
 | `snapshot` | `status` (`pushed`\|`push_failed`\|`held`), `sha`, `ref`, `reason` | Update `runs.snapshot_*` (the code layer's "last synced") |

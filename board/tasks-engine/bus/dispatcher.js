@@ -12,6 +12,7 @@ import { admit, strictSettings, dayOf } from './guard.js';
 import { runCost } from './pricing.js';
 import { BUS_VERSION, Envelope, HelloArgs, HandoffArgs, ReadArgs, WaitArgs, StatusArgs, RunHandoffArgs, ResultArgs, LIMITS, issue } from '../../shared/bus-schema.js';
 import { redactSecrets } from '../../shared/secret-patterns.mjs';
+import { KIND_SENTENCE } from '../../shared/failure.js';
 import { cleanPacketText } from '../../shared/packet-text.js';
 import { normalizeRemoteUrl } from '../../shared/scope.js';
 import untrustedFrame from '../../shared/untrusted-frame.cjs';
@@ -31,6 +32,16 @@ const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
 export class BusRefusal extends Error {
   constructor(code, message) { super(message); this.code = code; }
+}
+
+// What the calling session is told about a run that did not finish. A reason the CLI produced is untrusted text
+// (it can echo the worktree or a model): the caller gets the kind's fixed sentence. Reasons the engine wrote
+// itself (stopped, budget, released) pass through.
+const CLI_KINDS = new Set(['provider', 'network', 'error', 'limit']);
+function failedText(task) {
+  if (task.state === 'parked') return KIND_SENTENCE[task.parkReason] ?? 'The run stopped.';
+  if (CLI_KINDS.has(task.failKind)) return KIND_SENTENCE[task.failKind];
+  return task.failReason ?? 'The run stopped.';
 }
 
 /** Run-originated text (results, onward handoffs) never passes main's scrubber: it is folded and scrubbed here, then truncated. */
@@ -255,7 +266,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     if (c?.task_id !== task.id || halting.has(task.id)) return; // a run halted mid-start reports nothing
     let report = null;
     try { report = c?.report ? JSON.parse(c.report) : null; } catch { report = null; }
-    const own = outcome === 'done' ? task.evidence?.summary ?? task.lastAssistant ?? 'Done.' : task.failReason ?? task.parkReason ?? 'The run stopped.';
+    const own = outcome === 'done' ? task.evidence?.summary ?? task.lastAssistant ?? 'Done.' : failedText(task);
     finish(ev, task.sourceMeta.fence, report?.outcome === 'failed' ? 'failed' : outcome, {
       summary: report?.summary ?? scrubRun(own, LIMITS.summary, task.worktree), evidence: report?.evidence ?? [],
       ...runCost(task), branch: task.branch, task_id: task.id, provider: task.ai?.id ?? null,

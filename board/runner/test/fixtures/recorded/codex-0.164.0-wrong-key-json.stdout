@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"<UUID-34>"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `glm-5.3-flash` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"{\"error\":{\"message\":\"No connected db.\",\"type\":\"no_db_connection\",\"param\":null,\"code\":\"400\"}}"}
+{"type":"turn.failed","error":{"message":"{\"error\":{\"message\":\"No connected db.\",\"type\":\"no_db_connection\",\"param\":null,\"code\":\"400\"}}"}}

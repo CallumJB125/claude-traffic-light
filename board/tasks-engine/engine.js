@@ -25,6 +25,7 @@ import { redact, filterPath, normalizeRemoteUrl } from '../shared/scope.js';
 import { sweepKeyFiles } from '../shared/claude-carry.cjs';
 import { TAKEOVER_TRANSLATED, CODEX_KEY_FILE, CODEX_TAKEOVER_KEY_FILE } from '../shared/codex-carry.cjs';
 import { untrusted, envelopeTag } from '../shared/untrusted.js';
+import { classifyFailure, reasonLine, KIND_SENTENCE } from '../shared/failure.js';
 import { BACKENDS } from '../runner/backends/index.js';
 import { buildSettings, buildMcpConfig, buildEnv, trustedInstructions, HOOK_TOKEN_FILE, API_KEY_FILE, MCP_SERVER, DEFAULT_MAX_TURNS, DISALLOWED_TOOLS, BUS_DISALLOWED, DENY_READ } from '../runner/launch.js';
 import { startIpcServer } from '../runner/ipc.js';
@@ -53,6 +54,10 @@ const LEASED = new Set(['claimed', 'running', 'quiet', 'blocked', 'handing_over'
 // O3: a wrapped task is real work (gets a card) once it edits a file or has been working for a minute in total.
 const ACTIVE = new Set(['running', 'quiet']);
 const REAL_WORK_MS = 60_000;
+// A Codex run that shows no sign of life for this long is parked on its provider: with no reachable provider the
+// CLI retries the network forever and never exits (lab fixture 4, codex 0.164). Ten minutes is well past a long
+// reasoning turn on a slow model and well short of the hour-plus hang; opts.noProgressMs overrides it.
+const CODEX_NO_PROGRESS_MS = 10 * 60_000;
 const WORK_ROWS_MAX = 20;
 // States that hold a parallel-task slot (§13).
 const SLOT = new Set(['claimed', 'running', 'quiet', 'blocked', 'handing_over']);
@@ -1234,7 +1239,7 @@ export class TasksEngine extends EventEmitter {
     const { runDir, socketPath } = this.#runFiles(task);
     const token = crypto.randomBytes(24).toString('base64url');
     const run = {
-      task, runDir, socketPath, token, backend: null, ipc: null, hbAt: this.now(), toolInFlight: null, tools: new Map(), approvals: new Map(),
+      task, runDir, socketPath, token, backend: null, ipc: null, hbAt: this.now(), progressAt: this.now(), toolInFlight: null, tools: new Map(), approvals: new Map(),
       allow: new Set(), pending: [], stopping: false, expectExit: false, rateLimited: null, costBase: task.cost.usd, turnBase: task.numTurns,
       exited: null,
     };
@@ -1353,6 +1358,20 @@ export class TasksEngine extends EventEmitter {
     }).catch(() => {});
   }
 
+  #noProgress(task, now) {
+    const run = this.runs.get(task.id);
+    const limit = this.opts.noProgressMs ?? CODEX_NO_PROGRESS_MS;
+    if (task.ai.id !== 'codex' || !run?.backend || run.noProgressHit || run.toolInFlight || !['claimed', 'running', 'quiet'].includes(task.state) || now - run.progressAt < limit) return;
+    run.noProgressHit = true;
+    this.log.info('task made no progress', { task_id: task.id });
+    this.#withLock(task, async () => {
+      if (this.runs.get(task.id) !== run || !LEASED.has(task.state)) return;
+      await this.#stopRun(task, run);
+      if (task.openAsk) this.#closeAsk(task, null);
+      this.#failTask(task, 'provider', `Codex got no answer from its provider for ${Math.round(limit / 60000)} minutes. Check that the provider is reachable and its key and model are right, then retry.`);
+    }).catch(() => {});
+  }
+
   #isLive(task, run) { return !this.closing && !this.closed && this.runs.get(task.id) === run; }
 
   #attach(task, run) {
@@ -1465,7 +1484,7 @@ export class TasksEngine extends EventEmitter {
   #activity(task, run) {
     const now = this.now();
     task.lastActivity = now;
-    if (run) run.hbAt = now;
+    if (run) { run.hbAt = now; run.progressAt = now; }
     if (task.state === 'claimed' || task.state === 'quiet') this.#setState(task, 'running');
   }
 
@@ -1484,7 +1503,8 @@ export class TasksEngine extends EventEmitter {
         await this.#endRun(task, run);
         return this.#failTask(task, 'budget', 'budget reached');
       }
-      if (r.subtype === 'success') {
+      // Claude Code reports a logged-out or unreachable run as subtype:'success' with is_error:true (lab fixtures).
+      if (r.subtype === 'success' && r.is_error !== true) {
         if (task.planFirst && !task.planApproved) return this.#planAsk(task, run, r);
         if (task.ai.id === 'codex' && this.messages.pending(task.id).length) {
           await this.#endRun(task, run);
@@ -1495,9 +1515,13 @@ export class TasksEngine extends EventEmitter {
       await this.#endRun(task, run);
       if (r.subtype === 'error_max_turns') return this.#failTask(task, 'error', 'max_turns');
       const text = [r.result, ...(Array.isArray(r.errors) ? r.errors : []), r.terminal_reason, r.subtype].filter((x) => typeof x === 'string').join(' ');
-      if (run.rateLimited || /usage limit|rate[ _-]?limit|\b429\b|overloaded/i.test(text)) return this.#park(task, 'limit', run.rateLimited?.resetsAt ?? null);
-      if (/\b401\b|unauthori[sz]ed|not logged in|log ?in again|invalid api key|authentication/i.test(text)) return this.#park(task, 'auth', null);
-      this.#failTask(task, /network|ECONN|ENOTFOUND|ETIMEDOUT|fetch failed|offline/i.test(text) ? 'network' : 'error', 'the AI stopped with an error');
+      const kind = run.rateLimited ? 'limit' : classifyFailure(text, { carried: this.carries.has(task.id) });
+      // The redacted first line is for this task's own card only (failReason); every other surface gets the kind's fixed sentence.
+      const line = reasonLine([r.result, ...(Array.isArray(r.errors) ? r.errors : [])].find((x) => typeof x === 'string' && x.trim()) ?? '');
+      this.log.warn('task failed', { task_id: task.id, kind });
+      if (kind === 'limit') return this.#park(task, 'limit', run.rateLimited?.resetsAt ?? null);
+      if (kind === 'auth') return this.#park(task, 'auth', null, null, line);
+      this.#failTask(task, kind, line || KIND_SENTENCE[kind]);
     });
   }
 
@@ -1594,7 +1618,7 @@ export class TasksEngine extends EventEmitter {
     this.#setState(task, 'blocked', { blockedKind: 'plan' });
   }
 
-  #park(task, reason, resetsAt, detail = null) {
+  #park(task, reason, resetsAt, detail = null, line = null) {
     this.#setState(task, 'handing_over');
     this.#writeHandover(task, 'checkpoint_complete');
     this.#expireApprovals(task);
@@ -1614,7 +1638,7 @@ export class TasksEngine extends EventEmitter {
     }
     task.openAsk = { askId, kind: reason, text, options: null, choices, at: this.now() };
     this.#emit(task, 'ask', { askId, phase: 'asked', kind: reason, text, options: null, choices, answer: null });
-    this.#setState(task, 'parked', { parkReason: reason, ...(detail ? { failReason: detail } : {}) });
+    this.#setState(task, 'parked', { parkReason: reason, ...(detail || line ? { failReason: detail || line } : {}) });
     this.#schedule();
   }
 
@@ -2295,6 +2319,7 @@ export class TasksEngine extends EventEmitter {
       if (!LEASED.has(task.state)) continue;
       if (task.workedAt == null && ACTIVE.has(task.state) && (task.activeMs ?? 0) + now - task.stateSince >= REAL_WORK_MS) this.#markWork(task);
       this.#wallClock(task, now);
+      this.#noProgress(task, now);
       if (task.state === 'running' && task.lastActivity != null && now - task.lastActivity > T_QUIET_MS && !this.runs.get(task.id)?.toolInFlight) {
         this.#setState(task, 'quiet');
         continue;
