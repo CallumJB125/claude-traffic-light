@@ -9,6 +9,7 @@
 // Pure: main.js passes what it has already read.
 const { describeRequest, reveal } = require('./request-view.js');
 const Input = require('../hooks/pending-input.js');
+const Machine = require('../hooks/session-machine.js');
 
 const ASK_MS = 55000;
 const BLOCKED_KEEP_MS = 30 * 60 * 1000;
@@ -73,6 +74,11 @@ function fromSession(s, { pendingSessionIds = new Set(), now = Date.now() } = {}
       out.push({ ...base, id: `ask-${s.host}-${s.sessionId}`, kind: 'notification', notification_type: ask.type || null, tool: s.tool || null,
         title: text(ask.title, 200) || 'Needs your input', text: text(ask.message, 2000), options: [], created_at: ask.at || null });
     }
+  }
+  // A permission wait with no request file and no ask (Codex's PermissionRequest):
+  // shown at once for a blocking ask, after the transient hold otherwise.
+  if (s.signal === 'permission-ask' && !ask && !pendingSessionIds.has(s.sessionId) && Machine.presentSignal(s, now) === 'permission-ask') {
+    out.push({ ...base, id: `ask-${s.host}-${s.sessionId}`, kind: 'permission', tool: s.tool || null, title: 'Needs your permission', text: '', options: [], created_at: s.signalSince || s.updatedAt || null });
   }
   const b = s.blocked && typeof s.blocked === 'object' ? s.blocked : null;
   const bAt = b ? Date.parse(b.at) : NaN;
