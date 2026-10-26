@@ -185,7 +185,7 @@ test('real stdio MCP exposes scoped tools and performs an authenticated board ro
   assert.equal((await client.callTool({ name: 'plexiform_get_card', arguments: { card_id: 'card-one' } })).isError, true);
 });
 
-test('real Codex configuration commands preserve other settings and Undo removes only the owned server', { skip: !Install.findCodex() && 'Codex CLI is not installed' }, async (t) => {
+test('real Codex configuration commands preserve other settings and Undo removes only the owned server', { skip: (globalThis.__plexiformNoRealCli && 'real CLIs are blocked by test/support/no-real-cli.mjs') || (!Install.findCodex() && 'Codex CLI is not installed') }, async (t) => {
   const home = testTempDir('plexiform-codex-config-'); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   fs.mkdirSync(path.join(home, '.codex'));
   const file = Install.configPath('codex', home);

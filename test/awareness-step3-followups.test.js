@@ -171,7 +171,7 @@ test('L5: every node --test in the npm test scripts has a --test-timeout', () =>
   const root = path.join(__dirname, '..');
   for (const f of ['package.json', 'remote/package.json']) {
     const script = JSON.parse(fs.readFileSync(path.join(root, f), 'utf8')).scripts.test;
-    const runs = script.split('&&').map((s) => s.trim()).filter((s) => s.startsWith('node --test'));
+    const runs = script.split('&&').map((s) => s.trim()).filter((s) => /^node (--import \S+ )?--test\b/.test(s));
     assert.ok(runs.length > 0, f);
     // Node applies it to each test file's whole run too, and the slowest files take 40-50 s alone (more under the
     // full suite's load): 5 minutes bounds a hang without cutting a slow file off.
