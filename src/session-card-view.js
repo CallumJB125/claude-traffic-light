@@ -107,15 +107,15 @@ function sessionCard(session, { now = Date.now(), spend = null, teammate = null,
 // A short tag per row when two or more rows share a provider and project, so
 // two "Claude Code · notes-app" cards can be told apart before one is answered
 // or opened. rows: [{provider, project, tmux?, title?, id?, startedAt?}].
-// → one string per row ('' when its provider+project is unique). The tag is the
-// first of tmux window/pane, terminal title, 4-character session id, start
-// time that tells every row in the group apart; the id is the fallback.
-const TAG_SOURCES = [
-  (r) => str(r.tmux, 24),
-  (r) => str(r.title, 24),
-  (r) => str(r.id, 200).replace(/[^A-Za-z0-9]/g, '').slice(-4),
-  (r) => { const t = stamp(r.startedAt); return t ? `${String(new Date(t).getHours()).padStart(2, '0')}:${String(new Date(t).getMinutes()).padStart(2, '0')}` : ''; },
-];
+// → one string per row ('' when its provider+project is unique). Each tag stands
+// on its own row, so a session joining the group never relabels the others: the
+// session id's tail (4 characters, 6 then 8 only when two tails clash), with the
+// tmux window or terminal title in front when the row has one. Without an id,
+// the start time.
+const SUFFIX_LENGTHS = [4, 6, 8];
+const idOf = (r) => str(r.id, 200).replace(/[^A-Za-z0-9]/g, '');
+const startOf = (r) => { const t = stamp(r.startedAt); return t ? `${String(new Date(t).getHours()).padStart(2, '0')}:${String(new Date(t).getMinutes()).padStart(2, '0')}` : ''; };
+const unique = (v) => v.every(Boolean) && new Set(v).size === v.length;
 function disambiguate(rows) {
   const list = Array.isArray(rows) ? rows : [];
   const groups = new Map();
@@ -126,8 +126,16 @@ function disambiguate(rows) {
   const tags = list.map(() => '');
   for (const at of groups.values()) {
     if (at.length < 2) continue;
-    const pick = TAG_SOURCES.find((f) => { const v = at.map((i) => f(list[i])); return v.every(Boolean) && new Set(v).size === v.length; }) || TAG_SOURCES[2];
-    for (const i of at) tags[i] = pick(list[i]);
+    const ids = at.map((i) => idOf(list[i]));
+    const length = SUFFIX_LENGTHS.find((n) => unique(ids.map((x) => x.slice(-n)))) || SUFFIX_LENGTHS[SUFFIX_LENGTHS.length - 1];
+    const tails = ids.map((x) => x.slice(-length));
+    const clash = !unique(tails);
+    at.forEach((i, k) => {
+      const r = list[i];
+      const own = clash ? [tails[k], startOf(r)].filter(Boolean).join(' ') || str(r.tmux, 24) || str(r.title, 24) : tails[k] || startOf(r);
+      const extra = str(r.tmux, 24) || str(r.title, 24);
+      tags[i] = extra && own && extra !== own ? `${extra} ${own}` : own || extra;
+    });
   }
   return tags;
 }

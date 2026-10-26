@@ -96,6 +96,7 @@ const bubble = window.InputBubble.create(bubbleEl, {
     openAutoRule: (id) => window.trafficLight.openAutoRule({ inputId: id }),
     openWaiting: () => window.trafficLight.openWaiting(),
     openWidgetSettings: () => window.trafficLight.openWidgetSettings(),
+    dismissAskNotice: () => window.trafficLight.dismissAskNotice(),
     nudgeRule: (key) => window.trafficLight.openAutoRule({ nudgeKey: key }),
     nudgeMute: (key) => window.trafficLight.nudgeMute(key),
     setSessionScope: (id, mode) => window.trafficLight.setSessionScope(id, mode),

@@ -370,3 +370,120 @@ test('a permission input says how much of a long command it could not show', () 
   assert.equal(i.text.length + i.detail_cut, `echo ${'x'.repeat(25000)}`.length);
   assert.equal(PI.fromRequest({ ...req, toolInput: { command: 'ls' } }).detail_cut, 0);
 });
+
+// ── C-V: measured on Claude Code 2.1.310 (work/dogfood-lab/cv-report.md): the terminal dialog is not held, a late allow is harmless ──
+const AskPolicy = require('../hooks/ask-policy.js');
+const { spawnSync: spawnSyncOnce } = require('child_process');
+const waitFor = async (f, ms = 8000) => { const end = Date.now() + ms; while (Date.now() < end) { if (f()) return true; await new Promise((r) => setTimeout(r, 40)); } return f(); };
+
+test('C-V: the wait is 55 s, not shortened for a held dialog and no late-answer gate (there is no held branch left)', async () => {
+  assert.equal(AskPolicy.ASK_CEILING_MS, 55000);
+  assert.equal(AskPolicy.clampAskMs(undefined), 55000);
+  const src = fs.readFileSync(SET_STATUS, 'utf8') + fs.readFileSync(path.join(__dirname, '..', 'hooks', 'ask-policy.js'), 'utf8');
+  assert.doesNotMatch(src, /lsappinfo|frontmost|PERMISSION_DIALOG_HELD|LATE_ALLOW|FRONTMOST_APP|readOverrides|earlyStop/i);
+  const home = tmp();
+  const app = await fakeApp(home);
+  try {
+    const h = hook('permission-request', home, app.port, { session_id: 'c', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } }, { askMs: '', env: { CLAUDE_TRAFFIC_LIGHT_ASK_MS: '' } });
+    const req = await oneRequest(path.join(home, 'requests'));
+    const window = Date.parse(req.expiresAt) - Date.parse(req.createdAt);
+    assert.ok(window > 40000 && window <= 55000, `waits ${window} ms`);
+    h.kill('SIGKILL');
+  } finally { app.close(); }
+});
+
+test('the environment cannot stretch the wait, the installed timeout, or the AskUserQuestion budget', async () => {
+  assert.equal(AskPolicy.clampAskMs('999999999'), 55000);
+  assert.equal(AskPolicy.clampAskMs('-5'), 0);
+  assert.equal(AskPolicy.clampHookTimeoutMs('999999', 60000), 60000);
+  assert.equal(AskPolicy.clampHookTimeoutMs(undefined, 60000), 60000);
+  const home = tmp();
+  const app = await fakeApp(home);
+  try {
+    const h = hook('permission-request', home, app.port, { session_id: 'e', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } }, { askMs: 5000000 });
+    const req = await oneRequest(path.join(home, 'requests'));
+    const window = Date.parse(req.expiresAt) - Date.parse(req.createdAt);
+    assert.ok(window > 40000 && window <= 55000, `waits ${window} ms: not stretched`);
+    h.kill('SIGKILL');
+  } finally { app.close(); }
+});
+
+test('C-N: the first-use notice is the measured "not held" copy', () => {
+  assert.equal(AskPolicy.noticeText(), 'You can answer Claude’s permission prompts here or in the terminal.');
+});
+
+// A terminal No makes Claude Code SIGTERM the hook; its request must not outlive it as a card nobody can answer.
+for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+  test(`hook killed by ${sig}: its own request file and answer file are gone, and the hook dies of the signal`, async () => {
+    const home = tmp();
+    const app = await fakeApp(home);
+    try {
+      const h = hook('permission-request', home, app.port, { session_id: `k-${sig}`, cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } }, { askMs: 30000 });
+      const req = await oneRequest(path.join(home, 'requests'));
+      const file = path.join(home, 'requests', `${req.id}.json`);
+      const other = path.join(home, 'requests', 'other-hook.json');
+      fs.writeFileSync(other, JSON.stringify({ id: 'other-hook' })); // another hook's request: never touched
+      h.kill(sig);
+      const { code } = await h.done;
+      assert.ok(code === null || code === 128 + { SIGTERM: 15, SIGINT: 2, SIGHUP: 1 }[sig], `exit ${code}`);
+      assert.equal(await waitFor(() => !fs.existsSync(file)), true, 'the request file is removed');
+      assert.equal(fs.existsSync(other), true);
+      const { collect } = require('../src/pending-inputs.js');
+      assert.deepEqual(collect({ requests: fs.readdirSync(path.join(home, 'requests')).filter((f) => f.endsWith('.json') && f !== 'other-hook.json').map((f) => JSON.parse(fs.readFileSync(path.join(home, 'requests', f), 'utf8'))), now: Date.now() }), [], 'and so is the card');
+    } finally { app.close(); }
+  });
+}
+
+test('the watcher removes only the file whose id is the hook\'s own, and ends when the file is already gone', () => {
+  const home = tmp();
+  fs.mkdirSync(path.join(home, 'requests'));
+  const mine = path.join(home, 'requests', 'mine.json');
+  const theirs = path.join(home, 'requests', 'theirs.json');
+  fs.writeFileSync(mine, JSON.stringify({ id: 'mine' }));
+  fs.writeFileSync(theirs, JSON.stringify({ id: 'someone-elses-recreation' }));
+  const dead = 2 ** 22 + 12345; // no such process
+  const run = (file, id) => spawnSyncOnce(process.execPath, ['-e', AskPolicy.REAPER_SOURCE, file, `${file}.answer`, id, String(dead)], { timeout: 5000 });
+  assert.equal(run(mine, 'mine').status, 0);
+  assert.equal(fs.existsSync(mine), false);
+  assert.equal(run(theirs, 'theirs').status, 0);
+  assert.equal(fs.existsSync(theirs), true, 'a file another hook re-created under the name is left alone');
+  assert.equal(run(path.join(home, 'requests', 'gone.json'), 'gone').status, 0, 'already removed by the normal exit: ends at once');
+});
+
+test('answered in the terminal: when the tool call\'s entry leaves the session file the hook stops waiting and removes its card', async () => {
+  const home = tmp();
+  const app = await fakeApp(home);
+  try {
+    const payload = { session_id: 'w1', cwd: '/x', tool_name: 'Bash', tool_use_id: 'toolu_01abc', tool_input: { command: 'ls' } };
+    const started = Date.now();
+    const h = hook('permission-request', home, app.port, payload, { askMs: 30000 });
+    const req = await oneRequest(path.join(home, 'requests'));
+    const sessionFile = path.join(home, 'sessions', `${HOST}-w1.json`);
+    const s = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
+    assert.equal(s.claudeInputRequests.some((r) => r.id === 'toolu_01abc'), true, 'the hook recorded the call it is asking about');
+    runSync('tool-done', home, { ...payload, tool_response: {} }); // the terminal's Yes ran the tool: PostToolUse
+    const { out } = await h.done;
+    assert.equal(out, '', 'no decision: Claude Code already has its answer');
+    assert.ok(Date.now() - started < 8000, `stopped after ${Date.now() - started} ms`);
+    assert.equal(fs.existsSync(path.join(home, 'requests', `${req.id}.json`)), false);
+  } finally { app.close(); }
+});
+
+test('without a tool_use_id on the payload the hook waits as before (nothing to watch)', async () => {
+  const home = tmp();
+  const app = await fakeApp(home);
+  try {
+    const h = hook('permission-request', home, app.port, { session_id: 'w2', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } }, { askMs: 2500 });
+    const started = Date.now();
+    await oneRequest(path.join(home, 'requests'));
+    runSync('tool-done', home, { session_id: 'w2', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } });
+    await h.done;
+    assert.ok(Date.now() - started >= 2000, 'it kept waiting out its budget');
+  } finally { app.close(); }
+});
+
+test('hooks/ and src/ spawn no lsappinfo: the hook never asks which app is in front', () => {
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : /\.(c|m)?js$/.test(e.name) ? [path.join(d, e.name)] : []));
+  const hits = [...walk(path.join(__dirname, '..', 'hooks')), ...walk(path.join(__dirname, '..', 'src'))].filter((f) => /lsappinfo/.test(fs.readFileSync(f, 'utf8')));
+  assert.deepEqual(hits, []);
+});

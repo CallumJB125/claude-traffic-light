@@ -282,3 +282,86 @@ test('permission, answering off: says so in words, offers Open in terminal and a
     await expect(w).toHaveScreenshot('bubble-permission-off.png', SHOT);
   } finally { await hh.cleanup(); }
 });
+
+// PR 5b: answering is on for a new install, so the cards that become the default have to read right.
+const far = () => new Date(Date.now() + 40000).toISOString();
+
+test('stacked same-folder cards carry distinct tags on the bubble and on the Waiting page, light and dark', async () => {
+  F.hookSync(h, 'tool-use', { session_id: 'stk-aaaa1111', cwd: '/visual/notes-app', tool_name: 'Bash', tool_input: { command: 'ls' } });
+  F.hookSync(h, 'tool-use', { session_id: 'stk-bbbb2222', cwd: '/visual/notes-app', tool_name: 'Bash', tool_input: { command: 'ls' } });
+  F.staleRequest(h, { id: 'vis-stk-1', sessionId: 'stk-aaaa1111', cwd: '/visual/notes-app', tool: 'Bash', toolInput: { command: 'npm test' }, createdAt: minsAgo(0.5), expiresAt: far() });
+  F.staleRequest(h, { id: 'vis-stk-2', sessionId: 'stk-bbbb2222', cwd: '/visual/notes-app', tool: 'Bash', toolInput: { command: 'npm run lint' }, createdAt: minsAgo(0.3), expiresAt: far() });
+  await expect(widget.locator('.ib-item')).toHaveCount(2, { timeout: 10000 });
+  if (await widget.locator('.ib-body').count()) await widget.keyboard.press('Escape');
+  await expect(widget.locator('.ib-proj')).toHaveText(['notes-app (1111)', 'notes-app (2222)']);
+  await bubbleShot('bubble-stacked-tags.png');
+});
+
+test('the Waiting page shows the same distinct tags, light and dark', async () => {
+  const hh = await launchApp({ config: { askFromWidget: true }, extraArgs: ['--buddy', 'waiting'] });
+  try {
+    F.hookSync(hh, 'tool-use', { session_id: 'stk-aaaa1111', cwd: '/visual/notes-app', tool_name: 'Bash', tool_input: { command: 'ls' } });
+    F.hookSync(hh, 'tool-use', { session_id: 'stk-bbbb2222', cwd: '/visual/notes-app', tool_name: 'Bash', tool_input: { command: 'ls' } });
+    F.staleRequest(hh, { id: 'vis-stk-1', sessionId: 'stk-aaaa1111', cwd: '/visual/notes-app', tool: 'Bash', toolInput: { command: 'npm test' }, createdAt: minsAgo(0.5), expiresAt: far() });
+    F.staleRequest(hh, { id: 'vis-stk-2', sessionId: 'stk-bbbb2222', cwd: '/visual/notes-app', tool: 'Bash', toolInput: { command: 'npm run lint' }, createdAt: minsAgo(0.3), expiresAt: far() });
+    const page = await windowByFile(hh.app, 'waiting.html');
+    await expect(page.locator('.ib-item')).toHaveCount(2, { timeout: 10000 });
+    await expect(page.locator('.ib-proj')).toHaveText(['notes-app (1111)', 'notes-app (2222)']);
+    for (const colorScheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme, reducedMotion: 'reduce' });
+      await page.waitForTimeout(900);
+      await expect(page).toHaveScreenshot(`waiting-stacked-tags-${colorScheme}.png`, SHOT);
+    }
+  } finally { await hh.cleanup(); }
+});
+
+test('a flagged request: the first click arms "Allow anyway" and nothing is sent until the second', async () => {
+  F.staleRequest(h, { id: 'vis-flag', sessionId: 'flag', cwd: '/visual/app', tool: 'Bash', toolInput: { command: 'rm -rf build' }, createdAt: minsAgo(0.2), expiresAt: far() });
+  await expect(widget.locator('.ib-item.open')).toBeVisible({ timeout: 10000 });
+  await expect(widget.locator('.ib-warn')).toContainText('Needs a careful look');
+  await widget.waitForTimeout(900);
+  await widget.locator('[data-option="allow"]').click();
+  await expect(widget.locator('[data-option="allow"]')).toHaveText('Allow anyway');
+  await bubbleShot('bubble-allow-anyway.png');
+});
+
+test('a Codex ask is read-only: one sentence and Open, no buttons', async () => {
+  const f = path.join(h.home, 'sessions', `${F.HOST}-vis-codex.json`);
+  const at = new Date(Date.now() - 30000).toISOString();
+  fs.writeFileSync(f, JSON.stringify({ sessionId: 'vis-codex', host: F.HOST, source: 'codex', cwd: '/visual/api', signal: 'permission-ask', askKind: 'request', tool: 'Bash', signalSince: at, updatedAt: at, startedAt: at }));
+  await expect(widget.locator('.ib-item')).toBeVisible({ timeout: 15000 });
+  await expect(widget.locator('.ib-body [data-option]')).toHaveCount(0);
+  await bubbleShot('bubble-codex-ask.png');
+});
+
+test('the first-use notice shows once on a new install and Got it keeps it away', async () => {
+  const hh = await launchApp({ config: { askFromWidget: true, askNotice: 'pending' } });
+  try {
+    const w = await windowByFile(hh.app, 'index.html');
+    await w.emulateMedia({ reducedMotion: 'reduce' });
+    F.staleRequest(hh, { id: 'vis-notice', sessionId: 'notice', cwd: '/visual/app', tool: 'Bash', toolInput: { command: 'ls' }, createdAt: minsAgo(0.2), expiresAt: far() });
+    await expect(w.locator('.ib-notice')).toBeVisible({ timeout: 15000 });
+    await expect(w.locator('.ib-notice')).toContainText('answer Claude’s permission prompts here or in the terminal');
+    await w.waitForTimeout(900);
+    await expect(w).toHaveScreenshot('bubble-first-use-notice.png', SHOT);
+    await w.locator('.ib-notice button', { hasText: 'Got it' }).click();
+    await expect(w.locator('.ib-notice')).toHaveCount(0);
+    expect(JSON.parse(fs.readFileSync(path.join(hh.home, 'config.json'), 'utf8')).askNotice).toBe('seen');
+  } finally { await hh.cleanup(); }
+});
+
+test('a session that started before the permission hook went in says to restart it, with no buttons', async () => {
+  const hh = await launchApp({ config: { askFromWidget: true, askHooksAt: Date.now() + 3600000 } });
+  try {
+    const w = await windowByFile(hh.app, 'index.html');
+    await w.emulateMedia({ reducedMotion: 'reduce' });
+    F.hookSync(hh, 'session-start', { session_id: 'vis-pre', cwd: '/visual/app' });
+    F.hookSync(hh, 'notification', { session_id: 'vis-pre', cwd: '/visual/app', notification_type: 'permission_prompt', title: 'Permission needed', message: 'Claude needs your permission to use Bash' });
+    F.ageSession(hh, 'vis-pre', 60000);
+    await expect(w.locator('.ib-item')).toBeVisible({ timeout: 15000 });
+    await expect(w.locator('.ib-body [data-option]')).toHaveCount(0);
+    await expect(w.locator('.ib-body .ib-hint')).toContainText('restart this session to answer here');
+    await w.waitForTimeout(900);
+    await expect(w).toHaveScreenshot('bubble-pre-hook.png', SHOT);
+  } finally { await hh.cleanup(); }
+});

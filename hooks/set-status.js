@@ -538,7 +538,8 @@ function askFromWidgetOn() {
 }
 
 function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
-  const askMs = Math.min(Number(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS || 55000), maxAskMs);
+  const AskPolicy = require('./ask-policy.js');
+  const askMs = Math.min(AskPolicy.clampAskMs(process.env.CLAUDE_TRAFFIC_LIGHT_ASK_MS), maxAskMs);
   writeSession({ hostApp: detectHostApp(prevOnEntry?.hostApp), pid: claudePid(prevOnEntry?.claudePid) });
   const described = Input.describeHookInput(channel, data);
   // Nothing to bind an answer to: an unreadable payload must never become a
@@ -548,7 +549,7 @@ function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
   const Answer = require('./answer-file.js');
   // Stop waiting early enough to answer before Claude Code's own timeout
   // (the installed hook timeout) kills this hook.
-  const hookTimeoutMs = Number(process.env.CLAUDE_TRAFFIC_LIGHT_HOOK_TIMEOUT_MS) || hookTimeoutS * 1000;
+  const hookTimeoutMs = AskPolicy.clampHookTimeoutMs(process.env.CLAUDE_TRAFFIC_LIGHT_HOOK_TIMEOUT_MS, hookTimeoutS * 1000);
   const waitUntil = Math.min(Date.now() + askMs, HOOK_START + hookTimeoutMs - Answer.HOOK_MARGIN_MS);
   // Random, not a timestamp: parallel tool calls in one session would share
   // a millisecond id, and one answer would release the other call.
@@ -576,6 +577,8 @@ function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
   if (!(askMs > 0) || !registerKey(id, key.toString('hex'))) finish();
   fs.mkdirSync(REQUESTS_DIR, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(REQUESTS_DIR, 0o700); } catch {}
+  // Claude Code kills this hook when the terminal answers No (and at its timeout): a watcher removes the request then.
+  try { require('child_process').spawn(process.execPath, ['-e', AskPolicy.REAPER_SOURCE, reqFile, ansFile, id, String(process.pid)], { detached: true, stdio: 'ignore' }).unref(); } catch { /* the 60 s request expiry still clears it */ } // privacy-flow: hook-request-cleanup
   // Complete before its name appears: readers never see half a request.
   try { if (!Answer.createExclusive(reqFile, JSON.stringify(request, null, 2))) finish(); } catch { finish(); }
   // An answer that doesn't fit this request (wrong kind, missing answers) is
@@ -584,8 +587,22 @@ function waitForAnswer(channel, hookTimeoutS, maxAskMs = Infinity) {
   let answer = null;
   let answered = false;
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  // The terminal answered Yes: Claude Code does not kill the hook, but the tool's PostToolUse takes this tool call's
+  // entry out of the session file. Only watched when the payload names the call and the entry is there to begin with.
+  const watchId = typeof data?.tool_use_id === 'string' ? data.tool_use_id : null;
+  const owner = data?.agent_id ?? null;
+  const asking = () => Machine.claudeInputEntries(readPrev()).some((r) => r.id === watchId && r.agentId === owner);
+  let watching = false;
+  try { watching = !!watchId && asking(); } catch { watching = false; }
+  let nextWatch = Date.now() + 1000;
   while (Date.now() < waitUntil) {
     if (fs.existsSync(ansFile)) { answer = Answer.consumeAnswerDetail(REQUESTS_DIR, id, decisionHash, key, judge); answered = true; break; }
+    if (watching && Date.now() >= nextWatch) {
+      nextWatch = Date.now() + 1000;
+      let still = true;
+      try { still = asking(); } catch { still = true; }
+      if (!still) break; // answered in the terminal: stop waiting and take the card away
+    }
     Atomics.wait(sleeper, 0, 0, 150);
   }
   // The last word: either our timeout marker lands first, or an answer that

@@ -45,10 +45,17 @@ function banner(tools) {
 function quickOptions(input, now) {
   if (!InputView.canAnswer(input, now) || input.source !== 'hook' || typeof input.id !== 'string' || input.id.length > 100) return [];
   if (input.questions || input.schema || input.freeText) return [];
+  // A flagged request or a plan is read in the bubble or the terminal first: no one-click answer from a card.
+  if (input.kind === 'plan' || (input.kind === 'permission' && input.danger)) return [];
   return (Array.isArray(input.options) ? input.options : [])
     .filter((o) => o && typeof o.id === 'string' && o.id && o.id !== 'answers' && o.id.length <= 100 && typeof o.label === 'string' && o.label.trim())
     .slice(0, OPTIONS_MAX)
     .map((o) => ({ id: o.id, label: text(o.label.trim(), OPTION_LABEL_MAX) }));
+}
+
+function quickAction(input, now) {
+  const a = Answerability.answerability(input, { now }).action;
+  return a === 'answer' && input.kind === 'permission' && input.danger ? 'open' : a;
 }
 
 function needs(inputs, now, paused = null) {
@@ -56,7 +63,7 @@ function needs(inputs, now, paused = null) {
   return {
     paused: paused && typeof paused.text === 'string' ? { text: text(paused.text, 160), note: text(paused.note, 300), resumable: paused.resumable !== false } : null,
     total: queue.length,
-    items: queue.slice(0, LIST_MAX).map((i) => ({ id: typeof i.id === 'string' ? i.id.slice(0, 100) : '', kind: InputView.KIND_LABEL[i.kind] || Organise.headingOf('needs'), headline: InputView.headline(i), project: text(InputView.project(i), 100), age: InputView.ageText(i, now), late: InputView.escalated(i, now), options: quickOptions(i, now), action: Answerability.answerability(i, { now }).action })),
+    items: queue.slice(0, LIST_MAX).map((i) => ({ id: typeof i.id === 'string' ? i.id.slice(0, 100) : '', kind: InputView.KIND_LABEL[i.kind] || Organise.headingOf('needs'), headline: InputView.headline(i), project: text(InputView.project(i), 100), age: InputView.ageText(i, now), late: InputView.escalated(i, now), options: quickOptions(i, now), action: quickAction(i, now) })),
   };
 }
 

@@ -12,6 +12,7 @@
     'setting-off': 'Answering here is off',
     expired: 'The hook stopped waiting: answer in the terminal.',
     'session-reported': 'The session reported this itself, so Plexiform can’t send an answer. Answer it in the terminal.',
+    'pre-hook': 'Answer in the terminal (restart this session to answer here).',
     terminal: 'This is a dialog in the terminal. Answer it there.',
     blocked: 'Plexiform can’t decide this for you.',
     gone: 'It is no longer waiting.',
@@ -21,6 +22,7 @@
   const ERROR_TEXT = Object.freeze({
     off: 'Answering from here is off. Turn it on in Settings › Widget, or answer in the terminal.',
     'not allowed': 'This window can’t answer that. Answer it in the terminal.',
+    flagged: 'This one needs a careful look first: open it and click Allow anyway, or answer in the terminal.',
     invalid: 'That answer wasn’t sent because it didn’t look right. Answer it in the terminal.',
   });
   const LAST_RESORT = 'Could not send: answer it in the terminal.';
@@ -42,6 +44,7 @@
     if (hook && expired(request, now)) return { answerable: false, reason: 'expired', action: 'open' };
     if (hook) return on ? { answerable: true, reason: null, action: 'answer' } : { answerable: false, reason: 'setting-off', action: 'open' };
     if (request.source === 'tmux' || request.kind === 'dialog') return { answerable: false, reason: 'terminal', action: 'go-to-terminal' };
+    if (request.preHook === true) return { answerable: false, reason: 'pre-hook', action: 'go-to-terminal' };
     // Reported by the session, not by a blocking hook. Turning answering on can only help a Claude session.
     const claude = !request.provider || request.provider === 'claude';
     const choice = CHOICE_KINDS.has(request.kind) || (request.kind === 'notification' && request.notification_type === 'permission_prompt');

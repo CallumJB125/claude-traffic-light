@@ -108,7 +108,7 @@ function friendly(err, file, home) {
 
 function create({
   home, runtime, fs = nodeFs, platform = process.platform, dataDir = runtime.dataDir, sessionsDir = path.join(dataDir, 'sessions'),
-  claudeAskFromWidget = () => false, blocked = () => null, handoverSources = () => [], now = Date.now,
+  claudeAskFromWidget = () => false, onClaudeHooks = () => {}, blocked = () => null, handoverSources = () => [], now = Date.now,
   pathDirs = () => String(process.env.PATH || '').split(path.delimiter), run = execFile,
   // A GUI app's PATH is short; tools usually live in these.
   extraBinDirs = [path.join(home, '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'],
@@ -353,6 +353,7 @@ function create({
       return { ok: false, id, error: e.handled ? `${e.message} Your file is as it was.` : friendly(e, files[0], home) };
     }
     remember(id, { at: now(), files: entries.map((e) => ({ ...e, after: shaOf(e.file) })) });
+    if (id === 'claude') onClaudeHooks(true);
     return { ok: true, id, changed: true, files: entries.map((e) => ({ file: tilde(e.file, home), backup: e.backup ? tilde(e.backup, home) : null })), message: `Connected. ${t.after || 'Restart open sessions to pick up the hooks.'}` };
   }
 
@@ -373,6 +374,7 @@ function create({
       for (const e of entry.files) if (shaOf(e.file) !== e.after) return { ok: false, id, error: `${tilde(e.file, home)} has changed since Plexiform wrote it, so Undo left it alone.${e.backup ? ` Your original is at ${tilde(e.backup, home)}.` : ''}` };
       restore(entry.files);
       remember(id, null);
+      if (id === 'claude') onClaudeHooks(false);
       return { ok: true, id, message: 'Restored your original config.' };
     } catch (e) { return { ok: false, id, error: e.message }; }
   }
@@ -388,6 +390,7 @@ function create({
       else adapterOf(t).uninstall({ home, fs });
       if (isConnected(t)) return { ok: false, id, error: 'The hooks are still there after removing them.' };
       remember(id, entries.length ? { at: now(), files: entries.map((e) => ({ ...e, after: shaOf(e.file) })) } : null);
+      if (id === 'claude') onClaudeHooks(false);
       return { ok: true, id, message: 'Disconnected. Only Plexiform\'s own entries were removed.' };
     } catch (e) { return { ok: false, id, error: friendly(e, filesOf(t)[0] || '', home) }; }
   }

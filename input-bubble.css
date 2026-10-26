@@ -14,7 +14,9 @@
 .ib-row:hover { background: rgba(255, 255, 255, 0.05); }
 .ib-icon { flex: none; width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; color: var(--danger-text); }
 .kind-dialog .ib-icon, .kind-notification .ib-icon { color: var(--amber); }
-.ib-proj { flex: none; max-width: 38%; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ib-proj { flex: none; display: flex; max-width: 50%; font-weight: 700; white-space: pre; }
+.ib-proj-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ib-proj-tag { flex: none; }
 .ib-head { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: rgba(255, 255, 255, 0.85); font-family: ui-monospace, Menlo, monospace; font-size: 9px; }
 .ib-age { flex: none; color: var(--muted); font-size: 8.5px; font-variant-numeric: tabular-nums; }
 .ib-body { padding: 0 5px 5px; display: flex; flex-direction: column; gap: 3px; }
@@ -30,6 +32,7 @@
 .ib-opt.tone-yes { background: var(--green); border-color: var(--green); color: var(--bg); }
 .ib-opt.tone-risky { background: var(--panel-2); border-color: var(--green); color: #b9f0c0; }
 .ib-opt.tone-wide { background: var(--panel-2); border-color: #3f7a47; }
+.ib-opt.ib-anyway { background: var(--danger); border-color: var(--danger); color: #fff; }
 .ib-opt.tone-no { background: var(--danger); border-color: var(--danger); }
 .ib-opt.on { border-color: var(--accent); background: var(--accent-soft); }
 .ib-field { width: 100%; box-sizing: border-box; padding: 2px 5px; min-height: 18px; border: 1px solid var(--line-input); border-radius: var(--radius-sm); background: rgba(0, 0, 0, 0.3); color: var(--text); font: 9.5px var(--font); user-select: text; -webkit-user-select: text; }
@@ -56,7 +59,7 @@
 .ib-page .ib-item { background: var(--panel); }
 .ib-page .ib-row { padding: 8px 10px; gap: 8px; }
 .ib-page .ib-icon { width: 15px; height: 15px; }
-.ib-page .ib-proj { max-width: 30%; }
+.ib-page .ib-proj { max-width: 40%; }
 .ib-page .ib-head { font-size: var(--text-xs); color: var(--muted); }
 .ib-page .ib-age { font-size: var(--text-xs); }
 .ib-page .ib-body { padding: 0 10px 10px; gap: 6px; }

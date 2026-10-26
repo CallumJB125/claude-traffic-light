@@ -7,6 +7,8 @@ const CHILD_LIMIT = 64;
 const Machine = require('../hooks/session-machine');
 const RECENT_MS = 90_000;
 const PROVIDERS = Object.freeze({ codex: 'Codex', claude: 'Claude Code', 'claude-code': 'Claude Code', cursor: 'Cursor', gemini: 'Gemini', hermes: 'Hermes', opencode: 'OpenCode', copilot: 'Copilot' });
+// Claude Code's own hook (set-status.js) writes no source field; an unknown source reads as "Local AI".
+const providerLabel = (row) => (row.source == null ? PROVIDERS.claude : typeof row.source === 'string' && Object.hasOwn(PROVIDERS, row.source) ? PROVIDERS[row.source] : 'Local AI');
 const Organise = require('./work-organise');
 // Status words come from the five buckets (work-organise.js). A detail is kept
 // only where it says more than the bucket: it reads "Idle (ended)".
@@ -116,7 +118,7 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
     const tree = trees.find(t => t.ids.has(row.sessionId));
     rows.push({
       // Claude Code's own hook (set-status.js) writes no source field.
-      provider: row.source == null ? PROVIDERS.claude : typeof row.source === 'string' && Object.hasOwn(PROVIDERS, row.source) ? PROVIDERS[row.source] : 'Local AI',
+      provider: providerLabel(row),
       project: projectName(row.cwd),
       ...(tags && tags.get(row.sessionId) ? { tag: tags.get(row.sessionId) } : {}),
       ...groupOf(group, row),
@@ -141,4 +143,4 @@ function snapshot({ sessions = [], activity = {}, available = true, now = Date.n
     ...(trees.length ? { shared: trees.map(({ project, sessions: n, dirty }) => ({ project, sessions: n, dirty })) } : {}),
   };
 }
-module.exports = { snapshot, RECENT_MS, LIMIT, CHILD_LIMIT };
+module.exports = { snapshot, providerLabel, RECENT_MS, LIMIT, CHILD_LIMIT };

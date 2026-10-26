@@ -12,6 +12,7 @@ const Input = require('../hooks/pending-input.js');
 const Machine = require('../hooks/session-machine.js');
 const Organise = require('./work-organise.js');
 const { disambiguate } = require('./session-card-view.js');
+const { providerLabel } = require('./session-overview.js');
 
 const ASK_MS = 55000;
 const BLOCKED_KEEP_MS = 30 * 60 * 1000;
@@ -63,9 +64,16 @@ function answerFor(req, optionId, { answers, content, message } = {}) {
   return { decision: opt.answer.decision, extra };
 }
 
-function fromSession(s, { pendingSessionIds = new Set(), now = Date.now() } = {}) {
+// C-R: a Claude session that started before the blocking permission hook went in never loads it.
+function startedBeforeHook(s, askHooksAt) {
+  if (!(askHooksAt > 0) || (s.source && s.source !== 'claude')) return false;
+  const started = Date.parse(s.startedAt);
+  return Number.isFinite(started) && started < askHooksAt;
+}
+
+function fromSession(s, { pendingSessionIds = new Set(), now = Date.now(), askHooksAt = null } = {}) {
   const out = [];
-  const base = { v: 1, session: s.sessionId || null, host: s.host || null, cwd: s.cwd || null, source: 'session', answerable: false, actions: ['open'], expires_at: null, ...(s.source && s.source !== 'claude' ? { provider: s.source } : {}) };
+  const base = { v: 1, ...(startedBeforeHook(s, askHooksAt) ? { preHook: true } : {}), session: s.sessionId || null, host: s.host || null, cwd: s.cwd || null, source: 'session', answerable: false, actions: ['open'], expires_at: null, ...(s.source && s.source !== 'claude' ? { provider: s.source } : {}) };
   const ask = s.ask && typeof s.ask === 'object' ? s.ask : null;
   if (s.signal === 'permission-ask' && ask && !pendingSessionIds.has(s.sessionId)) {
     if (ask.kind === 'question') {
@@ -111,8 +119,8 @@ function fromDialog(d) {
   };
 }
 
-// The provider the overview shows is `source`, with Claude Code's own hook writing none.
-const providerOf = (s) => s.source || 'claude';
+// The label the overview prints, so two cards that read the same are grouped, whatever their raw `source`.
+const providerOf = providerLabel;
 
 // session id → short tag, only for sessions that share a provider and folder with another.
 function sessionTags(sessions) {
@@ -121,11 +129,11 @@ function sessionTags(sessions) {
   return new Map(rows.map((s, i) => [s.sessionId, tags[i]]).filter(([, t]) => t));
 }
 
-function collect({ requests = [], sessions = [], dialogs = [], now = Date.now() } = {}) {
+function collect({ requests = [], sessions = [], dialogs = [], now = Date.now(), askHooksAt = null } = {}) {
   const pendingSessionIds = new Set(requests.map((r) => r.sessionId));
   const items = [
     ...requests.map(fromRequest),
-    ...sessions.flatMap((s) => fromSession(s, { pendingSessionIds, now })),
+    ...sessions.flatMap((s) => fromSession(s, { pendingSessionIds, now, askHooksAt })),
   ];
   // A pane read beats the session's vaguer notification text for the same session.
   const dialogSessions = new Set(dialogs.map((d) => d.sessionId).filter(Boolean));

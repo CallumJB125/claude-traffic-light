@@ -48,3 +48,92 @@ test('the agent mail inbox preference syncs the poller, and only that preference
  applyConfigSideEffects({showWidget:true},{showWidget:false},d);assert.equal(calls,0);
  applyConfigSideEffects({agentMailInbox:false},{agentMailInbox:true},d);assert.equal(calls,1);
 });
+
+// ── C-P: the answering default, for new installs only ────────────────────────
+const fs = require('fs');
+const path = require('path');
+const { testTempDir } = require('./helpers/tmp');
+const AskDefault = require('../src/ask-default.js');
+const Claude = require('../adapters/claude-code.js');
+const Help = require('../help.js');
+const RT = require('../adapters/runtime.js').make({ execPath: null, hooksDir: path.join(__dirname, '..', 'hooks'), dataDir: path.join(__dirname, '..', '.tmp-data') });
+const written = (root) => JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'));
+const permissionHook = (settings) => !!settings.hooks.PermissionRequest;
+
+test('C-P: a brand-new install records askFromWidget true, and its hooks then carry the blocking permission hook', () => {
+  const root = testTempDir('ask-default-');
+  const firstRun = Help.shouldOnboard({ onboarded: false, helpShown: false, devRun: false });
+  assert.equal(AskDefault.migrate({ root, firstRun }), true);
+  const cfg = written(root);
+  assert.equal(cfg.askFromWidget, true);
+  assert.equal(cfg.claudeAutoConnect, undefined, 'nothing else is decided for the person: setup\'s Connect still holds the hooks');
+  assert.equal(permissionHook(Claude.apply({}, RT, { askFromWidget: cfg.askFromWidget })), true);
+  assert.equal(AskDefault.migrate({ root, firstRun }), null, 'written once; a second launch leaves it alone');
+});
+
+test('C-P: an existing config, with or without the key, is never flipped on', () => {
+  const root = testTempDir('ask-default-');
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ askFromWidget: false, showTasks: false }));
+  assert.equal(AskDefault.migrate({ root, firstRun: true }), null, 'a recorded choice stands, even on a first-run-looking folder');
+  assert.equal(written(root).askFromWidget, false);
+  const marked = testTempDir('ask-default-');
+  fs.writeFileSync(path.join(marked, 'config.json'), JSON.stringify({ showTasks: false }));
+  assert.equal(AskDefault.migrate({ root: marked, firstRun: Help.shouldOnboard({ onboarded: true, helpShown: false, devRun: false }) }), false, 'onboarded markers exist: existing install');
+  assert.deepEqual(written(marked), { showTasks: false, askFromWidget: false }, 'other keys untouched');
+  assert.equal(permissionHook(Claude.apply({}, RT, { askFromWidget: written(marked).askFromWidget })), false, 'its hooks are unchanged');
+  const legacy = testTempDir('ask-default-');
+  assert.equal(AskDefault.migrate({ root: legacy, firstRun: Help.shouldOnboard({ onboarded: false, helpShown: true, devRun: false }) }), false, 'an install that saw the old Help');
+});
+
+test('C-P (G1): a rename-retry launch (old-product install found, no markers yet) is an existing install', () => {
+  const root = testTempDir('ask-default-');
+  assert.equal(AskDefault.migrate({ root, firstRun: true, renameFound: true }), false);
+  assert.equal(written(root).askFromWidget, false);
+});
+
+test('C-P: claudeAutoConnect already set, no markers: an existing install', () => {
+  const root = testTempDir('ask-default-');
+  fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ claudeAutoConnect: true }));
+  assert.equal(AskDefault.migrate({ root, firstRun: true }), false);
+  assert.deepEqual(written(root), { claudeAutoConnect: true, askFromWidget: false });
+});
+
+test('C-P: a dev run writes nothing; every reader\'s own default stays false', () => {
+  const root = testTempDir('ask-default-');
+  assert.equal(AskDefault.migrate({ root, firstRun: false, devRun: true }), null);
+  assert.equal(fs.existsSync(path.join(root, 'config.json')), false);
+  const src = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+  assert.match(src('main.js'), /^\s*askFromWidget: false,/m);
+  assert.match(src('mcp-server.js'), /^\s*askFromWidget: false,/m);
+});
+
+test('C-P/G2: before setup\'s Connect a new install installs no hook at all', () => {
+  const start = Help.firstRunStart({ firstRun: true, claudeAutoConnect: undefined });
+  assert.equal(start.holdClaude, true, 'main saves claudeAutoConnect:false, so claudeAutoConnect() is false and installHooks never runs');
+  assert.equal(start.setLoginItem, false);
+});
+
+test('C-P (a): any config.json that was already there, even an empty or corrupt one with no markers, is an existing install', () => {
+  for (const body of ['{}', '{"showTasks":false}', '{not json']) {
+    const root = testTempDir('ask-default-');
+    fs.writeFileSync(path.join(root, 'config.json'), body);
+    assert.equal(AskDefault.migrate({ root, firstRun: true }), false, body);
+    assert.notEqual(written(root).askFromWidget, true, body);
+  }
+});
+
+test('C-P (b): our hook already in Claude\'s settings with the data folder gone is an existing install; foreign hooks and no settings are not', () => {
+  const home = testTempDir('ask-default-home-');
+  fs.mkdirSync(path.join(home, '.claude'));
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  const before = JSON.stringify({ hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: `node "${path.join(__dirname, '..', 'hooks', 'set-status.js')}" stop` }] }] } });
+  fs.writeFileSync(settingsFile, before);
+  const root = testTempDir('ask-default-');
+  assert.equal(AskDefault.migrate({ root, home, firstRun: true }), false);
+  assert.equal(fs.readFileSync(settingsFile, 'utf8'), before, 'detection writes nothing');
+  const foreign = testTempDir('ask-default-home-');
+  fs.mkdirSync(path.join(foreign, '.claude'));
+  fs.writeFileSync(path.join(foreign, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'echo done' }] }] } }));
+  assert.equal(AskDefault.migrate({ root: testTempDir('ask-default-'), home: foreign, firstRun: true }), true, 'someone else\'s hooks do not make it existing');
+  assert.equal(AskDefault.migrate({ root: testTempDir('ask-default-'), home: testTempDir('ask-default-home-'), firstRun: true }), true, 'a second user with no Claude settings is new');
+});

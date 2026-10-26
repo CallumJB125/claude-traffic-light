@@ -11,10 +11,10 @@ function handoverSources() {
   return ['claude', 'codex', 'gemini', 'cursor', 'hermes'];
 }
 
-function wire({ ipcMain, shell, clipboard, home, runtime, rootDir, fromPage, askFromWidget, ephemeral, openPage, fs, onClaudeConsent = () => {} }) {
+function wire({ ipcMain, shell, clipboard, home, runtime, rootDir, fromPage, askFromWidget, ephemeral, openPage, fs, onClaudeConsent = () => {}, onClaudeHooks }) {
   const tools = AiTools.create({
     home, runtime, ...(fs ? { fs } : {}), dataDir: rootDir, sessionsDir: path.join(rootDir, 'sessions'),
-    claudeAskFromWidget: askFromWidget, handoverSources,
+    claudeAskFromWidget: askFromWidget, ...(onClaudeHooks ? { onClaudeHooks } : {}), handoverSources,
     blocked: () => (ephemeral ? 'Plexiform is running from a temporary copy or a disk image. Move it to Applications first, or the hooks would point at a path that disappears.' : null),
   });
   // Connecting Claude Code on this page is consent to its re-connect; Disconnect or Undo withdraws it.

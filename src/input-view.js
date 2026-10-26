@@ -32,11 +32,25 @@
     return typeof input?.tag === 'string' && input.tag ? `${name} (${input.tag})` : name;
   }
 
+  // What a screen reader says for the folder: "notes-app, session ending 1111", not "notes-app (1111)" read digit by digit.
+  function spoken(input) {
+    const name = Organise.projectOf({ cwd: typeof input?.cwd === 'string' ? input.cwd : null }).heading;
+    const tag = typeof input?.tag === 'string' ? input.tag.trim() : '';
+    if (!tag) return name;
+    const last = tag.split(' ').pop();
+    return /^[A-Za-z0-9]+$/.test(last) ? `${name}, session ending ${last}` : `${name}, ${tag}`;
+  }
+
   function headline(input) {
     const i = input || {};
     let h;
     switch (i.kind) {
-      case 'permission': h = `${i.tool || 'tool'}: ${i.headline || oneLine(i.text) || i.title || ''}`; break;
+      case 'permission': {
+        const what = i.headline || oneLine(i.text);
+        // A session-reported wait names no tool ('Tool' is the placeholder): the title says it all.
+        h = !what && (!i.tool || i.tool === 'Tool') ? i.title || '' : `${i.tool || 'tool'}: ${what || i.title || ''}`;
+        break;
+      }
       case 'plan': h = `Plan: ${oneLine(i.text) || 'ready for approval'}`; break;
       case 'question': h = oneLine(i.questions?.[0]?.question || i.text) || i.title; break;
       case 'blocked': h = 'Needs your decision'; break;
@@ -93,6 +107,14 @@
     if (!canAnswer(input, now)) return null;
     const id = input.kind === 'elicitation' ? 'decline' : 'deny';
     return (input.options || []).some((o) => o.id === id) ? id : null;
+  }
+
+  // C-F: an allow that main flagged (danger set), and a plan approved with edits auto-accepted, take a second click.
+  // Plain requests stay one click; deny, decline and cancel never ask.
+  function needsConfirm(input, optionId) {
+    if (!input) return false;
+    if (input.kind === 'plan') return optionId === 'allow-accept-edits';
+    return input.kind === 'permission' && !!input.danger && /^allow/.test(String(optionId));
   }
 
   // How risky each option is, for styling and so a UI can order them.
@@ -193,8 +215,8 @@
   // Screen-reader name for a row.
   function rowLabel(input, now = Date.now()) {
     const age = ageText(input, now);
-    return `${KIND_LABEL[input?.kind] || NEEDS} in ${project(input)}: ${headline(input)}${age ? `, ${age}` : ''}${expired(input, now) ? ', answer in terminal' : ''}`;
+    return `${KIND_LABEL[input?.kind] || NEEDS} in ${spoken(input)}: ${headline(input)}${age ? `, ${age}` : ''}${expired(input, now) ? ', answer in terminal' : ''}`;
   }
 
-  return { ESCALATE_MS, KIND_LABEL, answerability: (input, now = Date.now()) => Answerability.answerability(input, { now }), project, headline, ageMs, ageText, escalated, expired, canAnswer, canOpen, primary, denyOption, optionTone, questionAnswer, formFields, formContent, visible, queue, step, rowLabel };
+  return { ESCALATE_MS, KIND_LABEL, answerability: (input, now = Date.now()) => Answerability.answerability(input, { now }), project, headline, ageMs, ageText, spoken, escalated, expired, canAnswer, canOpen, primary, needsConfirm, denyOption, optionTone, questionAnswer, formFields, formContent, visible, queue, step, rowLabel };
 });

@@ -68,9 +68,9 @@ test('disambiguate: only a provider+project collision gets a tag; id is the fall
   ];
   assert.deepEqual(CardView.disambiguate(rows), ['1111', '2222', '', '']);
   const tmux = rows.map((r, i) => ({ ...r, tmux: i < 2 ? `win${i}` : undefined }));
-  assert.deepEqual(CardView.disambiguate(tmux).slice(0, 2), ['win0', 'win1']);
+  assert.deepEqual(CardView.disambiguate(tmux).slice(0, 2), ['win0 1111', 'win1 2222'], 'the id tail always; the window as extra text');
   const same = rows.map((r) => ({ ...r, tmux: 'w' }));
-  assert.deepEqual(CardView.disambiguate(same).slice(0, 2), ['1111', '2222']);
+  assert.deepEqual(CardView.disambiguate(same).slice(0, 2), ['w 1111', 'w 2222']);
   assert.deepEqual(CardView.disambiguate([]), []);
 });
 
@@ -102,4 +102,50 @@ test('the start-time tag is local HH:MM', () => {
   const at = new Date(2026, 9, 26, 9, 5).getTime();
   const rows = [{ provider: 'Codex', project: 'p', startedAt: at }, { provider: 'Codex', project: 'p', startedAt: at + 120000 }];
   assert.deepEqual(CardView.disambiguate(rows), ['09:05', '09:07']);
+});
+
+// C-D (PR 5b hard gate): the production path runs Rules.classifySession before collect.
+test('classifySession → collect: two same-folder asks keep distinct tags, and grouping follows the label the overview prints', () => {
+  const classify = (s) => R.classifySession(s, { now: NOW, isGone: () => false, workingStaleMs: 360000, waitingStaleMs: 4 * 3600000 });
+  const raw = [codexAsk({ sessionId: 'aaaa1111', cwd: '/w/notes-app' }), codexAsk({ sessionId: 'bbbb2222', cwd: '/w/notes-app' })];
+  const sessions = raw.map((s) => classify(s).session);
+  assert.ok(sessions.every(Boolean));
+  const inputs = PendingInputs.collect({ sessions, now: NOW });
+  assert.equal(inputs.length, 2);
+  assert.equal(new Set(inputs.map((i) => i.tag)).size, 2, inputs.map((i) => i.tag).join());
+  assert.equal(Home.needs(inputs, NOW).total, 2);
+  // Two unknown sources print as "Local AI": one group, so they are told apart.
+  const odd = [codexAsk({ source: 'foo', sessionId: 'x-1111', cwd: '/w/app' }), codexAsk({ source: 'bar', sessionId: 'y-2222', cwd: '/w/app' })];
+  const tags = PendingInputs.collect({ sessions: odd, now: NOW }).map((i) => i.tag);
+  assert.deepEqual(tags.slice().sort(), ['1111', '2222']);
+});
+
+test('tags: a clash in the 4-character tail lengthens to 6 then 8, and a tmux window or title is extra text on a stable tag', () => {
+  const a = { provider: 'Codex', project: 'p', id: 'x-ab1111' };
+  const b = { provider: 'Codex', project: 'p', id: 'y-cd1111' };
+  assert.deepEqual(CardView.disambiguate([a, b]), ['ab1111', 'cd1111']);
+  const c = { provider: 'Codex', project: 'p', id: 'z-ab1111' };
+  const d = { provider: 'Codex', project: 'p', id: 'q-ab1111' };
+  const [t1, t2] = CardView.disambiguate([{ ...c, id: 'aa-1111ab1111' }, { ...d, id: 'bb-2222ab1111' }]);
+  assert.notEqual(t1, t2);
+  assert.ok(t1.length >= 6);
+  const solo = CardView.disambiguate([{ ...a, id: 'k-aaaa1111', tmux: 'win0' }, { ...b, id: 'k-bbbb2222' }]);
+  assert.deepEqual(solo, ['win0 1111', '2222'], 'the other row\'s tag does not change when this one has a window');
+  assert.deepEqual(CardView.disambiguate([{ ...a, id: 'k-aaaa1111' }, { ...b, id: 'k-bbbb2222' }, { provider: 'Codex', project: 'p', id: 'k-cccc3333' }]).slice(0, 2), ['1111', '2222'], 'a third session joining does not relabel the first two');
+});
+
+// C-R
+test('a session that started before the permission hook went in shows "restart this session", no buttons', () => {
+  const HOOK_AT = NOW - 60_000;
+  const old = codexAsk({ source: undefined, askKind: 'notification', ask: { kind: 'notification', title: 'Claude needs your permission', message: 'Run ls?', type: 'permission_prompt', at: iso(5000) }, startedAt: new Date(NOW - 3_600_000).toISOString() });
+  const fresh = codexAsk({ source: undefined, sessionId: 'c2', askKind: 'notification', ask: { kind: 'notification', title: 'Claude needs your permission', message: 'Run ls?', type: 'permission_prompt', at: iso(5000) }, startedAt: new Date(NOW - 10_000).toISOString() });
+  const A = require('../src/answerability.js');
+  const [o] = PendingInputs.collect({ sessions: [old], now: NOW, askHooksAt: HOOK_AT });
+  const [f] = PendingInputs.collect({ sessions: [fresh], now: NOW, askHooksAt: HOOK_AT });
+  assert.equal(o.preHook, true);
+  const ans = A.answerability({ ...o, answering: true }, { now: NOW });
+  assert.deepEqual([ans.answerable, ans.reason, ans.action], [false, 'pre-hook', 'go-to-terminal']);
+  assert.equal(A.reasonText('pre-hook'), 'Answer in the terminal (restart this session to answer here).');
+  assert.equal(f.preHook, undefined, 'started after the install: not pre-hook');
+  assert.equal(PendingInputs.collect({ sessions: [old], now: NOW })[0].preHook, undefined, 'no install time recorded: nothing claimed');
 });
