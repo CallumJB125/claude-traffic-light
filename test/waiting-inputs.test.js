@@ -481,3 +481,9 @@ test('without a tool_use_id on the payload the hook waits as before (nothing to 
     assert.ok(Date.now() - started >= 2000, 'it kept waiting out its budget');
   } finally { app.close(); }
 });
+
+test('hooks/ and src/ spawn no lsappinfo: the hook never asks which app is in front', () => {
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : /\.(c|m)?js$/.test(e.name) ? [path.join(d, e.name)] : []));
+  const hits = [...walk(path.join(__dirname, '..', 'hooks')), ...walk(path.join(__dirname, '..', 'src'))].filter((f) => /lsappinfo/.test(fs.readFileSync(f, 'utf8')));
+  assert.deepEqual(hits, []);
+});
