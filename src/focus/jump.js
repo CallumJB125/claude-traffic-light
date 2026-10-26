@@ -1,6 +1,7 @@
 // The click → tab decision, free of Electron so it can be tested directly.
 // `focus` is focusSession, `activate` is the old activate-the-app jump.
 const { ADAPTERS } = require('./index.js');
+const Ids = require('./ids.js');
 const ADOPT_MS = 2500;
 
 // A session reported from another machine: its host is a name the user typed
@@ -68,7 +69,30 @@ function createJumper({ localHost, platform, focus, activate, explainer, adopt =
       if (r.denied) explainer.onDenied(r.needs);
       return cantJump(r, session);
     }
+    if (platform === 'linux' && here) return runLinux(session, folderHint, preferApp, stale);
     return stale() ? null : activate(folderHint, preferApp);
+  }
+
+  // Linux: tmux's pane first (the adapters that answer for it), then the
+  // terminal window by the tmux client's PID, then by window title. A session
+  // inside tmux that tmux can't place is never guessed at by title.
+  async function runLinux(session, folderHint, preferApp, stale) {
+    let r = null;
+    if (session && session.terminal) {
+      const ctx = { onNeeds: (needs) => explainer.onNeeds(needs), isCancelled: stale, log };
+      r = await focus(session, ctx);
+      if (stale()) return null;
+      if (r.ok) {
+        const adapter = ADAPTERS.find((a) => a.id === String(r.adapter).split('+').pop());
+        return { app: r.app || session.hostApp || (adapter && adapter.app) || 'terminal', exact: !!r.exact, ...(r.byFolder ? { byFolder: true } : {}) };
+      }
+      log(`${r.adapter || 'no adapter'}: ${r.reason || 'failed'}`);
+      if (Ids.inTmux(session) && !r.selected) return cantJump(r, session);
+    }
+    const found = await activate(folderHint, preferApp, r && r.selected ? session : null);
+    if (stale()) return null;
+    if (found && found.cant) return { app: null, exact: false, cant: found.cant };
+    return found || cantJump(r, session);
   }
 
   // A repeat click on the same target shares the jump in flight. A click for

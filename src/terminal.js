@@ -32,7 +32,7 @@ function escapeForAppleScript(str) {
 }
 
 // `preferApp`: the app the session's hook recorded (hostApp), tried first.
-function activateTerminalApp(folderHint, preferApp = null) {
+function activateTerminalApp(folderHint, preferApp = null, session = null) {
   if (IS_WIN) {
     // Best effort: AppActivate matches a window title containing the folder,
     // falling back to a terminal's own name.
@@ -49,7 +49,8 @@ function activateTerminalApp(folderHint, preferApp = null) {
     const exec = (file, args) => new Promise((resolve, reject) => execFile(file, args, { timeout: 2000 }, (err) => { // privacy-flow: terminal-jump
       if (err && err.code === 'ENOENT') reject(err); else resolve(!err);
     }));
-    return LinuxActivate.activate(folderHint, exec);
+    const run = (file, args) => new Promise((resolve) => execFile(file, args, { timeout: 2000 }, (err, stdout) => resolve({ ok: !err, stdout: String(stdout || '') }))); // privacy-flow: terminal-jump
+    return LinuxActivate.activate(folderHint, exec, session, run);
   }
   return new Promise((resolve) => {
     const hint = escapeForAppleScript((folderHint || '').toLowerCase());
