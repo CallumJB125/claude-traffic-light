@@ -1,0 +1,4 @@
+model_provider = "my-gw"
+[model_providers."my-gw"]
+name = "Gateway"
+base_url = "https://gw.example.com/v1"

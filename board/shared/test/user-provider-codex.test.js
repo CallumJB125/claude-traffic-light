@@ -1,0 +1,185 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { codexProvider, CONFIG_TOML_MAX_BYTES, BURST_CODEX_MARKERS } from '../user-provider.cjs';
+import { codexConfig } from '../../runner/backends/codex.js';
+
+const HOME = '/home/u';
+const CH = `${HOME}/.codex`;
+const FIX = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'codex-config');
+const fixture = (name) => fs.readFileSync(path.join(FIX, name), 'utf8');
+
+function run(toml, { env = {}, loginEnv = {} } = {}) {
+  const home = (env.CODEX_HOME || loginEnv.CODEX_HOME || CH).replace(/^~/, HOME);
+  const files = toml == null ? {} : { [`${home}/config.toml`]: toml };
+  return codexProvider({ env, loginEnv, home: HOME, readFile: (p) => files[p] ?? null });
+}
+const keyPaths = (r) => r.overrides.map((o) => o.slice(0, o.indexOf('=')));
+const PLEXLAB = `model_provider = "plexlab"
+[model_providers.plexlab]
+name = "Lab"
+base_url = "https://lab.example.com/v1"
+env_key = "PLEXLAB_KEY"
+`;
+
+test('1 no config.toml: no provider, no overrides', () => {
+  const r = run(null);
+  assert.equal(r.providerId, null);
+  assert.deepEqual(r.overrides, []);
+  assert.deepEqual(r.unsupported, []);
+});
+
+test('2 custom provider with env_key', () => {
+  const r = run(PLEXLAB, { env: { PLEXLAB_KEY: 'from-app' }, loginEnv: { PLEXLAB_KEY: 'from-login' } });
+  assert.equal(r.providerId, 'plexlab');
+  assert.deepEqual(keyPaths(r).sort(), ['model_provider', 'model_providers.plexlab.base_url', 'model_providers.plexlab.env_key', 'model_providers.plexlab.name']);
+  assert.equal(r.cliEnv.PLEXLAB_KEY, 'from-app');
+  assert.equal(run(PLEXLAB, { loginEnv: { PLEXLAB_KEY: 'from-login' } }).cliEnv.PLEXLAB_KEY, 'from-login');
+  const none = run(PLEXLAB);
+  assert.deepEqual(none.missingEnv, ['PLEXLAB_KEY']);
+  assert.deepEqual(none.cliEnv, {});
+  assert.ok(!r.overrides.join('\n').includes('from-app'));
+});
+
+test('3 profile resolution', () => {
+  const r = run(`profile = "lab"
+model_provider = "openai"
+[profiles.lab]
+model_provider = "plexlab"
+model = "m1"
+[model_providers.plexlab]
+base_url = "https://lab.example.com/v1"
+`);
+  assert.equal(r.providerId, 'plexlab');
+  assert.equal(r.model, 'm1');
+  assert.ok(r.overrides.includes('model="m1"'));
+});
+
+test('4 http_headers and experimental_bearer_token are translated; secrets stay out of overrides', () => {
+  const r = run(`model_provider = "gw"
+[model_providers.gw]
+base_url = "https://gw.example.com/v1"
+experimental_bearer_token = "bearer-secret-1"
+http_headers = { "X-Org" = "org-secret-2" }
+`);
+  assert.equal(r.cliEnv.PLEXIFORM_PROVIDER_KEY, 'bearer-secret-1');
+  assert.equal(r.cliEnv.PLEXIFORM_PROVIDER_H1, 'org-secret-2');
+  const o = r.overrides.join('\n');
+  assert.ok(o.includes('env_key="PLEXIFORM_PROVIDER_KEY"'));
+  assert.ok(o.includes('{X-Org="PLEXIFORM_PROVIDER_H1"}'));
+  assert.ok(!o.includes('bearer-secret-1') && !o.includes('org-secret-2'));
+});
+
+test('5 env_key with experimental_bearer_token together is unsupported', () => {
+  const r = run(`model_provider = "gw"
+[model_providers.gw]
+env_key = "K"
+experimental_bearer_token = "bearer-secret-1"
+`, { env: { K: 'v' } });
+  assert.ok(r.unsupported.some((u) => u.code === 'codex_env_key_and_bearer_token'));
+  assert.ok(!JSON.stringify(r).includes('bearer-secret-1'));
+});
+
+test('6 built-in id: a table is unsupported, bare model_provider is carried', () => {
+  const t = run(`model_provider = "openai"
+[model_providers.openai]
+base_url = "https://evil.example.com"
+`);
+  assert.ok(t.unsupported.some((u) => u.code === 'codex_builtin_provider_override'));
+  assert.ok(!t.overrides.some((o) => o.includes('evil.example.com')));
+  const bare = run('model_provider = "ollama"\n');
+  assert.deepEqual(bare.overrides, ['model_provider="ollama"']);
+  assert.deepEqual(bare.unsupported, []);
+});
+
+test('7 a secret in query_params is unsupported', () => {
+  const tok = `sk-ant-api03-${'A1b2C3d4'.repeat(8)}`;
+  const r = run(`model_provider = "gw"
+[model_providers.gw]
+base_url = "https://gw.example.com"
+query_params = { api-version = "1", api_key = "${tok}" }
+`);
+  assert.ok(r.unsupported.some((u) => u.code === 'codex_query_params_secret'));
+  assert.ok(!JSON.stringify(r).includes(tok));
+});
+
+test('8 parse error: unsupported with line/column only, never a default provider', () => {
+  const r = run('model_provider = "gw"\nsecret = "FAKE-TOKEN-ghp_abcdefghijklmnopqrstuvwxyz0123456789" oops\n');
+  assert.equal(r.providerId, null);
+  assert.deepEqual(r.overrides, []);
+  assert.ok(r.unsupported.some((u) => u.code === 'codex_config_unparseable' && /line 2/.test(u.message)));
+  assert.ok(!JSON.stringify(r).includes('FAKE-TOKEN'));
+});
+
+test('9 override key paths are disjoint from codexConfig key paths', () => {
+  const cfg = codexConfig({ cwd: '/w', cacheDir: '/c', dataDir: '/d', gitDir: '/g', commonGitDir: '/g', env: {}, platform: 'linux' });
+  const theirs = (Array.isArray(cfg) ? cfg : Object.values(cfg).flat()).filter((x) => typeof x === 'string').map((x) => x.slice(0, x.indexOf('=')));
+  assert.ok(theirs.length > 0);
+  const r = run(PLEXLAB.replace('model_provider', 'model = "m"\nmodel_provider'));
+  assert.ok(r.overrides.length > 0);
+  for (const k of keyPaths(r)) {
+    assert.ok(['model_provider', 'model', 'model_providers'].includes(k.split('.')[0]), k);
+    for (const t of theirs) assert.ok(k !== t && !t.startsWith(`${k}.`) && !k.startsWith(`${t}.`), `${k} vs ${t}`);
+  }
+});
+
+test('10 mcp_servers, hooks, notify, projects, sandbox_mode are never looked at', () => {
+  const r = run(fixture('ignored-tables.toml'));
+  const s = JSON.stringify(r);
+  for (const bad of ['evil', 'danger-full-access', 'trusted']) assert.ok(!s.includes(bad), bad);
+  assert.deepEqual(r.dropped, []);
+  assert.equal(r.providerId, 'gw');
+});
+
+test('11 unknown provider field is dropped by name', () => {
+  const r = run(`model_provider = "gw"
+[model_providers.gw]
+base_url = "https://gw.example.com"
+mystery_flag = "zzz"
+`);
+  assert.deepEqual(r.dropped, ['mystery_flag']);
+  assert.ok(!JSON.stringify(r).includes('zzz'));
+});
+
+test('12 syntax forms give the same provider and base URL', () => {
+  for (const [file, id] of [['syntax-dotted.toml', 'gw'], ['syntax-inline.toml', 'gw'], ['syntax-quoted.toml', 'my-gw'], ['syntax-multiline.toml', 'gw'], ['syntax-comments.toml', 'gw']]) {
+    const r = run(fixture(file));
+    assert.equal(r.providerId, id, file);
+    assert.ok(r.overrides.some((o) => /base_url="https:\/\/gw\.example\.com\/v1"$/.test(o)), file);
+    assert.deepEqual(r.unsupported, [], file);
+  }
+  assert.ok(run(fixture('syntax-quoted.toml')).overrides.some((o) => o.startsWith('model_providers."my-gw".base_url=') || o.startsWith('model_providers.my-gw.base_url=')));
+});
+
+const burstFixture = path.join(FIX, 'burst-codex-enable.redacted.toml');
+// Waiting on the lab-captured fixture (plan §8); PR 3 cannot merge until this is live.
+if (fs.existsSync(burstFixture)) {
+  test('13 Burst codex-enable fixture', () => {
+    assert.ok(BURST_CODEX_MARKERS.length > 0);
+    const r = run(fs.readFileSync(burstFixture, 'utf8'));
+    assert.equal(r.burst.detected, true);
+    assert.deepEqual(r.unsupported, []);
+  });
+} else test.todo('13 Burst codex-enable fixture');
+
+test('13b with no markers, burst is never detected', () => {
+  assert.deepEqual(BURST_CODEX_MARKERS, []);
+  assert.equal(run(PLEXLAB).burst.detected, false);
+});
+
+test('14 size cap runs before parse', () => {
+  const r = run('= not toml\n'.repeat(Math.ceil((CONFIG_TOML_MAX_BYTES + 1000) / 11)));
+  assert.ok(r.unsupported.some((u) => u.code === 'codex_config_too_large'));
+  assert.ok(!r.unsupported.some((u) => u.code === 'codex_config_unparseable'));
+});
+
+test('15 CODEX_HOME: ~ expands, relative is unsupported', () => {
+  const ok = run(PLEXLAB, { env: { CODEX_HOME: '~/cx' } });
+  assert.equal(ok.codexHome, `${HOME}/cx`);
+  assert.equal(ok.providerId, 'plexlab');
+  const rel = run(PLEXLAB, { env: { CODEX_HOME: 'cx' } });
+  assert.ok(rel.unsupported.some((u) => u.code === 'codex_home_relative'));
+  assert.equal(rel.providerId, null);
+});
