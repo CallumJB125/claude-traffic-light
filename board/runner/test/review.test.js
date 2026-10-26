@@ -257,7 +257,7 @@ test('the review asked the carry for a no-shell site', () => {
 // Lead decision (DGX /proc lab): the Codex reviewer gets no command tool at all, so nothing in it can read the CLI env.
 test('reviewArgs: codex review disables every shell and exec tool and sub-agents, before the stdin marker', () => {
   const a = reviewArgs('codex', { cwd: '/tmp/x' });
-  for (const f of ['shell_tool', 'unified_exec', 'unified_exec_tty', 'shell_snapshot', 'code_mode_host', 'multi_agent']) assert.equal(a[a.indexOf(f) - 1], '--disable', f);
+  for (const f of ['shell_tool', 'unified_exec', 'unified_exec_tty', 'shell_snapshot', 'code_mode_host', 'multi_agent', 'view_image']) assert.equal(a[a.indexOf(f) - 1], '--disable', f);
   // Lab: include_apply_patch_tool is an unknown field under --strict-config (exit 1, nothing runs).
   assert.ok(a.includes('--strict-config'));
   assert.ok(!a.some((x) => x.includes('include_apply_patch_tool')));

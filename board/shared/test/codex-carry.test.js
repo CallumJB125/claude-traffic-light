@@ -317,6 +317,19 @@ test('(b) falls back to the (a) refusal: header values, Windows, no or relative 
   }
 });
 
+test('R2-4: when the rename fails, writeKey leaves no .tmp key behind and the carry falls back to the refusal', { skip: process.platform === 'win32' }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pxck-'));
+  const file = path.join(dir, CODEX_KEY_FILE);
+  try {
+    // A non-empty directory where the key file goes: the write succeeds, the rename over it can't.
+    fs.mkdirSync(file);
+    fs.writeFileSync(path.join(file, 'x'), '');
+    const r = await withKey({ keyViaAuthFile: true }).prepare({ mode: 'shell', keyFile: file });
+    assert.deepEqual(r.failure, { kind: 'auth', reason: KEY_NOT_KEPT });
+    assert.deepEqual(fs.readdirSync(dir), [CODEX_KEY_FILE], 'no .tmp file holding the key');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('the start-up sweep removes a left-over codex-provider.key (and its .tmp) except for kept runs', async () => {
   const { sweepKeyFiles } = await import('../claude-carry.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pxsw-'));

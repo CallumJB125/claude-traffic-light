@@ -28,7 +28,8 @@ const SHELL_KEYS = ['HOME', 'PATH', 'LANG', 'TMPDIR'];
 // The reviewer reads only the diff on stdin, so it gets no command tool at all (the same names the owned chat
 // disables, src/codex-app-server.js): with no shell, nothing can read the CLI's env through /proc or ps.
 // multi_agent too: a spawned sub-agent would get its own shell (lab: its tools stay with the shell features off).
-export const REVIEW_NO_SHELL = Object.freeze(['shell_tool', 'unified_exec', 'unified_exec_tty', 'shell_snapshot', 'code_mode_host', 'multi_agent']);
+// view_image too: it reads any path it is given, so it is a file read the diff-only reviewer never needs.
+export const REVIEW_NO_SHELL = Object.freeze(['shell_tool', 'unified_exec', 'unified_exec_tty', 'shell_snapshot', 'code_mode_host', 'multi_agent', 'view_image']);
 const HEAD = /^(?:[0-9a-f]{40}|[A-Za-z0-9][A-Za-z0-9._/-]{0,199})$/;
 const KEY = /^[A-Za-z][A-Za-z0-9]{0,15}-[0-9]{1,9}$/;
 const okRef = (r) => typeof r === 'string' && HEAD.test(r) && !r.includes('..') && !r.endsWith('.lock');
@@ -46,9 +47,10 @@ export function scrubDiff(diff, { home = null } = {}) {
  * config, rules, MCP servers, hooks or web search.
  * UNVERIFIED against a real Codex CLI: the exec flags follow backends/codex.js;
  * --sandbox read-only is documented but not exercised here.
- * provider: the user's Codex provider (board/shared/codex-carry.cjs) → its -c values and model. Its key values
- * travel in the CLI env only, and the shell gets none of that env (inherit="none"): only HOME, PATH, LANG and
- * TMPDIR from env, so read-only git and rg still work.
+ * provider: the user's Codex provider (board/shared/codex-carry.cjs) → its -c values and model. The review is a
+ * noshell site: a key goes through the carry's key file when it has one, else it stays in the CLI env, which is safe
+ * only because REVIEW_NO_SHELL leaves the reviewer no command tool. Any shell would get none of that env
+ * (inherit="none"): only HOME, PATH, LANG and TMPDIR from env.
  */
 export function reviewArgs(ai, { model = null, budgetUsd = null, cwd, provider = null, env = {} } = {}) {
   if (ai === 'claude') return DiffReview.buildArgs({ model, maxBudgetUsd: budgetUsd }).map((a) => (a === 'text' ? 'json' : a));
