@@ -412,42 +412,51 @@ test('C-N: the first-use notice is the measured "not held" copy', () => {
   assert.equal(AskPolicy.noticeText(), 'You can answer Claude’s permission prompts here or in the terminal.');
 });
 
-// A terminal No makes Claude Code SIGTERM the hook; its request must not outlive it as a card nobody can answer.
-for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
-  test(`hook killed by ${sig}: its own request file and answer file are gone, and the hook dies of the signal`, async () => {
-    const home = tmp();
-    const app = await fakeApp(home);
-    try {
-      const h = hook('permission-request', home, app.port, { session_id: `k-${sig}`, cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } }, { askMs: 30000 });
-      const req = await oneRequest(path.join(home, 'requests'));
-      const file = path.join(home, 'requests', `${req.id}.json`);
-      const other = path.join(home, 'requests', 'other-hook.json');
-      fs.writeFileSync(other, JSON.stringify({ id: 'other-hook' })); // another hook's request: never touched
-      h.kill(sig);
-      const { code } = await h.done;
-      assert.ok(code === null || code === 128 + { SIGTERM: 15, SIGINT: 2, SIGHUP: 1 }[sig], `exit ${code}`);
-      assert.equal(await waitFor(() => !fs.existsSync(file)), true, 'the request file is removed');
-      assert.equal(fs.existsSync(other), true);
-      const { collect } = require('../src/pending-inputs.js');
-      assert.deepEqual(collect({ requests: fs.readdirSync(path.join(home, 'requests')).filter((f) => f.endsWith('.json') && f !== 'other-hook.json').map((f) => JSON.parse(fs.readFileSync(path.join(home, 'requests', f), 'utf8'))), now: Date.now() }), [], 'and so is the card');
-    } finally { app.close(); }
-  });
-}
+const requestReader = (home) => require('../src/signal-server.js')({ rootDir: home, sessionsDir: path.join(home, 'sessions'), requestsDir: path.join(home, 'requests'), aggregateState: () => ({ sessions: [] }), broadcastStatus: () => {}, port: 0, app: { on: () => {} } }).readRequests;
+const stubRequest = (home, id, extra) => {
+  const R = require('../hooks/answer-file.js');
+  const r = { id, sessionId: 's', host: 'claude', cwd: '/x', tool: 'Bash', kind: 'permission', channel: 'PermissionRequest', summary: 'ls', toolInput: { command: 'ls' }, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 50000).toISOString(), ...extra };
+  r.decisionHash = R.decisionHashOf(r);
+  fs.mkdirSync(path.join(home, 'requests'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'requests', `${id}.json`), JSON.stringify(r));
+  fs.writeFileSync(path.join(home, 'requests', `${id}.answer`), '{}');
+  return r;
+};
 
-test('the watcher removes only the file whose id is the hook\'s own, and ends when the file is already gone', () => {
+// A terminal No makes Claude Code SIGTERM the hook; its request must not outlive it as a card nobody can answer.
+test('hook killed by SIGTERM: the next readRequests drops the card and both files; a live pid, an EPERM pid and a pid-less request stay', async () => {
   const home = tmp();
-  fs.mkdirSync(path.join(home, 'requests'));
-  const mine = path.join(home, 'requests', 'mine.json');
-  const theirs = path.join(home, 'requests', 'theirs.json');
-  fs.writeFileSync(mine, JSON.stringify({ id: 'mine' }));
-  fs.writeFileSync(theirs, JSON.stringify({ id: 'someone-elses-recreation' }));
-  const dead = 2 ** 22 + 12345; // no such process
-  const run = (file, id) => spawnSyncOnce(process.execPath, ['-e', AskPolicy.REAPER_SOURCE, file, `${file}.answer`, id, String(dead)], { timeout: 5000 });
-  assert.equal(run(mine, 'mine').status, 0);
-  assert.equal(fs.existsSync(mine), false);
-  assert.equal(run(theirs, 'theirs').status, 0);
-  assert.equal(fs.existsSync(theirs), true, 'a file another hook re-created under the name is left alone');
-  assert.equal(run(path.join(home, 'requests', 'gone.json'), 'gone').status, 0, 'already removed by the normal exit: ends at once');
+  const app = await fakeApp(home);
+  try {
+    const h = hook('permission-request', home, app.port, { session_id: 'k1', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } }, { askMs: 30000 });
+    const req = await oneRequest(path.join(home, 'requests'));
+    assert.equal(typeof req.pid, 'number', 'the hook writes its own pid');
+    const file = path.join(home, 'requests', `${req.id}.json`);
+    fs.writeFileSync(path.join(home, 'requests', `${req.id}.answer`), '{}');
+    const readRequests = requestReader(home);
+    assert.ok(readRequests().some((r) => r.id === req.id), 'alive: kept');
+    h.kill('SIGTERM');
+    await h.done;
+    assert.deepEqual(readRequests().filter((r) => r.id === req.id), [], 'dead: dropped');
+    assert.equal(fs.existsSync(file), false);
+    assert.equal(fs.existsSync(path.join(home, 'requests', `${req.id}.answer`)), false);
+  } finally { app.close(); }
+});
+
+test('readRequests keeps a request whose pid is alive, one that answers EPERM, and one with no pid (older hook)', () => {
+  const home = tmp();
+  stubRequest(home, 'claude-live', { pid: process.pid });
+  stubRequest(home, 'claude-eperm', { pid: 424242 });
+  stubRequest(home, 'claude-nopid', {});
+  stubRequest(home, 'claude-dead', { pid: 2 ** 22 + 12345 });
+  const kill = process.kill;
+  process.kill = (pid, sig) => { if (pid === 424242) throw Object.assign(new Error('not permitted'), { code: 'EPERM' }); return kill.call(process, pid, sig); };
+  try {
+    const ids = requestReader(home)().map((r) => r.id).sort();
+    assert.deepEqual(ids, ['claude-eperm', 'claude-live', 'claude-nopid']);
+    assert.equal(fs.existsSync(path.join(home, 'requests', 'claude-dead.json')), false);
+    assert.equal(fs.existsSync(path.join(home, 'requests', 'claude-dead.answer')), false);
+  } finally { process.kill = kill; }
 });
 
 test('answered in the terminal: when the tool call\'s entry leaves the session file the hook stops waiting and removes its card', async () => {
@@ -479,6 +488,20 @@ test('without a tool_use_id on the payload the hook waits as before (nothing to 
     runSync('tool-done', home, { session_id: 'w2', cwd: '/x', tool_name: 'Bash', tool_input: { command: 'ls' } });
     await h.done;
     assert.ok(Date.now() - started >= 2000, 'it kept waiting out its budget');
+  } finally { app.close(); }
+});
+
+test('answered-in-terminal watch fails toward waiting: an unreadable session file is not an answer', async () => {
+  const home = tmp();
+  const app = await fakeApp(home);
+  try {
+    const payload = { session_id: 'w3', cwd: '/x', tool_name: 'Bash', tool_use_id: 'toolu_03', tool_input: { command: 'ls' } };
+    const h = hook('permission-request', home, app.port, payload, { askMs: 3500 });
+    const started = Date.now();
+    await oneRequest(path.join(home, 'requests'));
+    fs.rmSync(path.join(home, 'sessions', `${HOST}-w3.json`), { force: true });
+    await h.done;
+    assert.ok(Date.now() - started >= 3000, `kept waiting (${Date.now() - started} ms)`);
   } finally { app.close(); }
 });
 
