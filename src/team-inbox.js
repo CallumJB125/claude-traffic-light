@@ -8,10 +8,11 @@
   const NOTIFY_KINDS = Object.freeze(['mention', 'handoff_request']);
   const NOTIFY_EVERY_MS = 30_000;
   const MAX_ROWS = 200;
-  const KIND = Object.freeze({ mention: 'mention', reply: 'reply', moment: 'moment', handoff_request: 'handoff', handoff_answer: 'handoff', input_answered: 'reply' });
-  const DESTINATION = Object.freeze({ mention: 'overview', reply: 'overview', moment: 'overview', handoff: 'sessions' });
+  const KIND = Object.freeze({ mention: 'mention', reply: 'reply', moment: 'moment', handoff_request: 'handoff', handoff_answer: 'handoff', input_answered: 'reply', board_link_request: 'link' });
+  // A link request opens Sessions, where "Link a repo to a board" is (organised views PR 7).
+  const DESTINATION = Object.freeze({ mention: 'overview', reply: 'overview', moment: 'overview', handoff: 'sessions', link: 'sessions' });
   const str = (v, max) => typeof v === 'string' && v.length <= max ? v : '';
-  const who = (ref) => str(ref?.by_name, 120) || (str(ref?.by, 100) ? 'A teammate' : 'Someone');
+  const who = (ref) => str(ref?.by_name, 120) || str(ref?.requester_name, 120) || (str(ref?.by, 100) ? 'A teammate' : 'Someone');
   const what = (ref) => str(ref?.title, 200) || str(ref?.label, 120) || str(ref?.excerpt, 200) || '';
   function title(item) {
     const by = who(item.ref), thing = what(item.ref);
@@ -22,6 +23,7 @@
       case 'handoff_request': return `${by} handed you a card${thing ? `: ${thing}` : ''}`;
       case 'handoff_answer': return `${by} answered your hand-off${thing ? `: ${thing}` : ''}`;
       case 'input_answered': return `${by} answered your session's question${thing ? `: ${thing}` : ''}`;
+      case 'board_link_request': return `${by} asked you to put ${str(item.ref?.repo_short, 80) || 'a project'} on a team board`;
       default: return `${by} needs you to look`;
     }
   }

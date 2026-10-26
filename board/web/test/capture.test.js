@@ -45,3 +45,12 @@ test('the Idle column offers one button that carries every live idle card id, an
  assert.equal(btn(idleColumn([], model([]))), undefined);
  assert.equal(btn(idleColumn([mk('a')], { ...model([]), readOnly: true })), undefined);
 });
+test('PR 7: a captured card says which project its work came from (the repo short name the hub already has), and nothing without one', () => {
+ const v=observed({repo:{id:'r1',short_name:'claude-traffic-light'}}), node=card({view:v,face:displayFace(v),elapsed_ms:0},model([]));
+ const foot=byClass(node,'card-foot').map(textOf).join(' ');
+ assert.match(foot,/^From claude-traffic-light · existing session, details only\./);
+ const bare=observed({repo:null}), n2=card({view:bare,face:displayFace(bare),elapsed_ms:0},model([]));
+ assert.match(byClass(n2,'card-foot').map(textOf).join(' '),/^Existing session · details only\./);
+ const odd=observed({repo:{id:'r2',short_name:'<img src=x>'}}), n3=card({view:odd,face:displayFace(odd),elapsed_ms:0},model([]));
+ assert.equal(byAttr(n3,'src').length,0,'text only');
+});

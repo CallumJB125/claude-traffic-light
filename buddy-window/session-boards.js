@@ -15,10 +15,11 @@ const FORBIDDEN = 'Only a team owner or admin can link a repository. Ask one of 
 // hubs(): signed-in hub origins. local: { localRequest }. getRoutes: work-capture's catalog read.
 function createSessionBoards({ hubs, clientFor, userOf, local, getRoutes, routeKey, log = () => {} }) {
   const known = new Map(); // key -> board
+  let teamList = []; // [{key, name, role, boards:[{key, name}]}], from the last boards()
 
   async function boards() {
     known.clear();
-    const out = [];
+    const out = [], teamsSeen = [];
     const add = (b, label) => { const key = keyOf(b); known.set(key, b); out.push({ key, label, kind: b.kind }); };
     let mine = null;
     try {
@@ -31,17 +32,25 @@ function createSessionBoards({ hubs, clientFor, userOf, local, getRoutes, routeK
       if (!r?.ok || !Array.isArray(r.teams)) continue;
       for (const t of r.teams.slice(0, 32)) {
         if (!ID.test(t?.id ?? '') || !['owner', 'admin', 'member', 'viewer'].includes(t.role)) continue;
+        const team = { key: keyOf({ kind: 'team-of', hub, team_id: t.id }), name: String(t.name ?? 'Team').slice(0, 60), role: t.role, boards: [] };
+        known.set(team.key, { kind: 'team-of', hub, team_id: t.id, role: t.role });
+        teamsSeen.push(team);
         for (const b of (Array.isArray(t.boards) ? t.boards : []).slice(0, 32)) {
           if (!ID.test(b?.id ?? '')) continue;
+          team.boards.push({ key: keyOf({ kind: 'team', hub, team_id: t.id, board_id: b.id }), name: String(b.name ?? 'Board').slice(0, 60) });
           add({ kind: 'team', hub, team_id: t.id, board_id: b.id, role: t.role, user_id: userOf(hub)?.id ?? null }, `${String(t.name ?? 'Team').slice(0, 60)} / ${String(b.name ?? 'Board').slice(0, 60)}${t.role === 'viewer' ? ' (read only)' : ''}`);
         }
       }
     }
+    teamList = teamsSeen;
     return out;
   }
+  // Each signed-in team with the person's role and its boards' keys (the Link form's keys): for the routing strip.
+  async function teams() { await boards(); return teamList.map((t) => ({ ...t, boards: t.boards.map((b) => ({ ...b })) })); }
   const lookup = async (key) => { if (!known.has(key)) await boards(); return known.get(key) ?? null; };
 
-  // Link a repository (its canonical name, e.g. github.com/org/app) to a board.
+  // Link a repository (its canonical name, e.g. github.com/org/app) to a board. A success says which kind of board
+  // it was, from the board the link used: the caller must not ask known later, as a refresh may have emptied it.
   async function linkRepo(key, canonical) {
     const b = await lookup(key);
     if (!b || typeof canonical !== 'string') return { ok: false, error: 'That board is no longer available. Try again.' };
@@ -54,7 +63,7 @@ function createSessionBoards({ hubs, clientFor, userOf, local, getRoutes, routeK
         if (!id) { const all = await local.localRequest('GET', '/api/repos'); id = (all.repos ?? []).find((r) => r.canonical_url === canonical)?.id ?? null; }
         if (!id) return { ok: false, error: 'Could not add this repository to My board.' };
         const added = await local.localRequest('POST', `/api/boards/${b.board_id}/repos`, { repo_id: id });
-        return added.ok ? { ok: true } : { ok: false, error: 'Could not link this repository to My board.' };
+        return added.ok ? { ok: true, kind: 'local' } : { ok: false, error: 'Could not link this repository to My board.' };
       }
       if (b.role === 'viewer') return { ok: false, needsAdmin: true, error: FORBIDDEN };
       const c = clientFor(b.hub);
@@ -68,8 +77,19 @@ function createSessionBoards({ hubs, clientFor, userOf, local, getRoutes, routeK
       }
       const added = await c.addBoardRepo(b.team_id, b.board_id, id);
       if (added.status === 403 || added.code === 'FORBIDDEN') return { ok: false, needsAdmin: true, error: FORBIDDEN };
-      return added.ok ? { ok: true } : { ok: false, error: added.error || 'Could not link this repository to the board.' };
+      return added.ok ? { ok: true, kind: 'team' } : { ok: false, error: added.error || 'Could not link this repository to the board.' };
     } catch (e) { log('[session-boards] link failed', e && e.code); return { ok: false, error: 'Could not reach the board. Try again.' }; }
+  }
+
+  // "Ask an admin" (organised views PR 7): the team's owners and admins are asked to link the repository. Only its
+  // short name is sent, only to a team the person is a plain member of (an admin links it; a viewer cannot ask).
+  async function askAdmin(teamKey, repoShort) {
+    const t = known.get(teamKey) ?? (await boards(), known.get(teamKey));
+    if (t?.kind !== 'team-of' || t.role !== 'member' || typeof repoShort !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(repoShort)) return { ok: false, error: 'Refresh, then ask again.' };
+    try {
+      const r = await clientFor(t.hub).linkRequest(t.team_id, repoShort);
+      return r?.ok ? { ok: true, sent: Number(r.sent) || 0, ...(r.duplicate ? { duplicate: true } : {}) } : { ok: false, error: r?.error || 'Could not ask the team. Try again.' };
+    } catch (e) { log('[session-boards] link request failed', e && e.code); return { ok: false, error: 'Could not reach the team. Try again.' }; }
   }
 
   // The work-capture route key for (board, repo): present only when the repo is linked to that team board.
@@ -109,7 +129,7 @@ function createSessionBoards({ hubs, clientFor, userOf, local, getRoutes, routeK
 
   const destinationOf = (key) => { const b = known.get(key); return b?.kind === 'team' ? { kind: 'team', hub: b.hub, team_id: b.team_id, board_id: b.board_id } : { kind: 'local' }; };
 
-  return { boards, linkRepo, captureKey, searchCards, destinationOf, lookup };
+  return { boards, teams, askAdmin, linkRepo, captureKey, searchCards, destinationOf, lookup };
 }
 
 module.exports = { createSessionBoards, FORBIDDEN };

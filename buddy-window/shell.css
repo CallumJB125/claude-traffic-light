@@ -195,3 +195,11 @@ ul { padding: 0; list-style: none; }
 .btn:active:enabled { transform: scale(.98); }
 @media (max-height: 650px) { .sidebar-brand { padding-bottom: 12px; } .nav-heading { margin-top: 12px; } .nav-item { min-height: 34px; } .nav-child { min-height: 30px; } }
 @media (prefers-reduced-motion: reduce) { .btn:active:enabled { transform: none; } }
+/* Organised views PR 7: This Mac → Automatic work cards, one row per project */
+.acct-subhead { margin: 14px 0 6px; font-size: var(--text-sm); font-weight: 600; color: var(--text); }
+.acct-table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); font-size: var(--text-sm); }
+.acct-table th, .acct-table td { text-align: left; vertical-align: top; padding: 10px 12px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.acct-table thead th { border-top: 0; color: var(--faint); font-weight: 600; }
+.acct-table td small { display: block; margin-top: 2px; }
+.acct-routing form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.acct-routing .field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

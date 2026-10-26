@@ -54,6 +54,8 @@ test('reported Codex work creates a team card, unmatched work creates a personal
     await expect.poll(()=>app.evaluate(()=>global.__clientTestBuddy.devPage('document.body.textContent'))).toContain('Automatic work cards');
     const text=await app.evaluate(()=>global.__clientTestBuddy.devPage('document.body.textContent'));
     expect(text).toContain('My board (this Mac)');expect(text).toContain('Fix automatic routing');expect(text).not.toContain(user.token);
+    // PR 7: the repo's only team board shows in the per-project table, with no per-task select left.
+    expect(text).toContain('Where each project’s new work goes');expect(text).toContain('Its only team board, so new work goes there.');expect(text).not.toContain('Save default');
     await emit('personal-work','tool-use',temp,'Updated personal task');
     await expect.poll(()=>app.evaluate(()=>global.__clientTestBuddy.devPage('document.body.textContent'))).toContain('Updated personal task');
   }finally{await app?.evaluate(()=>global.__clientTestBuddy.stop()).catch(()=>{});await app?.close();await x.h.close();fs.rmSync(temp,{recursive:true,force:true});}

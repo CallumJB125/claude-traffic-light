@@ -307,6 +307,71 @@ function linkPanel(host, preset, onDone) {
     host.append(fp.el, field('Board', board), node('p', d.scopeRule, 'muted'), go, out);
   });
 }
+// Organised views PR 7: where each live session's project's new work goes, with the first-time question, Change
+// and Link. main words every row (src/work-routing-view.js); the page only shows them and sends back opaque keys.
+let routingGeneration = 0;
+async function loadRouting() {
+  const box = document.getElementById('routing'), list = box.querySelector('.body'), out = document.getElementById('routing-status');
+  const mine = ++routingGeneration;
+  let data = null;
+  try { data = await api.routing?.(); } catch { data = null; }
+  if (mine !== routingGeneration) return;
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  list.replaceChildren(); box.hidden = !rows.length;
+  const act = async (run) => {
+    for (const b of box.querySelectorAll('button, select')) b.disabled = true;
+    let r = null; try { r = await run(); } catch { r = null; }
+    if (r?.ok) { out.textContent = ''; await loadRouting(); if (r.text) say(out, r.text, true); }
+    else { for (const b of box.querySelectorAll('button, select')) b.disabled = false; say(out, r?.text || 'Could not save. Try again.', false); }
+  };
+  for (const row of rows) {
+    const li = node('li', '', `routing-row routing-${row.state}`);
+    // The sentence as shown, and as read out: "goes to" for the arrow (#62 review).
+    const text = node('p', '', 'routing-text'), seen = node('span', row.text), heard = node('span', row.label || row.text, 'sr-only');
+    seen.setAttribute('aria-hidden', 'true'); text.append(seen, heard); li.append(text);
+    if (row.note) li.append(node('p', row.note, 'muted'));
+    const actions = node('div', '', 'routing-actions');
+    const choices = (row.choices ?? []).map(c => button(c.label, () => act(() => api.routeChoose(row.repo, c.key))));
+    // An unlinked project an admin can link: the Link picker first, "Keep on My board" after it (#62 review).
+    const linkFirst = row.state === 'unlinked' && !!row.link?.length;
+    if (!linkFirst) actions.append(...choices);
+    // A board picker revealed by one button: Change (new work goes elsewhere) or Link (admins: put it on a team board).
+    const picker = (label, options, go, goLabel) => {
+      const sel = select(options.map(o => ({ value: o.key, label: o.label })), 'Nothing to choose');
+      const cur = options.find(o => o.current); if (cur) sel.value = cur.key;
+      const wrap = node('div', '', 'routing-pick'); wrap.hidden = true;
+      wrap.append(field(label, sel), button(goLabel, () => act(() => go(sel.value))));
+      return wrap;
+    };
+    if (!row.choices && row.change?.length) {
+      const pick = picker('New work goes to', row.change, key => api.routeChoose(row.repo, key), 'Save');
+      actions.append(button('Change', () => { pick.hidden = !pick.hidden; }), pick);
+    }
+    if (row.link?.length) {
+      const pick = picker('Team board', row.link, key => api.routeLink(row.repo, key), 'Link');
+      if (row.note) pick.hidden = false; else actions.append(button('Put on a team board…', () => { pick.hidden = !pick.hidden; }));
+      actions.append(pick);
+      if (linkFirst) actions.append(...choices);
+    }
+    // Ask an admin (a plain member): the team to ask, then one button; main says what was sent.
+    if (row.ask?.length) {
+      const team = select(row.ask.map(t => ({ value: t.key, label: t.label })), 'No team');
+      const wrap = node('div', '', 'routing-pick routing-ask'); wrap.hidden = !row.note;
+      const go = button('Ask an admin', async () => {
+        for (const b of box.querySelectorAll('button, select')) b.disabled = true;
+        let r = null; try { r = await api.routeAsk(row.repo, team.value); } catch { r = null; }
+        for (const b of box.querySelectorAll('button, select')) b.disabled = false;
+        say(out, r?.text || 'Could not ask. Try again.', !!r?.ok);
+      });
+      if (row.ask.length > 1) wrap.append(field('Team', team));
+      wrap.append(go);
+      if (!row.note) actions.append(button('Ask an admin…', () => { wrap.hidden = !wrap.hidden; }));
+      actions.append(wrap);
+    }
+    if (actions.childNodes.length) li.append(actions);
+    list.append(li);
+  }
+}
 function startPanel(host) {
   loadSetup(true).then(d => {
     host.replaceChildren();
@@ -504,7 +569,7 @@ document.getElementById('session-search').addEventListener('input', applyLocalFi
 for (const id of ['session-provider', 'session-freshness']) document.getElementById(id).addEventListener('change', applyLocalFilters);
 for (const id of ['session-reset', 'session-empty-reset']) document.getElementById(id).addEventListener('click', resetLocalFilters);
 document.getElementById('start-session-shortcut').addEventListener('click', () => { const add = document.getElementById('add'), host = document.getElementById('panel-start'); add.open = true; addTouched = true; host.hidden = false; startPanel(host); host.scrollIntoView?.({ block: 'center' }); });
-document.getElementById('refresh').addEventListener('click', () => { editing = false; refresh({ clear: true }); });
+document.getElementById('refresh').addEventListener('click', () => { editing = false; refresh({ clear: true }); void loadRouting(); });
 document.getElementById('add').addEventListener('toggle', () => { addTouched = true; });
 document.getElementById('add-connect').addEventListener('click', async () => {
   const out = document.getElementById('connect-status');
@@ -525,3 +590,4 @@ document.addEventListener('visibilitychange', () => {
 });
 setInterval(() => { if (!document.hidden) void refresh(); }, 5000);
 if (!document.hidden) void refresh();
+void loadRouting();
