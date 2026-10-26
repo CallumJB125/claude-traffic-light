@@ -1395,6 +1395,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     // A local page's webContents, for main's sender checks (null if not open).
     // main.js hands over the Burst wiring (a thunk, so creation order does not matter).
     attachBurst: (get) => { burstApi = { snapshot: () => get().snapshot(), refresh: (f) => get().refresh(f), act: (k) => get().act(k), setupView: () => get().setupView() }; },
+    // The visible main window's rect, for placing the widget clear of its title bar (null when hidden).
+    bounds: () => (win && !win.isDestroyed() && win.isVisible() && !win.isMinimized() ? win.getBounds() : null),
     pageWebContents: (id) => localViews.get(id)?.webContents ?? null,
     accountWebContents: () => accountView?.webContents ?? null,
     // Fixed page ids from main only; queued callbacks never jump to a replacement renderer.

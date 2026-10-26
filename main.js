@@ -659,6 +659,7 @@ let tray;
 let signalServer = null;
 let signalServerError = null;
 
+const WidgetPlacement = require('./src/widget-placement.js');
 function readBounds() {
   let saved;
   try {
@@ -666,19 +667,9 @@ function readBounds() {
   } catch {
     return null;
   }
-  // Bounds saved while a different (e.g. larger external) display was
-  // connected can sit entirely outside every current display's work area,
-  // making the widget invisible with no way to reach it. Clamp back on.
-  const margin = 20;
-  const onAnyDisplay = screen.getAllDisplays().some(({ workArea: wa }) => (
-    saved.x + saved.width > wa.x + margin &&
-    saved.x < wa.x + wa.width - margin &&
-    saved.y + saved.height > wa.y + margin &&
-    saved.y < wa.y + wa.height - margin
-  ));
-  if (onAnyDisplay) return saved;
-  const wa = screen.getPrimaryDisplay().workArea;
-  return { ...saved, x: wa.x + wa.width - saved.width - 40, y: wa.y + 80 };
+  // Bounds saved while a different (e.g. larger external) display was connected can sit outside every
+  // current display; WidgetPlacement puts those back on screen, clear of the main window's title bar.
+  return WidgetPlacement.visibleOrDefault(screen, saved, buddyWin?.bounds?.() ?? null);
 }
 
 let gardenRun = null;
@@ -1297,15 +1288,15 @@ function retuneEyePoll() {
 function createWindow() {
   if (win && !win.isDestroyed()) return win;
   const saved = readBounds();
-  const primary = screen.getPrimaryDisplay().workAreaSize;
   const defaultWidth = 100;
   const defaultHeight = Math.round(defaultWidth / WIDGET_ASPECT);
+  const spot = saved || WidgetPlacement.defaultBounds(screen, { width: defaultWidth, height: defaultHeight }, buddyWin?.bounds?.() ?? null);
 
   const w = win = new BrowserWindow({
-    width: saved?.width || defaultWidth,
-    height: saved?.height || defaultHeight,
-    x: saved?.x ?? Math.round(primary.width - defaultWidth - 40),
-    y: saved?.y ?? 80,
+    width: spot.width || defaultWidth,
+    height: spot.height || defaultHeight,
+    x: spot.x,
+    y: spot.y,
     minWidth: MIN_WIDTH,
     minHeight: Math.round(MIN_WIDTH / WIDGET_ASPECT),
     maxWidth: MAX_WIDTH,
@@ -3626,7 +3617,7 @@ function createTray() {
       ...captureItems(),
       ...AgentBusMain.trayItems(),
       ...(advanced ? [{ label: 'Show Widget Now', click: () => { saveConfig({ showWidget: true }); clearTimeout(snoozeTimer); if (!win) createWindow(); win.showInactive(); createTray(); } }] : []),
-      { label: 'Reset Widget Position', click: () => { const wa = screen.getPrimaryDisplay().workArea; if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds({ x: wa.x + wa.width - 140, y: wa.y + 46, width: 107, height: 137 }); win.showInactive(); broadcastStatus(); } },
+      { label: 'Reset Widget Position', click: () => { if (!win) createWindow(); strip = WidgetStrip.NONE; win.setMaximumSize(MAX_WIDTH, Math.round(MAX_WIDTH / WIDGET_ASPECT)); win.setAspectRatio(WIDGET_ASPECT); win.setBounds(WidgetPlacement.defaultBounds(screen, { width: 107, height: 137 }, buddyWin?.bounds?.() ?? null)); win.showInactive(); broadcastStatus(); } },
       {
         label: 'Floating Widget',
         type: 'checkbox',
@@ -4802,9 +4793,9 @@ ipcMain.handle('open-input', async (e, id) => {
 // row comes last: it never hides either of those.
 const AWAY_PX = 64;
 const UPDATE_PX = 72;
-const BUBBLE_MAX_PX = 300;
+const BUBBLE_MAX_PX = 420;
 const BUDGET_PX = 64;
-const BUBBLE_MIN_W = 230;
+const BUBBLE_MIN_W = 288; // the bubble is 280 px wide, with 4 px each side
 const WidgetStrip = require('./src/widget-strip.js');
 let strip = WidgetStrip.NONE;
 let applyingStrip = false;

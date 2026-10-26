@@ -1,0 +1,17 @@
+test-visual/__screenshots__/ask.spec.js/widget-ask-edit-darwin.png
+test-visual/__screenshots__/ask.spec.js/widget-ask-long-command-darwin.png
+test-visual/__screenshots__/ask.spec.js/widget-ask-long-command-open-darwin.png
+test-visual/__screenshots__/budget-notice.spec.js/widget-budget-notice-darwin.png
+test-visual/__screenshots__/inputs.spec.js/bubble-allow-anyway-darwin.png
+test-visual/__screenshots__/inputs.spec.js/bubble-blocked-darwin.png
+test-visual/__screenshots__/inputs.spec.js/bubble-codex-ask-darwin.png
+test-visual/__screenshots__/inputs.spec.js/bubble-collapsed-darwin.png
+test-visual/__screenshots__/inputs.spec.js/bubble-dialog-darwin.png
+test-visual/__screenshots__/inputs.spec.js/bubble-expanded-darwin.png
+test-visual/__screenshots__/inputs.spec.js/bubble-first-use-notice-darwin.png
+test-visual/__screenshots__/inputs.spec.js/bubble-permission-darwin.png
+test-visual/__screenshots__/inputs.spec.js/bubble-permission-off-darwin.png
+test-visual/__screenshots__/inputs.spec.js/bubble-plan-darwin.png
+test-visual/__screenshots__/inputs.spec.js/bubble-pre-hook-darwin.png
+test-visual/__screenshots__/inputs.spec.js/bubble-question-darwin.png
+test-visual/__screenshots__/inputs.spec.js/bubble-stacked-tags-darwin.png
