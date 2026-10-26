@@ -225,7 +225,8 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
         const r = JSON.parse(fs.readFileSync(path.join(requestsDir, f), 'utf8'));
         if (Date.now() - new Date(r.createdAt).getTime() > 90000) continue; // hook has long since timed out
         // The hook died without cleaning up (Claude Code ended it): nobody is waiting on this card.
-        if (Number.isSafeInteger(r.pid) && r.pid > 0 && !pidAlive(r.pid)) {
+        // A pid only means something on the host that wrote it (a VM or container can share this folder).
+        if (r.host === os.hostname().split('.')[0] && Number.isSafeInteger(r.pid) && r.pid > 0 && !pidAlive(r.pid)) {
           const own = Answer.paths(requestsDir, String(r.id));
           if (own && path.basename(own.req) === f) { try { fs.rmSync(own.req, { force: true }); fs.rmSync(own.ans, { force: true }); } catch {} }
           continue;

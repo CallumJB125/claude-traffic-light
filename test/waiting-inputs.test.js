@@ -415,7 +415,7 @@ test('C-N: the first-use notice is the measured "not held" copy', () => {
 const requestReader = (home) => require('../src/signal-server.js')({ rootDir: home, sessionsDir: path.join(home, 'sessions'), requestsDir: path.join(home, 'requests'), aggregateState: () => ({ sessions: [] }), broadcastStatus: () => {}, port: 0, app: { on: () => {} } }).readRequests;
 const stubRequest = (home, id, extra) => {
   const R = require('../hooks/answer-file.js');
-  const r = { id, sessionId: 's', host: 'claude', cwd: '/x', tool: 'Bash', kind: 'permission', channel: 'PermissionRequest', summary: 'ls', toolInput: { command: 'ls' }, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 50000).toISOString(), ...extra };
+  const r = { id, sessionId: 's', host: HOST, cwd: '/x', tool: 'Bash', kind: 'permission', channel: 'PermissionRequest', summary: 'ls', toolInput: { command: 'ls' }, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 50000).toISOString(), ...extra };
   r.decisionHash = R.decisionHashOf(r);
   fs.mkdirSync(path.join(home, 'requests'), { recursive: true });
   fs.writeFileSync(path.join(home, 'requests', `${id}.json`), JSON.stringify(r));
@@ -443,17 +443,18 @@ test('hook killed by SIGTERM: the next readRequests drops the card and both file
   } finally { app.close(); }
 });
 
-test('readRequests keeps a request whose pid is alive, one that answers EPERM, and one with no pid (older hook)', () => {
+test('readRequests keeps a request whose pid is alive, one that answers EPERM, one with no pid (older hook), and one from another host', () => {
   const home = tmp();
   stubRequest(home, 'claude-live', { pid: process.pid });
   stubRequest(home, 'claude-eperm', { pid: 424242 });
   stubRequest(home, 'claude-nopid', {});
   stubRequest(home, 'claude-dead', { pid: 2 ** 22 + 12345 });
+  stubRequest(home, 'claude-elsewhere', { pid: 2 ** 22 + 12345, host: `${HOST}-vm` });
   const kill = process.kill;
   process.kill = (pid, sig) => { if (pid === 424242) throw Object.assign(new Error('not permitted'), { code: 'EPERM' }); return kill.call(process, pid, sig); };
   try {
     const ids = requestReader(home)().map((r) => r.id).sort();
-    assert.deepEqual(ids, ['claude-eperm', 'claude-live', 'claude-nopid']);
+    assert.deepEqual(ids, ['claude-elsewhere', 'claude-eperm', 'claude-live', 'claude-nopid']);
     assert.equal(fs.existsSync(path.join(home, 'requests', 'claude-dead.json')), false);
     assert.equal(fs.existsSync(path.join(home, 'requests', 'claude-dead.answer')), false);
   } finally { process.kill = kill; }
