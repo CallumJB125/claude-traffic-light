@@ -22,7 +22,7 @@ const path = require('node:path');
 const { claudeActivityLabel } = require('./session-activity');
 const os = require('node:os');
 const { NONE, prepareNoTool, prepareChat, carryFor } = require('./claude-carry');
-const { denyRules } = require('../board/shared/claude-carry.cjs');
+const { denyRules, PROC_RULES } = require('../board/shared/claude-carry.cjs');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ENV_KEYS = ['HOME', 'USER', 'LOGNAME', 'PATH', 'LANG', 'TMPDIR', 'TZ', 'CLAUDE_CONFIG_DIR',
@@ -180,14 +180,14 @@ function createClaudeCodeSession({ bin, env = process.env, spawn = childProcess.
     // The user's own provider and auth. A read-only chat has no tools, so a key may sit in its env. A writable
     // chat has Read/Glob/Grep, so (like a run with a shell) its key goes to a file in a private dir outside the
     // project, behind apiKeyHelper, with the dir and /proc denied to its file tools.
-    let c0, keyDir = null, disallowed = [], settingsFile = null;
+    let c0, keyDir = null, disallowed = writable ? [...PROC_RULES] : [], settingsFile = null;
     if (carry && writable) {
       keyDir = fs.mkdtempSync(path.join(keyRoot, 'plexiform-claude-'));
       c0 = await prepareChat(carry, keyDir, path.join(keyDir, 'api.key'));
       if (!c0.failure && c0.settings) {
         settingsFile = path.join(keyDir, 'settings.json');
         fs.writeFileSync(settingsFile, JSON.stringify(c0.settings), { mode: 0o600 });
-        disallowed = [...c0.disallowed, ...denyRules([...new Set([real(keyDir), keyDir].filter(Boolean))])];
+        disallowed = [...new Set([...c0.disallowed, ...PROC_RULES]), ...denyRules([...new Set([real(keyDir), keyDir].filter(Boolean))])];
       } else if (!c0.failure) { try { fs.rmSync(keyDir, { recursive: true, force: true }); } catch { /* gone */ } keyDir = null; }
     } else c0 = carry ? await prepareNoTool(carry) : NONE;
     const cleanKeys = () => { c0.release?.(); if (keyDir) { try { fs.rmSync(keyDir, { recursive: true, force: true }); } catch { /* gone */ } } };

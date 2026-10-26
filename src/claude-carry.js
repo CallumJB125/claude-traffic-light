@@ -3,7 +3,7 @@
 // children (owned chat, one-shot helpers, voice): the user's own provider and
 // auth, carried by allowlist. These children have no Bash tool, so a key may sit
 // in their env (plan C14); a run that has a shell never gets one that way.
-const { createClaudeCarry, burstOwnsPort, BURST_GATEWAY_PORT } = require('../board/shared/claude-carry.cjs');
+const { createClaudeCarry, burstOwnsPort, BURST_GATEWAY_PORT, PROC_RULES } = require('../board/shared/claude-carry.cjs');
 
 // Seam for PR 1b (src/login-shell-env.js): main calls setLoginShellEnv(readFilteredLoginShellEnv) once it exists.
 // Until then a Dock-launched app only sees its own env and the user's settings files.
@@ -52,6 +52,7 @@ async function prepareChat(carry, keyDir, keyFile) {
   if (c.failure) return { failure: c.failure, env: {}, model: 'haiku', userModel: null, settings: null, disallowed: [], release: c.release };
   if (!c.carry) return { ...NONE, settings: null, disallowed: [], release: c.release };
   const settings = {
+    permissions: { deny: [...PROC_RULES] },
     ...(c.apiKeyFile ? { apiKeyHelper: `/bin/cat '${String(c.apiKeyFile).replace(/'/g, `'\\''`)}'` } : {}),
     ...(Object.keys(c.settingsEnv).length ? { env: c.settingsEnv } : {}),
   };

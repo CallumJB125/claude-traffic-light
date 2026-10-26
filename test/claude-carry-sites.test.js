@@ -120,6 +120,8 @@ test('writable owned chat (review 4): the key is a file in a private dir behind 
     assert.ok(!('ANTHROPIC_AUTH_TOKEN' in opts.env) && !('ANTHROPIC_API_KEY' in opts.env), 'no key in the child env');
     assert.ok(![JSON.stringify(args), JSON.stringify(opts.env), JSON.stringify(seen.settings)].some((x) => x.includes(KEY)));
     const deny = args.slice(args.indexOf('--disallowedTools') + 1);
+    for (const r of seen.settings.permissions.deny) assert.ok(deny.includes(r), 'the settings file and the argv deny the same /proc rules');
+    assert.ok(seen.settings.permissions.deny.includes('Read(//proc/**)') && seen.settings.permissions.deny.includes('Read(/proc/**)'));
     for (const r of ['Read(//proc/**)', 'Grep(//proc/**)', 'Glob(//proc/**)', 'Read(/proc/**)', `Read(/${seen.dir}/**)`, `Write(/${seen.dir}/**)`]) assert.ok(deny.includes(r), r);
     session.stop();
     assert.equal(fs.existsSync(seen.dir), false, 'key dir deleted at close');
@@ -128,6 +130,48 @@ test('writable owned chat (review 4): the key is a file in a private dir behind 
     const s2 = createClaudeCodeSession({ bin: '/x/claude', env: { HOME: '/fx/home' }, carry: bad.carry, spawn: () => { throw new Error('must not start'); }, safeRoot: root, keyRoot });
     await assert.rejects(s2.open({ cwd: root }), (e) => e.message === SIGN_IN);
     assert.deepEqual(fs.readdirSync(keyRoot), [], 'no key dir left');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(keyRoot, { recursive: true, force: true }); }
+});
+
+// The rule from the /proc lab (dogfood-lab/fixtures/proc-environ-read.md): a child with a file tool never has the key
+// in its launch env and denies /proc; a child with --tools '' may have the key in env.
+test('every Claude site: tool set against where the key lives (lab proc-environ-read)', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const { carry } = await carryOf(GW_SETTINGS);
+  const envHasKey = (env) => Object.values(env).some((v) => v === KEY);
+  // no tools: env is allowed
+  const e = spawner({ out: 'WHAT: hi\nRATING: safe\nANSWER: Allow' });
+  await ExplainAi.createRunner({ bin: '/x/claude', spawn: e.spawn, env: { HOME: '/fx/home', PATH: '/bin' }, carry }).ask('p');
+  const d = spawner({ out: '- ok' });
+  await DiffReview.review({ diff: 'diff --git a/a b/a\n-1\n+2\n', settings: { enabled: true, model: 'haiku' }, entitled: true, bin: '/x/claude', spawn: d.spawn, env: { HOME: '/fx/home', PATH: '/bin' }, carry });
+  const h = spawner({ out: JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '{}', total_cost_usd: 0 }) });
+  await HatchAi.describe({ params: { name: 'Otter', description: 'a sleepy otter', shape: 'animal' }, bin: '/fake/claude', consented: () => true, askConsent: async () => true, env: { HOME: '/fx/home', PATH: '/bin' }, spawn: h.spawn, carry });
+  const ro = spawner(); const roCalls = [];
+  const readOnly = createClaudeCodeSession({ bin: '/x/claude', env: { HOME: '/fx/home' }, carry, spawn: (b, a, o) => { roCalls.push({ args: a, opts: o }); return child(); } });
+  await readOnly.open({ cwd: '/tmp' }); readOnly.stop(); void ro;
+  for (const c of [e.calls[0], d.calls[0], h.calls[0], roCalls[0]]) {
+    assert.equal(at(c.args, '--tools'), '', 'no tools');
+    assert.ok(envHasKey(c.opts.env), 'the key may ride the env of a child with no tools');
+  }
+  // file tools: the key is never in the launch env, and /proc is denied
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'site-root-')), keyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'site-keys-'));
+  try {
+    const chatCalls = [];
+    const writable = createClaudeCodeSession({ bin: '/x/claude', env: { HOME: '/fx/home' }, carry, safeRoot: root, keyRoot, spawn: (b, a, o) => { chatCalls.push({ args: a, opts: o }); return child(); } });
+    await writable.open({ cwd: root }); writable.stop();
+    const screenCalls = [];
+    const fsFake = { mkdtempSync: (p) => fs.mkdtempSync(p), writeFileSync: fs.writeFileSync, realpathSync: fs.realpathSync, rmSync: fs.rmSync };
+    const ask = VoiceHelper.askClaude({ spawn: (b, a, o) => { screenCalls.push({ args: a, opts: o }); return child({ out: 'Click Wi-Fi.' }); }, fs: fsFake, tmpdir: keyRoot, args: VoiceScreen.claudeArgs('/tmp/x/screen.png'), env: { HOME: '/fx/home' }, prompt: 'q', carry });
+    assert.equal(await ask.promise, 'Click Wi-Fi.');
+    for (const c of [chatCalls[0], screenCalls[0]]) {
+      assert.notEqual(at(c.args, '--tools'), '', 'has a file tool');
+      assert.ok(!envHasKey(c.opts.env) && !('ANTHROPIC_AUTH_TOKEN' in c.opts.env), 'the key is not in the launch env');
+      assert.ok(!JSON.stringify(c.args).includes(KEY));
+      const deny = c.args.slice(c.args.indexOf('--disallowedTools') + 1);
+      assert.ok(deny.includes('Read(//proc/**)') && deny.includes('Read(/proc/**)'), '/proc denied');
+      assert.ok(c.args.includes('--settings'), 'the key comes through a settings file');
+    }
+    assert.deepEqual(fs.readdirSync(keyRoot), [], 'every key dir is gone after the run');
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(keyRoot, { recursive: true, force: true }); }
 });
 

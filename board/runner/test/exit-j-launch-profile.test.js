@@ -24,6 +24,8 @@ test('argv is exactly the contract profile; resume keeps every isolation flag', 
     'Read(~/.ssh/**)', 'Read(~/.aws/**)', 'Read(~/.config/gh/**)', 'Read(~/.claude/**)', 'Read(~/.claude.json)',
     'Read(~/.claude-traffic-light/**)', 'Read(~/.codex/**)', 'Read(~/Library/Keychains/**)',
     'Read(~/.config/gcloud/**)', 'Read(~/.azure/**)',
+    // Lab 2026-10-26: Grep follows a symlink to /proc/self/environ; a Read deny rule covers it.
+    'Read(//proc/**)', 'Read(/proc/**)', 'Grep(//proc/**)', 'Grep(/proc/**)', 'Glob(//proc/**)', 'Glob(/proc/**)',
     'Read(~/.board/*.json)', 'Read(~/.board/run/**)', 'Read(~/.board/outbox/**)',
     'Edit(~/.board/*.json)', 'Edit(~/.board/run/**)', 'Edit(~/.board/outbox/**)',
     'Write(~/.board/*.json)', 'Write(~/.board/run/**)', 'Write(~/.board/outbox/**)',
@@ -36,7 +38,7 @@ test('argv is exactly the contract profile; resume keeps every isolation flag', 
   const r = buildArgv({ runDir: RUN_DIR, sessionId: 'S', resume: true, budgetUsd: 2.5, maxTurns: 40, systemPrompt: 'BRIEF' });
   assert.deepEqual(r.filter((x) => x !== '--resume' && x !== '--session-id'), a.filter((x) => x !== '--resume' && x !== '--session-id'));
   assert.equal(r[r.indexOf('--resume') + 1], 'S');
-  assert.equal(DISALLOWED_TOOLS.length, 15);
+  assert.equal(DISALLOWED_TOOLS.length, 21);
   // A non-default BOARD_HOME is denied by absolute path ("//" prefix); worktrees under it stay readable.
   const t = buildArgv({ runDir: RUN_DIR, sessionId: 'S', boardHome: '/tmp/bh' });
   assert.ok(t.includes('Read(//tmp/bh/run/**)') && t.includes('Write(//tmp/bh/*.json)'));

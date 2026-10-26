@@ -43,6 +43,7 @@ test('engine run: one settings file (routing env + /bin/cat api.key), the person
     for (const tool of ['Read', 'Edit', 'Write']) assert.ok(start.argv.includes(`${tool}(/${dataAsGiven}/**)`), `${tool} refused on the data dir as given too (review 11)`);
     assert.ok(settings.sandbox.filesystem.denyRead.includes(dataAsGiven));
     for (const k of ['~/.config/gcloud', '~/.azure']) assert.ok(settings.sandbox.filesystem.denyRead.includes(k));
+    for (const r of ['Read(//proc/**)', 'Read(/proc/**)']) assert.ok(settings.permissions.deny.includes(r) && start.argv.includes(r), `${r} in the settings file and the argv`);
     for (const where of [JSON.stringify(start.argv), JSON.stringify(start.env), JSON.stringify(settings)]) assert.ok(!where.includes(KEY));
     assert.ok(!('ANTHROPIC_AUTH_TOKEN' in start.env) && !('ANTHROPIC_API_KEY' in start.env));
     assert.equal(fs.existsSync(path.join(runDir, 'api.key')), false, 'the run ended: the key file is gone');
@@ -65,6 +66,8 @@ test('engine takeover: the same one settings file, the person\'s model and the d
     const dataReal = fs.realpathSync(m.dataDir);
     for (const tool of ['Read', 'Edit', 'Write']) assert.ok(t.argv.includes(`${tool}(/${dataReal}/**)`));
     assert.ok(t.argv.includes('Read(~/.config/gcloud/**)') && t.argv.includes('Read(~/.azure/**)'));
+    for (const r of ['Read(//proc/**)', 'Read(/proc/**)']) assert.ok(t.argv.includes(r), `${r} in the takeover argv`);
+    assert.ok(!('ANTHROPIC_AUTH_TOKEN' in t.env) && !('ANTHROPIC_API_KEY' in t.env));
     assert.ok(!JSON.stringify(t).includes(KEY), 'no key in the takeover argv or env');
     const settings = JSON.parse(fs.readFileSync(path.join(runDir, 'settings.json'), 'utf8'));
     assert.deepEqual(settings.env, gateway);

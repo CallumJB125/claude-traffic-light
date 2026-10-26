@@ -32,6 +32,8 @@ test('board runner: one --settings file with routing env and /bin/cat api.key; t
     assert.ok(argv.includes('--strict-mcp-config'));
     assert.equal(at('--model'), 'glm-5.3-flash', 'the person\'s own model when the repo sets none');
     const settings = JSON.parse(fs.readFileSync(path.join(run.runDir, 'settings.json'), 'utf8'));
+    for (const r of ['Read(//proc/**)', 'Read(/proc/**)']) assert.ok(settings.permissions.deny.includes(r) && argv.includes(r), `${r} in the settings file and the argv (Grep can read /proc/self/environ)`);
+    assert.ok(!('ANTHROPIC_AUTH_TOKEN' in start.env) && !('ANTHROPIC_API_KEY' in start.env), 'a run with file tools never has the key in its launch env');
     assert.deepEqual(settings.env, gateway, 'routing only');
     assert.equal(settings.apiKeyHelper, `/bin/cat '${path.join(run.runDir, 'api.key')}'`);
     assert.equal(fs.readFileSync(path.join(run.runDir, 'api.key'), 'utf8'), KEY);

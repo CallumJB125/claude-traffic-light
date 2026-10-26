@@ -25,6 +25,10 @@ const BURST_GATEWAY_PORT = 7777;
 const DEFAULT_TTL_MS = 5 * 60_000;
 const NOT_LOGGED_IN = 'Claude is not logged in. Run claude in a terminal and sign in with /login, then resume.';
 const OAUTH_TOKEN_NOTE = " (a CLAUDE_CODE_OAUTH_TOKEN in your shell doesn't reach runs yet)";
+// Lab 2026-10-26 (dogfood-lab/fixtures/proc-environ-read.md): Read refuses /proc itself, but Grep follows an in-tree
+// symlink to /proc/self/environ and returns the CLI's launch env, one regex at a time. A Read deny rule covers Grep too,
+// because the check resolves the symlink. So every generated Claude settings file denies /proc, and a key never rides the
+// launch env of a child that has any file tool.
 const PROC_RULES = ['Read', 'Grep', 'Glob'].flatMap((t) => [`${t}(//proc/**)`, `${t}(/proc/**)`]);
 // Not passed to the CLI: Plexiform's own refresh timer reads it.
 const NOT_FOR_CLI = new Set(['CLAUDE_CODE_API_KEY_HELPER_TTL_MS']);
@@ -182,7 +186,7 @@ function createClaudeCarry({
     const customDir = provider.configDir !== path.join(home, '.claude');
     const denyRead = [...provider.denyRead, ...(customDir ? [provider.configDir] : [])];
     const out = {
-      ...EMPTY, carry: true, model: provider.model, denyRead, disallowed: [...denyRules(denyRead), ...(mode === 'chat' ? PROC_RULES : [])],
+      ...EMPTY, carry: true, model: provider.model, denyRead, disallowed: [...denyRules(denyRead), ...(bash ? PROC_RULES : [])],
       oneShotModel: oneShotModel(provider),
     };
     const routingForCli = Object.fromEntries(Object.entries(routing).filter(([k]) => !NOT_FOR_CLI.has(k)));
@@ -289,4 +293,4 @@ function productionCarry(opts = {}) {
   return createClaudeCarry({ env: process.env, ...opts });
 }
 
-module.exports = { createClaudeCarry, productionCarry, sweepKeyFiles, burstOwnsPort, BURST_GATEWAY_PORT, denyRules, tcpProbe, oneShotModel, NOT_LOGGED_IN, PROBE_MS };
+module.exports = { PROC_RULES, createClaudeCarry, productionCarry, sweepKeyFiles, burstOwnsPort, BURST_GATEWAY_PORT, denyRules, tcpProbe, oneShotModel, NOT_LOGGED_IN, PROBE_MS };

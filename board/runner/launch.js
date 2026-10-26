@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { untrusted, envelopeTag } from '../shared/untrusted.js';
+import { PROC_RULES } from '../shared/claude-carry.cjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const BOARD_DIR = path.resolve(HERE, '..');
@@ -26,6 +27,7 @@ export const DISALLOWED_TOOLS = Object.freeze([
   'Read(~/.ssh/**)', 'Read(~/.aws/**)', 'Read(~/.config/gh/**)', 'Read(~/.claude/**)', 'Read(~/.claude.json)',
   'Read(~/.claude-traffic-light/**)', 'Read(~/.codex/**)', 'Read(~/Library/Keychains/**)',
   'Read(~/.config/gcloud/**)', 'Read(~/.azure/**)',
+  ...PROC_RULES,
 ]);
 
 // Agent bus runs (AGENT-BUS.md §2.4.7): the control against push and PR-open is no network
@@ -124,6 +126,7 @@ export function buildSettings({ worktree, tmpdir, node = process.execPath, repo 
       // also loads plugins/marketplaces from the (agent-editable) worktree's
       // .claude/settings.json (docs/waiting-inputs.md).
       additionalDirectories: [worktree],
+      deny: [...PROC_RULES],   // also in the argv; the settings file carries it too (lab proc-environ-read)
       allow: lv ? [...(lv.edits ? TOOL_ALLOW : READ_ALLOW), ...(lv.bash ? bashAllow : [])] : [...TOOL_ALLOW, ...bashAllow],
     },
     sandbox: {
