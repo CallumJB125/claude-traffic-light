@@ -2,6 +2,7 @@
 // auth key, stderr or environment value is sent to a renderer or app log.
 'use strict';
 const path = require('node:path');
+const { loginEnvMessage } = require('./login-env-hub.js');
 const WINDOW_MS = 10 * 60_000;
 const MAX_RESTARTS = 5;
 // Main's note ops over parentPort (board/tasks-engine/parent-bus.js): bounded, never queued without limit.
@@ -21,7 +22,7 @@ function tasksEnv(dataDir, base = process.env) {
 // to a wrapped run's bus_peers. onWork(rows): the helper's wrapped tasks that did real work (O3), for automatic cards;
 // [] whenever it is not running.
 function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStatus = () => {}, onRuns = () => {}, peersForTask = async () => null, onWork = () => {},
-  now = Date.now, readyTimeoutMs = 20_000, shutdownGraceMs = 20_000, killPid = process.kill.bind(process),
+  loginEnv = () => null, now = Date.now, readyTimeoutMs = 20_000, shutdownGraceMs = 20_000, killPid = process.kill.bind(process),
   timers = { setTimeout, clearTimeout } }) {
   let child = null; let ready = null; let info = null; let disposed = false; let stopping = false; let state = 'stopped';
   const restarts = [];
@@ -29,6 +30,8 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
   const pending = new Map();
   let busSeq = 0;
   const rejectPending = (c, code) => { for (const [id, p] of pending) if (!c || p.child === c) { pending.delete(id); timers.clearTimeout(p.timer); p.reject(busError(code)); } };
+  // The login-shell values (src/login-env-hub.js) go over parentPort only: never argv, env or a log line.
+  const sendLoginEnvTo = (c, values) => { if (values && c) { try { c.postMessage(loginEnvMessage(values)); } catch { /* exiting */ } } };
   const status = (s) => { state = s; try { onStatus({ state, restarts: restarts.length }); } catch { /* UI may be gone */ } };
   function start() {
     while (restarts.length && now() - restarts[0] > WINDOW_MS) restarts.shift();
@@ -42,6 +45,7 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
       try {
         c = fork(entry, [], { env: tasksEnv(dataDir, env), serviceName: 'Plexiform Tasks', stdio: 'pipe' }); // privacy-flow: tasks-process
         child = c;
+        sendLoginEnvTo(c, loginEnv());
         // Drain outputs without retaining them: errors can contain personal paths.
         c.stderr?.on('data', () => {}); c.stdout?.on('data', () => {});
         c.on('message', (m) => {
@@ -63,6 +67,7 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
           if (m?.type === 'tasks.work' && child === c) { try { onWork(Array.isArray(m.rows) ? m.rows : []); } catch { /* cards only */ } return; }
           if (m?.type !== 'tasks.listening' || m.socket !== path.join(dataDir, 'tasks.sock') || !/^[0-9a-f-]{36}$/.test(m.epoch ?? '')) return;
           if (disposed || stopping || child !== c) return fail();
+          sendLoginEnvTo(c, loginEnv());
           info = { socketPath: m.socket, epoch: m.epoch }; status('ready'); resolve(info);
         });
         c.once('error', fail);
@@ -97,6 +102,8 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
   return {
     ensure() { if (disposed) return Promise.reject(new Error('Tasks helper is stopped')); return ready || start(); },
     status: () => ({ state, restarts: restarts.length }),
+    /** Re-send the login-shell values after main re-read them (a provider or settings change). */
+    sendLoginEnv(values) { sendLoginEnvTo(child, values); },
     // One note op to the running helper over parentPort. Refused at once (UNAVAILABLE) with no ready helper or
     // BUS_MAX_INFLIGHT in flight; TIMEOUT after timeoutMs, and a late answer is dropped; the helper exiting or
     // being replaced, or stop(), rejects what is pending. A timeout is ambiguous: the helper may have acted.

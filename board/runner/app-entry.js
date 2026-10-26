@@ -17,6 +17,7 @@ import { Supervisor } from './supervisor.js';
 import { PresenceReporter } from './presence.js';
 import { makeLogger, ensurePrivateDir } from './util.js';
 import { productionCarry } from '../shared/claude-carry.cjs';
+import { createLoginEnvStore } from '../shared/login-env-store.cjs';
 
 const QUIT_BUDGET_MS = 25_000;   // the app waits for us; exit 0 by then whatever is left
 const QUIT_HANDOVER_MS = 10_000; // the agent's final-handover window inside that budget
@@ -88,8 +89,7 @@ async function start(m) {
     };
   try {
     ensurePrivateDir(m.data_dir);
-    // loginShellEnv is the seam for PR 1b (src/login-shell-env.js): the filtered login-shell values arrive over parentPort.
-    sup = new Supervisor({ home: m.data_dir, device, log, enabledAis: m.ai_ids ?? ['codex'], claudeCarry: productionCarry({ log: (line) => log.warn?.(line) }) });
+    sup = new Supervisor({ home: m.data_dir, device, log, enabledAis: m.ai_ids ?? ['codex'], claudeCarry: productionCarry({ log: (line) => log.warn?.(line), loginShellEnv: loginEnv.loginShellEnv }) });
     presence = new PresenceReporter(sup);
     sup.on('connected', () => status('connected'));
     sup.on('runner_event', (ev) => post(ev));
@@ -104,8 +104,14 @@ async function start(m) {
   pendingPresence = null;
 }
 
+// PR 2b: the allowlisted login-shell values main reads arrive as {type:'login.env'} over parentPort, are kept in
+// memory only and reach the carry through loginShellEnv. Never argv, env or a log line.
+const loginEnv = createLoginEnvStore();
+const acceptLoginEnv = (m) => loginEnv.accept(m);
+
 parent.on('message', (e) => {
   const m = e?.data;
+  if (acceptLoginEnv(m)) return;
   if (m?.type === 'runner.config') {
     if (configured) { log.warn('runner.config ignored: already configured'); return; }
     configured = true;

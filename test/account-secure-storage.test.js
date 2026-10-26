@@ -122,7 +122,7 @@ test('production runner uses the same secure backend guard for availability and 
   const start=source.indexOf('  function makeDevice(ws, { onStatus })'); assert.ok(start>=0);
   const body=source.slice(start,source.indexOf("  // A hub's sealed runner tokens",start));
   const f=fixture('linux','basic_text'); let options;
-  const context={safeStorage:f.native,fileKey:()=> 'fixture',fs:{mkdirSync:()=>{}},DEVICES_DIR:'/fixture/devices',createDeviceController:x=>(options=x),credentialStorage:f.storage,clientFor:()=>({}),deviceFile:()=>'/fixture/device.bin',path,app:{getAppPath:()=>'/fixture/app'},userData:'/fixture/data',log:()=>{},emitRunnerEvent:()=>{}};
+  const context={loginEnv:()=>null,safeStorage:f.native,fileKey:()=> 'fixture',fs:{mkdirSync:()=>{}},DEVICES_DIR:'/fixture/devices',createDeviceController:x=>(options=x),credentialStorage:f.storage,clientFor:()=>({}),deviceFile:()=>'/fixture/device.bin',path,app:{getAppPath:()=>'/fixture/app'},userData:'/fixture/data',log:()=>{},emitRunnerEvent:()=>{}};
   vm.createContext(context);vm.runInContext(`${body}\nmakeDevice({hub:'https://hub.example',teamId:'team'}, {onStatus:()=>{}});`,context);
   assert.equal(options.canSeal(),false);assert.throws(()=>options.seal('synthetic'));assert.throws(()=>options.unseal(Buffer.from('synthetic')));assert.deepEqual(f.calls,[]);
 });

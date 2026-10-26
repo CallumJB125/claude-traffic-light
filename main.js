@@ -1597,6 +1597,7 @@ function getBuddy() {
       handoverWriter: () => { try { return SessionHandoverMain.writer; } catch { return null; } },
       openTimeline: (session) => SessionTimelineMain.openSession(session),
       onCaptureChange: () => refreshTrayMenu(),
+      loginEnv: () => loginEnvHub.values(),
       spendFor: (o) => { if (!usageMemo.turns) getUsageTurns().catch(() => {}); return WorkCost.sessionSpend(usageMemo.turns, o); },
       continueIn: (o) => ContinueIn.popup({ Menu, continueIn, onEvent: continueToSessions, ...o,
         teammates: async () => { const p = teammatePacketFromDoc(await o.load()); return p ? (await AgentMail.teammates(p.cwd)).teammates : []; },
@@ -1796,6 +1797,13 @@ claudeChannel.attach=async args=>{
 // A Claude child with file tools keeps its key file here, never in /tmp; a start removes what a crash left.
 // Resolved on first use, after the dev profile is set; swept only by the instance that holds the lock (see gotLock).
 const claudeKeyRoot = () => require('./src/claude-carry.js').ensureKeyRoot(path.join(app.getPath('userData'), 'run'));
+// PR 2b: the allowlisted login-shell values a Dock-launched app never saw (a gateway URL or key exported only in
+// ~/.zshrc). Read once in the background by the instance that holds the lock; until it lands (or if it fails) every
+// spawn uses the app's own env. Subscribers are the Tasks helper and the team runners, over their parentPort.
+const LoginShellEnv = require('./src/login-shell-env.js');
+const loginEnvHub = require('./src/login-env-hub.js').createLoginEnvHub({ read: (a) => LoginShellEnv.readLoginShellEnv(a), invalidate: LoginShellEnv.invalidate, log: (m) => console.warn('[claude]', m) });
+require('./src/claude-carry.js').setLoginShellEnv(loginEnvHub.read);
+loginEnvHub.subscribe((values) => { try { tasksProcess?.sendLoginEnv(values); } catch { /* helper exiting */ } try { buddyWin?.sendLoginEnv?.(values); } catch { /* window gone */ } });
 const InteractionMain=require('./src/interaction-main').createInteractionMain({
   accountScope:followupScope,
   keyRoot:claudeKeyRoot,
@@ -2183,6 +2191,7 @@ function getTasks() {
       entry: path.join(__dirname, 'board', 'tasks-engine', 'utility-entry.js'), dataDir,
       onRuns: (runs) => { wrappedRuns = runs.slice(0, 50); AgentAwareness.schedule(); },
       peersForTask: (taskId) => AgentAwareness.peersForTask(taskId),
+      loginEnv: () => loginEnvHub.values(),
       // O3: wrapped tasks that did real work get automatic cards through the session path (src/wrapped-work.js).
       onWork: (rows) => { wrappedWorkRows = rows; pushWrappedWork(); },
     });
@@ -3882,6 +3891,8 @@ function commitConfig(partial) {
   })) backupFirst();
   const next = saveConfig(partial);
   applyConfigEffects(prev, next, (k) => k in partial);
+  // A provider-ish setting changed: read the login shell again (debounced; the reader's cache is dropped).
+  if (Object.keys(partial).some((k) => /provider|shell|gateway/i.test(k))) loginEnvHub.invalidate();
   // A changed exclude list drops every cached awareness verdict; the switch rebuilds (or removes) the roster.
   if ('agentBus' in partial && JSON.stringify(prev.agentBus?.exclude) !== JSON.stringify(next.agentBus?.exclude)) AgentAwareness.invalidate();
   else if ('agentAwareness' in partial) AgentAwareness.schedule();
@@ -5471,6 +5482,11 @@ app.whenReady().then(() => {
   // Release CI: start, install hooks, run one, open the window, quit (src/smoke.js).
   const smokeReport = Smoke.reportPathFrom(process.argv);
   // An AppImage's copies for older versions go only once this is the one running instance.
+  if (gotLock && !DEMO) {
+    loginEnvHub.refresh().catch(() => {});
+    // Coming back to the app picks up a changed shell file: at most one read a minute (the reader caches a good one for 5).
+    app.on('browser-window-focus', () => { loginEnvHub.focus().catch(() => {}); });
+  }
   if (gotLock) { try { require('./src/claude-carry.js').sweepKeyDirs(path.join(app.getPath('userData'), 'run')); } catch (err) { console.warn('[claude] could not tidy old key folders:', err.message); } }
   if (gotLock) { try { HookPaths.prune(HOOK_PATHS); } catch (err) { console.warn('[hooks] could not tidy old copies:', err.message); } }
   if (smokeReport) { Smoke.run({ app, installHooks, areHooksInstalled, createWindow, getWindow: () => win, settingsPath: CLAUDE_SETTINGS_PATH, sessionsDir: SESSIONS_DIR, reportPath: smokeReport }); return; }

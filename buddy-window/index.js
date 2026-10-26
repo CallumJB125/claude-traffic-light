@@ -124,7 +124,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, homeBusy = () => false, onHomeRetired = () => {} } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, homeBusy = () => false, onHomeRetired = () => {}, loginEnv = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -625,6 +625,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       log: (...a) => log('[runner]', ...a),
       onStatus,
       onEvent: emitRunnerEvent,
+      loginEnv,
     });
   }
   // A hub's sealed runner tokens, except those of the teams in `keep`.
@@ -1354,6 +1355,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     /** Burst facts for the runner (src/burst-ipc.js): only while a runner is running cards. */
     runnerLive: () => flow.runningTeams().length > 0,
     burstFacts: (facts) => flow.burstFacts(facts),
+    sendLoginEnv: (values) => flow.loginEnv(values),
     /** The widget's live sessions changed: hubs sharing presence get the new list. */
     sessionsChanged(sessions) { lastSessions = sessions; flow.sessionsChanged(sessions); if (captureEnabled) { void workCapture.observe(sessions, { wrapped: wrappedWork }); sessionBridge.sessionsChanged(sessions); } },
     // O3: the person's wrapped tasks that did real work (src/wrapped-work.js), for automatic cards only: never shown
