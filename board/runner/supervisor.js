@@ -135,6 +135,9 @@ export class Supervisor extends EventEmitter {
     this.confirm = opts.confirm ?? ((o) => this.#confirmViaControl(o));
     // Hosted (cloud) mode: hosted/index.js. null on a member's own machine.
     this.hosted = opts.hosted ?? null;
+    // The user's own Claude provider and auth (board/shared/claude-carry.cjs); null = carry nothing. Hosted
+    // runs never use it: the hub config is their only source.
+    this.claudeCarry = opts.claudeCarry ?? null;
   }
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
@@ -698,13 +701,23 @@ export class Supervisor extends EventEmitter {
     const realBin = ai === 'claude' ? this.claudeBin : this.ais?.find((a) => a.id === ai)?.bin;
     const hosted = this.hosted ? await this.hosted.prepare(this, run, ai, realBin) : null;
     if (this.runs.get(run.run_id) !== run || run.ending || run.ended || run.fenced || !run.gateState().open) return null;
+    run.carry?.release();
+    run.carry = null;
+    let carry = null;
+    if (!oneTurn && !this.hosted && this.claudeCarry) {
+      carry = await this.claudeCarry.prepare({ mode: 'bash', keyFile: path.join(run.runDir, API_KEY_FILE) });
+      if (carry.failure) throw Object.assign(new Error(carry.failure.reason), { code: carry.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' });
+      if (!carry.carry) carry = null;
+      run.carry = carry;
+      if (this.runs.get(run.run_id) !== run || run.ending || run.ended || run.fenced || !run.gateState().open) return null;
+    }
     const anthropicKey = hosted?.anthropicKey ?? this.env.ANTHROPIC_API_KEY;
-    const apiKeyFile = !oneTurn && anthropicKey ? path.join(run.runDir, API_KEY_FILE) : null;
-    if (apiKeyFile) writeFileAtomic(apiKeyFile, anthropicKey);
+    const apiKeyFile = carry ? carry.apiKeyFile : !oneTurn && anthropicKey ? path.join(run.runDir, API_KEY_FILE) : null;
+    if (apiKeyFile && !carry) writeFileAtomic(apiKeyFile, anthropicKey);
     const home = path.resolve(this.l.home);
     const boardHome = home === path.join(this.env.HOME ?? '', '.board') ? null : home;
     if (!oneTurn) {
-      const settings = buildSettings({ worktree: run.worktree, tmpdir: this.env.TMPDIR || '/tmp', repo, apiKeyFile, boardHome, extraDenyRead: hosted?.denyRead ?? [] });
+      const settings = buildSettings({ worktree: run.worktree, tmpdir: this.env.TMPDIR || '/tmp', repo, apiKeyFile, env: carry?.settingsEnv, boardHome, extraDenyRead: [...(hosted?.denyRead ?? []), ...(carry?.denyRead ?? [])] });
       writeJsonAtomic(path.join(run.runDir, 'settings.json'), settings);
       writeJsonAtomic(path.join(run.runDir, 'mcp.json'), buildMcpConfig({ socket: run.socketPath, token: run.run_token, server: this.mcpServer }));
     }
@@ -714,7 +727,7 @@ export class Supervisor extends EventEmitter {
     const buddyOwned = recordBuddyLaunch(buddyHome, { cwd: run.worktree });
     const cacheDir = path.join(home, 'cache', run.run_id);
     if (oneTurn) { ensureDir(cacheDir); ensureDir(path.join(cacheDir, 'tmp')); }
-    const env = { ...(oneTurn ? buildCodexEnv(this.env, cacheDir) : buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart, buddyOwned })), ...hosted?.env };
+    const env = { ...(oneTurn ? buildCodexEnv(this.env, cacheDir) : buildEnv(this.env, { runDir: run.runDir, socket: run.socketPath, supervisorPid: process.pid, supervisorLstart: this.supervisorLstart, buddyOwned })), ...carry?.cliEnv, ...hosted?.env };
     const brief = boardBrief({ key: run.key, fence: run.fence, nonce: run.nonce, trusted: trustedInstructions(repo.local_path, 20000, oneTurn ? 'codex' : ai) });
     const systemPrompt = hosted?.briefNote ? `${brief}\n\n${hosted.briefNote}` : brief;
     const Backend = this.opts.Backend ?? BACKENDS[ai] ?? ClaudeBackend;
@@ -723,8 +736,8 @@ export class Supervisor extends EventEmitter {
     run.readOnly = oneTurn && run.offer.require_plan_approval && !editable;
     const backend = new Backend({
       bin: hosted?.bin ?? realBin, cwd: run.worktree, env, runDir: run.runDir, sessionId: run.sessionId, resume,
-      budgetUsd: budget.usd, maxTurns: run.offer.max_turns, systemPrompt, model: hosted?.model ?? repo.model,
-      log: this.log, boardHome, interruptWaitMs: this.opts.interruptWaitMs ?? INTERRUPT_WAIT_MS, stopGraceMs: this.opts.stopGraceMs ?? STOP_GRACE_MS,
+      budgetUsd: budget.usd, maxTurns: run.offer.max_turns, systemPrompt, model: hosted?.model ?? repo.model ?? carry?.model ?? undefined,
+      log: this.log, boardHome, ...(carry ? { extraDisallowed: carry.disallowed } : {}), interruptWaitMs: this.opts.interruptWaitMs ?? INTERRUPT_WAIT_MS, stopGraceMs: this.opts.stopGraceMs ?? STOP_GRACE_MS,
       ...(oneTurn ? { ...run.gitAccess, cacheDir, boardRunDir: run.runDir, permissionMode: run.readOnly ? 'plan' : 'acceptEdits',
         denyPaths: [repo.local_path, this.l.device, this.l.policy, this.l.ledger, this.l.outboxDir, path.join(home, 'run'), ...(hosted?.denyRead ?? [])], } : {}),
     });
@@ -806,6 +819,7 @@ export class Supervisor extends EventEmitter {
   // snapshot that never got pushed keeps the worktree for a manual salvage.
   cleanupRun(run) {
     if (run.windowsStopUnconfirmed) return;
+    run.carry?.release();
     // Hosted: push the run branch and empty its cgroup before the worktree goes.
     if (this.hosted && !run.hostedFinished) {
       run.hostedFinished = true;

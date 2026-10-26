@@ -350,7 +350,8 @@
                 "error",
                 "budget",
                 "stopped",
-                "released"
+                "released",
+                "provider"
               ]
             },
             {
@@ -741,7 +742,8 @@
                 "error",
                 "budget",
                 "stopped",
-                "released"
+                "released",
+                "provider"
               ]
             },
             {
@@ -2887,7 +2889,8 @@
                 "error",
                 "budget",
                 "stopped",
-                "released"
+                "released",
+                "provider"
               ]
             },
             {

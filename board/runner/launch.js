@@ -25,6 +25,7 @@ export const DISALLOWED_TOOLS = Object.freeze([
   'WebFetch', 'WebSearch', 'Bash(git push --force*)', 'Bash(git push -f*)', 'Bash(git push * +*)',
   'Read(~/.ssh/**)', 'Read(~/.aws/**)', 'Read(~/.config/gh/**)', 'Read(~/.claude/**)', 'Read(~/.claude.json)',
   'Read(~/.claude-traffic-light/**)', 'Read(~/.codex/**)', 'Read(~/Library/Keychains/**)',
+  'Read(~/.config/gcloud/**)', 'Read(~/.azure/**)',
 ]);
 
 // Agent bus runs (AGENT-BUS.md §2.4.7): the control against push and PR-open is no network
@@ -55,6 +56,7 @@ export const TOOL_ALLOW = Object.freeze(['Read', 'Edit', 'Write', 'Glob', 'Grep'
 
 export const DENY_READ = Object.freeze([
   '~/.ssh', '~/.aws', '~/.config/gh', '~/Library/Keychains', '~/.claude', '~/.claude.json', '~/.codex', '~/.claude-traffic-light',
+  '~/.config/gcloud', '~/.azure',
 ]);
 
 // Ghostty Dock (a third-party terminal) takes requests, typing into live
@@ -69,11 +71,12 @@ export const CACHE_WRITE = Object.freeze(['~/.npm', '~/.cache', '~/Library/Cache
 
 export const DEFAULT_MAX_TURNS = 200;
 
-// No secret is ever in the CLI env (D26): without CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
-// Bash sees the CLI's env. ANTHROPIC_API_KEY reaches the CLI through apiKeyHelper
-// (a 0600 file in the run dir) and the run token only through files/mcp.json.
+// No secret is reachable from a tool shell (D26): without CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
+// Bash sees the CLI's env, and a settings `env` value reaches Bash too (lab s2/s3). So the key reaches
+// the CLI through apiKeyHelper (a 0600 file in the run dir), the run's settings `env` holds routing only,
+// and the run token goes only through files/mcp.json.
 const WINDOWS_ENV = ['SystemRoot', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP', 'COMSPEC', 'PATHEXT'];
-const ENV_KEEP = ['HOME', 'USER', 'LOGNAME', 'PATH', 'TMPDIR', 'LANG', 'TZ',
+const ENV_KEEP = ['HOME', 'USER', 'LOGNAME', 'PATH', 'TMPDIR', 'LANG', 'TZ', 'CLAUDE_CONFIG_DIR',
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'NODE_EXTRA_CA_CERTS'];
 export const API_KEY_FILE = 'api.key';
 
@@ -94,6 +97,8 @@ function hookCmd(node, event, electron) {
  * --settings file content. repo = policy.repos[repo_id] (may be {}).
  * boardHome: the runner's BOARD_HOME when it is not ~/.board (see boardHomeRules).
  * apiKeyFile: set when the member uses an API key; the CLI reads it via apiKeyHelper.
+ * env: the user's non-secret routing (base URL, model...), carried by Plexiform. It reaches Bash tool
+ * commands as well, so it never holds a key.
  */
 // Local task permission levels (TASKS-CONTRACT §10). No level = the board profile.
 //   edits: Edit/Write auto-allowed · bash: sandboxed Bash and the git rules auto-allowed
@@ -105,12 +110,13 @@ const LEVELS = Object.freeze({
 });
 const READ_ALLOW = Object.freeze(['Read', 'Glob', 'Grep', ...TASK_TOOLS, 'Task', 'mcp__board']);
 
-export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null, extraDenyRead = [], extraDenyWrite = [], level = null, cacheWrite = CACHE_WRITE, electron = underElectron(), bus = false }) {
+export function buildSettings({ worktree, tmpdir, node = process.execPath, repo = {}, boardHome = null, apiKeyFile = null, env = {}, extraDenyRead = [], extraDenyWrite = [], level = null, cacheWrite = CACHE_WRITE, electron = underElectron(), bus = false }) {
   const hook = (event, timeout, matcher) => [{ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: hookCmd(node, event, electron), timeout }] }];
   const lv = level ? LEVELS[level] ?? LEVELS.ask : null;
   const bashAllow = [...GIT_ALLOW, ...(repo.bash_allow ?? []).map((c) => (c.startsWith('Bash(') ? c : `Bash(${c})`))];
   return {
     ...(apiKeyFile ? { apiKeyHelper: `/bin/cat ${shq(apiKeyFile)}` } : {}),
+    ...(Object.keys(env).length ? { env } : {}),
     permissions: {
       defaultMode: lv?.mode ?? 'acceptEdits',
       // The worktree root is a working directory by settings, not --add-dir:
