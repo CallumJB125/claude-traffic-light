@@ -145,3 +145,16 @@ test('Find agents without the system keychain: browse only, + off with the reaso
     await expect(page).toHaveScreenshot('find-agents-no-key.png', SHOT);
   } finally { await done(); }
 });
+
+// Q13: under forced colours the browser drops box-shadow, so the focus ring has to be the outline.
+test('Find agents: the focused search box keeps a visible outline under forced colours', async () => {
+  const { page, done } = await open('light');
+  try {
+    await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce', forcedColors: 'active' });
+    await page.focus('#af-search');
+    const ring = await page.evaluate(() => { const s = getComputedStyle(document.querySelector('#af-search')); return { style: s.outlineStyle, width: s.outlineWidth }; });
+    expect(ring.style).toBe('solid');
+    expect(ring.width).toBe('2px');
+    await expect(page).toHaveScreenshot('find-agents-forced-colors.png', SHOT);
+  } finally { await done(); }
+});

@@ -10,7 +10,7 @@
 .gp-label { font-weight: 600; }
 .gp-field input, .gp-field select { font: inherit; color: inherit; background: var(--panel-2, #2a2a2c); border: 1px solid var(--line-strong, #444); border-radius: var(--radius, 6px); padding: 5px 8px; min-height: 28px; }
 .gp-field select[multiple] { min-height: 72px; }
-.gp-field input:focus-visible, .gp-field select:focus-visible { outline: none; box-shadow: var(--focus, 0 0 0 2px #38bdf8); }
+.gp-field input:focus-visible, .gp-field select:focus-visible { outline: 2px solid var(--focus-ring, #38bdf8); outline-offset: 2px; box-shadow: var(--focus, none); }
 .gp-check { margin: 0; font-size: var(--text-sm, 12px); color: var(--ok-text, #6ee7b7); }
 .gp-check.gp-bad { color: var(--danger-text, #fca5a5); }
 .gp-problems { margin: 0; padding-left: 18px; font-size: var(--text-sm, 12px); color: var(--danger-text, #fca5a5); }
@@ -21,4 +21,4 @@
 .gp-actions .btn { border: 1px solid var(--line-strong, #444); background: var(--panel-2, #2a2a2c); color: inherit; border-radius: var(--radius, 6px); padding: 5px 11px; min-height: 28px; font: inherit; cursor: pointer; }
 .gp-actions .btn.primary { background: var(--accent, #38bdf8); border-color: var(--accent, #38bdf8); color: var(--accent-ink, #000); font-weight: 600; }
 .gp-actions .btn:disabled { opacity: 0.5; cursor: default; }
-.gp-actions .btn:focus-visible { outline: none; box-shadow: var(--focus, 0 0 0 2px #38bdf8); }
+.gp-actions .btn:focus-visible { outline: 2px solid var(--focus-ring, #38bdf8); outline-offset: 2px; box-shadow: var(--focus, none); }

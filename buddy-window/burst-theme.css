@@ -107,7 +107,7 @@ button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%
 button.primary, button.go { background: var(--accent); border-color: var(--accent); color: #211f1c; }
 button:disabled { opacity: 0.5; }
 input, select, textarea { background: var(--bg); border: 1px solid var(--border); padding: 4px 8px; }
-button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: 0 0 0 2px var(--bg); }
 
 table { border-collapse: collapse; }
 th { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); background: var(--thead-bg); }
