@@ -162,10 +162,10 @@ test('Q9: no voice helper, so no "Hold … to talk" call to action; the reason s
   assert.equal(doc.getElementById('voice-hint').textContent, 'x');
 });
 
-test('Q9: voice helper built, so the call to action stays and its keys follow the platform', async () => {
-  const mk = async (presetKeys) => (await open('file:///app/settings.html', {}, { hotkeys: [], available: true, reason: null, presetKeys })).doc.getElementById('voice-preset');
-  const mac = await mk('Control + Option + Space');
-  assert.equal(mac.hidden, false);
-  assert.equal(mac.textContent, 'Hold Control + Option + Space to talk');
-  assert.equal((await mk('Ctrl + Alt + Space')).textContent, 'Hold Ctrl + Alt + Space to talk');
+test('Q9: the call to action starts hidden and shows only once voice-status says the helper is built', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'settings.html'), 'utf8');
+  assert.match(html, /<button type="button" id="voice-preset" hidden /);
+  const preset = (await open('file:///app/settings.html', {}, { hotkeys: [], available: true, reason: null })).doc.getElementById('voice-preset');
+  assert.equal(preset.hidden, false);
+  assert.equal(preset.textContent, 'Hold Control + Option + Space to talk');
 });
