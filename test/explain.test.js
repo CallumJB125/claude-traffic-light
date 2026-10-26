@@ -78,7 +78,7 @@ test('the claude runner is isolated, capped, on stdin and one at a time', async 
 test('explain:input is off by default, local first, model only for unknowns', async () => {
   let cfg = {};
   const asked = [];
-  const inputs = [{ id: 'a', kind: 'permission', tool: 'Bash', text: 'rm -rf dist' }, { id: 'b', kind: 'permission', tool: 'mcp__db__drop', text: 'drop users' }];
+  const inputs = [{ id: 'a', kind: 'permission', source: 'hook', tool: 'Bash', text: 'rm -rf dist' }, { id: 'b', kind: 'permission', source: 'hook', tool: 'mcp__db__drop', text: 'drop users' }];
   const svc = ExplainMain.create({ config: () => cfg, inputs: () => inputs, runner: { ask: async (p) => { asked.push(p); return { ok: true, text: 'WHAT: deletes a table\nRATING: risky\nANSWER: Deny' }; } } });
   assert.deepEqual(await svc.explainInput('a'), { ok: false, reason: 'off' });
   cfg = { explainMode: true };
@@ -92,6 +92,14 @@ test('explain:input is off by default, local first, model only for unknowns', as
   assert.equal(asked.length, 1, 'cached');
   assert.equal((await svc.explainInput('zzz')).reason, 'gone');
   assert.equal((await svc.explainInput('../x')).reason, 'invalid');
+});
+
+test('explain:input refuses a session-sourced permission and never asks the model', async () => {
+  let asked = 0;
+  const inputs = [{ id: 's', kind: 'permission', source: 'session', tool: 'Bash', text: '' }];
+  const svc = ExplainMain.create({ config: () => ({ explainMode: true }), inputs: () => inputs, runner: { ask: async () => { asked++; return { ok: true, text: '' }; } } });
+  assert.equal((await svc.explainInput('s')).reason, 'gone');
+  assert.equal(asked, 0);
 });
 
 test('a finished turn becomes a plain recap, a notification and a localhost test link', async () => {

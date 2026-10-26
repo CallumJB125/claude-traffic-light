@@ -143,7 +143,7 @@ function createGuard({ P, taskFace }) {
   function applyState(task, e, now = Date.now()) {
     const p = sanitizeEvent(e, now)?.patch;
     if (!p) return task;
-    return { ...task, state: p.state, blockedKind: p.blockedKind, failKind: p.failKind, parkReason: p.parkReason, outcome: p.outcome, green: p.green, label: p.label, tone: p.tone, reason: p.reason, actions: p.actions, confirm: p.confirm, stateSinceMs: e.state !== e.prevState ? now : task.stateSinceMs };
+    return { ...task, state: p.state, blockedKind: p.blockedKind, failKind: p.failKind, parkReason: p.parkReason, outcome: p.outcome, green: p.green, label: p.label, tone: p.tone, reason: p.reason, actions: p.actions, confirm: p.confirm, stateSinceMs: e.state !== e.prevState ? now : task.stateSinceMs, lastActivityMs: p.lastActivityMs ?? task.lastActivityMs };
   }
 
   // What the person sees right now: green only while the lease holds, and a dropped
