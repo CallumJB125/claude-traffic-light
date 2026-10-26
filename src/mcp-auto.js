@@ -32,6 +32,7 @@ const { allowedExe } = require('./agent-awareness.js');
 const NAME = McpInstall.BUS_NAME;
 const hashOf = (v) => crypto.createHash('sha256').update(JSON.stringify(v)).digest('hex').slice(0, 16);
 const effective = (c) => !!c && (c.agentAwareness?.enabled !== false || c.agentBus?.enabled !== false) && c.mcpBusUserOff !== true;
+const UNSUPPORTED_PLATFORM = Object.freeze({ state: 'unsupported', reason: 'UNSUPPORTED_PLATFORM', message: 'Plexiform can only tell which AI session is calling on a Mac, so the agent bus tools are not added on this computer.' });
 const claudeOn = (c) => effective(c) && c.mcpUserOff !== true;
 
 // The codex main runs (findCodexBin()), only when it is the real, signed binary: ~/.local/bin and Homebrew's
@@ -51,7 +52,7 @@ async function trustedCodex(bin, { home, codexHome, run, platform = process.plat
  * home: where ~/.claude.json and ~/.codex live (a sandbox in dev runs). codexBin(): findCodexBin().
  * codexEnv: the environment `codex` runs with (CODEX_HOME set to the sandbox in dev runs).
  */
-function create({ rootDir, home, config, launch, codexBin, codexEnv = process.env, execFile, fsp = fs.promises, mcpInstall = McpInstall, codexAdapter = Codex, now = () => Date.now(), log = () => {},
+function create({ rootDir, home, config, launch, codexBin, platform = process.platform, codexEnv = process.env, execFile, fsp = fs.promises, mcpInstall = McpInstall, codexAdapter = Codex, now = () => Date.now(), log = () => {},
   trustCodexBin = (bin) => trustedCodex(bin, { home, codexHome: codexEnv.CODEX_HOME || path.join(home, '.codex'), fsp,
     run: (file, args) => new Promise((resolve, reject) => { require('child_process').execFile(file, args, { timeout: 5000, windowsHide: true }, (err, out) => (err ? reject(err) : resolve(String(out)))); }) }) }) { // privacy-flow: agent-bus-tools-local
   const recordFile = path.join(rootDir, 'mcp-auto.json');
@@ -174,10 +175,18 @@ function create({ rootDir, home, config, launch, codexBin, codexEnv = process.en
     const had = !!(rec.claude || rec.codex);
     const c = config();
     // Whatever the bus switches: it is the person's own Claude integration, only made safe to bind.
-    if (c && c.mcpUserOff !== true) {
+    if (c && c.mcpUserOff !== true && platform === 'darwin') {
       try { if (upgradeFull()) log('[mcp-auto] the full server re-registered with --disable-sigusr1'); } catch { /* unreadable or changing: next start */ }
     }
-    if (effective(c)) {
+    if (!effective(c)) {
+      await removeAll(rec);
+      state = { claude: { state: 'off' }, codex: { state: 'off' }, codexHook: { state: 'off' } };
+    } else if (platform !== 'darwin') {
+      // No caller binding here (src/peer-pid.js; its reason is UNSUPPORTED, this one UNSUPPORTED_PLATFORM): tools that
+      // could not tell their caller are not added and nothing is announced, but turning the bus off still removes what an earlier version added.
+      if (!claudeOn(c)) removeClaude(rec);
+      state = { claude: UNSUPPORTED_PLATFORM, codex: UNSUPPORTED_PLATFORM, codexHook: UNSUPPORTED_PLATFORM };
+    } else {
       let claude;
       if (claudeOn(c)) {
         try { claude = addClaude(rec); } catch { claude = { state: 'error' }; }
@@ -190,9 +199,6 @@ function create({ rootDir, home, config, launch, codexBin, codexEnv = process.en
       state = { claude, codex, codexHook };
       // The first automatic add, ever: one Home notice with Undo (AW15). Earlier opt-outs left no record, so this is how they get honoured.
       if (!had && (rec.claude || rec.codex) && !rec.notice) rec.notice = { added_at: new Date(now()).toISOString(), dismissed: false };
-    } else {
-      await removeAll(rec);
-      state = { claude: { state: 'off' }, codex: { state: 'off' }, codexHook: { state: 'off' } };
     }
     record = rec;
     await writeRecord(rec);

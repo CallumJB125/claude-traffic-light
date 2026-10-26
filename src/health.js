@@ -190,6 +190,7 @@ function busRow(which) {
     switch (b.state) {
       case 'ours': return { status: 'ok', detail: which === 'claude' ? 'Registered as plexiform-bus.' : `Registered with Codex as plexiform-bus. ${BUS_APPROVALS}` };
       case 'full': return { status: 'ok', detail: "Plexiform's Claude integration is on and already carries the bus tools." };
+      case 'unsupported': return { status: 'info', detail: b.message || 'The agent bus tools are not added on this computer: Plexiform can only tell which AI session is calling on a Mac.' };
       case 'off': return { status: 'info', detail: "Off (agent awareness and the agent bus are off, you pressed Undo, or you turned Plexiform's Claude integration off)." };
       case 'missing': return { status: 'info', detail: 'Codex CLI not found.' };
       case 'untrusted': return { status: 'warn', detail: "The codex Plexiform found is not OpenAI's signed Codex, so Plexiform did not run it.", next: 'Install Codex from OpenAI (ChatGPT.app, Homebrew or npm), or remove the codex in ~/.local/bin, then restart Plexiform.' };
