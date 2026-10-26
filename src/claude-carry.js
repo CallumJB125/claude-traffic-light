@@ -72,12 +72,16 @@ function ensureKeyRoot(root) {
   return root;
 }
 const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e?.code === 'EPERM'; } };
-// When a process started (ms since epoch), or null when unknown: `ps -o etimes=` is elapsed seconds on macOS and Linux.
+// When a process started (ms since epoch), or null when unknown. `etime` ([[dd-]hh:]mm:ss) is the one elapsed-time
+// keyword both macOS (BSD) ps and Linux procps have; `etimes` is Linux only.
+const ETIME = /^\s*(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)\s*$/;
 function pidStartedAt(pid) {
   try {
-    const out = require('node:child_process').execFileSync('/bin/ps', ['-o', 'etimes=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }); // privacy-flow: key-dir-sweep
-    const s = Number(String(out).trim());
-    return Number.isFinite(s) ? Date.now() - s * 1000 : null;
+    const out = require('node:child_process').execFileSync('/bin/ps', ['-o', 'etime=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }); // privacy-flow: key-dir-sweep
+    const m = ETIME.exec(String(out));
+    if (!m) return null;
+    const [d, h, mi, s] = [m[1], m[2], m[3], m[4]].map((x) => Number(x || 0));
+    return Date.now() - (((d * 24 + h) * 60 + mi) * 60 + s) * 1000;
   } catch { return null; }
 }
 // A dir whose pid is alive is kept, unless the dir is older than that process: the pid was reused after a crash.
@@ -103,4 +107,4 @@ function sweepKeyDirs(root, { alive = pidAlive, startedAt = pidStartedAt } = {})
 // keyRoot may be a path or a getter (main resolves it after the dev profile is set).
 const resolveKeyRoot = (keyRoot) => (typeof keyRoot === 'function' ? keyRoot() : keyRoot) || null;
 
-module.exports = { ensureKeyRoot, sweepKeyDirs, keyDirPrefix, resolveKeyRoot, KEY_DIR_KINDS, prepareChat, NONE, prepareNoTool, defaultCarry, carryFor, setLoginShellEnv, burstOwnsPort, BURST_GATEWAY_PORT };
+module.exports = { pidStartedAt, ensureKeyRoot, sweepKeyDirs, keyDirPrefix, resolveKeyRoot, KEY_DIR_KINDS, prepareChat, NONE, prepareNoTool, defaultCarry, carryFor, setLoginShellEnv, burstOwnsPort, BURST_GATEWAY_PORT };

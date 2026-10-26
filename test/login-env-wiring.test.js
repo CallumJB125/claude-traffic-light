@@ -10,7 +10,7 @@ const { EventEmitter } = require('node:events');
 const { createLoginEnvStore, LOGIN_ENV_MESSAGE } = require('../board/shared/login-env-store.cjs');
 const { createLoginEnvHub, loginEnvMessage, CARRY_NAMES } = require('../src/login-env-hub.js');
 const { createClaudeCarry, productionCarry } = require('../board/shared/claude-carry.cjs');
-const { sweepKeyDirs } = require('../src/claude-carry.js');
+const { sweepKeyDirs, pidStartedAt } = require('../src/claude-carry.js');
 const { createTasksSupervisor, tasksEnv } = require('../src/tasks-process.js');
 
 const URL = 'https://shell-gw.example/v1';
@@ -18,7 +18,7 @@ const SECRET = 'sk-shell-LOGINSECRET000000000000000000000000';
 const values = { ANTHROPIC_BASE_URL: URL, ANTHROPIC_AUTH_TOKEN: SECRET };
 
 test('the store takes only well-formed string values, replaces them on each message, and answers only the names asked for', async () => {
-  const store = createLoginEnvStore();
+  const store = createLoginEnvStore({ waitMs: 20 });
   assert.equal(store.accept({ type: 'something.else' }), false);
   assert.deepEqual(await store.loginShellEnv({ names: CARRY_NAMES }), {}, 'nothing until main sends');
   assert.equal(store.accept({ type: LOGIN_ENV_MESSAGE, values: { ...values, 'bad name': 'x', N: 5, BIG: 'x'.repeat(9000), ARR: ['a'], OTHER: 'y' } }), true);
@@ -29,7 +29,7 @@ test('the store takes only well-formed string values, replaces them on each mess
 });
 
 test('values reach the carry in a helper: the store feeds createClaudeCarry({loginShellEnv}) and a gateway only in the login shell is carried', async () => {
-  const store = createLoginEnvStore();
+  const store = createLoginEnvStore({ waitMs: 20 });
   const carry = createClaudeCarry({
     env: {}, home: '/fx/home', platform: 'linux', loginShellEnv: store.loginShellEnv,
     readFile: (f) => (f === '/fx/home/.claude/settings.json' ? '{"model":"x"}' : null), readDir: () => null,
@@ -71,7 +71,7 @@ test('the hub reads in the background, publishes only on change, and a failure o
   const hub = createLoginEnvHub({ read: async () => { reads++; return result; }, log: (m) => logs.push(m), setTimer: (fn) => { hub.fire = fn; return { unref() {} }; }, clearTimer() {} });
   const got = [];
   hub.subscribe((v) => got.push({ ...v }));
-  assert.deepEqual(hub.values(), {}, 'nothing before the first read: spawns use the app env');
+  assert.equal(hub.values(), null, 'not read yet is null, not empty');
   await hub.refresh();
   assert.deepEqual(got, [values]);
   await hub.refresh();
@@ -152,4 +152,60 @@ test('optional hardening: a key dir whose pid is alive but older than that proce
     assert.deepEqual(fs.readdirSync(root), [fresh]);
     assert.equal(sweepKeyDirs(root, { alive: () => true, startedAt: () => null }), 0, 'unknown start time keeps it');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('review 1: pidStartedAt works unmocked (macOS and Linux ps) and is close to this process\'s real start', () => {
+  const started = pidStartedAt(process.pid);
+  assert.ok(started !== null, 'ps -o etime= is understood here');
+  const expected = Date.now() - process.uptime() * 1000;
+  assert.ok(Math.abs(started - expected) < 3000, `${started - expected} ms off`);
+  assert.equal(pidStartedAt(2 ** 22 + 12345), null, 'no such pid: unknown');
+});
+
+test('review 2: the OAuth token value never leaves the hub; only its presence (1) is stored, published and posted', async () => {
+  const token = 'sk-ant-oat01-REALTOKEN000000000000000000000000';
+  const hub = createLoginEnvHub({ read: async () => ({ ok: true, env: { ...values, CLAUDE_CODE_OAUTH_TOKEN: token } }) });
+  const posted = [];
+  hub.subscribe((v) => posted.push(loginEnvMessage(v)));
+  await hub.refresh();
+  assert.equal(hub.values().CLAUDE_CODE_OAUTH_TOKEN, '1');
+  assert.ok(!JSON.stringify(posted).includes(token) && !JSON.stringify(await hub.read({ names: CARRY_NAMES })).includes(token));
+  const empty = createLoginEnvHub({ read: async () => ({ ok: true, env: { CLAUDE_CODE_OAUTH_TOKEN: '' } }) });
+  await empty.refresh();
+  assert.deepEqual(empty.values(), {}, 'an empty token is no token');
+});
+
+test('review 3: a spawn in the first window waits for the login-shell read and gets the gateway; a read that never lands falls back to the app env', async () => {
+  // main side: hub.read awaits the first refresh
+  let release;
+  const hub = createLoginEnvHub({ read: () => new Promise((r) => { release = () => r({ ok: true, env: { ...values } }); }) });
+  const p = hub.read({ names: ['ANTHROPIC_BASE_URL'] });
+  const r = hub.refresh();
+  setTimeout(() => release(), 50);
+  assert.deepEqual(await p, { ANTHROPIC_BASE_URL: URL });
+  await r;
+  const never = createLoginEnvHub({ read: () => new Promise(() => {}), firstReadWaitMs: 30 });
+  assert.deepEqual(await never.read({ names: ['ANTHROPIC_BASE_URL'] }), {}, 'bounded wait, then the app env');
+  assert.deepEqual(never.values(), {});
+  // helper side: the carry prepares before the message, which arrives 100 ms later
+  const store = createLoginEnvStore({ waitMs: 2000 });
+  const carry = createClaudeCarry({ env: {}, home: '/fx/home', platform: 'linux', loginShellEnv: store.loginShellEnv, readFile: () => null, readDir: () => null, probe: async () => true, credentialsExist: () => true });
+  setTimeout(() => store.accept(loginEnvMessage(values)), 100);
+  const t0 = Date.now();
+  const out = await carry.prepare({ mode: 'notool' });
+  assert.equal(out.childEnv.ANTHROPIC_BASE_URL, URL);
+  assert.ok(Date.now() - t0 < 1500);
+  // and a store that is never told gives up after its wait, once
+  const quiet = createLoginEnvStore({ waitMs: 30 });
+  assert.deepEqual(await quiet.loginShellEnv({ names: CARRY_NAMES }), {});
+});
+
+test('review 5: focus refreshes are at most one a minute; invalidate is not limited', async () => {
+  let t = 1_000_000, reads = 0;
+  const hub = createLoginEnvHub({ read: async () => { reads++; return { ok: false, reason: 'spawn_failed' }; }, now: () => t, setTimer: () => ({ unref() {} }), clearTimer() {} });
+  await hub.focus(); await hub.focus(); await hub.focus();
+  assert.equal(reads, 1);
+  t += 61_000;
+  await hub.focus();
+  assert.equal(reads, 2);
 });

@@ -5484,8 +5484,8 @@ app.whenReady().then(() => {
   // An AppImage's copies for older versions go only once this is the one running instance.
   if (gotLock && !DEMO) {
     loginEnvHub.refresh().catch(() => {});
-    // A later read is free inside the reader's own 5-minute cache, so coming back to the app picks up a changed shell file.
-    app.on('browser-window-focus', () => { loginEnvHub.refresh().catch(() => {}); });
+    // Coming back to the app picks up a changed shell file: at most one read a minute (the reader caches a good one for 5).
+    app.on('browser-window-focus', () => { loginEnvHub.focus().catch(() => {}); });
   }
   if (gotLock) { try { require('./src/claude-carry.js').sweepKeyDirs(path.join(app.getPath('userData'), 'run')); } catch (err) { console.warn('[claude] could not tidy old key folders:', err.message); } }
   if (gotLock) { try { HookPaths.prune(HOOK_PATHS); } catch (err) { console.warn('[hooks] could not tidy old copies:', err.message); } }

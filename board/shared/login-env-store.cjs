@@ -8,6 +8,8 @@ const LOGIN_ENV_MESSAGE = 'login.env';
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MAX_ENTRIES = 64;
 const MAX_VALUE = 8192;
+// Main's first read can take up to the login shell's 4 s timeout; a spawn before it lands waits that long, once.
+const FIRST_WAIT_MS = 5000;
 
 // Exact names, or a prefix ending in `*`, the same as src/login-shell-env.js filter().
 function matches(name, names) {
@@ -18,8 +20,12 @@ function matches(name, names) {
   return false;
 }
 
-function createLoginEnvStore() {
+function createLoginEnvStore({ waitMs = FIRST_WAIT_MS } = {}) {
   let values = Object.freeze({});
+  // "Not told yet" is not "told, nothing set": until main's first message (or the wait runs out) a read waits.
+  let received = false;
+  let wake;
+  const first = new Promise((r) => { wake = r; });
   return {
     /** true when `msg` was a login.env message (accepted or refused), so the caller stops handling it. */
     accept(msg) {
@@ -32,10 +38,17 @@ function createLoginEnvStore() {
         }
       }
       values = Object.freeze(next);
+      received = true; wake();
       return true;
     },
     /** The createClaudeCarry({loginShellEnv}) seam: only the names the carry asks for. */
     async loginShellEnv({ names } = {}) {
+      if (!received) {
+        let t;
+        await Promise.race([first, new Promise((r) => { t = setTimeout(r, waitMs); })]);
+        clearTimeout(t);
+        received = true;   // gave up: the app env decides from now on
+      }
       const out = {};
       for (const [k, v] of Object.entries(values)) if (matches(k, names)) out[k] = v;
       return out;

@@ -199,7 +199,7 @@ function createDeviceController({ account, teamId, credsFile, seal, unseal, canS
     c.stderr?.on?.('data', (d) => log('runner', scrubTokens(d).trimEnd()));
     c.on('message', (m) => {
       if (c !== child || !m || typeof m.type !== 'string') return;
-      if (m.type === 'runner.ready') { c.ready = true; setRunner('connecting'); if (presence.enabled) send(c, presence); } else if (m.type === 'runner.status' && ENDED[m.state]) {
+      if (m.type === 'runner.ready') { c.ready = true; sendLoginEnvTo(c, loginEnv()); setRunner('connecting'); if (presence.enabled) send(c, presence); } else if (m.type === 'runner.status' && ENDED[m.state]) {
         // A rotation in flight closes the old socket 4403 by design: that must not delete the new token.
         if (c.retiring) c.endedWhileRetiring = ENDED[m.state]; else endedByHub(c, ENDED[m.state]);
       }

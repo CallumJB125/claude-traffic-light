@@ -1053,7 +1053,9 @@ test('PR 2b: the runner gets the login-shell values over parentPort after runner
   assert.ok(!JSON.stringify(c.opts).includes(secret), 'not in the fork env');
   d.sendLoginEnv({ ANTHROPIC_BASE_URL: 'https://b.example' });
   assert.equal(c.sent.length, 2, 'not sent to a runner that has not said ready');
+  current = { ANTHROPIC_BASE_URL: 'https://changed-before-ready.example' };
   c.emit('message', { type: 'runner.ready' });
+  assert.deepEqual(c.sent.at(-1), { type: 'login.env', values: current }, 'a change between fork and ready is sent on ready');
   d.sendLoginEnv({ ANTHROPIC_BASE_URL: 'https://b.example' });
   assert.deepEqual(c.sent.at(-1), { type: 'login.env', values: { ANTHROPIC_BASE_URL: 'https://b.example' } });
   assert.ok(!JSON.stringify(h.logs).includes(secret), 'never in a log line');
