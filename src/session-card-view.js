@@ -114,7 +114,7 @@ const TAG_SOURCES = [
   (r) => str(r.tmux, 24),
   (r) => str(r.title, 24),
   (r) => str(r.id, 200).replace(/[^A-Za-z0-9]/g, '').slice(-4),
-  (r) => { const t = stamp(r.startedAt); return t ? new Date(t).toISOString().slice(11, 16) : ''; },
+  (r) => { const t = stamp(r.startedAt); return t ? `${String(new Date(t).getHours()).padStart(2, '0')}:${String(new Date(t).getMinutes()).padStart(2, '0')}` : ''; },
 ];
 function disambiguate(rows) {
   const list = Array.isArray(rows) ? rows : [];

@@ -80,7 +80,9 @@ function fromSession(s, { pendingSessionIds = new Set(), now = Date.now() } = {}
   // A permission wait with no request file and no ask (Codex's PermissionRequest):
   // shown at once for a blocking ask, after the transient hold otherwise.
   if (s.signal === 'permission-ask' && !ask && !pendingSessionIds.has(s.sessionId) && Machine.presentSignal(s, now) === 'permission-ask') {
-    out.push({ ...base, id: `ask-${s.host}-${s.sessionId}`, kind: 'permission', tool: s.tool || null, title: 'Needs your permission', text: '', options: [], created_at: s.signalSince || s.updatedAt || null });
+    // A Codex request_user_input is a question to the person, not a tool permission.
+    const question = Machine.codexInputPending(s, now);
+    out.push({ ...base, id: `ask-${s.host}-${s.sessionId}`, kind: question ? 'question' : 'permission', tool: s.tool || null, title: question ? 'Codex has a question' : 'Needs your permission', text: '', options: [], created_at: s.signalSince || s.updatedAt || null });
   }
   const b = s.blocked && typeof s.blocked === 'object' ? s.blocked : null;
   const bAt = b ? Date.parse(b.at) : NaN;
@@ -127,7 +129,7 @@ function collect({ requests = [], sessions = [], dialogs = [], now = Date.now() 
   ];
   // A pane read beats the session's vaguer notification text for the same session.
   const dialogSessions = new Set(dialogs.map((d) => d.sessionId).filter(Boolean));
-  const kept = items.filter((i) => !(i.kind === 'notification' && dialogSessions.has(i.session)));
+  const kept = items.filter((i) => !((i.kind === 'notification' || (i.source === 'session' && (i.kind === 'permission' || i.kind === 'question'))) && dialogSessions.has(i.session)));
   const tags = sessionTags(sessions);
   return [...kept, ...dialogs.map(fromDialog)].map((i) => (tags.has(i.session) ? { ...i, tag: tags.get(i.session) } : i))
     .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));

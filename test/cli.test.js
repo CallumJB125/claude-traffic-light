@@ -282,3 +282,12 @@ test('raycast scripts carry their metadata and call the CLI', () => {
   }
   assert.ok(fs.existsSync(path.join(dir, 'README.md')));
 });
+
+test('waiting: a Codex permission wait with no request file counts once, as Home Needs you does', async () => {
+  const s = session('c1', { source: 'codex', signal: 'permission-ask', askKind: 'request', signalSince: iso(1000) });
+  const { home } = fixture({ sessions: { c1: s } });
+  const j = (await cli(['waiting', '--json'], { home, live: LIVE })).json();
+  assert.equal(j.count, 1);
+  const inputs = require('../src/pending-inputs.js').collect({ sessions: [s], now: NOW });
+  assert.equal(require('../src/home-main.js').needs(inputs, NOW).total, j.count);
+});

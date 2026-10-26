@@ -20,13 +20,27 @@ test('a request ask with no request file is a Needs-you input at once', () => {
   assert.deepEqual(inputs[0].actions, ['open']);
   assert.equal(inputs[0].created_at, iso(10));
   assert.equal(Home.needs(inputs, NOW).total, 1);
+  assert.equal(Home.today(null, inputs, NOW).longestWaitMs, 10);
+});
+
+test('a pane dialog for the same session replaces the session-sourced permission item', () => {
+  const dialog = { key: 'k', dialog: 'permission', title: 'Permission needed', text: 't', options: [], sessionId: 'c1', cwd: '/w/notes-app', seenAt: iso(5) };
+  const kinds = PendingInputs.collect({ sessions: [codexAsk()], dialogs: [dialog], now: NOW }).map((i) => i.kind);
+  assert.deepEqual(kinds, ['dialog']);
+});
+
+test('a Codex request_user_input is a question, not a permission', () => {
+  const s = codexAsk({ askKind: null, codexLifecycle: 1, codexClosedTurn: false, codexTurnId: 't1', codexInputRequests: [{ id: 'q1', turnId: 't1', kind: 'sync', askedAt: iso(10) }] });
+  const [i] = PendingInputs.collect({ sessions: [s], now: NOW });
+  assert.equal(i.kind, 'question');
+  assert.equal(i.answerable, false);
 });
 
 test('the widget look and the Agents bucket already read it as needing the person', () => {
   const s = codexAsk();
   assert.equal(R.resolve(R.defaultRules(), [s], NOW).look.lamp, 'red');
   const snap = Overview.snapshot({ sessions: [s], now: NOW });
-  assert.equal(JSON.stringify(snap).includes('Needs you'), true);
+  assert.equal(snap.sessions[0].bucket, 'needs');
 });
 
 test('a notification ask with no ask object is held 1.2 s; a request ask is not', () => {
@@ -82,4 +96,10 @@ test('a quiet task counts from its last activity, not its last state change', ()
   assert.match(CV.cardView({ title: 't', ai: 'claude', row }, NOW + 30 * 60_000).status, /42 min/);
   assert.equal(cardRow({ state: 'quiet' }, NOW).lastActivityMs, NOW);
   assert.equal(cardRow({ state: 'quiet' }).lastActivityMs, null);
+});
+
+test('the start-time tag is local HH:MM', () => {
+  const at = new Date(2026, 9, 26, 9, 5).getTime();
+  const rows = [{ provider: 'Codex', project: 'p', startedAt: at }, { provider: 'Codex', project: 'p', startedAt: at + 120000 }];
+  assert.deepEqual(CardView.disambiguate(rows), ['09:05', '09:07']);
 });

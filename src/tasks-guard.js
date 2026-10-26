@@ -63,6 +63,7 @@ function createGuard({ P, taskFace }) {
       cost: { usd: Number.isFinite(v.cost?.usd) ? v.cost.usd : 0, budgetUsd: Number.isFinite(v.cost?.budgetUsd) ? v.cost.budgetUsd : null },
       createdAtMs: now - int(v.createdAgeMs),
       stateSinceMs: now - int(v.stateAgeMs),
+      lastActivityMs: Number.isFinite(v.live?.activity_age_ms) ? now - int(v.live.activity_age_ms) : null,
       lastSeq: int(v.lastSeq),
       hub: v.hub ? { cardKey: str(v.hub.cardKey, 60) } : null,
       limitResetsAtMs: Number.isFinite(v.limitResetsInMs) ? now + v.limitResetsInMs : null,

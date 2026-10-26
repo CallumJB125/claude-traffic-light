@@ -21,7 +21,7 @@ function peersKeyOf(preflight) {
 /** What a row tells the card: no paths, no branch, no cost. */
 function cardRow(t, activityMs = null) {
   if (!t) return null;
-  return { state: t.state, label: String(t.label || '').slice(0, 60), reason: String(t.reason || '').slice(0, 300), ai: { id: t.ai?.id ?? null }, actions: Array.isArray(t.actions) ? t.actions.slice(0, 20) : [], stateSinceMs: t.stateSinceMs, lastActivityMs: Number.isFinite(activityMs) ? activityMs : null };
+  return { state: t.state, label: String(t.label || '').slice(0, 60), reason: String(t.reason || '').slice(0, 300), ai: { id: t.ai?.id ?? null }, actions: Array.isArray(t.actions) ? t.actions.slice(0, 20) : [], stateSinceMs: t.stateSinceMs, lastActivityMs: [t.lastActivityMs, activityMs].filter(Number.isFinite).reduce((a, b) => Math.max(a, b), null) };
 }
 
 /**
@@ -167,14 +167,14 @@ function register(deps) {
   function onEvent(wcId, id, event) {
     if (!started || wcId !== started.wcId) return false;
     if (!mine(wcId) || !started.ids.has(id)) return true;
-    started.activityAt = now();
+    if (id === started.last) started.activityAt = now();
     const line = CV.eventLine(event);
     const wc = homeWc();
     if (line && wc && wc.id === wcId) wc.send('compose:event', { id, line, at: started.activityAt });
     return true;
   }
 
-  let lastRow = '', lastConn = null, lastState = null;
+  let lastRow = '', lastConn = null;
   function onChange(snap) {
     // The helper connecting or going away: Home asks for its info again (the box was offline, or is now).
     const conn = snap?.conn?.status ?? null;
@@ -183,7 +183,6 @@ function register(deps) {
     const wc = homeWc();
     if (!wc || !mine(wc.id)) return;
     const found = (snap?.tasks || []).find((t) => t && t.id === started.last);
-    if (found && found.state !== lastState) { lastState = found.state; started.activityAt = now(); }
     const row = cardRow(found, started.activityAt);
     const msg = { id: started.last, row, connected: snap?.conn?.status === 'connected' };
     const json = JSON.stringify(msg);

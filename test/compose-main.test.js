@@ -41,7 +41,7 @@ function harness(over = {}) {
   const deps = {
     ipcMain, buddy: () => buddy, service: () => service, config: () => ({ homeComposer: st.hidden ? false : undefined }), homeDir: HOME,
     sessions: () => over.sessions ?? [], isDir: async (p) => !(over.missing || []).includes(p), muted: (cwd) => (over.muted || []).includes(cwd),
-    pickFolder: async () => over.pick ?? null, openInTasks: (id) => { calls.reveal = id; return true; }, shortcut: () => ({ state: 'off' }),
+    now: over.now, pickFolder: async () => over.pick ?? null, openInTasks: (id) => { calls.reveal = id; return true; }, shortcut: () => ({ state: 'off' }),
   };
   const api = Compose.register(deps);
   const ev = (sender = wc) => ({ sender, senderFrame: sender.mainFrame });
@@ -252,4 +252,19 @@ test('peers key is main’s own and stable for the same peers', () => {
   assert.equal(a, Compose.peersKeyOf({ peers: [{ id: 'p', state: 'running', paths: ['x'] }] }));
   assert.notEqual(a, Compose.peersKeyOf({ peers: [{ id: 'p', state: 'running', paths: ['y'] }] }));
   assert.deepEqual(Object.keys(Compose.cardRow({ id: 't', state: 'running', label: 'x', reason: 'y', ai: { id: 'claude' }, actions: [], stateSinceMs: 1, where: '~/secret', branch: 'b' })).sort(), ['actions', 'ai', 'label', 'lastActivityMs', 'reason', 'state', 'stateSinceMs']);
+});
+
+test('a quiet task keeps its last activity: the move into quiet is not activity', async () => {
+  let clock = 1_000_000;
+  const h = harness({ now: () => clock });
+  await h.call('compose:run', draft());
+  clock += 1000;
+  h.api.onEvent(h.wc.id, 't1', { type: 'tool', phase: 'start', name: 'Bash', summary: 'x' });
+  const lastEvent = clock;
+  clock += 6 * 60_000;
+  h.api.onChange({ conn: { status: 'connected' }, tasks: [{ id: 't1', state: 'quiet', stateSinceMs: clock }] });
+  assert.equal(h.wc.sent.filter(([ch]) => ch === 'compose:task').at(-1)[1].row.lastActivityMs, lastEvent);
+  clock += 60_000;
+  h.api.onChange({ conn: { status: 'connected' }, tasks: [{ id: 't1', state: 'quiet', stateSinceMs: clock, lastActivityMs: lastEvent + 5000 }] });
+  assert.equal(h.wc.sent.filter(([ch]) => ch === 'compose:task').at(-1)[1].row.lastActivityMs, lastEvent + 5000);
 });
