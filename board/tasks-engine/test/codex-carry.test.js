@@ -7,7 +7,7 @@ import { waitFor } from './helpers.js';
 import { startCodexFixture as setup } from './codex-helpers.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createCodexCarry, TAKEOVER_TRANSLATED, CODEX_KEY_FILE, KEY_NOT_KEPT } from '../../shared/codex-carry.cjs';
+import { createCodexCarry, TAKEOVER_TRANSLATED, CODEX_KEY_FILE, CODEX_TAKEOVER_KEY_FILE, KEY_NOT_KEPT } from '../../shared/codex-carry.cjs';
 
 const HOME = '/home/fixture';
 const KEY = 'plexlab-fake-key-0123456789abcdef';
@@ -33,7 +33,7 @@ function carry(text, { env = { PLEXLAB_KEY: KEY }, probeOk = true, keyViaAuthFil
 const getTask = (h, id) => h.client.getTask(id);
 
 const authArg = (argv) => argv.find((a) => a.startsWith('model_providers.plexlab.auth='));
-const keyFileOf = (argv) => JSON.parse(authArg(argv).match(/args=(\[.*\])\}$/)[1])[0];
+const keyFileOf = (argv, id = 'plexlab') => JSON.parse(argv.find((a) => a.startsWith(`model_providers.${id}.auth=`)).match(/args=(\[[^\]]*\])/)[1])[0];
 
 test('A8 regression, (b): a Codex Tasks run uses model_provider="plexlab" and the user\'s model; the key is only in a run-dir file behind an auth command', { skip: !posix }, async () => {
   const h = await setup({ text: 'ok' }, { codexCarry: carry(PLEXLAB) });
@@ -48,7 +48,7 @@ test('A8 regression, (b): a Codex Tasks run uses model_provider="plexlab" and th
     assert.ok(start.argv.includes('--ignore-user-config'), 'the user config.toml stays ignored: only the allowlisted provider is carried');
     assert.ok(!start.argv.some((a) => a.startsWith('model_providers.plexlab.env_key=')), 'env_key gives way to the auth command');
     const file = keyFileOf(start.argv);
-    assert.equal(authArg(start.argv), `model_providers.plexlab.auth={command="/bin/cat",args=[${JSON.stringify(file)}]}`);
+    assert.equal(authArg(start.argv), `model_providers.plexlab.auth={command="/bin/cat",args=[${JSON.stringify(file)}],timeout_ms=5000}`);
     assert.equal(path.basename(file), CODEX_KEY_FILE);
     assert.ok(file.startsWith(fs.realpathSync(h.dataDir)) || file.startsWith(h.dataDir), 'in the run dir, under the denied data dir');
     assert.equal(start.env.PLEXLAB_KEY, undefined, 'not in the CLI env, so not in /proc/<codex>/environ');
@@ -103,7 +103,7 @@ test('(b): a provider with header values from variables still parks auth on a ru
   } finally { await h.cleanup(); }
 });
 
-test('C4: the Codex takeover argv carries the provider -c values; the takeover env carries no key', { skip: !posix }, async () => {
+test('C4: the Codex takeover reads the key from codex-takeover.key (denied, 0600) until handback; no key in its argv or env', { skip: !posix }, async () => {
   const h = await setup({ wait: true, waitFirstOnly: true }, { codexCarry: carry(PLEXLAB) });
   try {
     const { id } = await h.client.createTask({ text: 'Take this over', cwd: h.repo.checkout, ai: 'codex', permissionLevel: 'auto-edits' });
@@ -111,14 +111,22 @@ test('C4: the Codex takeover argv carries the provider -c values; the takeover e
     const r = await h.client.act(id, 'takeover', { mode: 'print' });
     const argv = r.takeover.argv;
     assert.equal(argv[argv.indexOf('model_provider="plexlab"') - 1], '-c');
-    assert.ok(argv.includes('model_providers.plexlab.env_key="PLEXLAB_KEY"'));
+    assert.ok(!argv.some((a) => a.startsWith('model_providers.plexlab.env_key=')));
+    const file = keyFileOf(argv);
+    assert.equal(path.basename(file), CODEX_TAKEOVER_KEY_FILE);
+    assert.equal(fs.readFileSync(file, 'utf8'), KEY);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
+    assert.ok(argv.find((a) => a.startsWith('permissions.plexiform.filesystem=')).includes(`${JSON.stringify(path.dirname(file))}="deny"`), 'the takeover denies the key dir');
     assert.equal(argv[argv.indexOf('--model') + 1], 'glm-5.3-flash');
     assert.ok(!JSON.stringify(r.takeover).includes(KEY), 'no key in the takeover argv or env');
     assert.ok(!('PLEXLAB_KEY' in r.takeover.env));
+    await h.client.act(id, 'handback', {});
+    assert.equal(fs.existsSync(file), false, 'gone at handback');
   } finally { await h.cleanup(); }
 });
 
-test('a provider whose key is written in config.toml can run in the background but refuses a terminal takeover', { skip: !posix }, async () => {
+test('a provider whose key is written in config.toml runs in the background and takes over through the key file', { skip: !posix }, async () => {
   const inline = `model_provider = "gw"\n[model_providers.gw]\nbase_url = "https://gw.example.test/v1"\nexperimental_bearer_token = "${KEY}"\n`;
   const h = await setup({ wait: true, waitFirstOnly: true }, { codexCarry: carry(inline, { env: {} }) });
   try {
@@ -127,9 +135,13 @@ test('a provider whose key is written in config.toml can run in the background b
     const start = h.log().find((x) => x.kind === 'start');
     assert.equal(start.env.PLEXIFORM_PROVIDER_KEY, undefined, '(b): not in the CLI env');
     const auth = start.argv.find((a) => a.startsWith('model_providers.gw.auth='));
-    assert.equal(fs.readFileSync(JSON.parse(auth.match(/args=(\[.*\])\}$/)[1])[0], 'utf8'), KEY, 'the background run reads it from the key file');
+    assert.ok(auth);
+    assert.equal(fs.readFileSync(keyFileOf(start.argv, 'gw'), 'utf8'), KEY, 'the background run reads it from the key file');
     assert.ok(!start.argv.some((a) => a.includes(KEY)));
-    await assert.rejects(h.client.act(id, 'takeover', { mode: 'print' }), (e) => e.message === TAKEOVER_TRANSLATED);
+    assert.ok(!start.argv.some((a) => a.startsWith('model_providers.gw.env_key=') || a.startsWith('model_providers.gw.experimental_bearer_token=')), 'auth replaces them');
+    const r = await h.client.act(id, 'takeover', { mode: 'print' });
+    assert.equal(fs.readFileSync(keyFileOf(r.takeover.argv, 'gw'), 'utf8'), KEY);
+    assert.ok(!JSON.stringify(r.takeover).includes(KEY));
   } finally { await h.cleanup(); }
 });
 
@@ -170,12 +182,18 @@ test('no config.toml: the run is today\'s (no provider -c values)', { skip: !pos
 function liveCarry(live) {
   return createCodexCarry({
     env: live.env, home: HOME, platform: 'linux', keyViaAuthFile: true,
+    // live.noTakeoverFile: the takeover's key file can't be written, so the takeover falls back to (a).
+    writeKey: (file, value) => {
+      if (live.noTakeoverFile && path.basename(file) === CODEX_TAKEOVER_KEY_FILE) throw new Error('EACCES');
+      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(file, value, { mode: 0o600 });
+    },
     readFile: (f) => (f === `${HOME}/.codex/config.toml` ? live.text : null),
     probe: async () => true, burstOwnsPort: async () => false,
   });
 }
 const INLINE = `model_provider = "gw"\n[model_providers.gw]\nbase_url = "https://gw.example.test/v1"\nexperimental_bearer_token = "${KEY}"\n`;
-const carriesPlexlab = (argv) => argv[argv.indexOf('model_provider="plexlab"') - 1] === '-c' && argv.includes('model_providers.plexlab.env_key="PLEXLAB_KEY"');
+const carriesPlexlab = (argv) => argv[argv.indexOf('model_provider="plexlab"') - 1] === '-c' && argv.some((a) => a.startsWith('model_providers.plexlab.auth={command="/bin/cat"') || a === 'model_providers.plexlab.env_key="PLEXLAB_KEY"');
 
 test('takeover of a task that never ran in the background carries the provider (no cached carry to read)', { skip: !posix }, async () => {
   const live = { text: PLEXLAB, env: {} };
@@ -194,7 +212,7 @@ test('takeover of a task that never ran in the background carries the provider (
   } finally { await h.cleanup(); }
 });
 
-test('takeover after an engine restart carries the provider, and refuses a key written in config.toml', { skip: !posix }, async () => {
+test('takeover after an engine restart carries the provider; with no key file, a key written in config.toml is refused', { skip: !posix }, async () => {
   const live = { text: PLEXLAB, env: { PLEXLAB_KEY: KEY } };
   const h = await setup({ wait: true, waitFirstOnly: true }, { codexCarry: liveCarry(live) });
   try {
@@ -202,7 +220,9 @@ test('takeover after an engine restart carries the provider, and refuses a key w
     await waitFor(() => h.task(id)?.sessionStarted && h.task(id).state === 'running');
     await h.restart();
     live.text = INLINE;
+    live.noTakeoverFile = true;
     await assert.rejects(h.client.act(id, 'takeover', { mode: 'print' }), (e) => e.message === TAKEOVER_TRANSLATED);
+    live.noTakeoverFile = false;
     live.text = PLEXLAB;
     const r = await h.client.act(id, 'takeover', { mode: 'print' });
     assert.ok(carriesPlexlab(r.takeover.argv));
@@ -222,13 +242,14 @@ test('takeover after the provider was set (or changed) since the last run uses t
   } finally { await h.cleanup(); }
 });
 
-test('a run whose provider became an inline key since it started refuses the takeover and keeps running', { skip: !posix }, async () => {
+test('(a) fallback: with no takeover key file, a provider that became an inline key refuses the takeover and the run keeps running', { skip: !posix }, async () => {
   const live = { text: PLEXLAB, env: { PLEXLAB_KEY: KEY } };
   const h = await setup({ wait: true, waitFirstOnly: true }, { codexCarry: liveCarry(live) });
   try {
     const { id } = await h.client.createTask({ text: 'Take this over', cwd: h.repo.checkout, ai: 'codex', permissionLevel: 'auto-edits' });
     await waitFor(() => h.task(id)?.sessionStarted && h.task(id).state === 'running');
     live.text = INLINE;
+    live.noTakeoverFile = true;
     await assert.rejects(h.client.act(id, 'takeover', { mode: 'print' }), (e) => e.message === TAKEOVER_TRANSLATED);
     assert.equal(h.task(id).state, 'running', 'checked before the run is stopped');
   } finally { await h.cleanup(); }
@@ -254,5 +275,38 @@ test('a login-shell CODEX_HOME is the run\'s and the takeover\'s CODEX_HOME and 
     const r = await h.client.act(id, 'takeover', { mode: 'print' });
     assert.equal(r.takeover.env.CODEX_HOME, ALT);
     assert.ok(r.takeover.argv.find((a) => a.startsWith('permissions.plexiform.filesystem=')).includes(`"${ALT}"="deny"`));
+  } finally { await h.cleanup(); }
+});
+
+// Lab shape (codex-auth-command.md, gotcha 1): a key command that can't start shows on --json only as "Reconnecting…
+// high demand" then turn.failed; the cause is one stderr line. It must park auth with a fixed reason, not fail as "error".
+const AUTH_STDERR = 'Failed to resolve external auth: provider auth command `/bin/cat` failed to start: Permission denied (os error 13)\n';
+const HIGH_DEMAND = "We're currently experiencing high demand, which may cause temporary errors.";
+test('an auth command that cannot start (recorded stderr shape) parks auth, not "high demand"', { skip: !posix }, async () => {
+  const h = await setup({ stderr: AUTH_STDERR, events: [1, 2, 3, 4, 5].map((n) => ({ type: 'error', message: `Reconnecting... ${n}/5 (${HIGH_DEMAND})` })), error: HIGH_DEMAND }, { codexCarry: carry(PLEXLAB) });
+  try {
+    const { id } = await h.client.createTask({ text: 'Say ok', cwd: h.repo.checkout, ai: 'codex', permissionLevel: 'auto-edits' });
+    const d = await waitFor(async () => { const x = await getTask(h, id); return ['parked', 'failed'].includes(x.state) ? x : null; });
+    assert.equal(d.state, 'parked');
+    assert.equal(d.parkReason, 'auth');
+    assert.ok(!JSON.stringify(d).includes('/bin/cat') && !JSON.stringify(d).includes('os error'), 'no stderr text is kept');
+  } finally { await h.cleanup(); }
+  // The same failure without that stderr line stays an ordinary error.
+  const g = await setup({ error: HIGH_DEMAND }, { codexCarry: carry(PLEXLAB) });
+  try {
+    const { id } = await g.client.createTask({ text: 'Say ok', cwd: g.repo.checkout, ai: 'codex', permissionLevel: 'auto-edits' });
+    const d = await waitFor(async () => { const x = await getTask(g, id); return ['parked', 'failed'].includes(x.state) ? x : null; });
+    assert.notEqual(d.parkReason, 'auth');
+  } finally { await g.cleanup(); }
+});
+
+test('(b) with a key file that cannot be written falls back to (a): the Tasks run parks auth and Codex never starts', { skip: !posix }, async () => {
+  const c = createCodexCarry({ env: { PLEXLAB_KEY: KEY }, home: HOME, platform: 'linux', readFile: (f) => (f === `${HOME}/.codex/config.toml` ? PLEXLAB : null), probe: async () => true, burstOwnsPort: async () => false, writeKey: () => { throw new Error('EROFS'); } });
+  const h = await setup({ text: 'ok' }, { codexCarry: c });
+  try {
+    const { id } = await h.client.createTask({ text: 'Say ok', cwd: h.repo.checkout, ai: 'codex', permissionLevel: 'auto-edits' });
+    const d = await waitFor(async () => { const x = await getTask(h, id); return x.state === 'parked' ? x : null; });
+    assert.equal(d.parkReason, 'auth');
+    assert.equal(h.log().filter((x) => x.kind === 'start').length, 0);
   } finally { await h.cleanup(); }
 });

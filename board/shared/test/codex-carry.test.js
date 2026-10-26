@@ -242,11 +242,11 @@ import os from 'node:os';
 const NOKEY = 'model_provider = "local"\n[model_providers.local]\nbase_url = "http://127.0.0.1:4001/v1"\nwire_api = "responses"\n';
 const withKey = (opts = {}) => createCodexCarry({ env: { PLEXLAB_KEY: KEY }, home: HOME, platform: 'linux', readFile: (f) => (f === CFG ? (opts.text ?? PLEXLAB) : null), probe: async () => true, burstOwnsPort: async () => false, ...opts });
 
-test('the shipped default is (a): KEY_VIA_AUTH_FILE stays off until the lab confirms auth.command', () => {
-  assert.equal(KEY_VIA_AUTH_FILE, false);
+test('the shipped default is (b), proven by the lab (codex-auth-command.md); (a) is only the fallback', () => {
+  assert.equal(KEY_VIA_AUTH_FILE, true);
 });
 
-test('(a): a key is refused for a run with a shell (the default mode), kept for no-shell sites and takeover; a keyless provider goes everywhere', async () => {
+test('(a) fallback, with no key file: a key is refused for a run with a shell, kept for no-shell sites and takeover; a keyless provider goes everywhere', async () => {
   const shell = await withKey().prepare();
   assert.deepEqual(shell.failure, { kind: 'auth', reason: KEY_NOT_KEPT });
   assert.deepEqual(shell.cliEnv, {});
@@ -275,17 +275,20 @@ test('(b): the key goes to a 0600 file behind auth={command="/bin/cat",args=[fil
     assert.equal(r.keyFile, file);
     assert.deepEqual(r.cliEnv, {});
     assert.ok(!r.overrides.some((o) => o.startsWith('model_providers.plexlab.env_key=')));
-    assert.ok(r.overrides.includes(`model_providers.plexlab.auth={command="/bin/cat",args=[${JSON.stringify(file)}]}`));
+    assert.ok(r.overrides.includes(`model_providers.plexlab.auth={command="/bin/cat",args=[${JSON.stringify(file)}],timeout_ms=5000}`), 'the lab shape; no refresh_interval_ms');
     assert.ok(r.overrides.every((o) => overrideKeyAllowed(o, 'plexlab')), 'still only model_provider / model_providers.<id>.*');
     assert.ok(!r.overrides.some((o) => o.includes(KEY)));
     assert.equal(fs.readFileSync(file, 'utf8'), KEY);
     assert.equal(fs.statSync(file).mode & 0o777, 0o600);
     r.release();
     assert.equal(fs.existsSync(file), false);
-    // Same config, no-shell site: unchanged, no file.
+    // A no-shell site with a key file (the owned chat) uses it too; without one (review) the key stays in the CLI env.
     const n = await withKey({ keyViaAuthFile: true }).prepare({ mode: 'noshell', keyFile: file });
-    assert.equal(n.cliEnv.PLEXLAB_KEY, KEY);
-    assert.equal(fs.existsSync(file), false);
+    assert.deepEqual(n.cliEnv, {});
+    assert.equal(fs.readFileSync(file, 'utf8'), KEY);
+    n.release();
+    const e = await withKey({ keyViaAuthFile: true }).prepare({ mode: 'noshell' });
+    assert.equal(e.cliEnv.PLEXLAB_KEY, KEY);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -307,4 +310,21 @@ test('the start-up sweep removes a left-over codex-provider.key (and its .tmp) e
     assert.deepEqual(fs.readdirSync(path.join(root, 'a')), ['mcp.json']);
     assert.ok(fs.existsSync(path.join(root, 'b', CODEX_KEY_FILE)));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('(b) drops the fields auth cannot be combined with: env_key, experimental_bearer_token, requires_openai_auth', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pxck-'));
+  try {
+    const text = `${PLEXLAB}requires_openai_auth = true\n`;
+    const r = await withKey({ text }).prepare({ mode: 'shell', keyFile: path.join(dir, CODEX_KEY_FILE) });
+    assert.equal(r.failure, null);
+    for (const f of ['env_key', 'experimental_bearer_token', 'requires_openai_auth']) assert.ok(!r.overrides.some((o) => o.startsWith(`model_providers.plexlab.${f}=`)), f);
+    assert.equal(r.overrides.filter((o) => o.startsWith('model_providers.plexlab.auth=')).length, 1);
+    assert.equal(fs.statSync(dir).mode & 0o777, 0o700, 'the key dir is 0700');
+    r.release();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  // A keyless provider that relies on requires_openai_auth (Burst) keeps it: no auth command is added.
+  const burst = await withKey({ env: {}, text: 'model_provider = "b"\n[model_providers.b]\nbase_url = "http://127.0.0.1:7777/v1"\nrequires_openai_auth = true\n' }).prepare({ mode: 'shell', keyFile: '/r/k' });
+  assert.ok(burst.overrides.includes('model_providers.b.requires_openai_auth=true'));
+  assert.ok(!burst.overrides.some((o) => o.includes('.auth=')));
 });

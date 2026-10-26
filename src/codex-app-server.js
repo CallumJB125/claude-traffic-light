@@ -9,7 +9,8 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { codexActivityLabel } = require('./session-activity');
-const { productionCodexCarry } = require('../board/shared/codex-carry.cjs');
+const { productionCodexCarry, CODEX_KEY_FILE } = require('../board/shared/codex-carry.cjs');
+const { keyDirPrefix, resolveKeyRoot } = require('./claude-carry');
 
 // Owned threads are text-only: no shell/exec, image viewing, skills,
 // plugins, MCP servers, hooks, browser/computer use, web search, memories,
@@ -54,7 +55,9 @@ function setLoginShellEnv(fn) { loginShellEnv = typeof fn === 'function' ? fn : 
 
 // carry: the user's Codex provider; undefined = the app's own, read with this env (a copied or filtered env must not
 // lose the user's provider and silently go to OpenAI), null = none.
-function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spawn, clientVersion = '0', carry } = {}) {
+// keyRoot: <userData>/run (a path or a getter). Each launch with a keyed provider makes codex-<pid>-* there for the
+// key file its auth command reads; it goes when that process ends, and a start sweeps what a crash left.
+function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spawn, clientVersion = '0', carry, keyRoot = null } = {}) {
   const codexCarry = carry !== undefined ? carry : productionCodexCarry({ env, loginShellEnv: (a) => (loginShellEnv ? loginShellEnv(a) : {}) });
   const events = new EventEmitter();
   const pending = new Map();
@@ -137,12 +140,21 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
 
   // The provider check runs before every launch: a missing env_key value, an unreadable config or a gateway that
   // doesn't answer fails here with a reason that names no value, instead of Codex waiting on the network forever.
+  let keyDir = null;
+  const dropKeyDir = () => { if (keyDir) { try { fs.rmSync(keyDir, { recursive: true, force: true }); } catch { /* gone */ } keyDir = null; } };
   async function preflight() {
     if (!codexCarry) return null;
+    dropKeyDir();
+    let keyFile = null;
+    const root = resolveKeyRoot(keyRoot);
+    if (root) {
+      try { keyDir = fs.mkdtempSync(path.join(root, keyDirPrefix('codex'))); fs.chmodSync(keyDir, 0o700); keyFile = path.join(keyDir, CODEX_KEY_FILE); } catch { dropKeyDir(); }
+    }
     let c;
     // Owned threads have no command tool (DISABLED_FEATURES), so a key may sit in this process's env.
-    try { c = await codexCarry.prepare({ mode: 'noshell' }); } catch { throw Object.assign(new Error('Codex settings could not be read'), { code: 'PROVIDER' }); }
-    if (c.failure) throw Object.assign(new Error(c.failure.reason), { code: c.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' });
+    try { c = await codexCarry.prepare({ mode: 'noshell', keyFile }); } catch { dropKeyDir(); throw Object.assign(new Error('Codex settings could not be read'), { code: 'PROVIDER' }); }
+    if (c.failure) { dropKeyDir(); throw Object.assign(new Error(c.failure.reason), { code: c.failure.kind === 'auth' ? 'AUTH' : 'PROVIDER' }); }
+    if (!c.keyFile) dropKeyDir();
     return c;
   }
 
@@ -171,13 +183,13 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
     // stderr can carry account or network detail; it is never kept.
     child.stderr.on('data', () => {});
     child.stdin.on('error', () => {});
-    const ended = () => { if (child !== self || exited) return; exited = true; fail(new Error('Codex app-server exited')); events.emit('event', { kind: 'exit' }); };
+    const ended = () => { if (child !== self || exited) return; exited = true; dropKeyDir(); fail(new Error('Codex app-server exited')); events.emit('event', { kind: 'exit' }); };
     child.on('error', ended);
     child.on('exit', ended);
     return request('initialize', { clientInfo: { name: 'plexiform', title: 'Plexiform', version: String(clientVersion) } })
       .then(() => { write({ method: 'initialized' }); })
       .catch((error) => {
-        if (child === self) { child = null; exited = true; kill(self); }
+        if (child === self) { child = null; exited = true; kill(self); dropKeyDir(); }
         throw error;
       });
   }
@@ -213,7 +225,7 @@ function createCodexAppServer({ bin, env = process.env, spawn = childProcess.spa
     const timer = setTimeout(() => { if (proc.exitCode === null && proc.signalCode === null) { try { proc.kill('SIGKILL'); } catch { /* gone */ } } }, KILL_MS);
     timer.unref?.();
   }
-  function stop() { if (child && !exited) kill(child); }
+  function stop() { if (child && !exited) kill(child); dropKeyDir(); }
 
   return {
     provider: 'codex', label: 'Codex',

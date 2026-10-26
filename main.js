@@ -1812,7 +1812,7 @@ const InteractionMain=require('./src/interaction-main').createInteractionMain({
   compaction:Compaction.createSessionCompactor({settings:()=>loadConfig().compaction,ledger:CompactionLedger}),
   context:()=>buddyWin?.overviewContext?.()??null,
   readContext:()=>buddyWin?.overviewReadContext?.()??null,
-  adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion()}),codexBin?{}:{available:false,reason:'Codex CLI not found'}),'codex-daemon':CodexDaemon,'claude-channel':claudeChannel},
+  adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion(),keyRoot:claudeKeyRoot}),codexBin?{}:{available:false,reason:'Codex CLI not found'}),'codex-daemon':CodexDaemon,'claude-channel':claudeChannel},
   prepareChannel:async({board,fresh})=>{
     if(process.platform==='win32')return {ok:false,status:'unavailable',error:'Terminal channel setup requires a reviewed Windows private-file publisher.'};
     const choice=await dialog.showOpenDialog(buddyWin.overviewContext().window,{title:'Choose the Claude terminal project',properties:['openDirectory']});
@@ -1863,7 +1863,7 @@ const hostSync=require('./src/interaction-host-sync').createInteractionHostSync(
   identity:()=>devMockReady?getBuddy().interactionHostIdentity?.()??null:null,
   createHost:id=>RemoteInteraction.createRemoteInteractionHost({
     userId:id.userId,
-    adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion()}),codexBin?{}:{available:false,reason:'Codex CLI not found'})},
+    adapters:{codex:Object.assign(CodexAppServer.createCodexAppServer({bin:codexBin,clientVersion:app.getVersion(),keyRoot:claudeKeyRoot}),codexBin?{}:{available:false,reason:'Codex CLI not found'})},
     workspace:()=>fs.mkdtempSync(path.join(os.tmpdir(),'plexiform-owned-')),
     boardCurrent:board=>board===null,
     log:m=>console.log(m),

@@ -23,18 +23,22 @@ const TRANSLATED = /^PLEXIFORM_PROVIDER_/;
 const LOOPBACK = (host) => host === 'localhost' || host === '::1' || host === '[::1]' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 const BARE_ID = /^[A-Za-z0-9_-]+$/;
 
-// How a key reaches a Codex run that has a shell (lab 2026-10-26, codex-proc-environ.md: an unsandboxed tool shell
-// reads the CLI's env through /proc/$PPID/environ even with inherit="none", and no sandbox is proven to hide it).
-//   false (a): a provider with a key (env_key, a translated bearer token or header values) is refused there with an
-//              auth park. A provider with no secret is carried everywhere.
-//   true  (b): the key goes in a 0600 file in the run dir (denied to tool shells), read by Codex through
-//              model_providers.<id>.auth={command="/bin/cat",args=[<file>]}; only the path is on argv, never the key.
-//              Header values still can't travel that way and stay refused. Off until the DGX lab confirms 0.164
-//              runs auth.command under --ignore-user-config + -c and the token is not in /proc/<codex>/environ.
-const KEY_VIA_AUTH_FILE = false;
+// How a key reaches Codex (lab 2026-10-26: codex-proc-environ.md showed an unsandboxed tool shell reads the CLI's
+// env through /proc/$PPID/environ even with inherit="none"; codex-auth-command.md proved the fix on 0.164).
+//   true  (b, the default): the key goes in a 0600 file in a 0700 per-run dir that tool shells are denied, read by
+//              Codex itself through model_providers.<id>.auth={command="/bin/cat",args=[<file>],timeout_ms=5000}.
+//              Only the path is on argv; the key is in no environ or cmdline (0 hits in 61 samples). auth can't be
+//              combined with env_key, experimental_bearer_token or requires_openai_auth, so those go. No
+//              refresh_interval_ms: the file is fixed for the run. Header values can't travel that way.
+//   false (a): the fallback, also used when the file can't be written (or on Windows, which has no /bin/cat): a
+//              run with a shell refuses a provider with any secret (auth park); a keyless provider goes everywhere.
+const KEY_VIA_AUTH_FILE = true;
 const CODEX_KEY_FILE = 'codex-provider.key';
-// Where a key may still sit in the Codex CLI env: sites whose Codex has no command tool at all (the owned chat;
-// the board review, which disables every shell tool), and a takeover (the user's own terminal env supplies it).
+const CODEX_TAKEOVER_KEY_FILE = 'codex-takeover.key';
+const AUTH_TIMEOUT_MS = 5000;
+// Without a key file, where a key may still sit in the Codex CLI env: sites whose Codex has no command tool at all
+// (the owned chat; the board review, which disables every shell tool), and a takeover (the user's own terminal env
+// supplies env_key; a translated key is refused there by the caller).
 const MODES = new Set(['shell', 'noshell', 'takeover']);
 const KEY_NOT_KEPT = 'This Codex provider\'s key can\'t be kept from Codex\'s commands yet, so Plexiform doesn\'t carry it into a run that has a shell. A provider that needs no key still works.';
 const HEADER_NOT_KEPT = 'This Codex provider sends header values from variables, which can\'t be kept from Codex\'s commands yet, so Plexiform doesn\'t carry it into a run that has a shell.';
@@ -69,6 +73,8 @@ function createCodexCarry({
   log = () => {},
   keyViaAuthFile = KEY_VIA_AUTH_FILE,
   writeKey = (file, value) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.chmodSync(path.dirname(file), 0o700);
     const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tmp, value, { mode: 0o600, flag: 'wx' });
     fs.renameSync(tmp, file);
@@ -130,17 +136,18 @@ function createCodexCarry({
       if (!burst && gw.loopback) { try { burst = (await burstOwns(gw.port)) === true; } catch { burst = false; } }
       return fail('provider', burst ? "Burst gateway isn't running" : `the gateway at ${gw.host}:${gw.port} isn't answering`);
     }
-    const translated = Object.keys(p.cliEnv).some((k) => TRANSLATED.test(k));
     let carried = { overrides, cliEnv: { ...p.cliEnv }, keyFile: null };
-    if (mode === 'shell' && Object.keys(p.cliEnv).length) {
+    if (Object.keys(p.cliEnv).length) {
       const keyed = keyViaAuthFile && platform !== 'win32' && typeof keyFile === 'string' && path.isAbsolute(keyFile) ? viaAuthFile(p, overrides, keyFile) : { failure: KEY_NOT_KEPT };
-      if (keyed.failure) return fail('auth', keyed.failure);
-      carried = keyed;
+      if (!keyed.failure) carried = keyed;
+      else if (mode === 'shell') return fail('auth', keyed.failure);
+      // else (a) for a site with no command tool, or a takeover: today's CLI env / terminal env.
     }
     const keyPath = carried.keyFile;
     return {
       carry: true, failure: null, providerId: p.providerId, overrides: carried.overrides, model: p.model, cliEnv: carried.cliEnv, burst,
-      translated, codexHome: p.codexHome, keyFile: keyPath,
+      // A key that still has to travel in an env Plexiform translated it into: a terminal takeover can't carry that.
+      translated: Object.keys(carried.cliEnv).some((k) => TRANSLATED.test(k)), codexHome: p.codexHome, keyFile: keyPath,
       release() { if (keyPath) removeKey(keyPath); },
     };
   }
@@ -155,8 +162,10 @@ function createCodexCarry({
     if (Object.keys(p.cliEnv).some((k) => k !== name)) return { failure: HEADER_NOT_KEPT };
     if (!name || typeof p.cliEnv[name] !== 'string') return { failure: KEY_NOT_KEPT };
     try { writeKey(keyFile, p.cliEnv[name]); } catch { return { failure: KEY_NOT_KEPT }; }
+    const exclusive = ['env_key', 'experimental_bearer_token', 'requires_openai_auth'].map((f) => `${prefix}${f}=`);
     return {
-      overrides: [...overrides.filter((o) => o !== envKeyOverride), `${prefix}auth={command="/bin/cat",args=[${JSON.stringify(keyFile)}]}`],
+      overrides: [...overrides.filter((o) => !exclusive.some((x) => o.startsWith(x))),
+        `${prefix}auth={command="/bin/cat",args=[${JSON.stringify(keyFile)}],timeout_ms=${AUTH_TIMEOUT_MS}}`],
       cliEnv: {}, keyFile,
     };
   }
@@ -182,4 +191,4 @@ function productionCodexCarry(opts = {}) {
 // A Codex takeover runs in the user's own terminal: a value Plexiform translated out of config.toml can't follow it.
 const TAKEOVER_TRANSLATED = 'This Codex provider has its key written in config.toml, which a terminal takeover can\'t carry. Move it to env_key with the variable exported in your shell, then take over again.';
 
-module.exports = { createCodexCarry, productionCodexCarry, codexLoginNames, KEY_VIA_AUTH_FILE, CODEX_KEY_FILE, KEY_NOT_KEPT, HEADER_NOT_KEPT, overrideKeyAllowed, gatewayOf, TAKEOVER_TRANSLATED };
+module.exports = { createCodexCarry, productionCodexCarry, codexLoginNames, KEY_VIA_AUTH_FILE, CODEX_KEY_FILE, CODEX_TAKEOVER_KEY_FILE, AUTH_TIMEOUT_MS, KEY_NOT_KEPT, HEADER_NOT_KEPT, overrideKeyAllowed, gatewayOf, TAKEOVER_TRANSLATED };

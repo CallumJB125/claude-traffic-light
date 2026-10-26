@@ -268,7 +268,7 @@ function parseCredentials(text) {
   return { AWS_ACCESS_KEY_ID: id, AWS_SECRET_ACCESS_KEY: secret, ...(typeof c.SessionToken === 'string' && c.SessionToken ? { AWS_SESSION_TOKEN: c.SessionToken } : {}) };
 }
 
-// Deletes api.key and Codex's codex-provider.key (and a half-written *.tmp of either) from every <runRoot>/<id>/
+// Deletes api.key and Codex's codex-provider.key / codex-takeover.key (and a half-written *.tmp of any) from every <runRoot>/<id>/
 // except those `keep(id)` names.
 // For a start after a crash: carry state is in memory, so a key left on disk would otherwise stay forever.
 function sweepKeyFiles(runRoot, keep = () => false) {
@@ -280,7 +280,7 @@ function sweepKeyFiles(runRoot, keep = () => false) {
     let names;
     try { names = fs.readdirSync(path.join(runRoot, id)); } catch { continue; }
     for (const f of names) {
-      if (f !== 'api.key' && f !== 'codex-provider.key' && !/^(?:api|codex-provider)\.key\..*\.tmp$/.test(f)) continue;
+      if (f !== 'api.key' && f !== 'codex-provider.key' && f !== 'codex-takeover.key' && !/^(?:api|codex-provider|codex-takeover)\.key\..*\.tmp$/.test(f)) continue;
       try { fs.rmSync(path.join(runRoot, id, f), { force: true }); n++; } catch { /* gone */ }
     }
   }

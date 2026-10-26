@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir, rm, makeRepo, startFakeHub, startRunner, offerFor, claimRun, fakeClock, waitFor, REPO_ID, OWNER } from './helpers.js';
 import { CodexBackend } from '../backends/codex.js';
+import { createCodexCarry } from '../../shared/codex-carry.cjs';
 import { GATE_G_MS } from '../../shared/liveness.js';
 const fixture = fileURLToPath(new URL('./fixtures/fake-board-codex.js', import.meta.url));
 const q = (s) => `'${s.replaceAll("'", "'\\''")}'`;
@@ -194,4 +195,25 @@ test('board run: the carry is asked for a shell run with its key file in the den
     assert.ok(fsTable.includes(`${JSON.stringify(path.join(h.home, 'run'))}="deny"`), 'the run root, and so the key file, is denied');
   } finally { await h.close(); }
   assert.ok(released >= 1, 'the key file is released by the end');
+});
+
+test('board run, real carry (b): the key is only in <run dir>/codex-provider.key (0600) behind auth.command; never in env or argv; gone at run end', async () => {
+  const KEY = 'board-fake-key-0123456789abcdef';
+  const toml = 'model_provider = "plexlab"\n[model_providers.plexlab]\nname = "plexlab"\nbase_url = "http://10.0.0.5:4001/v1"\nenv_key = "PLEXLAB_KEY"\nwire_api = "responses"\n';
+  const codexCarry = createCodexCarry({ env: { PLEXLAB_KEY: KEY }, home: '/fx/home', platform: 'linux', readFile: (f) => (f === '/fx/home/.codex/config.toml' ? toml : null), probe: async () => true, burstOwnsPort: async () => false });
+  const h = await rig({ codexCarry });
+  try {
+    const run = await claimRun(h.sup, h.hub, h.offer); await waitFor(() => run.localState === 'idle');
+    const first = starts(h)[0];
+    const file = path.join(run.runDir, 'codex-provider.key');
+    assert.ok(first.argv.includes(`model_providers.plexlab.auth={command="/bin/cat",args=[${JSON.stringify(file)}],timeout_ms=5000}`));
+    assert.ok(!first.argv.some((a) => a.includes(KEY)), 'not on argv or in any -c value');
+    assert.ok(!JSON.stringify(first.env).includes(KEY), 'not in the CLI env');
+    assert.ok(!first.argv.some((a) => a.startsWith('model_providers.plexlab.env_key=')));
+    assert.equal(fs.readFileSync(file, 'utf8'), KEY);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.ok(first.argv.find((a) => a.startsWith('permissions.plexiform.filesystem=')).includes(`${JSON.stringify(path.join(h.home, 'run'))}="deny"`));
+    h.sup.cleanupRun(run);
+    assert.equal(fs.existsSync(file), false, 'deleted at run end');
+  } finally { await h.close(); }
 });

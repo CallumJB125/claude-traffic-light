@@ -296,3 +296,35 @@ test('the owned Codex chat\'s default carry asks the hub seam, and its CODEX_HOM
     assert.equal(calls[0].args[calls[0].args.indexOf('model_provider="gw"') - 1], '-c');
   } finally { CodexAppServer.setLoginShellEnv(null); try { a.stop(); } catch { /* never started */ } gw.close(); fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+test('the owned Codex chat reads its key from codex-<pid>-*/codex-provider.key under keyRoot (0700/0600), gone at stop; the sweep knows the prefix', async () => {
+  const net = require('node:net');
+  const { sweepKeyDirs } = require('../src/claude-carry.js');
+  const gw = net.createServer((s) => s.destroy());
+  await new Promise((res) => gw.listen(0, '127.0.0.1', res));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pxkr-'));
+  const carry = createCodexCarry({ env: { DEEPSEEK_API_KEY: CODEX_KEY }, home: '/fx/home', platform: 'linux', readFile: (f) => (f === '/fx/home/.codex/config.toml' ? codexToml('DEEPSEEK_API_KEY').replace('http://10.0.0.5:4001/v1', `http://127.0.0.1:${gw.address().port}/v1`) : null), probe: async () => true, burstOwnsPort: async () => false });
+  const calls = [];
+  const proc = () => { const p = new EventEmitter(); p.stdout = new EventEmitter(); p.stdout.setEncoding = () => {}; p.stderr = new EventEmitter(); p.stdin = Object.assign(new EventEmitter(), { write() { return true; }, end() {} }); p.kill = () => true; p.exitCode = null; p.signalCode = null; return p; };
+  const a = CodexAppServer.createCodexAppServer({ bin: '/nonexistent/codex', env: { HOME: '/fx/home', PATH: '/bin' }, carry, keyRoot: () => root, spawn: (bin, args, opts) => { calls.push({ args, env: opts.env }); return proc(); } });
+  try {
+    a.open({ cwd: '/tmp' }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(calls.length, 1);
+    const { args, env } = calls[0];
+    const auth = args.find((x) => x.startsWith('model_providers.gw.auth='));
+    const file = JSON.parse(auth.match(/args=(\[[^\]]*\])/)[1])[0];
+    assert.match(path.basename(path.dirname(file)), new RegExp(`^codex-${process.pid}-`));
+    assert.equal(path.dirname(path.dirname(file)), root);
+    assert.equal(fs.readFileSync(file, 'utf8'), CODEX_KEY);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
+    assert.equal(env.DEEPSEEK_API_KEY, undefined, 'not in the chat\'s env');
+    assert.ok(!args.some((x) => x.includes(CODEX_KEY)) && !args.some((x) => x.startsWith('model_providers.gw.env_key=')));
+    a.stop();
+    assert.equal(fs.existsSync(path.dirname(file)), false, 'gone at stop');
+    fs.mkdirSync(path.join(root, 'codex-999999-left'));
+    sweepKeyDirs(root, { alive: () => false });
+    assert.deepEqual(fs.readdirSync(root), [], 'a crashed chat\'s dir is swept like chat-*');
+  } finally { a.stop(); gw.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});

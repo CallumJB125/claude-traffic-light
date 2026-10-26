@@ -15,6 +15,9 @@ for await (const chunk of process.stdin) prompt += chunk;
 log({ kind: 'prompt', prompt });
 emit({ type: 'thread.started', thread_id: session });
 emit({ type: 'turn.started' });
+// stderr / events: a recorded failure shape (e.g. the auth command that could not start, codex-auth-command.md).
+if (scenario.stderr) { process.stderr.write(scenario.stderr); await new Promise((r) => setTimeout(r, 50)); }
+for (const ev of scenario.events ?? []) emit(ev);
 if (scenario.wait && !(scenario.waitFirstOnly && process.argv.includes('resume'))) {
  emit({ type: 'item.started', item: { id: 'cmd_1', type: 'command_execution', command: 'sleep 300' } });
  await new Promise((r) => setTimeout(r, 300000));
