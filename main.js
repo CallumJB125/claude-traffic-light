@@ -4558,7 +4558,8 @@ let voiceHotkeyTaken = null;
 function applyVoiceHotkey() {
   if (voiceHotkey) { globalShortcut.unregister(voiceHotkey); voiceHotkey = null; }
   voiceHotkeyTaken = null;
-  if (!IS_MAC || IS_DEV_RUN) return;
+  // Without the helper a held key can't be heard, so don't take the shortcut from every other app.
+  if (!IS_MAC || IS_DEV_RUN || !listener.available()) return;
   const hk = Voice.hotkey(Voice.normalizeConfig(loadConfig().voice).hotkey);
   if (!hk) return;
   // Held: the helper sees the key come up (and gives up if it can't read it).

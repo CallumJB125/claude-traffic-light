@@ -532,6 +532,8 @@
             : intro;
       };
       show({ taken: st.hotkeyTaken });
+      // The one-click preset only exists where the helper does (it starts hidden in the HTML).
+      preset.hidden = !st.available;
       if (!st.available) for (const el of [hotkey, longPress, askClaude, screenOn, point, preset]) el.disabled = true;
       // Pointing starts on with the screen switch; turning the screen on resets it to on.
       screenOn.addEventListener('change', () => { if (screenOn.checked) point.checked = true; });

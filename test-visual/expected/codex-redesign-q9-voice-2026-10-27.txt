@@ -1,0 +1,1 @@
+test-visual/__screenshots__/windows.spec.js/settings-window-darwin.png
