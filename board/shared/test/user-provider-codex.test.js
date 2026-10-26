@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { codexProvider, CONFIG_TOML_MAX_BYTES, BURST_CODEX_MARKERS } from '../user-provider.cjs';
+import { codexProvider, CONFIG_TOML_MAX_BYTES } from '../user-provider.cjs';
+import { findSecrets } from '../secret-patterns.mjs';
 import { codexConfig } from '../../runner/backends/codex.js';
 
 const HOME = '/home/u';
@@ -154,18 +155,21 @@ test('12 syntax forms give the same provider and base URL', () => {
 });
 
 const burstFixture = path.join(FIX, 'burst-codex-enable.redacted.toml');
-// Waiting on the lab-captured fixture (plan §8); PR 3 cannot merge until this is live.
-if (fs.existsSync(burstFixture)) {
-  test('13 Burst codex-enable fixture', () => {
-    assert.ok(BURST_CODEX_MARKERS.length > 0);
-    const r = run(fs.readFileSync(burstFixture, 'utf8'));
-    assert.equal(r.burst.detected, true);
-    assert.deepEqual(r.unsupported, []);
-  });
-} else test.todo('13 Burst codex-enable fixture');
+// The fixture was reconstructed from the claude-burst binary's template strings, not captured from a live write (plan §8).
+test('13 Burst codex-enable fixture', () => {
+  const text = fs.readFileSync(burstFixture, 'utf8');
+  assert.deepEqual(findSecrets(text), []);
+  const r = run(text);
+  assert.equal(r.providerId, 'claude-burst');
+  assert.equal(r.burst.detected, true);
+  assert.deepEqual(r.unsupported, []);
+  assert.deepEqual(r.dropped, []);
+  assert.ok(r.overrides.includes('model_providers.claude-burst.base_url="http://127.0.0.1:7777/backend-api/codex"'));
+  assert.ok(r.overrides.includes('model_providers.claude-burst.requires_openai_auth=true'));
+  assert.deepEqual(r.missingEnv, []);
+});
 
-test('13b with no markers, burst is never detected', () => {
-  assert.deepEqual(BURST_CODEX_MARKERS, []);
+test('13b a non-Burst provider is not detected as Burst', () => {
   assert.equal(run(PLEXLAB).burst.detected, false);
 });
 

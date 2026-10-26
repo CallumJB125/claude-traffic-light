@@ -32,10 +32,8 @@ const CODEX_TOP_KEYS = Object.freeze(['profile', 'model_provider', 'model', 'pro
 // Verify against the pinned codex before PR 3 relies on it.
 const CODEX_PROVIDER_FIELDS = Object.freeze(['name', 'base_url', 'wire_api', 'env_key', 'env_key_instructions', 'env_http_headers', 'query_params', 'requires_openai_auth', 'request_max_retries', 'stream_max_retries', 'stream_idle_timeout_ms']);
 const CODEX_BUILTIN_PROVIDER_IDS = Object.freeze(['openai', 'oss', 'ollama', 'lmstudio']);
-// Provider ids/markers in a real Burst `codex-enable` config. Empty until the lab fixture lands.
-const BURST_CODEX_MARKERS = Object.freeze([]);
-// Closed until the Windows managed-settings row is verified; win32 then carries nothing.
-const WIN32_MANAGED_VERIFIED = false;
+// Provider id Burst writes for `claude-burst codex enable` (fixture reconstructed from the Burst binary).
+const BURST_CODEX_MARKERS = Object.freeze(['claude-burst']);
 const CONFIG_TOML_MAX_BYTES = 262144;
 
 const MANAGED_DIRS = { darwin: '/Library/Application Support/ClaudeCode', linux: '/etc/claude-code', win32: 'C:\\Program Files\\ClaudeCode' };
@@ -86,19 +84,19 @@ function blankClaude(base, carryOffReason, unsupported = []) {
 function claudeProvider({ env = {}, loginEnv = {}, home, platform, readFile, readDir = () => null }) {
   const p = flavor(platform);
   const unsupported = [];
-  const managedDir = MANAGED_DIRS[platform] || MANAGED_DIRS.linux;
-  const managedPath = p.join(managedDir, 'managed-settings.json');
+  const managedDir = MANAGED_DIRS[platform] || null;
   const configDirSet = env.CLAUDE_CONFIG_DIR || loginEnv.CLAUDE_CONFIG_DIR || '';
   const configDir = expandHome(configDirSet || p.join(home, '.claude'), home, p);
-  const base = { configDir, managedPath };
+  const base = { configDir, managedDir };
 
-  if (platform === 'win32' && !WIN32_MANAGED_VERIFIED) return blankClaude(base, 'win32_managed_unverified');
+  if (!managedDir) return blankClaude(base, 'platform_unsupported');
   if (!p.isAbsolute(configDir)) {
     return blankClaude(base, 'claude_config_dir_relative', [{ code: 'claude_config_dir_relative', message: 'CLAUDE_CONFIG_DIR is not an absolute path' }]);
   }
 
   // Managed: the base file, then the drop-in folder in name order, later files overriding earlier ones.
   // (Drop-in order is the CLI's, to be re-verified against the pinned version.)
+  const managedPath = p.join(managedDir, 'managed-settings.json');
   const managedFiles = [managedPath];
   let dropIns = null;
   try { dropIns = readDir(p.join(managedDir, 'managed-settings.d')); } catch { dropIns = null; }
@@ -121,7 +119,7 @@ function claudeProvider({ env = {}, loginEnv = {}, home, platform, readFile, rea
   const layers = [
     { kind: 'managed', path: managedSeen ? managedPath : null, env: managed.env, top: managed },
     { kind: 'user', path: user ? userPath : null, env: isObj(user?.env) ? user.env : {}, top: user || {} },
-    { kind: 'claude-json', path: claudeJson ? claudeJsonPath : null, env: isObj(claudeJson?.env) ? claudeJson.env : {}, top: {} },
+    { kind: 'global-config', path: claudeJson ? claudeJsonPath : null, env: isObj(claudeJson?.env) ? claudeJson.env : {}, top: {} },
     { kind: 'app-env', path: null, env, top: {} },
     { kind: 'login-shell', path: null, env: loginEnv, top: {} },
   ];
@@ -209,7 +207,7 @@ function claudeProvider({ env = {}, loginEnv = {}, home, platform, readFile, rea
     auth: {
       kind, secret, secretName, helper: helper?.value ?? null,
       awsAuthRefresh: awsAuthRefresh?.value ?? null, awsCredentialExport: awsCredentialExport?.value ?? null,
-      rejected, origin,
+      rejected, origin, managedHelper: helper?.origin === 'managed',
     },
     noToolSecrets,
     localGateway: routing.ANTHROPIC_BASE_URL ? localGatewayOf(routing.ANTHROPIC_BASE_URL) : null,
@@ -317,5 +315,5 @@ module.exports = {
   claudeProvider, codexProvider,
   CLAUDE_ROUTING_KEYS, CLAUDE_PATH_KEYS, CLAUDE_SECRET_KEYS, CLAUDE_READ_NAMES,
   CODEX_PROVIDER_FIELDS, CODEX_BUILTIN_PROVIDER_IDS, CODEX_TOP_KEYS,
-  BURST_CODEX_MARKERS, WIN32_MANAGED_VERIFIED, CONFIG_TOML_MAX_BYTES,
+  BURST_CODEX_MARKERS, CONFIG_TOML_MAX_BYTES,
 };

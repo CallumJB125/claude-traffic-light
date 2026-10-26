@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { claudeProvider, WIN32_MANAGED_VERIFIED } from '../user-provider.cjs';
+import { claudeProvider, CLAUDE_SECRET_KEYS } from '../user-provider.cjs';
 
 const HOME = '/home/u';
 const CFG = `${HOME}/.claude`;
 const MANAGED = '/etc/claude-code/managed-settings.json';
+const MANAGED_D = '/etc/claude-code/managed-settings.d';
 const json = (o) => JSON.stringify(o);
 
 // Recording in-memory file system: the module's only I/O.
@@ -192,9 +193,11 @@ test('15 never cwd: project .claude files are not read, exact path set', () => {
     process.chdir(wt);
     const read = [];
     const readFile = (p) => { read.push(p); try { return fs.readFileSync(p, 'utf8'); } catch { return null; } };
-    const r = claudeProvider({ env: {}, home: HOME, platform: 'linux', readFile, readDir: () => null });
+    const asked = [];
+    const r = claudeProvider({ env: {}, home: HOME, platform: 'linux', readFile, readDir: (d) => { asked.push(d); return null; } });
     assert.ok(!JSON.stringify(r).includes('evil'));
     assert.deepEqual([...read].sort(), [MANAGED, `${CFG}/settings.json`, `${HOME}/.claude.json`].sort());
+    assert.deepEqual(asked, [MANAGED_D]);
   } finally { process.chdir(old); fs.rmSync(wt, { recursive: true, force: true }); }
 });
 
@@ -213,6 +216,8 @@ test('17 managed apiKeyHelper is authoritative over user helper, keys and tokens
   assert.equal(r.auth.helper, '/managed/helper');
   assert.equal(r.auth.origin, 'managed');
   assert.equal(r.auth.secret, null);
+  assert.equal(r.auth.managedHelper, true);
+  assert.equal(run({ [`${CFG}/settings.json`]: json({ apiKeyHelper: '/user/helper' }) }).r.auth.managedHelper, false);
 });
 
 test('18 path vars: ~ expands and must be absolute', () => {
@@ -225,16 +230,24 @@ test('18 path vars: ~ expands and must be absolute', () => {
   assert.equal(r.pathVars.GOOGLE_APPLICATION_CREDENTIALS, undefined);
 });
 
-test('19 managed paths per platform; win32 fails closed', () => {
-  assert.equal(run({}, { platform: 'linux' }).r.managedPath, '/etc/claude-code/managed-settings.json');
-  assert.equal(run({}, { platform: 'darwin' }).r.managedPath, '/Library/Application Support/ClaudeCode/managed-settings.json');
-  assert.equal(WIN32_MANAGED_VERIFIED, false);
-  const win = run({ [`${HOME}/.claude/settings.json`]: settings({ ANTHROPIC_BASE_URL: 'https://gw', ANTHROPIC_API_KEY: 'k' }) }, { platform: 'win32', env: { ANTHROPIC_API_KEY: 'k' } });
-  assert.equal(win.r.managedPath, 'C:\\Program Files\\ClaudeCode\\managed-settings.json');
-  assert.equal(win.r.carry, false);
-  assert.equal(win.r.carryOffReason, 'win32_managed_unverified');
-  assert.equal(win.r.auth.kind, 'oauth-or-none');
-  assert.deepEqual(win.r.routing, {});
-  assert.equal(win.r.auth.secret, null);
-  assert.deepEqual(win.read, []);
+test('19 managedDir per platform; unknown platform carries nothing', () => {
+  assert.equal(run({}, { platform: 'linux' }).r.managedDir, '/etc/claude-code');
+  assert.equal(run({}, { platform: 'darwin' }).r.managedDir, '/Library/Application Support/ClaudeCode');
+  const win = run({ 'C:\\Program Files\\ClaudeCode\\managed-settings.json': settings({ ANTHROPIC_BASE_URL: 'https://managed' }), [`${HOME}/.claude/settings.json`]: settings({ ANTHROPIC_BASE_URL: 'https://user' }) }, { platform: 'win32', env: { ProgramFiles: 'D:\\PF' } });
+  assert.equal(win.r.managedDir, 'C:\\Program Files\\ClaudeCode');
+  assert.equal(win.r.carry, true);
+  assert.ok(win.read.includes('C:\\Program Files\\ClaudeCode\\managed-settings.json'));
+  const bsd = run({}, { platform: 'freebsd' });
+  assert.equal(bsd.r.carry, false);
+  assert.equal(bsd.r.carryOffReason, 'platform_unsupported');
+  assert.equal(bsd.r.managedDir, null);
+  assert.deepEqual(bsd.read, []);
+});
+
+test('20 no secret-classed key ever lands in routing or pathVars', () => {
+  const env = { ANTHROPIC_API_KEY: 'k-1', ANTHROPIC_AUTH_TOKEN: 't-1', AWS_BEARER_TOKEN_BEDROCK: 'b-1', ANTHROPIC_BASE_URL: 'https://gw', AWS_PROFILE: 'p' };
+  const { r } = run({ [`${CFG}/settings.json`]: settings(env) });
+  for (const k of CLAUDE_SECRET_KEYS) { assert.equal(k in r.routing, false, k); assert.equal(k in r.pathVars, false, k); }
+  assert.ok(!JSON.stringify(r.routing).match(/k-1|t-1|b-1/));
+  assert.equal(r.routing.ANTHROPIC_BASE_URL, 'https://gw');
 });
