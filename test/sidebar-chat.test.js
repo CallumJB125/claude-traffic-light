@@ -452,7 +452,7 @@ test('T1: a row that stops being shared becomes a tombstone without its title; a
   assert.equal(gone.querySelector('.sb-meta').textContent, 'No longer shared with you, or it ended');
   assert.ok(!s.q('.sb-scroll').textContent.includes('Secret launch plan'), 'the title is dropped');
   // Unavailable with the same viewer keeps the last rows, marked stale.
-  out = { schema: 1, status: 'unavailable', viewer: null, teams: [], teamsTotal: 0, rows: [] };
+  out = { schema: 1, status: 'unavailable', viewer: VIEWER, teams: [], teamsTotal: 0, rows: [] };
   s.w.document.querySelector('.sb-filter-opt[data-filter="all"]').click();
   s.w.document.querySelector('.sb-filter-opt[data-filter="team"]').click();
   await settle(s);
@@ -499,4 +499,29 @@ test('T1: empty states, the team cap line, and keyboard through person groups (n
   s.key('ArrowLeft'); assert.equal(s.doc.activeElement.getAttribute('aria-expanded'), 'false');
   s.key('ArrowLeft'); assert.equal(s.doc.activeElement.dataset.key, 'g:t:shared');
   assert.deepEqual(s.calls.groups, [], 'person groups never reach config');
+});
+
+test('T1: an account switch whose first read fails clears the previous account\'s teammates (no stale leak)', async () => {
+  let out = payload([mate(1, { title: 'Old account private work' }), mate(2, { person: 'Ann Lee', initials: 'AL' })]);
+  const s = await teamBoot(() => out, { rows: [] });
+  assert.equal(s.qa('.sb-shared').length, 2);
+  const again = async () => {
+    s.w.document.querySelector('.sb-filter-opt[data-filter="all"]').click();
+    s.w.document.querySelector('.sb-filter-opt[data-filter="team"]').click();
+    await settle(s);
+  };
+  // Another person is signed in now, and the first read for them fails.
+  out = { schema: 1, status: 'unavailable', viewer: VIEWER2, teams: [], teamsTotal: 0, rows: [] };
+  await again();
+  assert.equal(s.qa('.sb-shared, .sb-gone').length, 0, 'no rows from the previous account, stale or not');
+  assert.ok(!s.q('.sb-scroll').textContent.includes('Old account private work'));
+  assert.ok(!s.q('.sb-scroll').textContent.includes('Ann Lee'));
+  assert.equal(s.q('#sb-empty').textContent, "Teammates' sessions are unavailable right now.");
+  // Signed out (no viewer) while unavailable: the same.
+  out = payload([mate(3)], { viewer: VIEWER2 });
+  await again();
+  assert.equal(s.qa('.sb-shared').length, 1);
+  out = { schema: 1, status: 'unavailable', viewer: null, teams: [], teamsTotal: 0, rows: [] };
+  await again();
+  assert.equal(s.qa('.sb-shared, .sb-gone').length, 0);
 });

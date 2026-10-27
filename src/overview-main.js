@@ -59,7 +59,11 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
    teamRead=read;
   }
   const r=await teamRead.result;
-  return r&&sameSidebar(before)?structuredClone(r):{schema:1,status:'unavailable',viewer:null,teams:[],teamsTotal:0,rows:[]};
+  // A failed read still names the current viewer, so the sidebar drops another account's rows (an account switch
+  // whose first read fails must not leave the previous person's teammates up, even marked stale).
+  if(r&&sameSidebar(before))return structuredClone(r);
+  let viewer=null;try{viewer=service.viewerScope();}catch{viewer=null;}
+  return{schema:1,status:'unavailable',viewer:typeof viewer==='string'?viewer:null,teams:[],teamsTotal:0,rows:[]};
  }
  // A teammate row click (index.js, from the sidebar document): navigation only. The hint names
  // what Overview should open; every read and action stays on Overview's own fences.

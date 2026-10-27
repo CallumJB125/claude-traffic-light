@@ -174,6 +174,7 @@ test('sidebar:team-rows guard: other senders, preview off, args, a document chan
   z = sidebarRig({ hub: slow });
   const got = await z.rows();
   assert.equal(got.status, 'unavailable'); assert.deepEqual(got.rows, []);
+  assert.match(got.viewer, /^[0-9a-f]{64}$/);
   // ... and after the service read, before the reply: the final re-check.
   const late = sidebarRig(), project = SidebarRows.teamRows;
   SidebarRows.teamRows = (out) => { late.reloadSidebar(); return project(out); };
@@ -272,3 +273,17 @@ function boardRigOwn() {
   const r = boardRig();
   return { ...r, hub: new Proxy(r.hub, { get: (t, k) => (k === 'passiveSessions' ? async (v) => { const out = await t.passiveSessions(v); for (const team of out.teams) for (const e of team.entries) if (e.kind === 'board-run') e.owner = { ...e.owner, id: 'u-ana', self: true }; return out; } : t[k]) }) };
 }
+
+test('an account switch whose first read fails answers unavailable with the new viewer, not the old one', async () => {
+  const x = sidebarRig();
+  const first = await x.rows();
+  const broken = createFakeTeamHub({ ...FIXTURE, viewer: 'u-ann' });
+  broken.passiveSessions = async () => { throw new Error('hub down'); };
+  x.switchTo(broken); x.tick(15_001);
+  const failed = await x.rows();
+  assert.equal(failed.status, 'unavailable');
+  assert.match(failed.viewer, /^[0-9a-f]{64}$/);
+  assert.notEqual(failed.viewer, first.viewer, 'the renderer can tell the account changed');
+  x.signOut(); x.tick(15_001);
+  assert.equal((await x.rows()).viewer, null, 'signed out: no viewer');
+});

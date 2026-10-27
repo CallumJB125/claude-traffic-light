@@ -414,13 +414,16 @@
     } catch { /* keep the last rows */ } finally { teamFetching = false; }
   }
   // → whether anything shown changed. A different viewer (or signed out) clears every row and
-  // tombstone at once; unavailable keeps the last rows, marked stale.
+  // tombstone at once, unavailable or not; unavailable for the same viewer keeps the last rows, marked stale.
   function applyTeam(out) {
     const before = JSON.stringify([team.viewer, team.status, team.rows, [...team.gone], team.teams, team.teamsTotal, team.loaded]);
     const viewer = typeof out.viewer === 'string' ? out.viewer : null;
-    if (out.status === 'unavailable') team.status = 'unavailable';
-    else {
-      if (viewer !== team.viewer || viewer === null) { team.rows = []; team.gone.clear(); team.people.clear(); team.collapsed.clear(); }
+    const clear = () => { team.rows = []; team.gone.clear(); team.people.clear(); team.collapsed.clear(); team.teams = []; team.teamsTotal = 0; };
+    if (out.status === 'unavailable') {
+      if (viewer !== team.viewer || viewer === null) { clear(); team.viewer = viewer; }
+      team.status = 'unavailable';
+    } else {
+      if (viewer !== team.viewer || viewer === null) clear();
       const rows = Array.isArray(out.rows) ? out.rows.filter((r) => r && typeof r.id === 'string') : [];
       const ids = new Set(rows.map((r) => r.id));
       for (const r of team.rows) if (!ids.has(r.id)) team.gone.set(r.id, { person: r.person, initials: r.initials, team: r.team, provider: r.provider, inbox: r.inbox });
