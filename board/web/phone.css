@@ -6,8 +6,8 @@
   --line: #343941;
   --text: #f0f1f3;
   --muted: #b0b7c2;
-  --accent: #e49a78;
-  --accent-ink: #251c18;
+  --accent: #e6e8eb;
+  --accent-ink: #17191d;
   --danger: #ff8a80;
   --warn: oklch(0.82 0.16 79);
   --ok: oklch(0.72 0.12 174);
@@ -23,7 +23,7 @@
     --line: #dde1e6;
     --text: #20252d;
     --muted: #556171;
-    --accent: #a34425;
+    --accent: #24292f;
     --accent-ink: #ffffff;
     --danger: #a3271d;
     --warn: #8a5a00;

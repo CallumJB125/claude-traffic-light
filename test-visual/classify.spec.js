@@ -1,7 +1,9 @@
 // Redesign snapshot classifier (plan-redesign §R2.6, §R3.10, §R4.4). Not a snapshot test: it checks that every
 // changed baseline PNG changed only by the accent swap. The rules are in classify-lib.js.
 //
-// Run with CLASSIFY=1. Inputs (all optional):
+// Runs on its own when the branch's test-visual/expected/<branch>.txt starts with `# classify` (an accent-flip
+// PR, R0b); CLASSIFY=1 or CLASSIFY_BASE forces it on any branch, CLASSIFY=0 turns it off. Inputs (all optional):
+//   CLASSIFY_BRANCH    the branch whose expected file is read (default: the checked-out branch)
 //   CLASSIFY_BASE      git ref holding the old baselines and old tokens.css (default: merge-base with origin/main)
 //   CLASSIFY_HEAD_DIR  a directory laid out like __screenshots__ holding the new PNGs (default: the working tree;
 //                      only PNGs that differ from the base are read)
@@ -9,20 +11,30 @@
 //   CLASSIFY_ONLY      comma-separated spec dirs to limit the run (e.g. widget.spec.js,usage.spec.js)
 // With no changed PNGs (R0a's own gate) it passes at once. Output: classify-report.json and one contact sheet
 // per baseline with unexpected pixels (old | new | diff crops), attached to the test and written to its output dir.
+// Each row counts noise (ΔE00 ≤ 1, the pre-filter), pass, unchanged, skipped, exception and unexpected separately.
 const { test, expect, _electron: electron } = require('@playwright/test');
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const lib = require('./classify-lib');
+const { controls, judgeControl } = require('./classify-controls');
 
 const ROOT = path.join(__dirname, '..');
 const SHOTS = 'test-visual/__screenshots__';
 const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 });
 
 function baseRef() {
-  if (process.env.CLASSIFY_BASE) return process.env.CLASSIFY_BASE;
-  try { return git('merge-base', 'HEAD', 'origin/main').toString().trim(); } catch { return 'HEAD'; }
+  return lib.resolveBase(process.env.CLASSIFY_BASE, () => git('merge-base', 'HEAD', 'origin/main').toString());
+}
+
+function asksForClassifier() {
+  if (process.env.CLASSIFY === '0') return false;
+  if (process.env.CLASSIFY || process.env.CLASSIFY_BASE) return true;
+  let branch = process.env.CLASSIFY_BRANCH;
+  if (!branch) { try { branch = git('rev-parse', '--abbrev-ref', 'HEAD').toString().trim(); } catch { return false; } }
+  const file = path.join(ROOT, lib.expectedFileFor(branch));
+  return fs.existsSync(file) && lib.wantsClassify(fs.readFileSync(file, 'utf8'));
 }
 
 function changedBaselines(base) {
@@ -43,6 +55,32 @@ function changedBaselines(base) {
   }
   const names = git('diff', '--name-only', base, '--', SHOTS).toString().split('\n').filter(keep);
   return names.map((rel) => ({ rel, headFile: path.join(ROOT, rel) }));
+}
+
+// The app's stylesheets (CSS and HTML) at a ref, or in the working tree: the color-mix() rules come from here.
+const SHEET = (f) => (f.endsWith('.css') || f.endsWith('.html')) && !f.startsWith('site/') && !f.includes('node_modules/');
+function sheetsAt(ref) {
+  const names = git('ls-tree', '-r', '--name-only', ref).toString().split('\n').filter(SHEET);
+  return names.map((f) => git('show', `${ref}:${f}`).toString());
+}
+function sheetsInTree() {
+  return git('ls-files', '*.css', '*.html').toString().split('\n').filter(SHEET).map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8'));
+}
+// The same, keyed by path (the literal → mix pairs match a file with itself).
+function sheetFilesAt(ref) {
+  const names = git('ls-tree', '-r', '--name-only', ref).toString().split('\n').filter(SHEET);
+  return Object.fromEntries(names.map((f) => [f, git('show', `${ref}:${f}`).toString()]));
+}
+function sheetFilesInTree() {
+  const names = git('ls-files', '*.css', '*.html').toString().split('\n').filter(SHEET);
+  return Object.fromEntries(names.map((f) => [f, fs.readFileSync(path.join(ROOT, f), 'utf8')]));
+}
+
+// App scripts (not tests, not vendored): accent color-mixes set from JS are listed as skipped, never modelled.
+function scriptsInTree() {
+  return git('ls-files', '*.js', '*.mjs').toString().split('\n')
+    .filter((f) => f && !f.startsWith('test') && !f.includes('node_modules/') && !f.startsWith('site/') && !f.startsWith('scripts/'))
+    .map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8'));
 }
 
 function oldBytes(base, rel) {
@@ -104,20 +142,22 @@ async function contactSheet(page, oldPng, newPng, tiles) {
 }
 
 test('classifier: every changed baseline changed only by the accent swap', async ({}, testInfo) => {
-  // Opt-in: only an accent-flip PR (R0b) asks every changed PNG to be an accent swap. Other PRs re-baseline on
-  // purpose and are checked by their test-visual/expected/<branch>.txt list instead.
-  test.skip(!process.env.CLASSIFY && !process.env.CLASSIFY_BASE, 'set CLASSIFY=1 (or CLASSIFY_BASE) to run the accent classifier');
+  // Only an accent-flip PR (R0b) asks every changed PNG to be an accent swap; it says so with `# classify` on the
+  // first line of its expected list. Other PRs re-baseline on purpose and are checked by that list instead.
+  test.skip(!asksForClassifier(), 'the branch\'s expected list does not start with `# classify` (or set CLASSIFY=1)');
   test.setTimeout(30 * 60 * 1000);
   const base = baseRef();
   const work = changedBaselines(base);
-  const report = { base, baselines: [] };
+  const report = { base, baselines: [], mixes: null };
   if (!work.length) {
     await testInfo.attach('classify-report.json', { body: JSON.stringify(report, null, 2), contentType: 'application/json' });
     return;
   }
   const oldCss = git('show', `${base}:tokens.css`).toString();
   const newCss = fs.readFileSync(process.env.CLASSIFY_TOKENS || path.join(ROOT, 'tokens.css'), 'utf8');
-  const families = lib.familiesOf(oldCss, newCss);
+  const files = { old: sheetFilesAt(base), new: sheetFilesInTree() };
+  const families = lib.familiesOf(oldCss, newCss, { old: Object.values(files.old), new: Object.values(files.new), js: scriptsInTree(), files });
+  report.mixes = families.mixes;
   const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'classify.config.json'), 'utf8'));
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'classify-ud-'));
   const browser = await electron.launch({ args: [path.join(__dirname, 'classify-main.js'), '-ApplePersistenceIgnoreState', 'YES', `--user-data-dir=${userData}`] });
@@ -129,8 +169,11 @@ test('classifier: every changed baseline changed only by the accent swap', async
       const newPng = fs.existsSync(headFile) ? fs.readFileSync(headFile) : null;
       if (!oldPng || !newPng) { report.baselines.push({ baseline: rel, added: !oldPng, removed: !newPng, tiles: [] }); continue; }
       if (oldPng.equals(newPng)) continue;
-      const r = lib.classifyImage(await decode(page, oldPng), await decode(page, newPng), families, { exceptions: lib.exceptionsFor(rel, config) });
-      const row = { baseline: rel, ...r, unexpectedPct: +(100 * r.unexpected / r.total).toFixed(4) };
+      const oldImg = await decode(page, oldPng); const newImg = await decode(page, newPng);
+      const th = lib.themeFor(families, rel, oldImg, newImg, config);
+      // Δα ≤ 2 on edges only in the windows that are transparent by construction (the config's widget list)
+      const r = lib.classifyImage(oldImg, newImg, th.families, { exceptions: lib.exceptionsFor(rel, config, th.theme), alphaEdge: !!lib.themeFromConfig(rel, config) });
+      const row = { baseline: rel, theme: th.theme, themeSource: th.source, themeShare: th.share, ...r, unexpectedPct: +(100 * r.unexpected / r.total).toFixed(4) };
       report.baselines.push(row);
       if (r.tiles.length) {
         const sheet = await contactSheet(page, oldPng, newPng, r.tiles);
@@ -142,15 +185,50 @@ test('classifier: every changed baseline changed only by the accent swap', async
   } finally {
     await browser.close();
   }
-  const verdict = lib.verdictOf(report.baselines);
+  const verdict = lib.verdictOf(report.baselines, config);
   report.crops = verdict.crops;
+  const sum = (k) => report.baselines.reduce((n, b) => n + (b[k] || 0), 0);
+  report.totals = Object.fromEntries(['changed', 'noise', 'pass', 'unchanged', 'skipped', 'exception', 'unexpected'].map((k) => [k, sum(k)]));
   report.failures = verdict.failures;
   const body = JSON.stringify(report, (k, v) => (k === 'tiles' ? v.length : v), 2);
   fs.writeFileSync(testInfo.outputPath('classify-report.json'), body);
   await testInfo.attach('classify-report.json', { body, contentType: 'application/json' });
   for (const b of report.baselines) {
     if (b.added || b.removed) console.log(`classify ${b.baseline}: ${b.added ? 'added' : 'removed'}`);
-    else console.log(`classify ${b.baseline}: changed ${b.changed}, pass ${b.pass}, unchanged ${b.unchanged}, skipped ${b.skipped}, exception ${b.exception}, unexpected ${b.unexpected} (${b.unexpectedPct} %)`);
+    else console.log(`classify ${b.baseline} [${b.theme} by ${b.themeSource}, ${b.themeShare}]: changed ${b.changed}, noise ${b.noise} (dense tiles ${b.noiseTiles}, max tile ${b.maxNoiseTileShare}), pass ${b.pass}, unchanged ${b.unchanged}, skipped ${b.skipped}, exception ${b.exception}, unexpected ${b.unexpected} (${b.unexpectedPct} %)`);
   }
+  console.log(`classify totals: ${JSON.stringify(report.totals)}, crops ${report.crops}`);
+  const mx = report.mixes;
+  console.log(`classify mixes: ${mx.parsed} modelled (base ${mx.base}, head ${mx.head}); only base ${mx.onlyBase.length}, only head ${mx.onlyHead.length}; unresolved ${mx.unresolved.length}: ${mx.unresolved.join(' | ')}`);
+  console.log(`classify mixes skipped (not modelled, fail closed): ${mx.skipped.length ? mx.skipped.map((x) => `${x.why}: ${x.raw}`).join(' | ') : 'none'}`);
+  console.log(`classify literal → mix: ${mx.literal.length ? mx.literal.join(' | ') : 'none'}; refused: ${mx.literalRefused.length ? mx.literalRefused.map((x) => `${x.where} (${x.why})`).join(' | ') : 'none'}`);
   expect(verdict.failures, 'classifier failures').toEqual([]);
+});
+
+// Integration: the controls as real PNGs, encoded here and decoded in Electron exactly like the baselines, then
+// classified and gated. Every negative control must fail the gate and every positive one pass. Always runs.
+test('classifier controls: synthetic PNG pairs through the real decode and gate', async ({}, testInfo) => {
+  const { PNG } = require('playwright-core/lib/utilsBundle');
+  const fixture = fs.readFileSync(path.join(ROOT, 'test', 'fixtures', 'tokens-terracotta-r0a.css'), 'utf8');
+  const sheets = sheetsInTree();
+  const families = lib.familiesOf(fixture, fs.readFileSync(path.join(ROOT, 'tokens.css'), 'utf8'), { old: sheets, new: sheets });
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'classify-ud-'));
+  const browser = await electron.launch({ args: [path.join(__dirname, 'classify-main.js'), `--user-data-dir=${userData}`] });
+  const rows = [];
+  try {
+    const page = await browser.firstWindow();
+    await page.waitForLoadState('domcontentloaded');
+    const png = (img) => { const p = new PNG({ width: img.width, height: img.height }); img.data.copy(p.data); return PNG.sync.write(p); };
+    for (const c of controls()) {
+      const decoded = { ...c, old: await decode(page, png(c.old)), new: await decode(page, png(c.new)) };
+      const { failed, result, crops } = judgeControl(decoded, families);
+      rows.push({ name: c.name, expect: c.expect, gate: failed ? 'fail' : 'pass', changed: result.changed, unexpected: result.unexpected, crops, wantCrops: !!c.crops });
+    }
+  } finally {
+    await browser.close();
+  }
+  await testInfo.attach('classify-controls.json', { body: JSON.stringify(rows, null, 2), contentType: 'application/json' });
+  expect(rows.filter((r) => r.gate !== r.expect), 'controls whose gate result is wrong').toEqual([]);
+  expect(rows.filter((r) => r.wantCrops && !r.crops), 'controls that must produce crops').toEqual([]);
+  expect(rows.filter((r) => r.expect === 'fail').length).toBeGreaterThanOrEqual(38);
 });

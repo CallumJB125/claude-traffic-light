@@ -21,7 +21,8 @@
     overflow: hidden;
     caret-color: var(--accent);
   }
-  ::selection { background: rgba(218, 119, 86, 0.35); }
+  /* 12 % is set by contrast, not by the old 35 % alpha: the wash sits under text, and --muted stays >= 4.5:1 here. */
+  ::selection { background: color-mix(in srgb, var(--accent) 12%, transparent); }
   ::-webkit-scrollbar { width: 10px; }
   ::-webkit-scrollbar-thumb { background: var(--line-strong); border: 3px solid var(--panel); border-radius: 8px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--faint); }
@@ -105,7 +106,7 @@
   .btn:active { transform: scale(0.97); }
   .btn:disabled { opacity: 0.45; cursor: default; transform: none; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
-  .btn.primary:hover { background: #e5866a; border-color: #e5866a; }
+  .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
   .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
   .btn.ghost:hover { background: var(--panel-2); color: var(--text); }
   .btn.danger:hover { border-color: var(--danger); color: var(--danger-text); }
@@ -145,7 +146,7 @@
   #rules-choice[hidden] { display: none; }
   #rules-choice .actions { display: flex; gap: 6px; margin-top: 8px; }
   #rules-choice .btn { flex: 1; height: 26px; justify-content: center; }
-  #rules-choice .btn.primary:hover { background: #e5866a; }
+  #rules-choice .btn.primary:hover { background: var(--accent-hover); }
   #now {
     margin: 0 6px 6px;
     padding: 6px 8px;
@@ -182,7 +183,7 @@
     transition: background var(--t), color var(--t), border-color var(--t);
   }
   #now .own:hover { color: var(--text); border-color: #544f5e; }
-  #now .own.on { background: var(--accent-soft); border-color: rgba(218, 119, 86, 0.5); color: var(--text); }
+  #now .own.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 50%, transparent); color: var(--text); }
   #now .own i { font-style: normal; color: var(--faint); }
   #rule-list {
     flex: 1;
@@ -454,7 +455,7 @@
     transition: background var(--t), color var(--t), border-color var(--t);
   }
   .signal:hover { border-color: #544f5e; color: var(--text); }
-  .signal.on { background: var(--accent-soft); border-color: rgba(218, 119, 86, 0.5); color: var(--text); }
+  .signal.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 50%, transparent); color: var(--text); }
   .signal .k { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
   .signal.on .k { background: var(--accent); }
   .signal.waiting .k { background: var(--amber); }
@@ -791,7 +792,7 @@
   #presets .menu-choice[hidden] { display: none; }
   #presets .menu-choice .btn { height: 26px; flex-direction: row; align-items: center; justify-content: center; text-align: center; }
   #presets .menu-choice .btn.primary { background: var(--accent); color: var(--accent-ink); }
-  #presets .menu-choice .btn.primary:hover { background: #e5866a; }
+  #presets .menu-choice .btn.primary:hover { background: var(--accent-hover); }
   #setup-summary, #rules-summary { font-size: 12px; line-height: 1.4; }
   #setup-summary code, #rules-summary code { display: block; font-size: 11px; color: #ffb4a8; white-space: pre-wrap; word-break: break-all; }
   #presets .menu-form .btn:disabled { opacity: 0.4; }

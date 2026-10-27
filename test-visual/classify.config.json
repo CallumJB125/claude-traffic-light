@@ -1,4 +1,195 @@
 {
-  "//": "Redesign classifier config (plan-redesign §R3.10, §R4.4). The accent families come from tokens.css at the base and the head, so only the named exceptions live here. R0b adds Check-it, Paused and the removed card borders, each tied to the baselines it may change. Entry shape: { \"name\", \"baselines\": [\"test-visual/__screenshots__/<spec>/<file>.png\"], \"old\": [\"#hex\"], \"new\": [\"#hex\"] }.",
-  "exceptions": []
+  "//": "Redesign classifier config (plan-redesign §R3.10, §R4.4). The accent families come from tokens.css at the base and the head, so only the named exceptions live here. Entry shape: { \"name\", \"reason\", \"baselines\": [\"test-visual/__screenshots__/<spec>/<file>.png\"], \"theme\"?: \"light\" | \"dark\", \"old\": [\"#hex\"], \"new\": [\"#hex\"] }. Only the listed baselines; only the exact old→new pair (±ΔE00 1) is strong, and its anti-aliased blends count only within 2 px of such a core pixel. `noise`: per-baseline noise allowances { baseline, maxRatio, reason } above the general cap (CAPS.noiseRatio 0.25 %), each with a named cause. `pairs` ([[old, new, over?], …]) keeps each old colour with its own new one; `over` records the surface a soft-tint pair was measured over (a surface token, or a neutral native grey), and a unit test recomputes the pair from the base and head --accent-soft over it. `themes`: { theme, source, reason, baselines } sets a baseline's theme from source instead of the lightness vote, for exactly those baselines.",
+  "exceptions": [
+    {
+      "name": "idle",
+      "reason": "R0b contrast fix, §R2.2: dark --idle #726c62 → #7c766b (3.07:1 on --panel-2)",
+      "baselines": [],
+      "theme": "dark",
+      "old": [
+        "#726c62"
+      ],
+      "new": [
+        "#7c766b"
+      ],
+      "//": "Derived from the R0b run (2026-10-27): none of the 65 changed baselines contains a #726c62 → #7c766b change, so the list is empty. Add a baseline here only when a run shows the dark Idle colour in it."
+    },
+    {
+      "name": "tint-lights-window",
+      "reason": "selected-row tint, terracotta 0.08 → Graphite 0.14 over white (§R2.2); too pale for the M1 discriminability rule",
+      "theme": "light",
+      "baselines": [
+        "test-visual/__screenshots__/windows.spec.js/lights-window-darwin.png"
+      ],
+      "pairs": [
+        [
+          "#f7f1ef",
+          "#e0e1e2",
+          "#ffffff"
+        ],
+        [
+          "#ede8e8",
+          "#d7d8db",
+          "#f4f5f7"
+        ]
+      ],
+      "//": "Measured (base 47ad8ac1): #f7f1ef → #e0e1e2 18,762 px (over #ffffff, model ΔE 0.59); #ede8e8 → #d7d8db 1,591 px (over --bg #f4f5f7, ΔE 0.79/0.43)."
+    },
+    {
+      "name": "tint-lights-template-minimal",
+      "reason": "selected-row tint, terracotta 0.08 → Graphite 0.14 over white (§R2.2); too pale for the M1 discriminability rule",
+      "theme": "light",
+      "baselines": [
+        "test-visual/__screenshots__/templates.spec.js/lights-template-minimal-darwin.png"
+      ],
+      "pairs": [
+        [
+          "#f7f1ef",
+          "#e0e1e2",
+          "#ffffff"
+        ],
+        [
+          "#ede8e8",
+          "#d7d8db",
+          "#f4f5f7"
+        ]
+      ],
+      "//": "Measured: #f7f1ef → #e0e1e2 12,349 px; #ede8e8 → #d7d8db 1,488 px."
+    },
+    {
+      "name": "tint-lights-templates-menu",
+      "reason": "selected-row tint, terracotta 0.08 → Graphite 0.14 over white (§R2.2); too pale for the M1 discriminability rule",
+      "theme": "light",
+      "baselines": [
+        "test-visual/__screenshots__/templates.spec.js/lights-templates-menu-darwin.png"
+      ],
+      "pairs": [
+        [
+          "#f7f1ef",
+          "#e0e1e2",
+          "#ffffff"
+        ],
+        [
+          "#f2ecea",
+          "#dcddde",
+          "#fafafa"
+        ],
+        [
+          "#f0eae8",
+          "#dadbdc",
+          "#f8f8f8"
+        ],
+        [
+          "#eee8e7",
+          "#d8d9da",
+          "#f5f6f6"
+        ]
+      ],
+      "//": "Measured: #f7f1ef → #e0e1e2 14,622 px; siblings over the native menu's near-white greys (model ΔE ≤ 0.78): #f2ecea → #dcddde 131, #f0eae8 → #dadbdc 76, #eee8e7 → #d8d9da 69 (neighbouring pairs within ΔE 1 of these fall in their core)."
+    },
+    {
+      "name": "tint-lights-auto-rules",
+      "reason": "selected-row tint, terracotta 0.08 → Graphite 0.14 over white (§R2.2); too pale for the M1 discriminability rule",
+      "theme": "light",
+      "baselines": [
+        "test-visual/__screenshots__/inputs.spec.js/lights-auto-rules-darwin.png"
+      ],
+      "pairs": [
+        [
+          "#f7f1ef",
+          "#e0e1e2",
+          "#ffffff"
+        ]
+      ],
+      "//": "Measured (base 47ad8ac1): #f7f1ef → #e0e1e2 536 px (the selected row, x 144–232, y 384–432) over #ffffff; model as tint-lights-window."
+    },
+    {
+      "name": "scrim-tile-dark",
+      "reason": "category tile (agents-find-view.css .af-tile: color-mix(in oklab, var(--tint) 16%, var(--panel)), --tint: var(--accent)) seen through the drawer scrim .af-backdrop (color-mix(in oklab, var(--bg) 55%, transparent)); the scrim leaves a 0.45 × change, too pale for the M1 discriminability rule, and no strong pixel within 2 px",
+      "theme": "dark",
+      "baselines": [
+        "test-visual/__screenshots__/find-agents.spec.js/find-agents-detail-dark-darwin.png",
+        "test-visual/__screenshots__/find-agents.spec.js/find-agents-confirm-dark-darwin.png"
+      ],
+      "pairs": [
+        [
+          "#282628",
+          "#282a2f"
+        ]
+      ],
+      "//": "Core pair (base 47ad8ac1): #282628 → #282a2f; the gate-decoded (sRGB) core #282628 → #272a2f is within ΔE 0.6. Derived in test/classify-lib.test.js as --bg at 55% over the 8-bit 16% tile mix, ΔE ≤ 1 at each end."
+    },
+    {
+      "name": "scrim-tile-light",
+      "reason": "category tile (agents-find-view.css .af-tile: color-mix(in oklab, var(--tint) 16%, var(--panel)), --tint: var(--accent)) seen through the drawer scrim .af-backdrop (color-mix(in oklab, var(--bg) 55%, transparent)); the scrim leaves a 0.45 × change, too pale for the M1 discriminability rule, and no strong pixel within 2 px",
+      "theme": "light",
+      "baselines": [
+        "test-visual/__screenshots__/find-agents.spec.js/find-agents-detail-light-darwin.png",
+        "test-visual/__screenshots__/find-agents.spec.js/find-agents-confirm-light-darwin.png"
+      ],
+      "pairs": [
+        [
+          "#f2eceb",
+          "#e7e9ea"
+        ]
+      ],
+      "//": "Core pair (base 47ad8ac1): #f2eceb → #e7e9ea; the gate-decoded (sRGB) core #f3eceb → #e6e9ea is within ΔE 1. Derived in test/classify-lib.test.js as --bg at 55% over the 8-bit 16% tile mix, ΔE ≤ 1 at each end."
+    }
+  ],
+  "noise": [
+    {
+      "baseline": "test-visual/__screenshots__/home-compose.spec.js/routed-light-darwin.png",
+      "maxRatio": 0.0075,
+      "reason": "R0b light --focus-halo #f4f5f7 → #ffffff: the halo's anti-aliased edge overlaps the focused compose textarea's 1 px --line-input border, moving its top and bottom hairlines (y 59, 122, x 31–882) by one sRGB step. 1,706 px = 0.693 %; allowance 0.75 %."
+    },
+    {
+      "baseline": "test-visual/__screenshots__/home-compose.spec.js/ask-me-light-darwin.png",
+      "maxRatio": 0.0075,
+      "reason": "R0b light --focus-halo #f4f5f7 → #ffffff: the halo's anti-aliased edge overlaps the focused compose textarea's 1 px --line-input border, moving its top and bottom hairlines (rows 59 and 122) by one sRGB step. 1,699 px = 0.601 %; allowance 0.75 %.",
+      "//": "Same cause as routed-light (the same compose textarea in its ask-me state): #a6acb6→#a7adb7 852 px, #9ca3ae/#9ca3af→#9ca4af 777 px (full re-render, base 47ad8ac1)."
+    }
+  ],
+  "themes": [
+    {
+      "theme": "dark",
+      "source": "index.html:2; input-bubble.css:5",
+      "reason": "The widget window: index.html:2 pins <html data-theme=\"dark\"> (confirmed in the Q13 review), and the bubble panels in it (bubble-*, widget-ask-*) are dark by source: input-bubble.css:5 hard-codes .ib-item { background: rgba(20, 20, 22, 0.94) } and every accent there reads the page's dark tokens (review round 5). Every listed baseline is shot from windowByFile(…, 'index.html'); widget-compose-taken (widget-page.html) is not. The work-scope shots (scope-counting, -personal, -watching; work-scope.spec.js:25 opens windowByFile(h.app, 'index.html')) were added in round 8b: they are the bubble with its scope pill, and their only unexpected pixels were Δα 1–2 anti-aliased edges (726 of 726 in scope-counting). The round-5 vote (flat, C* ≤ 8 pixels only) agrees: none of the 31 votes light.",
+      "baselines": [
+        "test-visual/__screenshots__/ask.spec.js/widget-ask-edit-darwin.png",
+        "test-visual/__screenshots__/ask.spec.js/widget-ask-long-command-darwin.png",
+        "test-visual/__screenshots__/ask.spec.js/widget-ask-long-command-open-darwin.png",
+        "test-visual/__screenshots__/away.spec.js/widget-away-recap-darwin.png",
+        "test-visual/__screenshots__/budget-notice.spec.js/widget-budget-notice-darwin.png",
+        "test-visual/__screenshots__/git-signals.spec.js/widget-ci-failed-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-allow-anyway-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-blocked-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-codex-ask-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-collapsed-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-dialog-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-expanded-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-first-use-notice-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-permission-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-permission-off-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-plan-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-pre-hook-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-question-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-stacked-tags-darwin.png",
+        "test-visual/__screenshots__/team-entry.spec.js/widget-team-hint-darwin.png",
+        "test-visual/__screenshots__/updates.spec.js/widget-update-armed-darwin.png",
+        "test-visual/__screenshots__/updates.spec.js/widget-update-hub-darwin.png",
+        "test-visual/__screenshots__/updates.spec.js/widget-update-ready-darwin.png",
+        "test-visual/__screenshots__/voice.spec.js/widget-voice-listening-darwin.png",
+        "test-visual/__screenshots__/voice.spec.js/widget-voice-talking-darwin.png",
+        "test-visual/__screenshots__/widget.spec.js/widget-blocked-red-darwin.png",
+        "test-visual/__screenshots__/widget.spec.js/widget-idle-off-darwin.png",
+        "test-visual/__screenshots__/widget.spec.js/widget-runaway-red-darwin.png",
+        "test-visual/__screenshots__/widget.spec.js/widget-working-green-darwin.png",
+        "test-visual/__screenshots__/widget.spec.js/widget-working-green-reduced-motion-darwin.png",
+        "test-visual/__screenshots__/widget.spec.js/widget-your-turn-amber-darwin.png",
+        "test-visual/__screenshots__/work-scope.spec.js/scope-counting-darwin.png",
+        "test-visual/__screenshots__/work-scope.spec.js/scope-personal-darwin.png",
+        "test-visual/__screenshots__/work-scope.spec.js/scope-watching-darwin.png"
+      ]
+    }
+  ]
 }
