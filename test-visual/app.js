@@ -160,7 +160,9 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = 
     if (!/closed|crash/i.test(String(e && e.message))) throw e;
     // Never silent: the warning and a test annotation say the first start died, with its exit code and stderr.
     await new Promise((r) => setTimeout(r, 300));
-    const detail = { error: String(e.message).split('\n')[0], exitCode: app?.process().exitCode ?? null, signal: app?.process().signalCode ?? null, stderrTail: stderrTail.trim().slice(-600) };
+    let proc = null;
+    try { proc = app?.process(); } catch { /* the handle is already torn down */ }
+    const detail = { error: String(e.message).split('\n')[0], exitCode: proc?.exitCode ?? null, signal: proc?.signalCode ?? null, stderrTail: stderrTail.trim().slice(-600) };
     console.warn(`[launch-retry] Electron died on its first start; starting it once more. ${JSON.stringify(detail)}`);
     try { test.info().annotations.push({ type: 'launch-retry', description: JSON.stringify(detail) }); } catch { /* not inside a test */ }
     try { await app?.close(); } catch { /* already gone */ }
