@@ -280,7 +280,22 @@ function createTasksService(opts) {
     relayed.set(relayKey(wcId, detail.id), {
       approvals: new Map(detail.openApprovals.map((a) => [a.approvalId, { tool: a.tool, inputSummary: a.inputSummary, hash: hashOf(a) }])),
       asks: new Set(detail.openAsk ? [detail.openAsk.askId] : []),
+      // R4 (plan-r4 §2.4): what each ask showed, choices included, for the chat's shown-arm. Read through shownHash only.
+      askHashes: new Map(detail.openAsk ? [[detail.openAsk.askId, askHashOf(detail.openAsk)]] : []),
     });
+  }
+  // A choice's payload with its keys in a fixed order, so equal choices always hash the same.
+  const stable = (p) => JSON.stringify(p && typeof p === 'object' ? Object.keys(p).sort().map((k) => [k, p[k]]) : null);
+  // One JSON array, so no field or option boundary is ambiguous.
+  const askHashOf = (k) => crypto.createHash('sha256').update(JSON.stringify([k.askId, k.text, k.options || [],
+    (k.choices || []).map((c) => [c.id, c.label, c.action, stable(c.payload)])])).digest('hex');
+  // Read-only (R4): the hash of an approval or ask main last relayed to this document for this task, or null.
+  function shownHash(wcId, taskId, kind, id) {
+    const e = relayed.get(relayKey(wcId, taskId));
+    if (!e || typeof id !== 'string') return null;
+    if (kind === 'approval') { const a = e.approvals.get(id); return a ? { hash: a.hash, tool: a.tool } : null; }
+    if (kind === 'ask') { const h = e.askHashes.get(id); return h ? { hash: h, tool: null } : null; }
+    return null;
   }
 
   async function openTask(id, wcId = 0) {
@@ -809,7 +824,7 @@ function createTasksService(opts) {
     return { handle, label };
   }
 
-  return { start, stop, retryNow, refresh, snapshot, openTask, closeTask, act, saveCheckpoint, copyTakeover, openTerminal, create, preflight, route, composerInfo, registerFolder, markSeen, folderOf: (handle) => folders.get(handle) ?? null, folderPaths: () => [...folders.values()], bus };
+  return { start, stop, retryNow, refresh, snapshot, openTask, closeTask, act, shownHash, saveCheckpoint, copyTakeover, openTerminal, create, preflight, route, composerInfo, registerFolder, markSeen, folderOf: (handle) => folders.get(handle) ?? null, folderPaths: () => [...folders.values()], bus };
 }
 
 module.exports = { createTasksService, OFFLINE };

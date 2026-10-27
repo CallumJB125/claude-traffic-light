@@ -43,6 +43,8 @@
           <p class="th-waiting-where" id="th-waiting-where"></p>
           <button type="button" class="th-btn th-primary" id="th-answer">Open to answer</button>
         </section>
+        <!-- R4-1a: every request this chat can act on, stacked; built by thread.js from main's detail only. -->
+        <div class="th-cards" id="th-cards" hidden role="group" aria-label="Waiting for you"></div>
         <!-- R2b-1: the reply box, a Plexiform chat only. Send or ⌘↩ sends; Enter is a newline
              (provisional, awaiting Callum: plan-r2b-auth §7 item 2). -->
         <form class="th-reply" id="th-reply" hidden aria-label="Reply">
@@ -54,6 +56,16 @@
             <button type="submit" class="th-btn th-primary" id="th-send">Send</button>
           </div>
         </form>
+        <!-- R4-1a: Stop, in the open chat only; the second step is armed for 600 ms. -->
+        <div class="th-stop" id="th-stop" hidden>
+          <button type="button" class="th-btn" id="th-stop-btn">Stop</button>
+          <div class="th-stop-confirm" id="th-stop-confirm" hidden role="group" aria-labelledby="th-stop-q">
+            <span class="th-stop-q" id="th-stop-q">Stop this chat?</span>
+            <button type="button" class="th-btn th-danger" id="th-stop-yes">Stop</button>
+            <button type="button" class="th-btn" id="th-stop-no">Keep going</button>
+          </div>
+          <p class="th-stop-note" id="th-stop-note" aria-live="polite"></p>
+        </div>
         <section class="th-ended" id="th-ended" hidden aria-labelledby="th-ended-title">
           <h2 class="th-ended-title" id="th-ended-title">This chat has ended</h2>
           <p class="th-ended-text" id="th-ended-text"></p>

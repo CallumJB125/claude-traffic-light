@@ -48,6 +48,20 @@ function rig({ act } = {}) {
     async composerInfo() { return { ais: [], recent: [] }; },
     async route() { return { ok: false, code: 'VALIDATION' }; },
     registerFolder: () => null,
+    // R4-1a: an open approval and an open question, relayed per document (tasks-service remember()/shownHash).
+    relayed: new Map(),
+    async openTask(id, wcId) {
+      await this.closeTask(wcId); this.slots.set(wcId, id); this.log.push(['open', id, wcId]);
+      this.relayed.set(wcId, id);
+      return { ok: true, detail: { id, title: 'Fix the tests', messages: [], actions: ['approve', 'deny', 'answer', 'stop'], confirm: [],
+        openApprovals: [{ approvalId: 'ap-1', tool: 'Bash', inputSummary: 'ls' }], openAsk: { askId: 'ask-1', text: 'Which?', options: ['x'], choices: null } }, replay: [] };
+    },
+    shownHash(wcId, taskId, kind, id) {
+      if (this.relayed.get(wcId) !== taskId) return null;
+      if (kind === 'approval' && id === 'ap-1') return { hash: 'h-ap-1', tool: 'Bash' };
+      if (kind === 'ask' && id === 'ask-1') return { hash: 'h-ask-1', tool: null };
+      return null;
+    },
   });
   const w = world({ tasks, now: () => clock.t });
   const page = () => { const wc = fakeContents(); wc.url = 'file:///page.html'; wc.mainFrame = { url: wc.url }; return wc; };
@@ -122,8 +136,23 @@ const COLUMNS = [
   { ch: 'newchat:route', name: 'the new chat\'s route', args: () => [{ text: 'x', folder: 'f' }] },
   { ch: 'newchat:preflight', name: 'the new chat\'s preflight', args: () => [{ folder: 'f' }] },
   { ch: 'newchat:open-in-tasks', name: 'the new chat opening task A in Tasks', args: () => ['task-a'] },
+  // R4-1a: thread:act. Valid only for the focused, bound task thread, on a request main showed it 600 ms ago.
+  { ch: 'thread:act', name: 'allow once in its own chat', args: (s) => [{ id: own(s), action: 'approve', approvalId: 'ap-1', scope: 'once' }], valid: true, expect: { action: 'approve', payload: { approvalId: 'ap-1', scope: 'once' } } },
+  { ch: 'thread:act', name: 'deny in its own chat', args: (s) => [{ id: own(s), action: 'deny', approvalId: 'ap-1' }], valid: true, expect: { action: 'deny', payload: { approvalId: 'ap-1' } } },
+  { ch: 'thread:act', name: 'answer in its own chat', args: (s) => [{ id: own(s), action: 'answer', askId: 'ask-1', answer: ' x ' }], valid: true, expect: { action: 'answer', payload: { askId: 'ask-1', answer: 'x' } } },
+  { ch: 'thread:act', name: 'stop its own chat', args: (s) => [{ id: own(s), action: 'stop', confirmed: true }], valid: true, expect: { action: 'stop', confirmed: true } },
+  { ch: 'thread:act', name: 'allow once in chat A', args: () => [{ id: A, action: 'approve', approvalId: 'ap-1', scope: 'once' }], valid: true, expect: { action: 'approve', payload: { approvalId: 'ap-1', scope: 'once' } } },
+  { ch: 'thread:act', name: 'allow once in chat B', args: () => [{ id: B, action: 'approve', approvalId: 'ap-1', scope: 'once' }], valid: true, expect: { action: 'approve', payload: { approvalId: 'ap-1', scope: 'once' } } },
+  { ch: 'thread:act', name: 'allow for this task (R4-1b)', args: (s) => [{ id: own(s), action: 'approve', approvalId: 'ap-1', scope: 'task' }] },
+  { ch: 'thread:act', name: 'allow a request never shown', args: (s) => [{ id: own(s), action: 'approve', approvalId: 'ap-9', scope: 'once' }] },
+  { ch: 'thread:act', name: 'allow once with a payload', args: (s) => [{ id: own(s), action: 'approve', approvalId: 'ap-1', scope: 'once', payload: {} }] },
+  { ch: 'thread:act', name: 'allow once with confirmed', args: (s) => [{ id: own(s), action: 'approve', approvalId: 'ap-1', scope: 'once', confirmed: true }] },
+  { ch: 'thread:act', name: 'stop without confirmed', args: (s) => [{ id: own(s), action: 'stop' }] },
+  { ch: 'thread:act', name: 'discard', args: (s) => [{ id: own(s), action: 'discard', confirmed: true }] },
+  { ch: 'thread:act', name: 'act with two arguments', args: (s) => [{ id: own(s), action: 'stop', confirmed: true }, 'more'] },
+  { ch: 'thread:act', name: 'act with a bare string', args: (s) => [own(s)] },
   // Every other thread:* channel (R2a's reads and navigation effects), for its own row and for A.
-  ...CHANNELS.filter((c) => c !== 'thread:message').flatMap((ch) => [
+  ...CHANNELS.filter((c) => c !== 'thread:message' && c !== 'thread:act').flatMap((ch) => [
     { ch, name: `${ch} for its own row`, args: (s) => [own(s)] },
     { ch, name: `${ch} for row A`, args: () => [A] },
   ]),
@@ -131,7 +160,7 @@ const COLUMNS = [
 
 // The allowed cells, explicitly. Anything not here must make zero service calls and zero effects.
 function allowed(s, col, args) {
-  if (col.ch === 'thread:message') return !!s.live && !!s.focused && !s.session && col.valid === true && args[0].id === s.bound;
+  if (col.ch === 'thread:message' || col.ch === 'thread:act') return !!s.live && !!s.focused && !s.session && col.valid === true && args[0].id === s.bound;
   if (col.ch.startsWith('tasks:')) return !!s.tasksPage;
   if (col.ch.startsWith('compose:')) return !!s.home;
   // The new chat: its own document only. create also needs focus and a valid draft; open-in-tasks only for an id it started (none here).
@@ -151,6 +180,8 @@ for (const s of SENDERS) {
       const r = rig();
       const e = s.make(r);
       await settle();
+      // thread:act: the live thread document (if any) has read its chat, and 600 ms have passed.
+      if (col.ch === 'thread:act') { const live = r.w.doc(); if (live) await r.w.ipc.handlers['thread:open'](live, r.w.peek().threadId); r.clock.t += 700; }
       const before = r.calls.length, effects = r.w.effects.length;
       const out = await r.w.ipc.handlers[col.ch](e, ...args);
       await settle();
@@ -158,7 +189,18 @@ for (const s of SENDERS) {
       if (!ok) {
         assert.deepEqual(made, [], 'no act, create, preflight or openTerminal');
         assert.deepEqual(did, [], 'no navigation effect');
-        if (col.ch === 'thread:message') assert.ok(out === null || out.ok === false, JSON.stringify(out));
+        if (col.ch === 'thread:message' || col.ch === 'thread:act') assert.ok(out === null || out.ok === false, JSON.stringify(out));
+        return;
+      }
+      if (col.ch === 'thread:act') {
+        assert.deepEqual(out, { ok: true });
+        assert.equal(made.length, 1);
+        const [kind, req, wcId, current] = made[0];
+        assert.equal(kind, 'act');
+        // Main resolved the task and built the request; the page named only the row and the request.
+        assert.deepEqual(req, { id: TASK[s.bound], ...col.expect });
+        assert.equal(wcId, e.sender.id);
+        assert.equal(current, true);
         return;
       }
       if (col.ch === 'thread:message') {
@@ -190,6 +232,11 @@ test('completeness: every registered thread:* and tasks:* channel has a column, 
   const columns = [...new Set(COLUMNS.map((c) => c.ch))].filter((n) => /^(thread|tasks|newchat):/.test(n)).sort();
   assert.deepEqual(registered, columns);
   assert.ok(registered.includes('thread:message'));
+  assert.ok(registered.includes('thread:act'));
+  // R4-1a: the allowed thread:act cells are exactly the two focused task threads acting in their own chat.
+  const acts = SENDERS.flatMap((s) => COLUMNS.filter((c) => c.ch === 'thread:act').filter((c) => allowed(s, c, c.args(s))).map((c) => `${s.name} · ${c.name}`));
+  assert.deepEqual(acts, ['thread:A focused · allow once in its own chat', 'thread:A focused · deny in its own chat', 'thread:A focused · answer in its own chat', 'thread:A focused · stop its own chat', 'thread:A focused · allow once in chat A',
+    'thread:B focused · allow once in its own chat', 'thread:B focused · deny in its own chat', 'thread:B focused · answer in its own chat', 'thread:B focused · stop its own chat', 'thread:B focused · allow once in chat B']);
   assert.deepEqual([...ENGINE_ACTIONS].sort(), ['answer', 'approve', 'deny', 'discard', 'handback', 'merge', 'message', 'openPr', 'pause', 'resume', 'retry', 'stop', 'switchAi', 'takeover'].sort());
   // The allowed thread:message cells are exactly the two focused task threads sending to their own chat.
   const cells = SENDERS.flatMap((s) => COLUMNS.filter((c) => c.ch === 'thread:message').filter((c) => allowed(s, c, c.args(s))).map((c) => `${s.name} · ${c.name}`));

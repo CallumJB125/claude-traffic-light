@@ -243,3 +243,100 @@ test('ended: no reply box, Resume in Tasks', async () => {
     await shot(page, 'thread-ended.png');
   } finally { await h.cleanup(); }
 });
+
+// ── R4-1a: requests answered in the chat, stacked (plan-r4 §4, §11) ──────
+const ACTS = ['approve', 'deny', 'answer', 'stop', 'resume', 'message'];
+const STACKED = {
+  ...CHAT,
+  header: { ...CHAT.header, bucket: 'needs', chatState: 'working' },
+  detail: { ...CHAT.detail, actions: ACTS, confirm: [],
+    openApprovals: [{ approvalId: 'a1', tool: 'Bash', inputSummary: 'npm run migrate -- --env staging' }, { approvalId: 'a2', tool: 'Edit', inputSummary: 'config/staging.json' }],
+    openAsk: { askId: 'q1', text: 'Should the retry also cover the S3 upload, or only local files?', options: ['Both', 'Only local files'], choices: null } },
+  replay: CHAT.replay.slice(0, 8),
+};
+const QUESTION = { ...STACKED, detail: { ...STACKED.detail, openApprovals: [] } };
+const CHOICES = {
+  ...STACKED,
+  header: { ...STACKED.header, chatState: null },
+  detail: { ...STACKED.detail, state: 'parked', actions: ['resume', 'stop'], openApprovals: [],
+    openAsk: { askId: 'q2', text: 'Claude hit its usage limit. The handover is saved.', options: null, choices: [{ id: 'wait_reset', label: 'Wait for the reset', action: 'resume', payload: { when: 'reset' } }] } },
+};
+// Main's thread:act is replaced with a recorder that answers the thread document only.
+const recordActs = (h) => h.app.evaluate(({ ipcMain }) => {
+  globalThis.__acts = [];
+  ipcMain.removeHandler('thread:act');
+  ipcMain.handle('thread:act', (e, ...a) => { if (!new URL(e.sender.getURL()).pathname.endsWith('/thread.html')) return null; globalThis.__acts.push(a); return { ok: true }; });
+});
+
+for (const theme of ['light', 'dark']) {
+  test(`stacked (${theme}): two approvals and a question, each its own card; Allow once sends that request only`, async () => {
+    const { h, side } = await open({ fixture: STACKED, theme });
+    try {
+      await recordActs(h);
+      const page = await openThread(h, side, theme);
+      const cards = page.locator('#th-cards .th-card');
+      await expect(cards).toHaveCount(3);
+      await expect(cards.nth(0).locator('.th-card-title')).toHaveText('Claude wants to use Bash');
+      await expect(cards.nth(2).locator('.th-card-title')).toHaveText('Claude has a question');
+      await expect(page.locator('#th-reply-text')).toHaveAttribute('placeholder', 'Type your answer to the question above');
+      // Armed for 600 ms, then every button works.
+      await expect(cards.nth(0).getByRole('button', { name: 'Allow once' })).toBeEnabled({ timeout: 3000 });
+      await shot(page, `thread-approval-stacked-${theme}.png`);
+      if (theme === 'light') {
+        await cards.nth(1).getByRole('button', { name: 'Allow once' }).click();
+        await expect(cards.nth(1).locator('.th-card-receipt')).toHaveText('Allowed once');
+        const sent = await h.app.evaluate(() => globalThis.__acts);
+        expect(sent.length).toBe(1);
+        expect(sent[0].length).toBe(1);
+        expect(Object.keys(sent[0][0]).sort()).toEqual(['action', 'approvalId', 'id', 'scope']);
+        expect(sent[0][0]).toMatchObject({ action: 'approve', approvalId: 'a2', scope: 'once' });
+        expect(sent[0][0].id).toMatch(/^[0-9a-f]{64}$/);
+      }
+    } finally { await h.cleanup(); }
+  });
+}
+
+test('question: options and the box as its answer', async () => {
+  const { h, side } = await open({ fixture: QUESTION });
+  try {
+    const page = await openThread(h, side);
+    await expect(page.locator('#th-cards .th-card')).toHaveCount(1);
+    await expect(page.locator('#th-reply-text')).toHaveAttribute('placeholder', 'Pick an option above, or type an answer');
+    await expect(page.getByRole('button', { name: 'Both' })).toBeEnabled({ timeout: 3000 });
+    await shot(page, 'thread-question.png');
+  } finally { await h.cleanup(); }
+});
+
+test('choices: the supervisor\'s own words, one click each', async () => {
+  const { h, side } = await open({ fixture: CHOICES });
+  try {
+    await recordActs(h);
+    const page = await openThread(h, side);
+    await expect(page.locator('#th-cards .th-card-title')).toHaveText('Claude needs you to choose');
+    const wait = page.getByRole('button', { name: 'Wait for the reset' });
+    await expect(wait).toBeEnabled({ timeout: 3000 });
+    await shot(page, 'thread-choices.png');
+    await wait.click();
+    await expect(page.locator('#th-cards .th-card-receipt')).toHaveText('Sent');
+    const sent = await h.app.evaluate(() => globalThis.__acts);
+    expect(Object.keys(sent[0][0]).sort()).toEqual(['action', 'askId', 'choiceId', 'id']);
+    expect(sent[0][0]).toMatchObject({ action: 'choose', askId: 'q2', choiceId: 'wait_reset' });
+  } finally { await h.cleanup(); }
+});
+
+test('stop: two steps in the open chat', async () => {
+  const { h, side } = await open({ fixture: REPLY });
+  try {
+    await recordActs(h);
+    const page = await openThread(h, side);
+    await page.locator('#th-stop-btn').click();
+    await expect(page.locator('#th-stop-q')).toHaveText('Stop this chat?');
+    await expect(page.locator('#th-stop-yes')).toBeEnabled({ timeout: 3000 });
+    await shot(page, 'thread-stop-confirm.png');
+    await page.locator('#th-stop-yes').click();
+    await expect(page.locator('#th-stop-note')).toHaveText('Stopping…');
+    const sent = await h.app.evaluate(() => globalThis.__acts);
+    expect(sent[0][0]).toMatchObject({ action: 'stop', confirmed: true });
+    expect(Object.keys(sent[0][0]).sort()).toEqual(['action', 'confirmed', 'id']);
+  } finally { await h.cleanup(); }
+});

@@ -225,6 +225,39 @@ test('relayed ids are per document: an id shown only to one page is refused from
   await svc.closeTask(20);
 });
 
+// Redesign R4-1a (plan-r4 §2.4, §9): the chat's shown-arm reads what remember() relayed to its own document, read-only.
+test('shownHash: the hash and tool relayed to one document, null for any other document, kind or id, and after close', async () => {
+  const c = await (await import(pathToFileURL(path.join(__dirname, '..', 'board', 'tasks-api', 'client.js')).href)).connect({ socketPath: srv.socketPath, tokenPath: srv.tokenPath });
+  const { id } = await c.createTask({ text: 'Shown hash', cwd: '/Users/demo/Development/acme-web', ai: 'claude', source: 'board', sourceMeta: { userId: 'stranger', displayName: 'Mallory', boardId: 'b', cardId: 'c3' } });
+  c.close();
+  await until(() => svc.snapshot().tasks.find((x) => x.id === id && x.actions.includes('approve')));
+  assert.equal(svc.shownHash(41, id, 'approval', 'anything'), null, 'nothing relayed yet');
+  const a = (await svc.openTask(id, 41)).detail.openApprovals[0];
+  const sha = require('node:crypto').createHash('sha256').update(`${a.tool}\0${a.inputSummary}`).digest('hex');
+  assert.deepEqual(svc.shownHash(41, id, 'approval', a.approvalId), { hash: sha, tool: 'StartTask' });
+  assert.equal(svc.shownHash(42, id, 'approval', a.approvalId), null, 'another document');
+  assert.equal(svc.shownHash(41, 'other-task', 'approval', a.approvalId), null, 'another task');
+  assert.equal(svc.shownHash(41, id, 'ask', a.approvalId), null, 'another kind');
+  assert.equal(svc.shownHash(41, id, 'state', a.approvalId), null);
+  assert.equal(svc.shownHash(41, id, 'approval', 'forged'), null);
+  await svc.closeTask(41);
+  assert.equal(svc.shownHash(41, id, 'approval', a.approvalId), null, 'a closed document keeps nothing');
+});
+
+test('the ask hash covers the text, options and choices, with each choice payload in a fixed key order', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'tasks-service.js'), 'utf8');
+  const lines = src.slice(src.indexOf('  const stable = '), src.indexOf('  // Read-only (R4)'));
+  const vm = require('node:vm'), ctx = { crypto: require('node:crypto') };
+  vm.runInNewContext(`${lines}; globalThis.askHashOf = askHashOf;`, ctx);
+  const ask = (choices, options = null, text = 'Paused') => ({ askId: 'ask-1', text, options, choices });
+  const h = ctx.askHashOf(ask([{ id: 'c', label: 'Resume', action: 'resume', payload: { when: 'now', x: 1 } }]));
+  assert.equal(ctx.askHashOf(ask([{ label: 'Resume', id: 'c', action: 'resume', payload: { x: 1, when: 'now' } }])), h, 'key order never matters');
+  assert.notEqual(ctx.askHashOf(ask([{ id: 'c', label: 'Resume', action: 'resume', payload: { when: 'reset', x: 1 } }])), h, 'a payload');
+  assert.notEqual(ctx.askHashOf(ask([{ id: 'c', label: 'Wait', action: 'resume', payload: { when: 'now', x: 1 } }])), h, 'a label');
+  assert.notEqual(ctx.askHashOf(ask([{ id: 'c', label: 'Resume', action: 'resume', payload: { when: 'now', x: 1 } }], null, 'Other')), h, 'the text');
+  assert.notEqual(ctx.askHashOf(ask(null, ['a', 'b'])), ctx.askHashOf(ask(null, ['a\0b'])), 'options keep their boundaries');
+});
+
 test('relayed ids are per document after a refresh too: a live approval reaches only the open page', async () => {
   const { id } = await svc.create({ text: 'Ask before installing', folder: svc.registerFolder('/Users/demo/Development/acme-web').handle, ai: 'claude', permissionLevel: 'ask', surface: 'background', when: 'now' });
   assert.ok(id);
