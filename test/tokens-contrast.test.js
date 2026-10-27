@@ -250,3 +250,59 @@ test('tokens: status buckets are at least 3:1 on every surface', () => {
     }
   }
 });
+
+// ── The last terracotta literals (follow-up to R0b) ──────────────────────────────────────────────────────────
+// The Lights stage wash is the accent at a percentage read from lights.html; the stage text must stay ≥ 4.5:1 at
+// its peak. Graphite at 8 % on light --bg gives --faint 4.47:1, so it is 6 %.
+test('tokens: the Lights stage wash keeps the stage text at least 4.5:1 at its peak', () => {
+  const a = washPct('lights.html', /#stage \{[^}]*radial-gradient\([^)]*?color-mix\(in srgb, var\(--accent\) (\d+)%, transparent\)/s);
+  for (const theme of Object.keys(THEMES)) {
+    const peak = over(wash(theme, a), color(theme, '--bg'));
+    for (const fg of ['--text', '--muted', '--faint']) {
+      const r = ratio(color(theme, fg), peak);
+      assert.ok(r >= 4.5, `${theme} ${fg} on the stage wash at ${a * 100}% is ${r.toFixed(2)}:1`);
+    }
+  }
+});
+
+// The commands an imported file will run are shown in caution colour (--danger-text), not the accent. They sit on
+// --panel-2 (#setup-summary) and on --accent-soft over --panel (#rules-summary, inside #rules-choice).
+test('tokens: the "clicks run" command text is --danger-text and reads on the surfaces it sits on', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'lights.html'), 'utf8');
+  assert.match(html, /#setup-summary code, #rules-summary code \{[^}]*color: var\(--danger-text\)/);
+  assert.ok(!/ffb4a8/i.test(html), 'lights.html no longer has #ffb4a8');
+  for (const theme of Object.keys(THEMES)) {
+    const fg = color(theme, '--danger-text');
+    const surfaces = { '--bg': color(theme, '--bg'), '--panel': color(theme, '--panel'), '--panel-2': color(theme, '--panel-2'),
+      'accent-soft over --panel': over(color(theme, '--accent-soft'), color(theme, '--panel')) };
+    for (const [name, bg] of Object.entries(surfaces)) {
+      const r = ratio(fg, bg);
+      assert.ok(r >= 4.5, `${theme} --danger-text on ${name} is ${r.toFixed(2)}:1`);
+    }
+  }
+});
+
+// The exported replay page is standalone (no tokens.css): its accent is the Graphite value of each scheme.
+test('tokens: the exported replay page uses the Graphite accent and it reads on the page', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src/session-replay.js'), 'utf8');
+  const css = src.match(/const CSS = `([\s\S]*?)`;/)[1];
+  const light = css.match(/^:root\{([^}]*)\}/)[1];
+  const dark = css.match(/@media \(prefers-color-scheme:dark\)\{:root\{([^}]*)\}/)[1];
+  const read = (block, name) => block.match(new RegExp(`${name}:(#[0-9a-f]{3,6})`, 'i'))[1];
+  assert.ok(!/b4532e|da7756/i.test(css), 'no terracotta in the replay page');
+  for (const [theme, own] of [['light', light], ['dark', dark]]) {
+    assert.equal(read(own, '--accent').toLowerCase(), resolve(THEMES[theme], `--graphite-${theme}`), `${theme} replay --accent is Graphite`);
+    for (const bg of ['--bg', '--panel']) {
+      const r = ratio(parse(read(own, '--accent')), parse(read(own, bg)));
+      assert.ok(r >= 4.5, `${theme} replay --accent on ${bg} is ${r.toFixed(2)}:1`);
+    }
+  }
+});
+
+test('tokens: the Lights window and the replay export have no terracotta literals left', () => {
+  const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+  for (const f of ['lights.html', 'lights-view.js']) assert.ok(!/218,\s*119,\s*86|b4532e|ffb4a8/i.test(read(f)), `${f} has a terracotta literal`);
+  // lights-view.js keeps '#da7756' as the mascot body-colour default (character art stays by plan).
+  assert.ok(!/da7756/i.test(read('lights.html')), 'lights.html has #da7756');
+  assert.ok(!/b4532e|da7756|218,\s*119,\s*86/i.test(read('src/session-replay.js')), 'session-replay.js has terracotta');
+});

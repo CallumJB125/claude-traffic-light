@@ -96,8 +96,8 @@ function summary(model) {
 const pad = (n) => String(n).padStart(2, '0');
 const stamp = (iso) => { const d = new Date(iso); return Number.isFinite(d.getTime()) ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` : 'unknown'; };
 
-const CSS = `:root{color-scheme:light dark;--bg:#faf9f7;--panel:#fff;--line:#e4e0da;--text:#1f1d1a;--muted:#6b665d;--accent:#b4532e;--add:#1d7a35;--del:#b3261e}
-@media (prefers-color-scheme:dark){:root{--bg:#1c1a1f;--panel:#221f27;--line:#35313d;--text:#ece8e2;--muted:#a8a293;--accent:#da7756;--add:#4cc35c;--del:#ff8a80}}
+const CSS = `:root{color-scheme:light dark;--bg:#faf9f7;--panel:#fff;--line:#e4e0da;--text:#1f1d1a;--muted:#6b665d;--accent:#24292f;--add:#1d7a35;--del:#b3261e}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1a1f;--panel:#221f27;--line:#35313d;--text:#ece8e2;--muted:#a8a293;--accent:#e6e8eb;--add:#4cc35c;--del:#ff8a80}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,system-ui,sans-serif}
 main{max-width:900px;margin:0 auto;padding:24px 16px}h1{margin:0;font-size:20px}h2{font-size:15px;margin:0 0 8px}
 .sub,.muted{color:var(--muted)}section{margin-top:16px;padding:16px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
