@@ -31,7 +31,7 @@ function freePort() {
 }
 
 // Variables that point back into the real home whatever HOME is set to.
-const HOME_POINTERS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'ZDOTDIR'];
+const HOME_POINTERS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'HERMES_HOME', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'ZDOTDIR'];
 // A real path below the OS temp dir (symlinks such as /var -> /private/var resolved).
 // (/tmp too: the app's own TMPDIR on macOS, where specs make some of their temp dirs.)
 const underTmp = (p) => { try { const r = fs.realpathSync(p); return [os.tmpdir(), '/tmp'].some((t) => { try { return r.startsWith(fs.realpathSync(t) + path.sep); } catch { return false; } }); } catch { return false; } };

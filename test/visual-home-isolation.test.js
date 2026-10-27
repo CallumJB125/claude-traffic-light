@@ -57,30 +57,47 @@ test('visual launches: a caller PATH keeps the fakes first, and home-pointer var
   assert.equal(underTmp(path.join(os.tmpdir(), 'does-not-exist-x')), false); // unresolvable counts as not safe
 });
 
-// The rule for the whole directory, self-launching specs included: nothing sets HOME or USERPROFILE for an app or the
-// run, and a spec that starts Electron itself sets no PATH either (launchApp prepends the fakes to a caller PATH, a
-// direct electron.launch would not). app.js builds the env (homeEnv) and provider-isolation.spec.js tests the refusal.
+// The rule for the whole directory (recursively: test-visual/matrix/main.js too), self-launching specs included: nothing sets
+// HOME or USERPROFILE for an app or the run, and a spec that starts Electron itself sets no PATH either (launchApp
+// prepends the fakes to a caller PATH, a direct electron.launch would not). app.js builds the env (homeEnv) and
+// provider-isolation.spec.js tests the refusals. Shorthand ({ HOME }) and computed ({ [k]: v }) keys are not caught here:
+// launchApp refuses them at run time, and a self-launching spec's env reads the run HOME anyway.
+const HOME_KEY = /(^|[^A-Za-z0-9_.])['"]?(HOME|USERPROFILE)['"]?\s*:/;
+const ENV_ASSIGN = /process\.env\s*=[^=]|\.(HOME|USERPROFILE|PATH)\s*=[^=]|\[['"](HOME|USERPROFILE|PATH)['"]\]\s*=[^=]/;
+const PATH_KEY = /(^|[^A-Za-z0-9_.])['"]?PATH['"]?\s*:/;
+const sourceFiles = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === '__screenshots__' || e.name === 'node_modules' ? [] : sourceFiles(path.join(dir, e.name))) : /\.(js|mjs|cjs)$/.test(e.name) ? [path.join(dir, e.name)] : []));
 test('visual specs: no spec sets HOME, USERPROFILE or (for a direct electron.launch) PATH', () => {
   const dir = path.join(__dirname, '../test-visual');
   const allowed = new Set(['app.js', 'provider-isolation.spec.js']);
   const hits = [];
-  for (const name of fs.readdirSync(dir).filter((f) => f.endsWith('.js') && !allowed.has(f))) {
-    const text = fs.readFileSync(path.join(dir, name), 'utf8');
+  for (const file of sourceFiles(dir)) {
+    const name = path.relative(dir, file);
+    if (allowed.has(name)) continue;
+    const text = fs.readFileSync(file, 'utf8');
     const direct = /electron\.launch\(|_electron\.launch\(/.test(text);
     text.split('\n').forEach((line, i) => {
       const code = line.replace(/^\s*\/\/.*$/, '');
-      if (/(^|[^A-Za-z0-9_])(HOME|USERPROFILE)\s*:/.test(code)) hits.push(`${name}:${i + 1} sets a HOME key: ${code.trim().slice(0, 100)}`);
-      if (/process\.env\.(HOME|USERPROFILE|PATH)\s*=[^=]/.test(code) || /process\.env\[['"](HOME|USERPROFILE|PATH)['"]\]\s*=[^=]/.test(code)) hits.push(`${name}:${i + 1} assigns process.env: ${code.trim().slice(0, 100)}`);
-      if (direct && /(^|[^A-Za-z0-9_])PATH\s*:/.test(code)) hits.push(`${name}:${i + 1} sets PATH next to a direct electron.launch: ${code.trim().slice(0, 100)}`);
+      if (HOME_KEY.test(code)) hits.push(`${name}:${i + 1} sets a HOME key: ${code.trim().slice(0, 100)}`);
+      if (ENV_ASSIGN.test(code)) hits.push(`${name}:${i + 1} assigns HOME/USERPROFILE/PATH or process.env: ${code.trim().slice(0, 100)}`);
+      if (direct && PATH_KEY.test(code)) hits.push(`${name}:${i + 1} sets PATH next to a direct electron.launch: ${code.trim().slice(0, 100)}`);
     });
   }
   assert.deepEqual(hits, []);
 });
 
 test('visual specs: the source rule would catch a violation (self-check of the patterns)', () => {
-  const sample = ["electron.launch({ env: { ...process.env, HOME: tmp } })", "process.env.HOME = x;", "process.env['PATH'] = y;", "env: { USERPROFILE: x }"];
-  const hit = (code) => /(^|[^A-Za-z0-9_])(HOME|USERPROFILE)\s*:/.test(code) || /process\.env\.(HOME|USERPROFILE|PATH)\s*=[^=]/.test(code) || /process\.env\[['"](HOME|USERPROFILE|PATH)['"]\]\s*=[^=]/.test(code);
-  for (const s of sample) assert.equal(hit(s), true, s);
-  assert.equal(hit("CLAUDE_TRAFFIC_LIGHT_HOME: home"), false);
-  assert.equal(hit("PLEXIFORM_SESSION_TABS_HOME: home"), false);
+  const bad = ["electron.launch({ env: { ...process.env, HOME: tmp } })", "env: { 'HOME': x }", 'env: { "USERPROFILE": x }', "process.env.HOME = x;", "process.env['PATH'] = y;", "opts.env.HOME = x;", "child.env.PATH = y;", "process.env = { ...process.env };", "env['HOME'] = z;"];
+  for (const s of bad) assert.equal(HOME_KEY.test(s) || ENV_ASSIGN.test(s), true, s);
+  for (const s of ["PATH: bins", "\"PATH\": bins"]) assert.equal(PATH_KEY.test(s), true, s);
+  const fine = ["CLAUDE_TRAFFIC_LIGHT_HOME: home", "PLEXIFORM_SESSION_TABS_HOME: home", "const x = h.userHome;", "if (a.HOME === b) {}", "env.HOME == null", "SOMEPATH: 1"];
+  for (const s of fine) assert.equal(HOME_KEY.test(s) || ENV_ASSIGN.test(s) || PATH_KEY.test(s), false, s);
+  // the matrix fixture main is inside the scan
+  assert.ok(sourceFiles(path.join(__dirname, '../test-visual')).some((f) => f.endsWith(path.join('matrix', 'main.js'))));
+});
+
+test('visual launches: HERMES_HOME, GEMINI_CLI_HOME and XDG_CACHE_HOME are home pointers too', () => {
+  for (const k of ['HERMES_HOME', 'GEMINI_CLI_HOME', 'XDG_CACHE_HOME']) assert.ok(HOME_POINTERS.includes(k), k);
+  const base = { HERMES_HOME: os.homedir(), GEMINI_CLI_HOME: os.homedir(), XDG_CACHE_HOME: os.homedir(), PATH: '/usr/bin' };
+  const env = homeEnv('/tmp/cbuddy-visual-user-x', base);
+  for (const k of ['HERMES_HOME', 'GEMINI_CLI_HOME', 'XDG_CACHE_HOME']) assert.equal(k in env, false, k);
 });
