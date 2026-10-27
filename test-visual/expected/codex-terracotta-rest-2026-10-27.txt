@@ -1,0 +1,3 @@
+# classify
+test-visual/__screenshots__/templates.spec.js/lights-template-minimal-darwin.png
+test-visual/__screenshots__/windows.spec.js/lights-window-darwin.png

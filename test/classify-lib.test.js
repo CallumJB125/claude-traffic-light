@@ -676,6 +676,7 @@ test('classifier: exception guards — no old colour near a surface or text toke
   for (const e of config.exceptions) {
     assert.ok(e.theme === 'light' || e.theme === 'dark', `${e.name}: needs a theme scope`);
     const pairs = e.pairs || (e.old || []).flatMap((o) => (e.new || []).map((n) => [o, n]));
+    if (e.gradient) continue; // checked against the wash model in the next test
     for (const [o] of pairs) for (const k of NEUTRAL) assert.ok(de(o, head[e.theme][k]) > 2, `${e.name}: old ${o} is within ΔE 2 of ${e.theme} ${k} (an exception must not explain a neutral)`);
   }
   // soft-tint pairs: old = base --accent-soft over `over`, new = head --accent-soft over `over` (ΔE ≤ 1)
@@ -791,4 +792,33 @@ test('classifier: a literal → mix member explains the swap over a surface, and
   // and in light, over --panel
   const panel = hex('#ffffff');
   assert.equal(lib.classifyPixel(mix([218, 119, 86], panel, 0.5), mix(hex('#24292f'), panel, 0.5), [panel], fam.light.members), 'pass');
+});
+
+// A gradient exception has no flat colour, so its rungs are checked against the model instead of the neutral guard:
+// old = the retired terracotta at alpha a over the surface, new = the head accent at newAlphaOfOld × a (ΔE ≤ 1).
+test('classifier: a gradient exception is the wash model and nothing else', () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const root = path.join(__dirname, '..');
+  const config = JSON.parse(fs.readFileSync(path.join(root, 'test-visual', 'classify.config.json'), 'utf8'));
+  const head = lib.tokensOf(fs.readFileSync(path.join(root, 'tokens.css'), 'utf8'));
+  const grads = config.exceptions.filter((e) => e.gradient);
+  assert.deepEqual(grads.map((e) => e.name), ['stage-wash']);
+  const html = fs.readFileSync(path.join(root, 'lights.html'), 'utf8');
+  const pct = Number(html.match(/#stage \{[^}]*radial-gradient\([^)]*?color-mix\(in srgb, var\(--accent\) (\d+)%, transparent\)/s)[1]) / 100;
+  for (const e of grads) {
+    const g = e.gradient;
+    assert.equal(e.theme, 'light');
+    assert.equal(g.newAlphaOfOld, pct / g.oldAlphaMax, `${e.name}: new alpha is ${pct} of the old ${g.oldAlphaMax}`);
+    const surface = lib.parseColour(head.light[g.over]).slice(0, 3);
+    const accent = lib.parseColour(head.light['--accent']).slice(0, 3);
+    const mix = (fg, a) => fg.map((v, i) => v * a + surface[i] * (1 - a));
+    for (const [o, n] of e.pairs) {
+      const po = lib.parseColour(o).slice(0, 3); const pn = lib.parseColour(n).slice(0, 3);
+      // the alpha whose terracotta mix best matches the old colour, then the head accent at newAlphaOfOld × that alpha
+      let best = null;
+      for (let a = 0; a <= g.oldAlphaMax + 1e-9; a += 0.0005) { const d = lib.deltaE00(lib.lab(mix(g.oldRgb, a)), lib.lab(po)); if (!best || d < best.d) best = { a, d }; }
+      assert.ok(best.d <= 1, `${e.name}: ${o} is not terracotta over ${g.over} (ΔE ${best.d.toFixed(2)})`);
+      assert.ok(lib.deltaE00(lib.lab(mix(accent, best.a * g.newAlphaOfOld)), lib.lab(pn)) <= 1, `${e.name}: ${n} is not the accent at ${g.newAlphaOfOld} × alpha ${best.a.toFixed(4)}`);
+    }
+  }
 });

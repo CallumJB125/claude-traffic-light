@@ -931,11 +931,10 @@ const NOISE_TILE_SHARE = 0.5;
 // stack: text over the 18 % pill wash over the 0.94 card in a transparent window), reviewed by hand in round 8b.
 // 212 + a margin of 3. Raise it only after reviewing the new crops.
 const CAPS = { unexpectedRatio: 0.005, crops: 215, noiseRatio: 0.0025 };
-// A per-baseline noise allowance from classify.config.json: { baseline, maxRatio, reason }. Exact path only.
-const noiseCapFor = (baseline, config) => {
-  const hit = ((config && config.noise) || []).find((n) => n.baseline === baseline);
-  return hit ? hit.maxRatio : CAPS.noiseRatio;
-};
+// A per-baseline noise allowance from classify.config.json: { baseline, maxRatio, maxDenseTiles?, reason }. Exact path
+// only. maxDenseTiles (default 0) lets a named cause, such as a gradient's faint tail, have that many dense-noise tiles.
+const noiseEntryFor = (baseline, config) => ((config && config.noise) || []).find((n) => n.baseline === baseline);
+const noiseCapFor = (baseline, config) => { const hit = noiseEntryFor(baseline, config); return hit ? hit.maxRatio : CAPS.noiseRatio; };
 function verdictOf(results, config) {
   const failures = [];
   let crops = 0;
@@ -947,7 +946,7 @@ function verdictOf(results, config) {
     else if (r.unexpected / r.total > CAPS.unexpectedRatio) failures.push(`${r.baseline}: ${(100 * r.unexpected / r.total).toFixed(3)} % unexpected (cap 0.5 %)`);
     const noiseCap = noiseCapFor(r.baseline, config);
     if (!r.sizeChanged && r.noise / r.total > noiseCap) failures.push(`${r.baseline}: ${(100 * r.noise / r.total).toFixed(3)} % noise (cap ${+(100 * noiseCap).toFixed(3)} %)`);
-    if (r.noiseTiles) failures.push(`${r.baseline}: ${r.noiseTiles} tile(s) at least ${100 * NOISE_TILE_SHARE} % noise (a dense shift under ΔE 1)`);
+    if (r.noiseTiles > ((noiseEntryFor(r.baseline, config) || {}).maxDenseTiles || 0)) failures.push(`${r.baseline}: ${r.noiseTiles} tile(s) at least ${100 * NOISE_TILE_SHARE} % noise (a dense shift under ΔE 1)`);
   }
   if (crops > CAPS.crops) failures.push(`${crops} review crops (cap ${CAPS.crops})`);
   return { failures, crops };
