@@ -155,3 +155,28 @@ test('E3: an inbox.item pushed down the presence socket reaches the badge count 
   assert.equal(inbox.unread(), 0);
   link.stop();
 });
+
+test('hub change (ledger 31): the owner clears while the old hub\'s socket is still open, so its presence.view null reaches that hub', async () => {
+  FakeWS.all = [];
+  const { createPresenceOwner } = require('../src/presence-owner');
+  const t = timers(); let links = [route()], link = null;
+  const owner = createPresenceOwner({ presenceView: (r) => link.view(r) });
+  link = createPresenceLink({ links: async () => links, WebSocket: FakeWS, ...t, onRouteDropped: () => owner.clearAll() });
+  await link.refresh();
+  const old = FakeWS.all[0]; open(old);
+  owner.set('overview', { team: 'team-1', card: 'card-1' });
+  assert.deepEqual(old.frames('presence.view').map((f) => f.card_id), ['card-1']);
+  const sentBeforeClose = []; old.close = function (code) { sentBeforeClose.push(this.frames('presence.view').map((f) => f.card_id)); this.closed = code; };
+  links = [route({ hub: 'https://other.example', team_id: 'team-9', board_id: 'board-9' })];
+  await link.refresh();
+  assert.deepEqual(sentBeforeClose, [['card-1', null]], 'the null went out on the old hub\'s open socket before it closed');
+  assert.equal(old.closed, 1000);
+});
+test('a dropped route that was not being viewed does not call the owner', async () => {
+  FakeWS.all = [];
+  const t = timers(); let links = [route()], drops = 0;
+  const link = createPresenceLink({ links: async () => links, WebSocket: FakeWS, ...t, onRouteDropped: () => drops++ });
+  await link.refresh(); open(FakeWS.all[0]);
+  links = []; await link.refresh();
+  assert.equal(drops, 0);
+});

@@ -33,7 +33,7 @@ function reduce(msg) {
   return { members, viewers };
 }
 
-function createPresenceLink({ links = async () => [], WebSocket, now = Date.now, setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout, log = () => {}, onChange = () => {}, onInbox = () => {} } = {}) {
+function createPresenceLink({ links = async () => [], WebSocket, now = Date.now, setTimeout = globalThis.setTimeout, clearTimeout = globalThis.clearTimeout, log = () => {}, onChange = () => {}, onInbox = () => {}, onRouteDropped = () => {} } = {}) {
   const conns = new Map();   // key → {route, ws, attempt, timer, beat, open, viewing, latest}
   let stopped = false;
 
@@ -108,7 +108,8 @@ function createPresenceLink({ links = async () => [], WebSocket, now = Date.now,
       const route = { hub: r.hub, team_id: r.team_id, board_id: r.board_id, token: typeof l.token === 'function' ? l.token : () => '' };
       want.set(key(route), route);
     }
-    for (const [k, c] of conns) if (!want.has(k)) { conns.delete(k); close(c); }
+    // A hub or team went away: tell the owner first, while this socket is still open, so its `presence.view null` reaches that hub (ledger 31).
+    for (const [k, c] of conns) if (!want.has(k)) { if (c.viewing) { try { onRouteDropped(c.route); } catch { /* best effort */ } } conns.delete(k); close(c); }
     for (const [k, route] of want) {
       if (conns.has(k)) continue;
       const c = { route, ws: null, attempt: 0, timer: null, beat: null, open: false, viewing: null, latest: null };

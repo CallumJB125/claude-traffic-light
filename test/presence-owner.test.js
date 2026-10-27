@@ -121,6 +121,7 @@ test('wiring: one owner in main.js cleared with the invalidate sites; hide/minim
   assert.match(win, /win\.on\('minimize', \(\) => \{ try \{ onPresenceLeave\(\)/);
   assert.match(win, /content === localViews\.get\('overview'\) && view !== content\) \{ try \{ onOverviewLeft\(\)/);
   for (const m of win.matchAll(/win\.on\('blur'[^\n]*/g)) assert.doesNotMatch(m[0], /onPresenceLeave|onOverviewLeft/);
+  assert.match(main, /onRouteDropped:\(\)=>PresenceOwner\.clearAll\(\)/);
   assert.match(om, /clearViewing\(\)\{if\(!stopped\)service\.clearViewing\(\);\}/);
 });
 

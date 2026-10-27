@@ -1845,7 +1845,7 @@ const followupScope=()=>{
 const sessionFollowups=require('./src/session-followups').createSessionFollowups({file:path.join(app.getPath('userData'),'session-followups','outbox.bin'),storage:followupStorage,scope:followupScope,onChange:()=>OverviewMain.directoryChanged()});
 if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{overviewTeamHub=require('./src/team-hub-fake').createFakeTeamHub(JSON.parse(fs.readFileSync(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB,'utf8')));}catch(e){console.warn('[overview] fake team hub not loaded:',e.message);}}
 // Team depth lane C: board presence over the person's own hub sign-in (who views which card, who runs where); feeds Team sessions and beats this computer's open shared session.
-const PresenceLink=require('./src/team-presence-link').createPresenceLink({links:async()=>devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[],WebSocket:require('ws'),log:m=>console.log(m),onChange:()=>OverviewMain.directoryChanged(),onInbox:(hub,item)=>ingestTeamInbox(hub,[item])}); // privacy-flow: team-hub
+const PresenceLink=require('./src/team-presence-link').createPresenceLink({links:async()=>devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[],WebSocket:require('ws'),log:m=>console.log(m),onChange:()=>OverviewMain.directoryChanged(),onInbox:(hub,item)=>ingestTeamInbox(hub,[item]),onRouteDropped:()=>PresenceOwner.clearAll()}); // privacy-flow: team-hub
 const PresenceOwner=require('./src/presence-owner').createPresenceOwner({presenceView:r=>PresenceLink.view(r)});
 const OverviewMain=require('./src/overview-main').createOverviewMain({
   buddy:()=>buddyWin,chatPreview:CHAT_PREVIEW,presenceOwner:PresenceOwner,sessions:()=>aggregateState().sessions||[],
