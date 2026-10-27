@@ -127,7 +127,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, onThreadRetired = () => {}, newChatBusy = () => false, onNewChatRetired = () => {}, loginEnv = () => null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, chatsOn = () => true, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, onThreadRetired = () => {}, newChatBusy = () => false, onNewChatRetired = () => {}, loginEnv = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -543,7 +543,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
         : [...vaults.values()].some(v => v.state() === 'locked') ? 'locked' : 'ready',
       accountStorageHelp: storageHelp(),
       runners: flow.runningTeams(),
-      ...(chatFirst === true ? { chat: { focus: sidebarFocus, thread: selected === 'thread' ? threadId : null } } : {}),
+      ...(chatFirst === true ? { chat: { focus: sidebarFocus, thread: selected === 'thread' ? threadId : null, chats: chatsAllowed() } } : {}),
       hub: team
         ? { state: viewError ? 'failed' : 'ready', error: viewError, mode: 'team', name: team.name }
         : { state: viewError ? 'failed' : hubStatus.state, error: viewError ?? hubStatus.error ?? null, mode },
@@ -1209,8 +1209,26 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     newChatHeldView = null;
     disposeNewChat(held.v, held.wcId);
   }
+  // C4: "Show chats" (config homeComposer), read on every call. Off: nothing opens the new chat; the callers' own
+  // fallbacks apply (Home and My day → their old pages, a link → Board, a resume → Home). Existing chats are unchanged.
+  // A read that throws counts as off (fails closed, as newchat-home-main does).
+  const chatsAllowed = () => { try { return chatsOn() !== false; } catch { return false; } };
+  let chatsFlipPending = false;
+  // From main when the setting changed. A showing new chat is retired (its generation moves, so a Run in flight fails
+  // same()) and Home shows; a held "Start anyway" dialog defers that until it is answered. Either way the sidebar hears.
+  function chatsChanged() {
+    if (chatFirst !== true || !win || win.isDestroyed()) return;
+    if (!chatsAllowed()) {
+      resumeNewChat = false;
+      if (newChatModalTicket) { chatsFlipPending = true; return; }
+      if (newChatView) retireNewChat();
+      // Also a hidden window whose new chat was already retired (it would otherwise come back to nothing).
+      if (selected === 'newchat') { select('home'); return; }
+    }
+    pushState();
+  }
   function openNewChat() {
-    if (chatFirst !== true || !win || win.isDestroyed()) return false;
+    if (chatFirst !== true || !chatsAllowed() || !win || win.isDestroyed()) return false;
     if (newChatView && content === newChatView && selected === 'newchat') { try { newChatView.webContents.focus(); } catch { /* closed */ } return true; }
     retireThread();
     retireNewChat();
@@ -1234,7 +1252,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   function resumeNewChatView() {
     if (selected !== 'newchat' || newChatView || !resumeNewChat) return;
     resumeNewChat = false;
-    if (!openNewChat()) select('board');
+    if (!openNewChat()) select(chatsAllowed() ? 'board' : 'home');
   }
 
   // ── workspaces ──────────────────────────────────────────────────────────
@@ -1291,7 +1309,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   function chatPagesExtra() {
     let saved = null;
     try { saved = sidebarCollapsed(sidebarGroups.load()); } catch { saved = null; }
-    return { collapsed: saved ?? [...DEFAULT_COLLAPSED], focus: sidebarFocus, selected };
+    return { collapsed: saved ?? [...DEFAULT_COLLAPSED], focus: sidebarFocus, selected, chats: chatsAllowed() };
   }
   // The thread page's "Back to Board" (navigation only, from that document's main frame).
   const fromThread = (e) => !!threadView && e.sender === threadView.webContents && e.senderFrame === threadView.webContents.mainFrame && e.sender.getURL() === threadUrl();
@@ -1539,12 +1557,13 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
         const answer=await show(before.window),after=this.newChatContext();
         if(newChatModalTicket!==ticket||!after?.foreground||after.contents.mainFrame!==ticket.frame||['window','contents','generation','document','account','workspace'].some(key=>after[key]!==ticket[key]))return null;
         return answer;
-      }finally{if(newChatModalTicket===ticket)newChatModalTicket=null;}
+      }finally{if(newChatModalTicket===ticket){newChatModalTicket=null;if(chatsFlipPending){chatsFlipPending=false;chatsChanged();}}}
     },
     // The other confirms ask this, so a new-chat dialog and theirs never overlap. Always false with the gate off.
     newChatHeld(){ return newChatModalTicket!==null; },
     newChatSettled,
     openNewChat,
+    chatsChanged,
     // Chat-first preview: a deep link main parsed (src/chat-links.js); navigation only.
     // A page goes through route(), never goTo(), so no link starts an account flow.
     openLink(target) {

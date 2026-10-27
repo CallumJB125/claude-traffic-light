@@ -26,6 +26,8 @@
     terminals: 'No sessions in a terminal right now.',
     team: 'No team sessions right now.',
   };
+  // C4: with chats off ("Show chats" in Settings), All doesn't mention chats.
+  const EMPTY_NO_CHATS = 'No sessions yet. Run claude or codex in any terminal and it shows up here.';
   // Footer rows. Plexiform Terminal returns with the Terminal app, with a
   // "Get Plexiform Terminal" path (plan-r1 §5 Q3); its slot is after Usage.
   const FOOT = [
@@ -39,7 +41,11 @@
   const ui = {
     filter: 'all', rows: [], collapsed: new Set(['idle']), selectedRow: null, focusKey: null,
     seq: 0, selectedPage: null, sections: [], loaded: false,
+    // C4: main says whether chats can be started here. Off hides New chat and the Chats filter; rows stay (a chat
+    // started earlier may need you, and its thread still opens).
+    chats: true,
   };
+  const filters = () => FILTERS.filter((f) => ui.chats || f.id !== 'chats');
 
   function el(tag, attrs = {}, ...kids) {
     const n = document.createElement(tag);
@@ -119,7 +125,11 @@
   }
 
   function render() {
+    if (!ui.chats && ui.filter === 'chats') ui.filter = 'all';
+    const nw = document.getElementById('sb-new');
+    if (nw) nw.hidden = !ui.chats;
     for (const b of document.querySelectorAll('.sb-filter-opt')) {
+      b.hidden = !ui.chats && b.dataset.filter === 'chats';
       const on = b.dataset.filter === ui.filter;
       b.setAttribute('aria-checked', String(on));
       b.tabIndex = on ? 0 : -1;
@@ -152,7 +162,7 @@
     }
     const empty = document.getElementById('sb-empty');
     empty.hidden = rows.length > 0 || !ui.loaded;
-    empty.textContent = EMPTY[ui.filter];
+    empty.textContent = !ui.chats && ui.filter === 'all' ? EMPTY_NO_CHATS : EMPTY[ui.filter];
     document.getElementById('sb-connect').hidden = empty.hidden || ui.filter !== 'all';
     tree.hidden = rows.length === 0;
     // Roving tabindex: exactly one tree item is tabbable.
@@ -248,7 +258,7 @@
   }
 
   function onFilterKey(e) {
-    const ids = FILTERS.map((f) => f.id), i = ids.indexOf(ui.filter);
+    const ids = filters().map((f) => f.id), i = ids.indexOf(ui.filter);
     const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
     if (!step) return;
     e.preventDefault();
@@ -257,7 +267,7 @@
   }
 
   function setFilter(id, { focus = true, needs = false } = {}) {
-    ui.filter = FILTERS.some((f) => f.id === id) ? id : 'all';
+    ui.filter = filters().some((f) => f.id === id) ? id : 'all';
     render();
     if (!focus) return;
     const items = treeItems();
@@ -293,6 +303,7 @@
 
   function onState(s) {
     if (typeof s?.selected === 'string') ui.selectedPage = s.selected;
+    if (s?.chat && typeof s.chat.chats === 'boolean' && s.chat.chats !== ui.chats) { ui.chats = s.chat.chats; render(); }
     // The thread on screen is the selected row. Overview keeps the row only
     // when that row (one with no thread) opened it, as in R1; any other page
     // selects none.
@@ -316,6 +327,7 @@
       if (typeof r.selected === 'string') ui.selectedPage = r.selected;
       const saved = r.chat?.collapsed;
       if (Array.isArray(saved)) ui.collapsed = new Set(saved);
+      if (r.chat?.chats === false) ui.chats = false;
       build();
       // A redirect may have asked for a filter before this script loaded.
       if (r.chat?.focus) onState({ chat: { focus: r.chat.focus } });

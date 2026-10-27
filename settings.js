@@ -1,5 +1,13 @@
     const inPane = (...p) => !window.SettingsPanes || window.SettingsPanes.inPane(...p); // R8-1: a pane document runs only its own sections' loaders
     const PANE = window.SettingsPanes ? window.SettingsPanes.current : null;
+    // C4: in the Settings sheet (the chat-first preview only) the same key is "Show chats": the new chat and the task box.
+    // The old page keeps its own words.
+    if (PANE) {
+      const box = document.getElementById('homeComposer');
+      if (box?.parentElement) box.parentElement.lastChild.textContent = ' Show chats';
+      const hint = document.getElementById('hint-home-composer');
+      if (hint) hint.textContent = 'New chat and the task box. Turn it off if you only use your AI tools in your own terminals; Plexiform still shows those sessions, what needs you, the widget and the board as before.';
+    }
     const workingInput = document.getElementById('workingStaleMinutes');
     const waitingInput = document.getElementById('waitingStaleHours');
     const soundInput = document.getElementById('sounds');

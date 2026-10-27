@@ -43,7 +43,7 @@ function harness(over = {}) {
     act: async () => { throw Error('the new chat never acts'); },
   };
   const deps = {
-    ipcMain, buddy: () => buddy, service: () => service, config: () => ({}), homeDir: HOME,
+    ipcMain, buddy: () => buddy, service: () => service, config: () => st.config ?? {}, homeDir: HOME,
     sessions: () => [], isDir: async () => true, muted: () => false, pickFolder: async () => null,
     openInTasks: (id) => { calls.reveal.push(id); return true; },
   };
@@ -201,4 +201,18 @@ test('create refuses with the new chat\'s own copy: unfocused, moved mid-check, 
   h.service.preflight = async () => { h.st.document++; return { ok: true, preflight: { peers: [] } }; };
   assert.equal((await h.call('newchat:create', draft())).text, NewChat.COPY.moved);
   assert.equal(h.calls.create.length, 0);
+});
+
+test('C4: with "Show chats" off (homeComposer false) the new chat starts nothing: info says hidden and every start channel refuses', async () => {
+  const h = harness();
+  h.st.config = { homeComposer: false };
+  assert.deepEqual(await h.call('newchat:info'), { hidden: true });
+  assert.equal(await h.call('newchat:pick-folder'), null);
+  for (const ch of ['newchat:route', 'newchat:preflight']) assert.equal((await h.call(ch, draft())).ok, false, ch);
+  const r = await h.call('newchat:create', draft());
+  assert.equal(r.ok, false);
+  assert.equal(h.calls.create.length, 0, 'create() is never called');
+  // Read on every call: on again, the same document can start one.
+  h.st.config = {};
+  assert.notDeepEqual(await h.call('newchat:info'), { hidden: true });
 });

@@ -27,7 +27,7 @@ const ROWS = [
 const open = [];
 test.afterEach(() => { while (open.length) open.pop().close(); });
 
-async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus = { filter: 'all', seq: 0 }, early = null, selected = undefined } = {}) {
+async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus = { filter: 'all', seq: 0 }, early = null, selected = undefined, chats = undefined } = {}) {
   const dom = new JSDOM(HTML, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'file:///app/buddy-window/sidebar.html' });
   const w = dom.window;
   open.push(w);
@@ -35,7 +35,7 @@ async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus
   let onState = [];
   w.buddy = {
     pages: async () => ({ pages: Pages.PAGES, groups: Pages.GROUPS, sections: Pages.SECTIONS, footer: Pages.FOOTER, brand: { name: 'Plexiform', hubText: {} },
-      ...(chatFirst ? { chatFirst: true, chat: { collapsed, focus, ...(selected !== undefined ? { selected } : {}) } } : {}) }),
+      ...(chatFirst ? { chatFirst: true, chat: { collapsed, focus, ...(selected !== undefined ? { selected } : {}), ...(chats !== undefined ? { chats } : {}) } } : {}) }),
     select: (x) => calls.select.push(x), retry() {}, retryAccountStorage() {}, workspace() {}, optimiserSection() {}, signOut() {},
     onState: (fn) => onState.push(fn),
     sessions: async () => { calls.sessions++; return { schema: 1, status: 'complete', sessions: typeof rows === 'function' ? rows() : rows }; },
@@ -344,4 +344,39 @@ test('R1 follow-up 8b: the sidebar bridge has the chat-first channels only when 
   assert.deepEqual(on.filter((k) => !off.includes(k)), ['openNewChat', 'openThread', 'sessions', 'setGroups']);
   const index = read('buddy-window/index.js');
   assert.match(index, /preload: path\.join\(DIR, 'sidebar-preload\.js'\), \.\.\.\(chatFirst === true \? \{ additionalArguments: \['--plexiform-chat-preview'\] \} : \{\}\) \} \}\);/);
+});
+
+// ── C4: "Show chats" off ───────────────────────────────────────────────────
+const shown = (n) => n && !n.hidden;
+test('C4: chats off hides New chat and the Chats filter; the rows and the footer are exactly as with chats on', async () => {
+  const on = await boot();
+  const off = await boot({ chats: false });
+  assert.equal(shown(off.q('.sb-new')), false);
+  assert.equal(shown(off.q('.sb-filter-opt[data-filter="chats"]')), false);
+  assert.deepEqual(off.qa('.sb-filter-opt').filter(shown).map((b) => b.textContent), ['All', 'In terminals', 'Team']);
+  assert.equal(shown(on.q('.sb-new')), true);
+  assert.equal(on.qa('.sb-filter-opt').filter(shown).length, 4);
+  assert.equal(off.q('.sb-tree').outerHTML, on.q('.sb-tree').outerHTML, 'rows unchanged, chats included (Q1)');
+  assert.equal(off.q('#nav-foot').outerHTML, on.q('#nav-foot').outerHTML);
+  // Arrow keys skip the hidden filter.
+  off.q('.sb-filter-opt[data-filter="all"]').focus();
+  off.key('ArrowRight');
+  assert.equal(off.q('.sb-filter-opt[aria-checked="true"]').dataset.filter, 'terminals');
+});
+
+test('C4: a redirect to the Chats filter lands on All; the live flip both ways; the All empty text drops "chats"', async () => {
+  const s = await boot({ chats: false, focus: { filter: 'chats', seq: 1 } });
+  assert.equal(s.q('.sb-filter-opt[aria-checked="true"]').dataset.filter, 'all');
+  const live = await boot();
+  live.q('.sb-filter-opt[data-filter="chats"]').click();
+  await live.push({ chat: { chats: false } });
+  assert.equal(live.q('.sb-filter-opt[aria-checked="true"]').dataset.filter, 'all', 'showing Chats when it went off → All');
+  assert.equal(shown(live.q('.sb-new')), false);
+  await live.push({ chat: { chats: true } });
+  assert.equal(shown(live.q('.sb-new')), true);
+  assert.equal(shown(live.q('.sb-filter-opt[data-filter="chats"]')), true);
+  const empty = await boot({ chats: false, rows: [] });
+  assert.equal(empty.q('#sb-empty').textContent, 'No sessions yet. Run claude or codex in any terminal and it shows up here.');
+  const emptyOn = await boot({ rows: [] });
+  assert.equal(emptyOn.q('#sb-empty').textContent, 'No chats or sessions yet. Run claude or codex in any terminal and it shows up here.');
 });

@@ -19,8 +19,8 @@ const ROWS = [
 ];
 
 // One app per test: the gate is read once at boot, and each test needs its own rows.
-async function open({ rows = ROWS, theme = 'dark', env = { CLAUDE_TRAFFIC_LIGHT_CHAT_PREVIEW: '1' } } = {}) {
-  const h = await launchApp({ env });
+async function open({ rows = ROWS, theme = 'dark', env = { CLAUDE_TRAFFIC_LIGHT_CHAT_PREVIEW: '1' }, config = {} } = {}) {
+  const h = await launchApp({ env, config });
   if (rows) {
     // Answers the sidebar document only, as main does; nothing else in these shots reads it.
     await h.app.evaluate(({ ipcMain }, rows) => {
@@ -68,6 +68,16 @@ for (const theme of ['light', 'dark']) {
     } finally { await h.cleanup(); }
   });
 }
+
+test('C4 chats off (dark): no New chat and no Chats filter; the rows are the same', async () => {
+  const { h, side } = await open({ config: { homeComposer: false } });
+  try {
+    await expect(side.locator('.sb-new')).toBeHidden();
+    await expect(side.locator('.sb-filter-opt:visible')).toHaveText(['All', 'In terminals', 'Team']);
+    await expect(side.locator('[role="tree"] .sb-group')).toHaveCount(5);
+    await shot(side.locator('.sidebar'), 'sidebar-chats-off-dark.png');
+  } finally { await h.cleanup(); }
+});
 
 test('empty: one sentence and How to connect a tool', async () => {
   const { h, side } = await open({ rows: [] });

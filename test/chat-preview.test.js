@@ -46,7 +46,8 @@ test('main reads the gate once from IS_DEV_RUN and app.isPackaged and hands it t
 
 test('the sidebar learns the gate only from buddy:pages, and only when it is on', () => {
   assert.match(src, /\.\.\.\(chatFirst === true \? \{ chatFirst: true, chat: chatPagesExtra\(\) \} : \{\}\) \} : null\)\);/);
-  assert.match(src, /\.\.\.\(chatFirst === true \? \{ chat: \{ focus: sidebarFocus, thread: selected === 'thread' \? threadId : null \} \} : \{\}\),/);
+  // C4: plus whether chats can be started here (the sidebar hides New chat and the Chats filter when not).
+  assert.match(src, /\.\.\.\(chatFirst === true \? \{ chat: \{ focus: sidebarFocus, thread: selected === 'thread' \? threadId : null, chats: chatsAllowed\(\) \} \} : \{\}\),/);
 });
 
 function world(chatFirst) {

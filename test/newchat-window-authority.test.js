@@ -17,7 +17,7 @@ const src = fs.readFileSync(path.join(root, 'buddy-window/index.js'), 'utf8');
 const mainSrc = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
 const between = (text, a, b) => { const i = text.indexOf(a); const j = text.indexOf(b, i + 1); assert.ok(i >= 0 && j > i, `${a} … ${b}`); return text.slice(i, j); };
 
-function world({ chatFirst = true, busy = () => false } = {}) {
+function world({ chatFirst = true, busy = () => false, chats = true } = {}) {
   const dir = '/synthetic/app/buddy-window';
   const url = (file, q) => { const u = new URL(pathToFileURL(path.join(dir, '..', file)).href); if (q) u.searchParams.set('embedded', '1'); return u.href; };
   const state = { focused: true, visible: true, minimized: false, workspace: 'w1' };
@@ -36,7 +36,7 @@ function world({ chatFirst = true, busy = () => false } = {}) {
   const ctx = { URL, path, pathToFileURL, DIR: dir, win, selected: 'home', content: views.home, localViews: new Map(Object.entries(views)), store: { active: () => ({ id: state.workspace }) }, Map, state,
     chatFirst, WebContentsView, nativeTheme: { shouldUseDarkColors: false }, lockLocal() {}, flow: { leftAccountPages() {} },
     dispose: (v) => { disposed.push(v.webContents.id); v.webContents.destroyed = true; }, newChatBusy: busy, onNewChatRetired: (id) => retired.push(id),
-    retireThread() {}, pushState() {}, select: (id) => { ctx.selected = id; }, layout() {}, lifecycle: { setCurrent() {} }, optimiser: { sync() {} }, threadView: null };
+    retireThread() {}, pushState: () => { ctx.pushes = (ctx.pushes || 0) + 1; }, select: (id) => { ctx.selected = id; (ctx.selects = ctx.selects || []).push(id); }, chats, chatsOn: () => ctx.chats, layout() {}, lifecycle: { setCurrent() {} }, optimiser: { sync() {} }, threadView: null };
   const methods = between(src, '    tasksContext() {', '    setupSources,') + between(src, '    homeContext() {', '    // main → page readiness sends')
     + between(src, '    setupsContext() {', '    onActiveChange(') + between(src, '    newChatContext(){', '    newChatSettled,');
   const lifecycle = between(src, '  // ── new chat (chat-first preview, redesign R2b-2)', '  // ── workspaces');
@@ -46,7 +46,7 @@ function world({ chatFirst = true, busy = () => false } = {}) {
   vm.runInNewContext(`let tasksDocument=0,tasksGeneration=0,tasksModalTicket=null,setupModalTicket=null,setupSourcesGeneration=0,setupLocalGeneration=0,homeDocument=0,homeGeneration=0,homeModalTicket=null;
     ${lifecycle}
     ${attach}
-    globalThis.api={${methods} newChatSettled, openNewChat};${hooks}${focus}
+    globalThis.api={${methods} newChatSettled, openNewChat, chatsChanged, resumeNewChatView};${hooks}${focus}
     globalThis.show=(id)=>{selected=id;attach(localViews.get(id));homeGeneration++;tasksGeneration++;setupLocalGeneration++;if(newChatView&&selected!=='newchat')retireNewChat();};
     globalThis.ticket=()=>newChatModalTicket;
     globalThis.held=()=>newChatHeldView&&newChatHeldView.wcId;
@@ -236,4 +236,85 @@ test('the four confirms refuse while the thread\'s dialog is held, and ask again
   }
   for (const name of ['async tasksConfirm(show)', 'async homeConfirm(show)', 'async setupsConfirm(show)', 'async newChatConfirm(show)']) assert.match(between(src, `    ${name} {`, '}finally{'), /this\.threadHeld\?\.\(\)/, name);
   assert.match(src, /    threadHeld\(\)\{ return chatFirst===true&&threadModalTicket!==null; \},/, 'always false with the gate off');
+});
+
+// ── C4: "Show chats" off (config homeComposer) ─────────────────────────────
+test('C4: with chats off the new chat never opens, and refusing retires and bumps nothing', () => {
+  const w = world({ chats: false });
+  const before = { ...w.api.newChatContext?.() };
+  assert.equal(w.api.openNewChat(), false);
+  assert.equal(w.api.newChatWebContents(), null);
+  assert.equal(w.ctx.selected, 'home', 'the page on screen stays');
+  assert.deepEqual(w.disposed, []);
+  assert.deepEqual(w.retired, []);
+  assert.deepEqual(before, {});
+  w.ctx.chats = true;
+  assert.equal(w.api.openNewChat(), true, 'read on every call: on again opens it');
+});
+
+test('C4 live flip: a showing new chat is retired (an in-flight Run fails same()) and Home shows; resume never brings it back', () => {
+  const w = world();
+  assert.equal(w.api.openNewChat(), true);
+  const c = w.api.newChatContext(), id = w.nc().id;
+  w.ctx.chats = false;
+  w.api.chatsChanged();
+  assert.equal(w.api.newChatWebContents(), null);
+  assert.ok(w.retired.includes(id));
+  assert.equal(w.ctx.selected, 'home');
+  assert.equal(w.api.newChatContext(), null, 'the old context is gone, so same() fails');
+  assert.notEqual(c.generation, undefined);
+  // Hidden while showing (resume armed), then chats off: the resume is cleared and the window lands on Home.
+  const h = world();
+  h.api.openNewChat();
+  h.win.emit('hide');
+  h.ctx.chats = false;
+  h.api.chatsChanged();
+  assert.equal(h.ctx.selected, 'home');
+  h.win.emit('show');
+  assert.equal(h.api.newChatWebContents(), null, 'no resume');
+  // A resume that finds chats off lands on Home, not Board.
+  const r = world();
+  r.api.openNewChat();
+  r.win.emit('hide');
+  r.ctx.chats = false;
+  r.win.emit('show');
+  assert.equal(r.ctx.selected, 'home');
+  assert.equal(r.api.newChatWebContents(), null);
+});
+
+test('C4 live flip: chats on, or off with no new chat, only tells the sidebar', () => {
+  const w = world();
+  w.api.chatsChanged();
+  assert.equal(w.ctx.pushes, 1);
+  assert.deepEqual(w.ctx.selects ?? [], []);
+  w.ctx.chats = false;
+  w.api.chatsChanged();
+  assert.equal(w.ctx.pushes, 2);
+  assert.deepEqual(w.ctx.selects ?? [], [], 'Home showing: nothing else moves');
+  const off = world({ chatFirst: false, chats: false });
+  off.api.chatsChanged();
+  assert.equal(off.ctx.pushes, undefined, 'gate off: a no-op');
+});
+
+test('C4 live flip: a held "Start anyway" dialog defers the flip until it is answered, then it applies', async () => {
+  const w = world();
+  w.api.openNewChat();
+  let release;
+  const pending = w.api.newChatConfirm(() => new Promise((r) => { release = r; }));
+  w.ctx.chats = false;
+  w.api.chatsChanged();
+  assert.ok(w.api.newChatWebContents(), 'kept while the dialog is open');
+  assert.equal(w.ctx.selected, 'newchat');
+  release({ response: 1 });
+  await pending;
+  assert.equal(w.api.newChatWebContents(), null, 'then retired');
+  assert.equal(w.ctx.selected, 'home');
+});
+
+test('C4: a setting read that throws counts as chats off (fails closed, like newchat-home)', () => {
+  const w = world();
+  w.ctx.chatsOn = () => { throw new Error('config unreadable'); };
+  assert.equal(w.api.openNewChat(), false);
+  assert.equal(w.api.newChatWebContents(), null);
+  assert.deepEqual(w.retired, []);
 });
