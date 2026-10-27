@@ -288,6 +288,7 @@
         p.dataset.section = [...p.children].some((c) => c.dataset.pane === PANE) ? PANE : '';
       }
       document.getElementById('answering-title').textContent = 'Answering from the widget';
+      document.getElementById('agent-mail-pointer').textContent = 'Agent mail (teammates\' AI questions and hand-offs to you) is under Agent messages.';
     }
     function showSection(id) {
       if (!SECTIONS.includes(id)) id = 'general';

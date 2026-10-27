@@ -62,7 +62,7 @@
     workingStaleMinutes: 'general', stuckMinutes: 'general', waitingStaleHours: 'general', voice: 'general',
     sounds: 'notifications', quietHours: 'notifications', mutedProjects: 'notifications', notifyOnStates: 'notifications', notifyStates: 'notifications',
     oneKeyApprove: 'notifications', busyHold: 'notifications', slackPresence: 'notifications', busyCalendar: 'notifications', busyCalendarTitles: 'notifications',
-    busyFocus: 'notifications', busyIcsUrl: 'notifications', busyFocusShortcut: 'notifications', agentMailInbox: 'notifications',
+    busyFocus: 'notifications', busyIcsUrl: 'notifications', busyFocusShortcut: 'notifications', agentMailInbox: 'agent-messages',
     spend: 'spend',
     showWidget: 'widget', menuBarMode: 'widget', lowPower: 'widget', seasonal: 'widget', askFromWidget: 'notifications', showTasks: 'widget', showAgents: 'aitools',
     agentRoster: 'aitools', agentKinds: 'aitools', agentChipSize: 'aitools', roam: 'widget', randomEvents: 'widget', simpleMode: 'general', homeComposer: 'general',
