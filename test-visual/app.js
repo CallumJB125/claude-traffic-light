@@ -116,7 +116,7 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = 
   // `--demo visual` is an unrecognised demo name: it flags the run as a dev
   // run (no hook installs, no login item, no background pollers) without
   // overriding CLAUDE_TRAFFIC_LIGHT_HOME/PORT.
-  const app = await electron.launch({
+  const launch = () => electron.launch({
     args: [ROOT, `--user-data-dir=${userData}`, '--demo', 'visual', ...extraArgs],
     env: {
       ...homeEnv(userHome),
@@ -135,9 +135,12 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = 
       ...env,
     },
   });
+  // Electron now and then dies in the first second under load ("Target page, context or browser has been closed" at the
+  // first evaluate). One fresh start; a second early death is a real failure and surfaces.
+  let app;
   // Pin the main window (a BaseWindow holding the sidebar and page views) to a whole-pixel
   // origin on the primary display, so embedded pages lay out the same every run.
-  await app.evaluate(({ BaseWindow, BrowserWindow, screen }) => {
+  const pinWindow = () => app.evaluate(({ BaseWindow, BrowserWindow, screen }) => {
     const pinned = new WeakSet();
     setInterval(() => {
       for (const w of BaseWindow.getAllWindows()) {
@@ -148,6 +151,12 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = 
       }
     }, 50);
   });
+  try { app = await launch(); await pinWindow(); } catch (e) {
+    if (!/closed|crash/i.test(String(e && e.message))) throw e;
+    try { await app?.close(); } catch { /* already gone */ }
+    app = await launch();
+    await pinWindow();
+  }
   const cleanup = async () => {
     try { await app.close(); } catch { /* already gone */ }
     fs.rmSync(home, { recursive: true, force: true });
