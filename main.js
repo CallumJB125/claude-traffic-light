@@ -2276,6 +2276,8 @@ function getTasks() {
       // Home's task box (O4): only its create (Run anyway over the cap) gets a dialog, through Home's own ticket; anything else is refused.
       const homeWc = !wc && wcId ? buddyWin?.pageWebContents?.('home') : null;
       if (homeWc && homeWc.id === wcId) return info.action === 'create' ? (await buddyWin?.homeConfirm?.(show))?.response === 1 : false;
+      // Only a Tasks page (above: Home's create) may raise a dialog; any other sender, registered or not, is refused, never an unparented one.
+      if (!wc) return false;
       const r = ['merge', 'switchAi', 'openPr', 'takeover', 'openTerminal'].includes(info.action) || info.action === 'create' && wc ? await buddyWin?.tasksConfirm?.(show) : await show(parent);
       return r?.response === 1;
     },

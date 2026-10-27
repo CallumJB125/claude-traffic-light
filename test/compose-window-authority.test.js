@@ -176,6 +176,14 @@ test('finding 2: confirmDialog sends Home’s create to homeConfirm and refuses 
   ctx.answer = 1;
   assert.equal(await ctx.confirm({ action: 'create', label: 'Start anyway', title: 't' }, 42), true, 'Tasks keeps its own ticket');
   assert.equal(tasksAsks.length, 1);
-  assert.equal(await ctx.confirm({ action: 'create', label: 'Start anyway', title: 't' }, 0), true, 'main’s own callers (wcId 0) keep today’s path');
-  assert.equal(shown.at(-1)[0], undefined);
+  // Only a Tasks page (and Home's create) may raise a dialog: an unknown, absent, destroyed or other-document sender is
+  // refused with no dialog and no ticket, never an unparented one. 43 is a live webContents that is neither Tasks nor Home.
+  const before = { shown: shown.length, home: homeAsks.length, tasks: tasksAsks.length };
+  for (const wcId of [999, 43, 0, undefined, null]) {
+    for (const info of [{ action: 'create' }, { action: 'discard' }, { action: 'merge' }, { action: 'openTerminal' }, { action: 'approve', payload: { scope: 'task' } }]) {
+      assert.equal(await ctx.confirm({ ...info, label: 'x', title: 't' }, wcId), false, `${info.action} from wcId ${wcId}`);
+    }
+  }
+  assert.equal(shown.length, before.shown, 'no dialog for an unknown sender');
+  assert.equal(homeAsks.length, before.home); assert.equal(tasksAsks.length, before.tasks);
 });
