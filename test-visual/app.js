@@ -299,7 +299,7 @@ async function confirmFocused(app, button, { done, alert, reopen }) {
     })();
     const ok = await Promise.race([done().then(() => true, () => false), watch.then((t) => (t ? false : new Promise(() => {})))]);
     stop = true;
-    const text = ok ? '' : (await watch) || await read();
+    const text = ok ? '' : (await watch) || ((t) => (t === stale ? '' : t))(await read());
     if (ok) return;
     const focused = await app.evaluate(({ BaseWindow }) => BaseWindow.getAllWindows().map((w) => w.isFocused())).catch(() => []);
     if (attempt === 0 && FOCUS_REFUSED.test(text) && (reopen || await button.isVisible().catch(() => false))) {
