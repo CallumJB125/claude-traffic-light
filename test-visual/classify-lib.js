@@ -318,10 +318,15 @@ function computeMix(spec, theme) {
 //   - the head file does not redeclare the accent var (the mix then reads a sheet-local value).
 // The member is the literal at base and the mix with the head tokens, each over a surface, per theme.
 const isHtml = (file) => file.endsWith('.html');
+// Elements whose content is text, not markup (RCDATA: textarea, title; RAWTEXT: xmp, iframe, noembed, noframes, and
+// noscript when scripting is on, as in Chromium): no tags, comments, <style> or <script> inside, up to the end tag.
+// <template> is not here: its content is ordinary markup. <plaintext> runs to the end of the file.
+const RAW_TEXT = new Set(['textarea', 'title', 'noscript', 'xmp', 'iframe', 'noembed', 'noframes']);
 // Splits an HTML file the way the parser does: <style> and <script> hold raw text up to their end tag (a "<!--"
 // inside them is just text), markup comments only exist between those elements, and a start tag's attribute values
 // are skipped as quoted strings. `styles`: each <style>'s content. `outside`: the file with every <style>'s content
-// emptied and markup comments kept (so a changed comment still counts as changed markup).
+// emptied and markup comments kept (so a changed comment still counts as changed markup). Foreign content (an inline
+// <svg>'s <style>) is read as raw text too, as before: no tracked file has one.
 function htmlParts(html) {
   const styles = []; let outside = ''; let i = 0;
   while (i < html.length) {
@@ -341,12 +346,12 @@ function htmlParts(html) {
     const open = Math.min(k + 1, html.length);
     outside += html.slice(lt, open); i = open;
     const name = tag[1].toLowerCase();
-    if (name === 'style' || name === 'script') {
+    if (name === 'style' || name === 'script' || RAW_TEXT.has(name)) {
       const close = html.slice(open).search(new RegExp(`</${name}\\b`, 'i'));
       const end = close < 0 ? html.length : open + close;
       if (name === 'style') styles.push(html.slice(open, end)); else outside += html.slice(open, end);
       i = end;
-    }
+    } else if (name === 'plaintext') { outside += html.slice(open); i = html.length; }
   }
   return { styles, outside };
 }
