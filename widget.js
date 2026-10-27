@@ -136,9 +136,9 @@ function reportBubble() {
   const on = bubbleEl.classList.contains('has-items');
   const fresh = on && !document.body.classList.contains('asking');
   document.body.classList.toggle('asking', on);
-  // Each new bubble starts from the full height (the widget may be on another display by then; main sends
-  // the room again if it asks for more than there is), scrolled to the top.
-  if (!on) document.body.style.removeProperty('--bubble-max');
+  // A new bubble starts scrolled to the top. Its cap stays: main resends it whenever the room changes (status
+  // broadcasts run applyStrip with no bubble too) or a bubble asks for more, so forgetting it would only make each
+  // new bubble on a short display ask too much for a moment.
   if (fresh) bubbleEl.scrollTop = 0;
   const px = on ? Math.ceil(bubbleEl.getBoundingClientRect().height) + 8 : 0;
   if (px === bubblePx) return;

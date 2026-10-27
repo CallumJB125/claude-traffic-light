@@ -140,7 +140,8 @@ test('S1: main sends bubble-cap from applyStrip; the widget caps #bubble at it a
   assert.match(fs.readFileSync(path.join(root, 'preload.js'), 'utf8'), /onBubbleCap: \(cb\) => ipcRenderer\.on\('bubble-cap'/);
   const widget = fs.readFileSync(path.join(root, 'widget.js'), 'utf8');
   assert.match(widget, /onBubbleCap\(\(cap\) => \{[\s\S]{0,200}--bubble-max', `\$\{Math\.max\(0, Math\.round\(n\) - 8\)\}px`\);\s*reportBubble\(\);/);
-  assert.match(widget, /if \(!on\) document\.body\.style\.removeProperty\('--bubble-max'\);\s*if \(fresh\) bubbleEl\.scrollTop = 0;/, 'an empty bubble forgets the cap');
+  assert.match(widget, /if \(fresh\) bubbleEl\.scrollTop = 0;/, 'a new bubble starts at the top');
+  assert.doesNotMatch(widget, /removeProperty\('--bubble-max'\)/, 'the cap is kept between bubbles: forgetting it makes each new bubble on a short display ask 408 for a frame');
   assert.match(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), /#bubble \{[^}]*max-height: min\(400px, var\(--bubble-max, 400px\)\);[^}]*overflow-y: auto/);
 });
 

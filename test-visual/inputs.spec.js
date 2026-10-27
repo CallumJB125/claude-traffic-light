@@ -117,10 +117,9 @@ test('a short display (1280×800) and the largest widget: the bubble scrolls ins
     expect(m.inner).toBe(410 + 365); // the window is the widget plus exactly the room the bubble asked for
     const send = q.getByRole('button', { name: 'Send answer' });
     await expect(send).toBeEnabled({ timeout: 3000 }); // vouched for and settled: it can be answered
+    // click() scrolls the option into the bubble's view itself, and retries if a re-render replaced it.
     await q.locator('.ib-q').nth(0).getByRole('button', { name: options[1].label }).click();
-    await q.locator('.ib-q').nth(1).getByRole('button', { name: options[2].label }).scrollIntoViewIfNeeded();
     await q.locator('.ib-q').nth(1).getByRole('button', { name: options[2].label }).click();
-    await send.scrollIntoViewIfNeeded();
     await send.click();
     const { out } = await hook.done;
     const answers = JSON.parse(out).hookSpecificOutput.updatedInput.answers;
