@@ -2,8 +2,8 @@
 // Redesign R2b (plan-r2b-auth §5): with the chat-first preview gate off, the
 // app registers exactly the ipcMain channels it did on main before R2b. The
 // committed list (test/fixtures/ipc-channels-gate-off.txt) was
-// generated from main (70328b0f; #102 and #103 add no channel) with
-// PLEXIFORM_WRITE_IPC_LIST=1; any added or
+// generated from main 7c604485 with PLEXIFORM_WRITE_IPC_LIST=1 (byte-identical
+// to the list first generated at 70328b0f); any added or
 // missing channel fails, so nothing R2b adds can reach a gate-off build.
 const fs = require('node:fs');
 const path = require('node:path');
