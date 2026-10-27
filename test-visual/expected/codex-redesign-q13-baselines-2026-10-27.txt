@@ -1,0 +1,4 @@
+test-visual/__screenshots__/home-compose.spec.js/ask-me-dark-darwin.png
+test-visual/__screenshots__/home-compose.spec.js/ask-me-light-darwin.png
+test-visual/__screenshots__/home-compose.spec.js/routed-dark-darwin.png
+test-visual/__screenshots__/home-compose.spec.js/routed-light-darwin.png
