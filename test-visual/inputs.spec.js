@@ -93,6 +93,49 @@ test('plan: the plan text; Enter never approves it, a click does (not auto-accep
   expect(d.updatedPermissions).toBeUndefined();
 });
 
+test('a short display (1280×800) and the largest widget: the bubble scrolls inside the room main has, is vouched for and can be answered', async () => {
+  // main sees a 1280×800 display (work area 1280×775 under the menu bar) and the widget at its largest, 320×410:
+  // room for a 365 px bubble, less than this one wants.
+  const before = await h.app.evaluate(({ screen, BrowserWindow }) => {
+    globalThis.__realMatching = screen.getDisplayMatching;
+    screen.getDisplayMatching = (r) => ({ ...globalThis.__realMatching.call(screen, r), workArea: { x: 0, y: 25, width: 1280, height: 775 } });
+    const w = BrowserWindow.getAllWindows().find((b) => b.webContents.getURL().endsWith('/index.html'));
+    const was = w.getBounds();
+    w.setBounds({ x: 900, y: 300, width: 320, height: 410 });
+    return was;
+  });
+  try {
+    const options = ['Keep the current runner and add coverage', 'Move to vitest with the jsdom environment', 'Split unit and browser tests into two jobs', 'Run everything under Playwright component tests'].map((label) => ({ label, description: `${label}: what changes, what it costs and how long the suite takes afterwards on CI and locally.` }));
+    const questions = [0, 1].map((i) => ({ question: `Question ${i + 1}: which test setup should the new package use, given the CI time budget and the flaky browser tests we saw last week?`, header: `Setup ${i + 1}`, multiSelect: false, options }));
+    const hook = F.blockingHook(h, 'tool-use', { session_id: 'vis-short', cwd: '/visual/app', tool_name: 'AskUserQuestion', tool_input: { questions } });
+    const q = widget.locator('.ib-item.kind-question');
+    await expect(q.locator('.ib-q')).toHaveCount(2, { timeout: 10000 });
+    await expect.poll(() => widget.evaluate(() => getComputedStyle(document.body).getPropertyValue('--bubble-max').trim()), { timeout: 5000 }).toBe('357px');
+    await expect.poll(() => widget.evaluate(() => getComputedStyle(document.body).getPropertyValue('--bubble-h').trim()), { timeout: 5000 }).toBe('365px');
+    const m = await widget.evaluate(() => { const b = document.getElementById('bubble'); return { client: b.clientHeight, scroll: b.scrollHeight, inner: innerHeight }; });
+    expect(m.scroll).toBeGreaterThan(m.client); // it scrolls: more than fits
+    expect(m.inner).toBe(410 + 365); // the window is the widget plus exactly the room the bubble asked for
+    const send = q.getByRole('button', { name: 'Send answer' });
+    await expect(send).toBeEnabled({ timeout: 3000 }); // vouched for and settled: it can be answered
+    await q.locator('.ib-q').nth(0).getByRole('button', { name: options[1].label }).click();
+    await q.locator('.ib-q').nth(1).getByRole('button', { name: options[2].label }).scrollIntoViewIfNeeded();
+    await q.locator('.ib-q').nth(1).getByRole('button', { name: options[2].label }).click();
+    await send.scrollIntoViewIfNeeded();
+    await send.click();
+    const { out } = await hook.done;
+    const answers = JSON.parse(out).hookSpecificOutput.updatedInput.answers;
+    expect(Object.values(answers)).toEqual([options[1].label, options[2].label]);
+  } finally {
+    // Put the display, the widget and the pointer back for the next test (its buttons sit where these were).
+    await h.app.evaluate(({ screen }) => { screen.getDisplayMatching = globalThis.__realMatching; });
+    F.clearRequests(h);
+    await widget.mouse.move(0, 0);
+    await widget.waitForFunction(() => !document.body.classList.contains('asking'), null, { timeout: 10000 }).catch(() => {});
+    await h.app.evaluate(({ BrowserWindow }, was) => { BrowserWindow.getAllWindows().find((b) => b.webContents.getURL().endsWith('/index.html')).setBounds(was); }, before);
+    await widget.waitForFunction((w) => innerWidth === w, before.width, { timeout: 5000 }).catch(() => {});
+  }
+});
+
 test('question: options as buttons, one click answers it', async () => {
   const hook = F.blockingHook(h, 'tool-use', { session_id: 'vis-q', cwd: '/visual/app', tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: 'Which test runner should the new package use?', header: 'Runner', multiSelect: false, options: [{ label: 'node:test', description: 'built in' }, { label: 'vitest' }] }] } });
   await expect(widget.locator('.ib-item.kind-question [data-option="q0o0"]')).toBeVisible({ timeout: 10000 });

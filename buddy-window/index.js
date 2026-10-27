@@ -19,6 +19,7 @@ const { pathToFileURL } = require('node:url');
 const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage, dialog, clipboard } = require('electron'); // privacy-flow: team-hub-account
 const { PAGES, GROUPS, SECTIONS, FOOTER, sectionsFor, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
+const { MAIN_WINDOW } = require('../src/widget-placement.js');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
 const { createAccountClient, pinnedTransport, bearerScope, bearerHeaders } = require('./accounts');
 const { createDeviceController, defaultDeviceName } = require('./device');
@@ -1170,7 +1171,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       return;
     }
     win = new BaseWindow({
-      width: 1320, height: 860, minWidth: 760, minHeight: 520,
+      width: MAIN_WINDOW.width, height: MAIN_WINDOW.height, minWidth: 760, minHeight: 520,
       title: BRAND.WINDOW_TITLE,
       titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
       trafficLightPosition: { x: 16, y: 18 },
@@ -1395,6 +1396,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     // A local page's webContents, for main's sender checks (null if not open).
     // main.js hands over the Burst wiring (a thunk, so creation order does not matter).
     attachBurst: (get) => { burstApi = { snapshot: () => get().snapshot(), refresh: (f) => get().refresh(f), act: (k) => get().act(k), setupView: () => get().setupView() }; },
+    // The visible main window's rect, for placing the widget clear of its title bar (null when hidden).
+    bounds: () => (win && !win.isDestroyed() && win.isVisible() && !win.isMinimized() ? win.getBounds() : null),
     pageWebContents: (id) => localViews.get(id)?.webContents ?? null,
     accountWebContents: () => accountView?.webContents ?? null,
     // Fixed page ids from main only; queued callbacks never jump to a replacement renderer.

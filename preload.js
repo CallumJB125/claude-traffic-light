@@ -46,6 +46,8 @@ contextBridge.exposeInMainWorld('trafficLight', {
   setBubbleHeight: (px) => ipcRenderer.send('set-bubble-height', px),
   // main has given the bubble that much room (until then it may be clipped).
   onStripApplied: (cb) => ipcRenderer.on('strip-applied', (e, px) => cb(px)),
+  // The most room the bubble may take on this display (window included): it scrolls inside that.
+  onBubbleCap: (cb) => ipcRenderer.on('bubble-cap', (e, px) => cb(px)),
   openWaiting: () => ipcRenderer.invoke('open-waiting'),
   openWidgetSettings: () => ipcRenderer.invoke('open-widget-settings'),
   dismissAskNotice: () => ipcRenderer.invoke('dismiss-ask-notice'),
