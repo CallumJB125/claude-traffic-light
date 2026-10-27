@@ -1618,6 +1618,9 @@ function getBuddy() {
       // Chat-first preview (redesign R2a): which row a thread may show, and its document ending.
       threadTarget: (id) => OverviewMain.threadTarget(id),
       onThreadRetired: (wcId) => ThreadMain?.retire(wcId),
+      // R2b-2: the new chat is kept only while a create it sent is in flight (review S1).
+      newChatBusy: () => NewChat?.busy() === true,
+      onNewChatRetired: (wcId) => NewChat?.retire(wcId),
       onOverviewRetired: () => { InteractionMain.retireDocuments().catch(() => {}); retireClaudeChannels(); },
       openWindow: (which) => {
         if (which === 'lights') createLightsWindow();
@@ -2218,6 +2221,7 @@ function createWaitingWindow() { openBuddy('waiting'); }
 // Dev runs point at the mock supervisor through an env var, never in a package.
 // The chat-first thread document (src/thread-main.js), created below with the gate on.
 let ThreadMain = null;
+let NewChat = null;
 let tasksSvc = null;
 let tasksProcess = null;
 const tasksPages = () => [buddyWin?.pageWebContents('tasks')].filter((w) => w && !w.isDestroyed());
@@ -2260,10 +2264,11 @@ function getTasks() {
     onChange: (snap) => {
       for (const wc of tasksPages()) wc.send('tasks:changed', snap);
       Compose.onChange(snap);
+      NewChat?.onChange(snap);
       for (const id of AgentMail.acceptedTasks()) { const t = (snap?.tasks || []).find((x) => x && String(x.id) === id); if (t && ['done', 'in_review', 'failed'].includes(t.state)) AgentMail.taskEnded(id, t.state, t.state === 'failed' ? '' : t.reason || '').catch(() => {}); }
       try { keepAwakeMain?.hold(require('./src/morning-report.js').queueActive(snap)); } catch { /* the blocker is best-effort */ }
     },
-    onEvent: (wcId, id, event) => { if (Compose.onEvent(wcId, id, event)) return; if (ThreadMain?.onEvent(wcId, id, event)) return; const wc = tasksPages().find((w) => w.id === wcId); if (wc) wc.send('tasks:event', { id, event }); },
+    onEvent: (wcId, id, event) => { if (Compose.onEvent(wcId, id, event)) return; if (NewChat?.onEvent(wcId, id, event)) return; if (ThreadMain?.onEvent(wcId, id, event)) return; const wc = tasksPages().find((w) => w.id === wcId); if (wc) wc.send('tasks:event', { id, event }); },
     // The confirmation for the risky actions is main's: a native dialog, Cancel the default, the page's click never counts.
     confirmDialog: async (info, wcId) => {
       const wc = tasksPages().find((w) => w.id === wcId);
@@ -2275,6 +2280,9 @@ function getTasks() {
       // Home's task box (O4): only its create (Run anyway over the cap) gets a dialog, through Home's own ticket; anything else is refused.
       const homeWc = !wc && wcId ? buddyWin?.pageWebContents?.('home') : null;
       if (homeWc && homeWc.id === wcId) return info.action === 'create' ? (await buddyWin?.homeConfirm?.(show))?.response === 1 : false;
+      // Chat-first preview (R2b-2): the new chat's create likewise, through its own ticket. newChatWcId() is null with the gate off.
+      const newChatWcId = !wc && wcId ? buddyWin?.newChatWcId?.() ?? null : null;
+      if (newChatWcId && newChatWcId === wcId) return info.action === 'create' ? (await buddyWin?.newChatConfirm?.(show))?.response === 1 : false;
       // Only a Tasks page (above: Home's create) may raise a dialog; any other sender, registered or not, is refused, never an unparented one.
       if (!wc) return false;
       // Every Tasks dialog, native approve (StartTask, scope 'task') and discard included, takes the Tasks window's
@@ -2352,6 +2360,22 @@ if (CHAT_PREVIEW) {
     goToTerminal: threadGoToTerminal,
   });
   ThreadMain.register(ipcMain);
+  // Redesign R2b-2: the new chat, Home's task box bound to its own document (src/newchat-main.js).
+  NewChat = require('./src/newchat-main.js').createNewChat({
+    ipcMain, buddy: () => buddyWin, service: getTasks, config: loadConfig, homeDir: os.homedir(),
+    sessions: () => localSessions(aggregateState().sessions || []),
+    isDir: (p) => fs.promises.stat(p).then((st) => st.isDirectory(), () => false),
+    muted: (cwd) => Quiet.projectMuted(loadConfig().mutedProjects, cwd),
+    pickFolder: async (e) => {
+      if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_PICK) return process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_PICK;
+      const r = await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Choose the folder the chat works in', properties: ['openDirectory', 'createDirectory'] });
+      return r.canceled ? null : r.filePaths[0];
+    },
+    openInTasks: (id) => { if (!devMockReady) return false; openBuddy('tasks'); return buddyWin?.tasksReveal?.(id) ?? false; },
+  }, {
+    rowForTask: (id) => OverviewMain.threadForTask(id),
+    refreshTasks: () => getTasks().refresh(),
+  });
 }
 // Tray and shortcut: focus Home's box, or with the box hidden ("Show the task box on Home" off) the Tasks composer.
 // Either only focuses an empty or kept draft; nothing starts until Run.

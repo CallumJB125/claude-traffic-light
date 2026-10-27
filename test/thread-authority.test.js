@@ -188,7 +188,8 @@ test('events reach only the current thread document for its own task', async () 
   assert.equal(w.thread.onEvent(a.sender.id, 'task-b', { type: 'transcript' }), true, 'consumed, not forwarded to the Tasks page');
   assert.equal(a.sender.sent.length, n, 'but never shown: another task');
   assert.equal(w.thread.onEvent(999, 'task-a', {}), false, 'another webContents is the Tasks page\'s');
-  assert.match(mainSrc, /onEvent: \(wcId, id, event\) => \{ if \(Compose\.onEvent\(wcId, id, event\)\) return; if \(ThreadMain\?\.onEvent\(wcId, id, event\)\) return;/);
+  // R2b-2: the new chat sits between Home and the thread (plan-r2b-auth §2.2).
+  assert.match(mainSrc, /onEvent: \(wcId, id, event\) => \{ if \(Compose\.onEvent\(wcId, id, event\)\) return; if \(NewChat\?\.onEvent\(wcId, id, event\)\) return; if \(ThreadMain\?\.onEvent\(wcId, id, event\)\) return;/);
 });
 
 // ── S1: effects need foreground ─────────────────────────────────────────

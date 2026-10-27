@@ -16,6 +16,7 @@ const { world, fakeContents, fakeTasks, between, A, B, SESSION, root } = require
 const { CHANNELS, REPLY_TEXT } = require('../src/thread-main');
 const TasksMain = require('../src/tasks-main');
 const ComposeMain = require('../src/compose-main');
+const NewChatMain = require('../src/newchat-main');
 
 const engineSrc = fs.readFileSync(path.join(root, 'board/tasks-engine/engine.js'), 'utf8');
 const ENGINE_ACTIONS = JSON.parse(engineSrc.match(/const ENGINE_ACTIONS = new Set\((\[[^\]]+\])\)/)[1].replace(/'/g, '"'));
@@ -42,10 +43,16 @@ function rig({ act } = {}) {
     async create(draft, extra) { calls.push(['create', draft, extra?.wcId]); return { ok: false, code: 'VALIDATION' }; },
     async preflight(req) { calls.push(['preflight', req]); return { ok: false }; },
     async openTerminal(id, wcId) { calls.push(['openTerminal', id, wcId]); return { ok: false }; },
+    // Reads the box makes (not effects): present so a new-chat read answers rather than throws.
+    snapshot: () => ({ conn: { status: 'connected' }, tasks: [] }),
+    async composerInfo() { return { ais: [], recent: [] }; },
+    async route() { return { ok: false, code: 'VALIDATION' }; },
+    registerFolder: () => null,
   });
   const w = world({ tasks, now: () => clock.t });
   const page = () => { const wc = fakeContents(); wc.url = 'file:///page.html'; wc.mainFrame = { url: wc.url }; return wc; };
-  const docs = { tasks: page(), home: page(), sidebar: page(), overview: page() };
+  const docs = { tasks: page(), home: page(), sidebar: page(), overview: page(), newchat: page() };
+  const newchat = { focused: true };
   // The Tasks and Home documents are live and foreground for their own channels throughout,
   // so a refusal below is the sender check, never a missing context.
   const ctxOf = (wc) => ({ window: w.win, contents: wc, generation: 1, document: 1, account: 0, workspace: 'ws-1', foreground: true });
@@ -54,8 +61,13 @@ function rig({ act } = {}) {
     ipcMain: w.ipc, service: () => tasks, config: () => ({}), sessions: () => [], isDir: async () => true,
     buddy: () => ({ homeContext: () => ctxOf(docs.home), pageWebContents: (id) => (id === 'home' ? docs.home : null), homeDocument: () => ({ wcId: docs.home.id, doc: 1 }) }),
   });
+  // R2b-2: the new chat, its own document; foreground unless a sender row says otherwise.
+  NewChatMain.createNewChat({
+    ipcMain: w.ipc, service: () => tasks, config: () => ({}), sessions: () => [], isDir: async () => true, pickFolder: async () => null, openInTasks: () => true,
+    buddy: () => ({ newChatContext: () => ({ ...ctxOf(docs.newchat), foreground: newchat.focused }), newChatWebContents: () => docs.newchat, newChatDocument: () => ({ wcId: docs.newchat.id, doc: 1 }), openThread: () => false }),
+  }, { rowForTask: () => null, refreshTasks: async () => {} });
   const ev = (wc) => ({ sender: wc, senderFrame: wc.mainFrame });
-  return { w, tasks, calls, clock, docs, ev };
+  return { w, tasks, calls, clock, docs, ev, newchat };
 }
 
 // ── senders (rows) ───────────────────────────────────────────────────────
@@ -75,6 +87,9 @@ const SENDERS = [
   { name: 'the Tasks page', tasksPage: true, make: (r) => { r.w.ctx.openThread(A); return r.ev(r.docs.tasks); } },
   { name: 'Home', home: true, make: (r) => { r.w.ctx.openThread(A); return r.ev(r.docs.home); } },
   { name: 'the Overview page', make: (r) => { r.w.ctx.openThread(A); return r.ev(r.docs.overview); } },
+  // R2b-2: the new-chat document, focused and not.
+  { name: 'the new chat focused', newchat: true, focused: true, make: (r) => { r.w.ctx.openThread(A); return r.ev(r.docs.newchat); } },
+  { name: 'the new chat unfocused', newchat: true, focused: false, make: (r) => { r.w.ctx.openThread(A); r.newchat.focused = false; return r.ev(r.docs.newchat); } },
 ];
 
 // ── channels × payloads (columns) ────────────────────────────────────────
@@ -98,6 +113,15 @@ const COLUMNS = [
   { ch: 'tasks:preflight', name: 'preflight a folder', args: () => [{ folder: 'f' }] },
   { ch: 'compose:run', name: 'run from Home\'s box', args: () => [{ text: 'x', folder: 'f', ai: 'claude' }] },
   { ch: 'compose:stop', name: 'stop from Home\'s box', args: () => [{ id: 'task-a', confirmed: true }] },
+  // R2b-2: newchat:create with a valid draft and with extra keys, and the box's other newchat:* channels.
+  { ch: 'newchat:create', name: 'create from the new chat', args: () => [{ text: 'x', folder: 'f', ai: 'claude' }], valid: true },
+  { ch: 'newchat:create', name: 'create from the new chat with an extra key', args: () => [{ text: 'x', folder: 'f', ai: 'claude', confirmed: true }] },
+  { ch: 'newchat:create', name: 'create from the new chat naming a task', args: () => [{ text: 'x', folder: 'f', id: 'task-a' }] },
+  { ch: 'newchat:info', name: 'the new chat\'s info', args: () => [] },
+  { ch: 'newchat:pick-folder', name: 'the new chat\'s folder pick', args: () => [] },
+  { ch: 'newchat:route', name: 'the new chat\'s route', args: () => [{ text: 'x', folder: 'f' }] },
+  { ch: 'newchat:preflight', name: 'the new chat\'s preflight', args: () => [{ folder: 'f' }] },
+  { ch: 'newchat:open-in-tasks', name: 'the new chat opening task A in Tasks', args: () => ['task-a'] },
   // Every other thread:* channel (R2a's reads and navigation effects), for its own row and for A.
   ...CHANNELS.filter((c) => c !== 'thread:message').flatMap((ch) => [
     { ch, name: `${ch} for its own row`, args: (s) => [own(s)] },
@@ -110,6 +134,10 @@ function allowed(s, col, args) {
   if (col.ch === 'thread:message') return !!s.live && !!s.focused && !s.session && col.valid === true && args[0].id === s.bound;
   if (col.ch.startsWith('tasks:')) return !!s.tasksPage;
   if (col.ch.startsWith('compose:')) return !!s.home;
+  // The new chat: its own document only. create also needs focus and a valid draft; open-in-tasks only for an id it started (none here).
+  if (col.ch === 'newchat:create') return !!s.newchat && !!s.focused && col.valid === true;
+  if (col.ch === 'newchat:open-in-tasks') return false;
+  if (col.ch.startsWith('newchat:')) return !!s.newchat;
   // R2a reads and effects: the current thread document for its own row (effects also need focus; they never act).
   if (col.ch.startsWith('thread:')) return !!s.live && args[0] === s.bound;
   return false;
@@ -144,6 +172,10 @@ for (const s of SENDERS) {
         assert.equal(current, true);
       } else if (col.ch.startsWith('thread:')) {
         assert.deepEqual(made.filter(([k]) => k !== 'preflight'), [], 'R2a channels never act');
+      } else if (col.ch === 'newchat:create') {
+        // Main's own preflight runs first (the rig's fails, so nothing is created); the page's draft never names a task.
+        assert.deepEqual(made, [['preflight', { folder: 'f' }]]);
+        assert.equal(out.ok, false);
       } else if (col.ch === 'tasks:act') {
         assert.equal(made.length, 1, 'the Tasks page still reaches act (unchanged)');
         assert.equal(made[0][2], r.docs.tasks.id);
@@ -162,6 +194,11 @@ test('completeness: every registered thread:* and tasks:* channel has a column, 
   // The allowed thread:message cells are exactly the two focused task threads sending to their own chat.
   const cells = SENDERS.flatMap((s) => COLUMNS.filter((c) => c.ch === 'thread:message').filter((c) => allowed(s, c, c.args(s))).map((c) => `${s.name} · ${c.name}`));
   assert.deepEqual(cells, ['thread:A focused · send to its own chat', 'thread:A focused · send to chat A', 'thread:B focused · send to its own chat', 'thread:B focused · send to chat B']);
+  // R2b-2: the allowed cells grow by exactly "the new chat (focused) → newchat:*": create only focused, with a valid draft.
+  const nc = SENDERS.flatMap((s) => COLUMNS.filter((c) => c.ch.startsWith('newchat:')).filter((c) => allowed(s, c, c.args(s))).map((c) => `${s.name} · ${c.name}`));
+  assert.deepEqual(nc, ['the new chat focused · create from the new chat', 'the new chat focused · the new chat\'s info', 'the new chat focused · the new chat\'s folder pick', 'the new chat focused · the new chat\'s route', 'the new chat focused · the new chat\'s preflight',
+    'the new chat unfocused · the new chat\'s info', 'the new chat unfocused · the new chat\'s folder pick', 'the new chat unfocused · the new chat\'s route', 'the new chat unfocused · the new chat\'s preflight']);
+  assert.ok(!SENDERS.some((s) => !s.newchat && COLUMNS.some((c) => c.ch.startsWith('newchat:') && allowed(s, c, c.args(s)))), 'no other sender reaches a newchat:* channel');
 });
 
 // ── refusal codes ────────────────────────────────────────────────────────

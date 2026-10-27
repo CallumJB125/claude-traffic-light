@@ -46,6 +46,7 @@ function createNewChat(deps, glue) {
     context: () => buddy()?.newChatContext?.(),
     hidden: () => false,
     openCard: false, oneAtATime: true, keepAlive: 'create', afterCreate,
+    settled: (wcId) => buddy()?.newChatSettled?.(wcId),
   });
 }
 

@@ -56,6 +56,7 @@ function register(deps) {
  *   keepAlive         'live' (Home: while a task it started is live) or 'create' (the new chat: only until create returns)
  *   afterCreate       async ({id, wcId, current}) → true once main has moved to the new task's own page (S3 handoff);
  *                     the instance then retires, so the page left behind holds nothing
+ *   settled(wcId)     after every run returns, so a document kept only for that run can go
  */
 function createCompose(deps, params = {}) {
   const { ipcMain } = deps;
@@ -146,7 +147,10 @@ function createCompose(deps, params = {}) {
     if (!req || typeof req !== 'object' || Object.keys(req).some((k) => !RUN_KEYS.includes(k))) return refused('VALIDATION');
     if (params.oneAtATime === true && creating > 0) return refused('BUSY', 'Still starting the last one.');
     creating++;
-    try { return await run(e, req, before); } finally { creating--; }
+    try { return await run(e, req, before); } finally {
+      creating--;
+      try { params.settled?.(e.sender.id); } catch { /* never blocks the answer */ }
+    }
   });
 
   async function run(e, req, before) {
