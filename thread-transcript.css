@@ -1,0 +1,43 @@
+/* The thread transcript, inside the script-less srcdoc frame (redesign R2a).
+   Linked, never inline: the frame inherits thread.html's style-src 'self'. */
+html, body { margin: 0; background: var(--bg); color: var(--text); font: var(--text-base)/1.55 var(--font); -webkit-font-smoothing: antialiased; }
+* { box-sizing: border-box; }
+.tx { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-2) 0 var(--space-6); }
+
+.tx-msg { max-width: 100%; overflow-wrap: anywhere; }
+.tx-user { align-self: flex-end; max-width: 85%; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-2) var(--space-3); white-space: pre-wrap; }
+.tx-user.is-waiting { border-style: dashed; }
+.tx-status { display: block; margin-top: var(--space-1); font-size: var(--text-xs); color: var(--muted); white-space: normal; }
+.tx-ai > :first-child { margin-top: 0; }
+.tx-ai > :last-child { margin-bottom: 0; }
+.tx-ai p, .tx-ai ul, .tx-ai ol, .tx-ai blockquote, .tx-ai pre, .tx-ai table { margin: 0 0 var(--space-2); }
+.tx-ai h3, .tx-ai h4 { margin: var(--space-3) 0 var(--space-1); font-size: var(--text-base); font-weight: 600; }
+.tx-ai ul, .tx-ai ol { padding-left: 1.4em; }
+.tx-ai blockquote { border-left: 3px solid var(--line-strong); padding-left: var(--space-3); color: var(--muted); }
+.tx-ai code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; background: var(--panel-2); border-radius: 4px; padding: 0 3px; }
+.tx-ai pre { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-2) var(--space-3); overflow-x: auto; }
+.tx-ai pre code { background: none; padding: 0; white-space: pre; }
+.tx-ai table { border-collapse: collapse; display: block; overflow-x: auto; }
+.tx-ai td { border: 1px solid var(--line); padding: 2px var(--space-2); vertical-align: top; }
+.tx-ai tr:first-child td { font-weight: 600; background: var(--panel); }
+.tx-link { text-decoration: underline; text-decoration-color: var(--line-strong); }
+.tx-url { color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.tx-note { align-self: center; font-size: var(--text-sm); color: var(--muted); text-align: center; }
+
+/* A group of tool steps: one line, expandable (the page listens; this frame runs nothing). */
+.tx-steps { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); font-size: var(--text-sm); }
+.tx-steps-head { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-3); cursor: pointer; color: var(--muted); }
+.tx-steps-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.tx-shape { flex: none; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--st-check); }
+.tx-shape.tx-stuck { border: 0; border-radius: 0; background: var(--st-stuck); clip-path: polygon(50% 5%, 100% 95%, 0 95%); }
+.tx-dur, .tx-running { flex: none; color: var(--muted); font-size: var(--text-xs); }
+.tx-caret { flex: none; color: var(--muted); }
+.tx-step-list { list-style: none; margin: 0; padding: 0 var(--space-3) var(--space-2) calc(var(--space-3) + 8px + var(--space-2)); display: grid; gap: 2px; }
+.tx-step { display: flex; gap: var(--space-2); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--text-xs); }
+.tx-step-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.tx-step.is-failed .tx-step-text::before { content: "Failed · "; color: var(--danger-text); font-family: var(--font); }
+
+@media (forced-colors: active) {
+  .tx-shape { border-color: CanvasText; }
+  .tx-shape.tx-stuck { background: CanvasText; }
+}

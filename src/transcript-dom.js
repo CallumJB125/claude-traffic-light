@@ -128,5 +128,24 @@
     return f;
   }
 
-  return { markdown, groups, summary, render, durationText, verbOf };
+  // A terminal session's activity (main's Timeline display, already sanitised) →
+  // transcript items. Tool steps carry the summary only: no output is recorded.
+  const ACTIVITY_TOOL = { edit: 'Edit', read: 'Read', command: 'Bash' };
+  const ACTIVITY_NOTE = new Set(['interrupted', 'end', 'limit', 'approval']);
+  function itemsFromActivity(view) {
+    const items = [];
+    for (const e of Array.isArray(view?.events) ? view.events.slice(-1500) : []) {
+      if (!e || typeof e !== 'object' || e.hidden) continue;
+      const text = typeof e.text === 'string' ? e.text : '';
+      if (e.kind === 'prompt' && text) items.push({ kind: 'text', role: 'user', text });
+      else if (e.kind === 'turn-end') { if (text) items.push({ kind: 'text', role: 'assistant', text }); if (e.failed) items.push({ kind: 'note', text: 'Turn failed' }); }
+      else if (ACTIVITY_TOOL[e.kind]) items.push({ kind: 'tool', name: ACTIVITY_TOOL[e.kind], summary: text, done: true, ok: true });
+      else if (e.kind === 'tool') items.push({ kind: 'tool', name: text || 'a tool', summary: '', done: true, ok: true });
+      else if (e.kind === 'failed') items.push({ kind: 'tool', name: text || 'a tool', summary: '', done: true, ok: false });
+      else if (ACTIVITY_NOTE.has(e.kind) && typeof e.label === 'string') items.push({ kind: 'note', text: text && e.kind === 'approval' ? `${e.label}: ${text}` : e.label });
+    }
+    return items;
+  }
+
+  return { markdown, groups, summary, render, durationText, verbOf, itemsFromActivity };
 }));

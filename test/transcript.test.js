@@ -125,3 +125,22 @@ test('static: the transcript and thread code use no HTML sinks', () => {
     assert.ok(!/\.on[a-z]+\s*=/.test(s.replace(/\.onload\s*=\s*resolve/g, '')), `${n} assigns an on* handler property`);
   }
 });
+
+test('activity: a terminal session\'s Timeline events become transcript items (summaries only)', () => {
+  const items = Dom.itemsFromActivity({ events: [
+    { kind: 'start', label: 'Started' },
+    { kind: 'prompt', label: 'Asked', text: 'Fix the flaky test' },
+    { kind: 'prompt', label: 'Asked', text: null, hidden: true },
+    { kind: 'read', label: 'Read', text: 'a.js, b.js' },
+    { kind: 'edit', label: 'Edited', text: 'src/server.js' },
+    { kind: 'command', label: 'Ran', text: 'npm test' },
+    { kind: 'failed', label: 'Tool failed', text: 'Bash' },
+    { kind: 'turn-end', label: 'Turn finished', text: 'Fixed: the timer was not awaited.' },
+    { kind: 'checkpoint', label: 'Checkpoint, turn 1' },
+    { kind: 'end', label: 'Session ended' },
+  ] });
+  assert.deepEqual(items.map((i) => i.kind + (i.role ? `:${i.role}` : '')), ['text:user', 'tool', 'tool', 'tool', 'tool', 'text:assistant', 'note']);
+  assert.equal(Dom.summary(Dom.groups(items)[1].steps), 'Read a.js, b.js · Edited src/server.js · Ran 2 commands');
+  assert.equal(items[4].ok, false);
+  assert.deepEqual(Dom.itemsFromActivity(null), []);
+});
