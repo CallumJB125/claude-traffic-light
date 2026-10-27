@@ -610,16 +610,21 @@ const rulesPane = (e) => CHAT_PREVIEW === true && fromUtilityPage(e, `settings:$
 const rulesEditor = (e) => widgetConfigSender(e) || rulesPane(e);
 /** A push the Lights window gets, also to the rules pane (preview only; with the gate off nothing is sent). */
 function sendToRules(channel, ...args) { if (CHAT_PREVIEW === true) buddyWin?.sendToPage(`settings:${SettingsPanes.RULES_PANE}`, channel, ...args); }
-const sameValue = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-/** Keys of a rules-pane save it may not make: a key it does not own, or another pane's key that the named template does not imply. */
+/** Keys of a rules-pane save it may not make: a key it does not own, or another pane's key that the named template does not imply.
+ *  For the allowed ones it also replaces the page's value with the template's (see below). */
 function rulesRefusal(partial) {
   if (!partial || typeof partial !== 'object' || Array.isArray(partial)) return ['(not an object)'];
   const cross = SettingsPanes.crossKeys(partial);
   const bad = Object.keys(partial).filter((k) => !cross.includes(k) && !SettingsPanes.writesAllowed(SettingsPanes.RULES_PANE, { [k]: partial[k] }));
   if (!cross.length) return bad;
   const prefs = typeof partial.__prefsFrom === 'string' ? Rules.templatePrefs(partial.__prefsFrom) : {};
-  const implied = (want, got) => (want && typeof want === 'object' ? !!got && typeof got === 'object' && Object.keys(want).every((k) => sameValue(want[k], got[k])) : sameValue(want, got));
-  for (const k of cross) if (!Object.prototype.hasOwnProperty.call(prefs, k) || !implied(prefs[k], partial[k])) bad.push(k);
+  // The page's value for another pane's key is never trusted: main writes the named template's pref over what is stored
+  // (objects merge into the stored one, the same merge lights-view's prefsToSave makes), so nothing but that pref changes.
+  const stored = loadConfig();
+  for (const k of cross) {
+    if (!Object.prototype.hasOwnProperty.call(prefs, k)) { bad.push(k); continue; }
+    partial[k] = prefs[k] && typeof prefs[k] === 'object' ? { ...(stored[k] && typeof stored[k] === 'object' ? stored[k] : {}), ...prefs[k] } : prefs[k];
+  }
   return bad;
 }
 const settingsAnyPane = (e) => fromUtilityPage(e, 'settings') || settingsPaneOf(e) !== null;

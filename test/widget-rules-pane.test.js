@@ -125,7 +125,7 @@ function handlers({ preview = true } = {}) {
     utilityHandle: (ch, guard, fn) => h.set(ch, (e, ...a) => (guard(e) ? fn(e, ...a) : null)),
     console: { warn: (m) => log.warns.push(String(m)) },
   };
-  vm.runInNewContext(`${between(mainSrc, 'const sameValue = ', '// O3: the Tasks helper')}\n${mainSrc.slice(start, end)}`, ctx);
+  vm.runInNewContext(`${between(mainSrc, '/** Keys of a rules-pane save it may not make', '// O3: the Tasks helper')}\n${mainSrc.slice(start, end)}`, ctx);
   return { call: (ch, e, ...a) => h.get(ch)(e, ...a), log };
 }
 const impliedSave = (tpl) => {
@@ -174,12 +174,20 @@ test('crossWrites: only in the same save as a template, only the values that tem
   // the named template does not imply this key / this value
   const other = Rules.templates().find((t) => !('spend' in t.prefs));
   assert.match(h.call('save-config', from(RULES), { rules: [], __prefsFrom: other.id, spend: { dailyLimit: 1 } }).error, /not on this page/, 'a key the template does not imply');
-  const bad = impliedSave(tpl); const key = Object.keys(tpl.prefs)[0];
-  bad[key] = typeof tpl.prefs[key] === 'object' ? { ...bad[key], [Object.keys(tpl.prefs[key])[0]]: 'tampered' } : !tpl.prefs[key];
-  assert.match(h.call('save-config', from(RULES), bad).error, /not on this page/, 'a value the template does not imply');
+  // the page's own values for another pane's key are never stored: main writes the template's pref over the stored object
+  const forged = { rules: [], __prefsFrom: tpl.id, spend: { ...tpl.prefs.spend, dailyLimit: 999999, extra: 1 }, seasonal: 'tampered', notifyStates: { everything: true } };
+  const want = {};
+  for (const k of ['spend', 'notifyStates', 'seasonal', 'notifyOnStates']) if (k in tpl.prefs) want[k] = typeof tpl.prefs[k] === 'object' ? { ...STORED[k], ...tpl.prefs[k] } : tpl.prefs[k];
+  h.call('save-config', from(RULES), forged);
+  const done = h.log.commits[h.log.commits.length - 1];
+  for (const [k, v] of Object.entries(want)) assert.deepEqual(done[k], v, `${k} is the template's pref over the stored one`);
+  for (const k of Object.keys(SP.WIDGET_RULES.crossWrites)) if (!(k in tpl.prefs)) assert.equal(k in done, false, `${k} is not written: the template does not imply it`);
+  assert.equal(done.spend.dailyLimit, STORED.spend.dailyLimit, 'an extra or changed spend key from the page is dropped');
+  assert.equal('extra' in done.spend, false);
+  const n2 = h.log.commits.length;
   assert.match(h.call('save-config', from(RULES), { rules: [], __prefsFrom: 'no-such-template', seasonal: false }).error, /not on this page/, 'unknown template');
   assert.match(h.call('save-config', from(RULES), { rules: [], __prefsFrom: ['quiet'], seasonal: false }).error, /not on this page/);
-  assert.equal(h.log.commits.length, n, 'nothing applied by the refused ones');
+  assert.equal(h.log.commits.length, n2, 'nothing applied by the refused ones');
   // another pane may not use the control field to write the rules pane's neighbours
   assert.match(h.call('save-config', from('settings:widget'), { seasonal: false, __prefsFrom: tpl.id }).error, /not on this page/);
 });
@@ -214,10 +222,7 @@ test('pages: the rules pane is a local lights.html view with the lights preload,
 });
 
 test('pushes: the rules pane gets status-changed and motion-paused only with the preview on', () => {
-  const sent = [];
-  const mk = (preview) => { const o = []; vm.runInNewContext(`${between(mainSrc, '/** A push the Lights window gets', 'const sameValue')}\nglobalThis.sendToRules = sendToRules;`, { CHAT_PREVIEW: preview, SettingsPanes: SP, buddyWin: { sendToPage: (...a) => o.push(a) }, globalThis: {} }); return o; };
-  void sent; void mk;
-  const run = (preview) => { const o = []; const ctx = { CHAT_PREVIEW: preview, SettingsPanes: SP, buddyWin: { sendToPage: (...a) => o.push(a) } }; vm.runInNewContext(`${between(mainSrc, '/** A push the Lights window gets', 'const sameValue')}\nsendToRules('status-changed'); sendToRules('motion-paused', true);`, ctx); return o; };
+  const run = (preview) => { const o = []; const ctx = { CHAT_PREVIEW: preview, SettingsPanes: SP, buddyWin: { sendToPage: (...a) => o.push(a) } }; vm.runInNewContext(`${between(mainSrc, '/** A push the Lights window gets', '/** Keys of a rules-pane save')}\nsendToRules('status-changed'); sendToRules('motion-paused', true);`, ctx); return o; };
   assert.deepEqual(run(true), [[RULES, 'status-changed'], [RULES, 'motion-paused', true]]);
   assert.deepEqual(run(false), [], 'gate off: nothing is sent');
   assert.match(mainSrc, /lightsWin\?\.webContents\.send\('status-changed'\);\n  sendToRules\('status-changed'\);/);
