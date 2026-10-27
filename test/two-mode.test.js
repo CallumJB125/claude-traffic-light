@@ -67,7 +67,7 @@ test('main.js wiring: one source for the window, the new chat and its reads; Hom
   assert.equal(main.match(/chatsOn: \(\) => loadConfig\(\)\.homeComposer !== false/g).length, 2, 'the window and newchat-home');
   assert.match(main, /chatsChanged: \(\) => buddyWin\?\.chatsChanged\?\.\(\),/);
   assert.match(read('src/newchat-main.js'), /hidden: \(\) => deps\.config\(\)\?\.homeComposer === false,/);
-  assert.equal((main.match(/CHAT_PREVIEW/g) || []).length, 13, 'no new gated channel');
+  // No new gated channel: C4 adds no CHAT_PREVIEW use (the count itself is pinned in test/chat-preview.test.js).
 });
 
 test('Settings: the sheet says "Show chats"; the old page keeps its words byte for byte', () => {

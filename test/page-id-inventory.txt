@@ -19,6 +19,7 @@ board	buddy-window/pages.js	SECTIONS	1
 board	test-visual/newchat.spec.js	data-page	1
 board	test-visual/ownership.spec.js	select	1
 board	test-visual/thread.spec.js	data-page	1
+board	test-visual/two-mode.spec.js	select	1
 board	test/account-hub-routing.test.js	select	5
 board	test/thread-authority.test.js	select	1
 board	test/thread-confirm.test.js	select	2
