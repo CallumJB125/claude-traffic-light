@@ -1,20 +1,17 @@
 'use strict';
-// Redesign R0a: the snapshot classifier's rules (plan-redesign §R3.10, §R4.4), checked on synthetic pixels.
+// Redesign R0a/R0b: the snapshot classifier's rules (plan-redesign §R3.10, §R4.4), checked on synthetic pixels.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const lib = require('../test-visual/classify-lib');
 
-const TOKENS = fs.readFileSync(path.join(__dirname, '..', 'tokens.css'), 'utf8');
-// Today's tokens flipped to Graphite (§R2.2, §R3.12): the same flip R0b makes.
-const GRAPHITE = TOKENS
-  .replace('--accent: #e49a78;', '--accent: #e6e8eb;').replace('--accent-ink: #251c18;', '--accent-ink: #17191d;')
-  .replace('--accent-soft: rgba(228, 154, 120, 0.14);', '--accent-soft: rgba(230, 232, 235, 0.14);')
-  .replace('--accent-hover: var(--accent);', '--accent-hover: #c4c9cf;').replace('--accent-pressed: var(--accent);', '--accent-pressed: #a8afb7;')
-  .replace('--accent: #a34425;', '--accent: #24292f;\n    --accent-hover: #3a4048;\n    --accent-pressed: #4b525b;\n    --focus-halo: #ffffff;')
-  .replace('--accent-soft: rgba(163, 68, 37, 0.08);', '--accent-soft: rgba(36, 41, 47, 0.14);');
-const FAM = lib.familiesOf(TOKENS, GRAPHITE);
+// The base is tokens.css as it stood before R0b (terracotta, frozen as a fixture); the head is the real tokens.css,
+// so these tests check the flip R0b ships.
+const TOKENS = fs.readFileSync(path.join(__dirname, 'fixtures', 'tokens-terracotta-r0a.css'), 'utf8');
+const GRAPHITE = fs.readFileSync(path.join(__dirname, '..', 'tokens.css'), 'utf8');
+const ALL = lib.familiesOf(TOKENS, GRAPHITE);
+const FAM = ALL.both;
 
 const hex = (h) => lib.parseColour(h).slice(0, 3);
 const mix = (a, b, t) => a.map((v, i) => Math.round(v * t + b[i] * (1 - t)));
@@ -113,4 +110,155 @@ test('classifier: the gate fails on characters, on more than 0.5 % unexpected an
   assert.equal(lib.verdictOf([row('x/usage.spec.js/a.png', 51, 3)]).failures.length, 1);
   assert.equal(lib.verdictOf([row('test-visual/__screenshots__/characters.spec.js/a.png', 0, 0, 1)]).failures.length, 1);
   assert.equal(lib.verdictOf([row('x/a.png', 0, 120), row('x/b.png', 0, 81)]).failures.length, 1);
+});
+
+// ── R0b additions ────────────────────────────────────────────────────────────────────────────────────────────
+test('classifier (a): a change of ΔE00 ≤ 1 is noise, counted on its own and never as a pass or unexpected', () => {
+  // #202329 → #212429 is ΔE00 ≈ 0.4 (render rounding); #b0b7c2 → #f0f1f3 is a real grey change.
+  assert.ok(lib.deltaE00(lib.lab(hex('#202329')), lib.lab(hex('#212429'))) <= lib.DE_NOISE);
+  const oldImg = image(8, 8, (x, y) => (y < 4 ? PANEL_D : hex('#b0b7c2')));
+  const newImg = image(8, 8, (x, y) => (y < 4 ? hex('#212429') : hex('#f0f1f3')));
+  const r = lib.classifyImage(oldImg, newImg, FAM);
+  assert.equal(r.changed, 64);
+  assert.equal(r.noise, 32);
+  assert.equal(r.pass, 0);
+  assert.equal(r.unexpected, 32);
+  // just over the line is not noise
+  const a = hex('#808080'); const b = hex('#838383');
+  assert.ok(lib.deltaE00(lib.lab(a), lib.lab(b)) > lib.DE_NOISE);
+  assert.equal(lib.classifyImage(image(2, 2, () => a), image(2, 2, () => b), FAM).noise, 0);
+});
+
+test('classifier (b): an added or removed baseline fails the gate', () => {
+  assert.deepEqual(lib.verdictOf([{ baseline: 'x/a.png', added: true, tiles: [] }]).failures, ['x/a.png: added (an accent flip adds and removes no baseline)']);
+  assert.equal(lib.verdictOf([{ baseline: 'x/b.png', removed: true, tiles: [] }]).failures.length, 1);
+  assert.equal(lib.verdictOf([{ baseline: 'x/c.png', total: 100, changed: 0, unexpected: 0, sizeChanged: false, tiles: [] }]).failures.length, 0);
+});
+
+test('classifier (c): the theme comes from the file name and picks that theme\'s surfaces and families', () => {
+  assert.equal(lib.themeOf('test-visual/__screenshots__/home-compose.spec.js/routed-dark-darwin.png'), 'dark');
+  assert.equal(lib.themeOf('x/settings-light-darwin.png'), 'light');
+  assert.equal(lib.themeOf('x/light-dark.png'), 'both');
+  assert.equal(lib.themeOf('x/widget-ask-long-command-darwin.png'), 'both');
+  assert.equal(lib.themeOf('x/darkroom-darwin.png'), 'both');
+  assert.equal(lib.familiesFor(ALL, 'x/a-dark-darwin.png'), ALL.dark);
+  assert.equal(lib.familiesFor(ALL, 'x/a-darwin.png'), ALL.both);
+  assert.deepEqual(ALL.light.surfaces.map((c) => c.join()), ['244,245,247', '255,255,255', '238,240,243']);
+  assert.deepEqual(ALL.dark.surfaces.map((c) => c.join()), ['23,25,29', '32,35,41', '41,45,52']);
+  // the old dark accent turning into the new dark accent passes in a dark baseline but is a theme mix-up in a light one
+  const oldImg = image(4, 4, () => hex('#e49a78'));
+  const newImg = image(4, 4, () => hex('#e6e8eb'));
+  assert.equal(lib.classifyImage(oldImg, newImg, lib.familiesFor(ALL, 'x/a-dark-darwin.png')).pass, 16);
+  assert.equal(lib.classifyImage(oldImg, newImg, lib.familiesFor(ALL, 'x/a-light-darwin.png')).unexpected, 16);
+});
+
+test('classifier (d): it runs when the branch\'s expected file starts with `# classify`', () => {
+  assert.equal(lib.expectedFileFor('codex/redesign-r0b-2026-10-27'), 'test-visual/expected/codex-redesign-r0b-2026-10-27.txt');
+  assert.equal(lib.wantsClassify('# classify\ntest-visual/__screenshots__/a.png\n'), true);
+  assert.equal(lib.wantsClassify('# classify  \r\n'), true);
+  assert.equal(lib.wantsClassify('test-visual/__screenshots__/a.png\n# classify\n'), false);
+  assert.equal(lib.wantsClassify('# classify-not\n'), false);
+  assert.equal(lib.wantsClassify(''), false);
+  assert.equal(lib.wantsClassify(null), false);
+  // this branch's own list asks for it
+  const own = path.join(__dirname, '..', lib.expectedFileFor('codex/redesign-r0b-2026-10-27'));
+  assert.equal(lib.wantsClassify(fs.readFileSync(own, 'utf8')), true);
+});
+
+// ── R0b extensions (lead conditions): surfaces as neutrals, text on the tint, parsed color-mixes ─────────────
+const { execFileSync } = require('node:child_process');
+const ROOT = path.join(__dirname, '..');
+const SHEETS = execFileSync('git', ['ls-files', '*.css', '*.html'], { cwd: ROOT, encoding: 'utf8' }).split('\n').filter(Boolean)
+  .map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8'));
+const MIXED = lib.familiesOf(TOKENS, GRAPHITE, { old: SHEETS, new: SHEETS });
+
+test('classifier (iii): color-mix() rules that use an accent var are parsed from the stylesheets, not listed by hand', () => {
+  const specs = lib.colourMixesOf(`a { color: color-mix(in oklab, var(--accent) 30%, var(--panel)); }
+    b { background: color-mix(in srgb, 35% var(--accent), transparent); }
+    c { border-color: color-mix(in srgb, var(--line) 60%, var(--text)); }
+    d { color: color-mix(in oklab, var(--accent-hover), white 20%); }`);
+  assert.deepEqual(specs.map((s) => [s.space, s.args.map((a) => [a.colour, a.pct])]), [
+    ['oklab', [['var(--accent)', 30], ['var(--panel)', null]]],
+    ['srgb', [['var(--accent)', 35], ['transparent', null]]],
+    ['oklab', [['var(--accent-hover)', null], ['white', 20]]],
+  ]);
+  assert.ok(MIXED.mixes.parsed >= 15, `found ${MIXED.mixes.parsed} accent mixes in the repo`);
+  assert.ok(MIXED.light.members.some((m) => m.key.startsWith('mix color-mix(in oklab')));
+});
+
+test('classifier (iii): computeMix follows CSS Color 5 (srgb, oklab, transparent, percentages)', () => {
+  const theme = { '--accent': '#ff0000', '--b': '#0000ff' };
+  const at = (raw) => lib.computeMix(lib.colourMixesOf(`x{c:${raw}}`)[0], theme);
+  assert.deepEqual(at('color-mix(in srgb, var(--accent) 50%, var(--b))').map((v) => Math.round(v * 1000) / 1000), [127.5, 0, 127.5, 1]);
+  // the oklab midpoint of red and blue is a lighter purple than the sRGB midpoint (128-ish, 0, 128-ish); the
+  // value pins this implementation (Ottosson's matrices), so a change to the conversion shows up here
+  const ok = at('color-mix(in oklab, var(--accent), var(--b))').map(Math.round);
+  assert.deepEqual(ok.slice(0, 3), [140, 83, 162]);
+  // with transparent, the colour keeps its own channels and takes the weight as alpha
+  assert.deepEqual(at('color-mix(in srgb, var(--accent) 35%, transparent)').map((v) => Math.round(v * 100) / 100), [255, 0, 0, 0.35]);
+  // percentages that sum under 100 scale alpha
+  assert.equal(at('color-mix(in srgb, var(--accent) 20%, var(--b) 30%)')[3], 0.5);
+  assert.equal(lib.computeMix({ space: 'oklch', args: [{ colour: 'var(--accent)', pct: 50 }, { colour: 'white', pct: null }] }, theme), null);
+});
+
+test('classifier (iii): a pixel drawn in an accent mix passes, mixed with the old and the new tokens', () => {
+  const tokens = lib.tokensOf(GRAPHITE).dark; const oldTokens = lib.tokensOf(TOKENS).dark;
+  const spec = lib.colourMixesOf('x{c:color-mix(in oklab, var(--accent) 30%, var(--panel))}')[0];
+  const fam = lib.familiesOf(TOKENS, GRAPHITE, { old: ['x{c:color-mix(in oklab, var(--accent) 30%, var(--panel))}'], new: [] }).dark;
+  const o = lib.computeMix(spec, oldTokens).slice(0, 3).map(Math.round); const n = lib.computeMix(spec, tokens).slice(0, 3).map(Math.round);
+  const r = lib.explainPixel(o, n, [hex('#17191d'), ...fam.surfaces], fam.members);
+  assert.equal(r.verdict, 'pass');
+  assert.match(r.key, /^mix color-mix\(in oklab, var\(--accent\) 30%/);
+});
+
+test('classifier (i): the surfaces are tried as well as the nearest unchanged pixel', () => {
+  // an accent blend over --panel-2 whose nearest unchanged pixel is a text pixel, not the background
+  const P2 = hex('#292d34');
+  const old = mix(hex('#e49a78'), P2, 0.3); const head = mix(hex('#e6e8eb'), P2, 0.3);
+  const textPx = hex('#f0f1f3');
+  assert.equal(lib.classifyPixel(old, head, [textPx], ALL.dark.members), 'unexpected');
+  assert.equal(lib.classifyPixel(old, head, [textPx, ...ALL.dark.surfaces], ALL.dark.members), 'pass');
+});
+
+test('classifier (ii): text anti-aliased over the selected tint passes only at the same coverage', () => {
+  const surface = hex('#202329');
+  const tintOld = lib.parseColour('rgba(228, 154, 120, 0.14)'); const tintNew = lib.parseColour('rgba(230, 232, 235, 0.14)');
+  const over = (c, b) => b.map((v, i) => Math.round(c[i] * c[3] + v * (1 - c[3])));
+  const TO = over(tintOld, surface); const TN = over(tintNew, surface); const T = hex('#b0b7c2');
+  const r = lib.explainPixel(mix(T, TO, 0.5), mix(T, TN, 0.5), ALL.dark.surfaces, ALL.dark.members);
+  assert.equal(r.verdict, 'pass');
+  assert.equal(r.weak, true, 'text on the tint is weak evidence');
+  assert.match(r.key, /^--(text|muted|faint)~soft\//);
+  // the same text at different coverage is not the tint swap
+  assert.notEqual(lib.explainPixel(mix(T, TO, 0.5), mix(T, TN, 0.62), ALL.dark.surfaces, ALL.dark.members).verdict, 'pass');
+});
+
+test('classifier: members that do not change are dropped, and the light halo is weak', () => {
+  assert.ok(!ALL.dark.members.some((m) => m.key === 'halo'), 'dark halo (#17191d → #17191d) explains nothing');
+  assert.ok(!ALL.light.members.some((m) => m.key === 'ink'), 'light ink (#fff → #fff) explains nothing');
+  assert.equal(ALL.light.members.find((m) => m.key === 'halo').weak, true);
+  assert.equal(ALL.light.members.find((m) => m.key === 'rest').weak, false);
+});
+
+test('classifier: an old pixel that is a neutral is never a pass, and near-N verdicts need strong evidence nearby', () => {
+  const S = hex('#292d34'); const darker = hex('#1f232a');
+  assert.notEqual(lib.explainPixel(S, darker, ALL.dark.surfaces, ALL.dark.members).verdict, 'pass');
+  // a lone near-N change is unexpected; beside a strong accent pass it is accepted
+  const lone = lib.classifyImage(image(20, 20, () => PANEL_D), image(20, 20, (x, y) => (x === 10 && y === 10 ? mix(hex('#e6e8eb'), PANEL_D, 0.2) : PANEL_D)), FAM);
+  assert.equal(lone.unexpected, 1);
+  const beside = lib.classifyImage(
+    image(20, 20, (x, y) => (x < 8 ? hex('#e49a78') : PANEL_D)),
+    image(20, 20, (x, y) => (x < 8 ? hex('#e6e8eb') : x === 10 && y === 10 ? mix(hex('#e6e8eb'), PANEL_D, 0.2) : PANEL_D)), FAM);
+  assert.equal(beside.unexpected, 0);
+  assert.equal(beside.skipped, 1);
+});
+
+test('classifier controls: every negative control fails the gate and every positive one passes, in both themes', () => {
+  const { controls, judgeControl } = require('../test-visual/classify-controls');
+  const all = controls();
+  assert.ok(all.filter((c) => c.expect === 'fail').length >= 16);
+  for (const c of all) {
+    const { failed, result } = judgeControl(c, MIXED);
+    assert.equal(failed, c.expect === 'fail', `${c.name}: expected the gate to ${c.expect} (unexpected ${result.unexpected} of ${result.changed})`);
+  }
 });

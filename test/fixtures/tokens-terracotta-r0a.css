@@ -1,0 +1,130 @@
+/* Shared design tokens for every Plexiform window. */
+:root {
+  color-scheme: dark;
+
+  --bg: #17191d;
+  --panel: #202329;
+  --panel-2: #292d34;
+  --line: #343941;
+  --line-strong: #4b535f;
+  --line-input: #78818e;
+  --text: #f0f1f3;
+  --muted: #b0b7c2;
+  --faint: #9aa3b0;
+  --accent: #e49a78;
+  --accent-ink: #251c18;
+  --accent-soft: rgba(228, 154, 120, 0.14);
+
+  --green: #67c4a6;
+  --amber: #e4b566;
+  --red: #ff9187;
+  --danger: #b8443a;
+  --danger-text: #ff8a80;
+  --idle: #726c62;
+
+  --radius-sm: 4px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 22px;
+
+  /* Two-tone focus ring: an outline (survives forced-colors) with a 2px halo filling the offset gap. Today's accent. */
+  --focus-ring: var(--accent);
+  --focus-halo: var(--bg);
+  --focus: 0 0 0 2px var(--focus-halo);
+  --t: 160ms ease;
+  --t-fast: 120ms ease;
+
+  /* ── Redesign R0a: v2 token names, aliased to today's values ──────────────
+     Nothing reads these yet, so they change no pixel. R0b gives the accent
+     states their Graphite values and the soft tint its 14 %; components still
+     use their own hover mixes until then. */
+  --accent-hover: var(--accent);
+  --accent-pressed: var(--accent);
+
+  /* Status buckets: one meaning each (Needs you, Working on it, Finished —
+     check it, Stuck or failed, Idle). Paused is styled as Idle. */
+  --st-needs: var(--amber);
+  --st-working: var(--green);
+  --st-check: var(--faint);
+  --st-stuck: var(--red);
+  --st-idle: var(--idle);
+  --st-paused: var(--st-idle);
+
+  /* Type: `font: var(--t-body)`. 12px is the minimum anywhere. */
+  --t-caption: 400 12px/16px var(--font);
+  --t-small: 400 13px/18px var(--font);
+  --t-body: 400 14px/20px var(--font);
+  --t-body-strong: 600 14px/20px var(--font);
+  --t-title: 600 16px/22px var(--font);
+  --t-display: 600 22px/28px var(--font);
+
+  --space-8: 32px;
+  --space-10: 40px;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.18);
+  --t-slow: 240ms ease-out;
+}
+
+:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; box-shadow: var(--focus); }
+@media (forced-colors: active) {
+  :focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+}
+
+/* Native pages follow the system appearance; status ink stays readable on paper.
+   The widget's chrome is always dark, so index.html opts out with data-theme="dark". */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --panel-2: #eef0f3;
+    --line: #dde1e6;
+    --line-strong: #c3cad3;
+    --line-input: #8792a0;
+    --text: #20252d;
+    --muted: #556171;
+    --faint: #5c6879;
+    --accent: #a34425;
+    --accent-ink: #ffffff;
+    --accent-soft: rgba(163, 68, 37, 0.08);
+    --green: #187d63;
+    --amber: #945c12;
+    --red: #c2352b;
+    --danger: #b3261e;
+    --danger-text: #b3261e;
+  }
+}
+
+/* ── Lamps ────────────────────────────────────────────────────────────────
+   The traffic-light palette, kept apart from the window tokens above. Built
+   in OKLCH for colour-vision safety, not for matching the UI's status hues:
+   a vermilion red, a yellow-leaning amber and a bluish green stay ≥ 13 ΔE
+   apart under simulated protanopia, deuteranopia and tritanopia (the old
+   #e2231a / #f2a200 / #2fae3e fell to 3.8 under protanopia), step in
+   lightness (red < green < amber) so even monochrome keeps them apart, and
+   each clears 3:1 against the unlit lamp. Colour is never the only cue:
+   position on the sign and the lamp's rhythm (green breathes, amber holds,
+   red blinks) carry the state too. The hex after each value is its sRGB
+   equivalent, which lights.html's swatches use; `node scripts/lamp-palette.js`
+   prints the check and test/lamp-palette.test.js enforces it. */
+:root {
+  --lamp-red: oklch(0.65 0.21 32); /* #f44b2f */
+  --lamp-amber: oklch(0.82 0.16 79); /* #fbb62b */
+  --lamp-green: oklch(0.69 0.12 174); /* #2db396 */
+  --lamp-off: oklch(0.3393 0.0234 302.7); /* #3a3542 */
+  --lamp-ring: #fff5d6;
+}
