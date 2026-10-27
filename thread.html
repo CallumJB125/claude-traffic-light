@@ -22,6 +22,8 @@
           <div class="th-more-wrap">
             <button type="button" class="th-btn th-more" id="th-more" aria-haspopup="menu" aria-expanded="false" aria-controls="th-menu" aria-label="More">⋯</button>
             <div class="th-menu" id="th-menu" role="menu" hidden>
+              <button type="button" role="menuitem" class="th-menu-item" id="th-tasks" hidden>Open in Tasks</button>
+              <button type="button" role="menuitem" class="th-menu-item" id="th-terminal" hidden aria-describedby="th-terminal-why">Open in a terminal<span class="th-menu-sub" id="th-terminal-why"></span></button>
               <button type="button" role="menuitem" class="th-menu-item" id="th-copy">Copy link</button>
             </div>
           </div>
@@ -40,6 +42,22 @@
           <p class="th-waiting-what" id="th-waiting-what"></p>
           <p class="th-waiting-where" id="th-waiting-where"></p>
           <button type="button" class="th-btn th-primary" id="th-answer">Open to answer</button>
+        </section>
+        <!-- R2b-1: the reply box, a Plexiform chat only. Send or ⌘↩ sends; Enter is a newline
+             (provisional, awaiting Callum: plan-r2b-auth §7 item 2). -->
+        <form class="th-reply" id="th-reply" hidden aria-label="Reply">
+          <label class="th-sr" for="th-reply-text" id="th-reply-label">Reply</label>
+          <textarea class="th-reply-text" id="th-reply-text" rows="2" maxlength="8192" aria-describedby="th-reply-note"></textarea>
+          <div class="th-reply-row">
+            <p class="th-reply-note" id="th-reply-note" aria-live="polite"></p>
+            <span class="th-reply-keys" id="th-reply-keys" aria-hidden="true">⌘↩</span>
+            <button type="submit" class="th-btn th-primary" id="th-send">Send</button>
+          </div>
+        </form>
+        <section class="th-ended" id="th-ended" hidden aria-labelledby="th-ended-title">
+          <h2 class="th-ended-title" id="th-ended-title">This chat has ended</h2>
+          <p class="th-ended-text" id="th-ended-text"></p>
+          <button type="button" class="th-btn" id="th-resume">Resume in Tasks</button>
         </section>
         <section class="th-empty" id="th-empty" hidden>
           <h2 class="th-empty-title" id="th-empty-title"></h2>

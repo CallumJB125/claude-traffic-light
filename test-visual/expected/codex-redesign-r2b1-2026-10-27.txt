@@ -1,0 +1,7 @@
+# R2b-1: three new baselines, all from test-visual/thread.spec.js (chat-first preview gate on). No existing baseline changes; no accent flip, so no classifier run.
+test-visual/__screenshots__/thread.spec.js/thread-reply-light-darwin.png
+# reason: new. A chat that takes replies: the reply box at the foot of the 760 px column with a typed draft, ⌘↩ hint and Send (provisional keys, awaiting Callum). The R2a chat fixture (actions without message) still shows no box, so thread-chat-* are unchanged.
+test-visual/__screenshots__/thread.spec.js/thread-reply-dark-darwin.png
+# reason: new. The same reply box in dark.
+test-visual/__screenshots__/thread.spec.js/thread-ended-darwin.png
+# reason: new. An ended chat: no reply box; "This chat has ended" with Resume in Tasks (provisional, awaiting Callum).

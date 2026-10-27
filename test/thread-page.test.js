@@ -28,6 +28,7 @@ function page(responses) {
     openInTasks: async (id) => { calls.push(['tasks', id]); return true; },
     goToTerminal: async (id) => { calls.push(['terminal', id]); return responses.terminal ?? { ok: true }; },
     copyLink: async (id) => { calls.push(['copy', id]); return true; },
+    message: async (id, body) => { calls.push(['message', id, body]); return typeof responses.message === 'function' ? responses.message(body) : (responses.message ?? { ok: true }); },
     board: () => calls.push(['board']),
     onReady: (cb) => { ready = cb; },
     onEvent: (cb) => { onEvent = cb; },
@@ -113,7 +114,7 @@ test('Copy link from the ⋯ menu; Escape closes it and returns focus', async ()
   p.$('th-more').click();
   assert.equal(p.$('th-menu').hidden, false);
   assert.equal(p.$('th-more').getAttribute('aria-expanded'), 'true');
-  assert.equal(p.w.document.activeElement, p.$('th-copy'));
+  assert.equal(p.w.document.activeElement, p.$('th-tasks'), 'the first item: a chat\'s Open in Tasks (R2b-1)');
   p.$('th-menu').dispatchEvent(new p.w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   assert.equal(p.$('th-menu').hidden, true);
   assert.equal(p.w.document.activeElement, p.$('th-more'));
@@ -141,4 +142,156 @@ test('thread.html: the frame is sandboxed without scripts, srcdoc with its own C
   assert.match(frame, /content=&quot;default-src 'none'; style-src 'self'&quot;/);
   assert.match(frame, /href=&quot;thread-transcript\.css&quot;/);
   assert.doesNotMatch(frame, /&lt;style|<style|&lt;script/);
+});
+
+// ── R2b-1: the reply box ─────────────────────────────────────────────────
+const key = (p, over) => p.$('th-reply-text').dispatchEvent(new p.w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...over }));
+const type = (p, text) => { p.$('th-reply-text').value = text; p.$('th-reply-text').dispatchEvent(new p.w.Event('input', { bubbles: true })); };
+
+test('reply: a chat that takes messages shows the box; ⌘↩ sends the row and the text only, Enter is a newline', async () => {
+  const p = page({ open: task({ actions: ['message', 'stop'] }) });
+  p.ready();
+  await tick(); await tick();
+  assert.equal(p.$('th-reply').hidden, false);
+  assert.equal(p.$('th-reply').dataset.state, 'on');
+  assert.equal(p.$('th-reply-text').placeholder, 'Reply to Claude…');
+  assert.equal(p.$('th-send').disabled, true, 'nothing to send yet');
+  type(p, 'Use the staging database');
+  assert.equal(p.$('th-send').disabled, false);
+  key(p, {});
+  await tick();
+  assert.equal(p.calls.filter(([k]) => k === 'message').length, 0, 'Enter alone never sends');
+  key(p, { metaKey: true });
+  await tick(); await tick();
+  assert.deepEqual(p.calls.filter(([k]) => k === 'message'), [['message', ID, 'Use the staging database']]);
+  assert.equal(p.$('th-reply-text').value, '', 'sent, so cleared');
+  assert.equal(p.$('th-reply-note').textContent, '');
+});
+
+test('reply: the Send button sends; a refusal keeps the text and says why', async () => {
+  const p = page({ open: task({ actions: ['message'] }), message: { ok: false, code: 'CONFLICT', text: 'This chat changed while sending. Check it before sending again.' } });
+  p.ready();
+  await tick(); await tick();
+  type(p, 'hello');
+  p.$('th-send').click();
+  await tick(); await tick();
+  assert.deepEqual(p.calls.filter(([k]) => k === 'message'), [['message', ID, 'hello']]);
+  assert.equal(p.$('th-reply-text').value, 'hello');
+  assert.equal(p.$('th-reply-note').textContent, 'This chat changed while sending. Check it before sending again.');
+  assert.equal(p.$('th-reply-note').dataset.tone, 'error');
+});
+
+test('reply: while a reply is in flight, a second press sends nothing', async () => {
+  let release;
+  const p = page({ open: task({ actions: ['message'] }), message: () => new Promise((r) => { release = () => r({ ok: true }); }) });
+  p.ready();
+  await tick(); await tick();
+  type(p, 'one');
+  p.$('th-send').click();
+  await tick();
+  assert.equal(p.$('th-send').textContent, 'Sending…');
+  assert.equal(p.$('th-send').disabled, true);
+  key(p, { metaKey: true });
+  await tick();
+  assert.equal(p.calls.filter(([k]) => k === 'message').length, 1);
+  release();
+  await tick(); await tick();
+  assert.equal(p.$('th-send').textContent, 'Send');
+});
+
+test('reply: an open approval comes first: no box, or the draft kept and the box off, saying why', async () => {
+  const p = page({ open: task({ actions: ['message'] }) });
+  p.ready();
+  await tick(); await tick();
+  type(p, 'half-written');
+  p.event({ id: ID, event: { type: 'detail', detail: { ...task().detail, actions: ['approve', 'deny'], openApprovals: [{ approvalId: 'a', tool: 'Bash', inputSummary: 'npm i' }] } } });
+  assert.equal(p.$('th-reply').hidden, false, 'the draft is kept on screen');
+  assert.equal(p.$('th-reply-text').value, 'half-written');
+  assert.equal(p.$('th-reply').dataset.state, 'wait');
+  assert.equal(p.$('th-reply-text').disabled, true);
+  assert.equal(p.$('th-reply-text').placeholder, 'Allow or deny the request above to continue');
+  assert.equal(p.$('th-send').disabled, true);
+  const q = page({ open: task({ actions: ['approve', 'deny'], openApprovals: [{ approvalId: 'a', tool: 'Bash', inputSummary: 'npm i' }] }) });
+  q.ready();
+  await tick(); await tick();
+  assert.equal(q.$('th-reply').hidden, true, 'no draft: the waiting card is the one thing to do');
+});
+
+test('reply: a chat in the terminal, or one that can\'t take a message now, has the box off with a reason', async () => {
+  const p = page({ open: { ...task({ actions: [] }), header: { ...task().header, chatState: 'in-terminal' } } });
+  p.ready();
+  await tick(); await tick();
+  assert.equal(p.$('th-reply').dataset.state, 'off');
+  assert.equal(p.$('th-reply-text').placeholder, 'This chat is in your terminal. Reply there.');
+  const q = page({ open: task({ state: 'parked', actions: ['resume'] }) });
+  q.ready();
+  await tick(); await tick();
+  assert.equal(q.$('th-reply').hidden, true, 'nothing to send and nothing to say: no dead box');
+});
+
+test('reply: a chat that stops taking messages keeps the draft, with the box off', async () => {
+  const p = page({ open: task({ actions: ['message'] }) });
+  p.ready();
+  await tick(); await tick();
+  type(p, 'keep me');
+  p.event({ id: ID, event: { type: 'detail', detail: { ...task().detail, state: 'parked', actions: ['resume'] } } });
+  assert.equal(p.$('th-reply').hidden, false);
+  assert.equal(p.$('th-reply-text').placeholder, 'Claude can’t take a message right now.');
+  assert.equal(p.$('th-reply-text').disabled, true);
+  assert.equal(p.$('th-reply-text').value, 'keep me');
+});
+
+test('the R2a fixtures keep their look: a running chat whose actions lack message has no box', async () => {
+  const p = page({ open: task({ actions: [] }) });
+  p.ready();
+  await tick(); await tick();
+  assert.equal(p.$('th-reply').hidden, true);
+  assert.equal(p.$('th-ended').hidden, true);
+});
+
+test('ended: no reply box; Resume in Tasks goes to this chat in Tasks', async () => {
+  const p = page({ open: { ...task({ state: 'done', actions: [] }), header: { ...task().header, chatState: 'ended' } } });
+  p.ready();
+  await tick(); await tick();
+  assert.equal(p.$('th-reply').hidden, true);
+  assert.equal(p.$('th-ended').hidden, false);
+  assert.equal(p.$('th-ended-title').textContent, 'This chat has ended');
+  p.$('th-resume').click();
+  await tick();
+  assert.deepEqual(p.calls.filter(([k]) => k === 'tasks'), [['tasks', ID]]);
+});
+
+test('⋯ menu: Open in Tasks, and Open in a terminal says why not (openInTerminal), or goes to Tasks', async () => {
+  const p = page({ open: { ...task({ actions: ['message'] }), header: { ...task().header, chatState: 'working', openInTerminal: { available: false, reason: 'in-place' } } } });
+  p.ready();
+  await tick(); await tick();
+  assert.equal(p.$('th-tasks').hidden, false);
+  assert.equal(p.$('th-terminal').hidden, false);
+  assert.equal(p.$('th-terminal').getAttribute('aria-disabled'), 'true');
+  assert.equal(p.$('th-terminal-why').textContent, 'It works directly in your folder.');
+  p.$('th-more').click();
+  p.$('th-terminal').click();
+  await tick();
+  assert.equal(p.calls.filter(([k]) => k === 'tasks').length, 0, 'unavailable does nothing');
+  p.$('th-tasks').click();
+  await tick();
+  assert.deepEqual(p.calls.filter(([k]) => k === 'tasks'), [['tasks', ID]]);
+  const q = page({ open: { ...task(), header: { ...task().header, openInTerminal: { available: true, reason: null } } } });
+  q.ready();
+  await tick(); await tick();
+  assert.equal(q.$('th-terminal').hasAttribute('aria-disabled'), false);
+  assert.equal(q.$('th-terminal-why').textContent, 'From the Tasks page');
+  q.$('th-terminal').click();
+  await tick();
+  assert.deepEqual(q.calls.filter(([k]) => k === 'tasks'), [['tasks', ID]]);
+});
+
+test('a terminal session\'s thread has no reply box and no Tasks items', async () => {
+  const p = page({ open: { kind: 'session', header: { title: 'Claude session in billing', project: 'billing', bucket: 'working', origin: 'iTerm', ai: 'Claude', terminal: true, chatState: null, openInTerminal: null }, origin: 'iTerm', activity: { view: { events: [] } } } });
+  p.ready();
+  await tick(); await tick();
+  assert.equal(p.$('th-reply').hidden, true);
+  assert.equal(p.$('th-ended').hidden, true);
+  assert.equal(p.$('th-tasks').hidden, true);
+  assert.equal(p.$('th-terminal').hidden, true);
 });

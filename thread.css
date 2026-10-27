@@ -53,6 +53,28 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .th-waiting-what { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--text-sm); overflow-wrap: anywhere; }
 .th-waiting-where { margin: 0 0 var(--space-2); color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
 
+/* R2b-1: the reply box and the ended state. */
+.th-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.th-reply { flex: none; display: grid; gap: var(--space-2); margin: 0; padding: var(--space-2); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel); }
+.th-reply:focus-within { border-color: var(--focus-ring); }
+.th-reply-text { width: 100%; box-sizing: border-box; min-height: 44px; max-height: 40vh; resize: none; field-sizing: content; margin: 0; padding: var(--space-1) var(--space-2); font: inherit; color: var(--text); background: transparent; border: 0; outline: none; }
+.th-reply-text::placeholder { color: var(--muted); }
+.th-reply-text:disabled { cursor: not-allowed; }
+.th-reply-row { display: flex; align-items: center; gap: var(--space-2); }
+.th-reply-note { flex: 1; min-width: 0; margin: 0; font-size: var(--text-sm); color: var(--muted); overflow-wrap: anywhere; }
+.th-reply-note[data-tone="error"] { color: var(--danger-text); }
+.th-reply-keys { flex: none; font-size: var(--text-xs); color: var(--muted); }
+.th-reply[data-state="off"] .th-reply-keys { display: none; }
+.th-btn:disabled { opacity: .55; cursor: not-allowed; }
+.th-btn.th-primary:disabled:hover { background: var(--accent); border-color: var(--accent); }
+.th-ended { flex: none; display: grid; gap: var(--space-1); justify-items: start; padding: var(--space-3) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.th-ended-title { margin: 0; font-size: var(--text-base); font-weight: 600; }
+.th-ended-text { margin: 0 0 var(--space-2); color: var(--muted); font-size: var(--text-sm); }
+.th-ended-text:empty { display: none; }
+.th-menu-item[aria-disabled="true"] { color: var(--muted); cursor: default; }
+.th-menu-item[aria-disabled="true"]:hover { background: none; }
+.th-menu-sub { display: block; font-size: var(--text-xs); color: var(--muted); }
+.th-menu-sub:empty { display: none; }
 .th-empty { margin: auto 0; padding: var(--space-8) 0; text-align: center; display: grid; gap: var(--space-2); justify-items: center; }
 .th-empty-title { margin: 0; font-size: var(--text-lg); font-weight: 600; }
 .th-empty-text { margin: 0; color: var(--muted); max-width: 46ch; }
