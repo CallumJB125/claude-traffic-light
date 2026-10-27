@@ -1,4 +1,16 @@
 const { defineConfig } = require('@playwright/test');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+// Playwright's transform cache lives in $TMPDIR/playwright-transform-cache-<uid>, shared by every run of this user.
+// Two runs at once (several sessions, several worktrees) race on it and a spec can load a half-written CJS copy of
+// an .mjs ("does not provide an export named ..."). One private cache per run; workers inherit the variable.
+if (!process.env.PWTEST_CACHE_DIR) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-cache-'));
+  process.env.PWTEST_CACHE_DIR = dir;
+  process.on('exit', () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
+}
 
 module.exports = defineConfig({
   testDir: './test-visual',
