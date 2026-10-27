@@ -121,6 +121,12 @@
     refresh();
   });
   api.changed(() => refresh());
+  // In the Settings sheet (preview): a link back and a fresh read when the sheet shows this page again.
+  if (new URLSearchParams(location.search).get('sheet') === '1') {
+    document.getElementById('back-settings').hidden = false;
+    document.getElementById('back-settings').addEventListener('click', () => api.goPane?.('phone'));
+    api.onShown?.(() => refresh());
+  }
   // Expiry and the phone's progress show without a click.
   setInterval(() => { if (state?.pairing) refresh(); }, 2000);
   refresh();

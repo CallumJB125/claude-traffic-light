@@ -14,14 +14,16 @@ function parseDestination(d) {
   return { focus: !m[1] || m[1] === 'all' || KNOWN.has(m[1]) ? m[1] || null : null };
 }
 
-function register({ ipcMain, fromPage, shell, clipboard, tools }) {
+// focusAllowed (default: fromPage) guards aitools:focus alone: the pending focus is for the page aiToolsOpen opens, so a Settings
+// sheet document sharing fromPage must not be able to take it (R8-3b-2).
+function register({ ipcMain, fromPage, focusAllowed = fromPage, shell, clipboard, tools }) {
   let focus = null;
-  const on = (channel, fn) => ipcMain.handle(channel, async (e, ...args) => {
-    if (!fromPage(e)) return null;
+  const on = (channel, fn, allowed = fromPage) => ipcMain.handle(channel, async (e, ...args) => {
+    if (!allowed(e)) return null;
     try { return await fn(...args); } catch { return { ok: false, error: 'Something went wrong; nothing was changed.' }; }
   });
   on('aitools:scan', () => tools.scan());
-  on('aitools:focus', () => { const f = focus; focus = null; return f; });
+  on('aitools:focus', () => { const f = focus; focus = null; return f; }, focusAllowed);
   on('aitools:preview', (id) => (KNOWN.has(id) ? tools.preview(id) : { ok: false, error: 'Unknown tool.' }));
   on('aitools:connect', (id) => (KNOWN.has(id) ? tools.connect(id) : { ok: false, error: 'Unknown tool.' }));
   on('aitools:connect-all', () => tools.connectAll());

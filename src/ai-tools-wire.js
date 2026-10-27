@@ -11,7 +11,7 @@ function handoverSources() {
   return ['claude', 'codex', 'gemini', 'cursor', 'hermes'];
 }
 
-function wire({ ipcMain, shell, clipboard, home, runtime, rootDir, fromPage, askFromWidget, ephemeral, openPage, fs, onClaudeConsent = () => {}, onClaudeHooks }) {
+function wire({ ipcMain, shell, clipboard, home, runtime, rootDir, fromPage, focusAllowed, askFromWidget, ephemeral, openPage, fs, onClaudeConsent = () => {}, onClaudeHooks }) {
   const tools = AiTools.create({
     home, runtime, ...(fs ? { fs } : {}), dataDir: rootDir, sessionsDir: path.join(rootDir, 'sessions'),
     claudeAskFromWidget: askFromWidget, ...(onClaudeHooks ? { onClaudeHooks } : {}), handoverSources,
@@ -26,7 +26,7 @@ function wire({ ipcMain, shell, clipboard, home, runtime, rootDir, fromPage, ask
     undo: (id) => consent(id, false)(tools.undo(id)),
     connectAll: async () => { const r = await tools.connectAll(); if (r?.results?.some((x) => x.id === 'claude' && x.ok)) onClaudeConsent(true); return r; },
   };
-  const ipc = AiToolsMain.register({ ipcMain, fromPage, shell, clipboard, tools: page });
+  const ipc = AiToolsMain.register({ ipcMain, fromPage, focusAllowed, shell, clipboard, tools: page });
   return {
     tools,
     // 'aitools', 'aitools:<id>' or 'aitools:all' → opens the page (true), anything else false.

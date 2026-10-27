@@ -102,7 +102,7 @@ test('Claude Code\'s row carries the Claude integration (MCP) switch; Settings n
   assert.match(doc.querySelector('section.tool').textContent, /Claude integration \(MCP\): on\./);
   assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'settings.html'), 'utf8'), /mcp-toggle/);
   const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
-  assert.match(main, /utilityHandle\('mcp-set-enabled', \(e\) => fromUtilityPage\(e, 'aitools'\)/);
+  assert.match(main, /utilityHandle\('mcp-set-enabled', aiToolsPage/);
 });
 
 test('Codex row: Burst routing switch only when Burst answers; the click goes to main, which asks first', async () => {

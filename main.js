@@ -612,6 +612,8 @@ const rulesEditor = (e) => widgetConfigSender(e) || rulesPane(e);
 // is handed only to the wiring sites of that document's own channels. Neither document uses get-config/save-config.
 const sheetDoc = (pane) => (e) => CHAT_PREVIEW === true && fromUtilityPage(e, `settings:${pane}`);
 const widgetLookPage = (e) => fromUtilityPage(e, 'widget') || sheetDoc(SettingsPanes.WIDGET_LOOK)(e);
+const phonePage = (e) => fromUtilityPage(e, 'phone') || sheetDoc(SettingsPanes.PHONE_PAIRING)(e);
+const aiToolsPage = (e) => fromUtilityPage(e, 'aitools') || sheetDoc(SettingsPanes.AITOOLS_SETUP)(e);
 const fromHatch = (e) => fromUtilityPage(e, 'hatch') || sheetDoc(SettingsPanes.CHARACTER)(e);
 /** A push the Lights window gets, also to the rules pane (preview only; with the gate off nothing is sent). */
 function sendToRules(channel, ...args) { if (CHAT_PREVIEW === true) buddyWin?.sendToPage(`settings:${SettingsPanes.RULES_PANE}`, channel, ...args); }
@@ -2134,7 +2136,7 @@ let startupUp;
 const startupDone = new Promise((resolve) => { startupUp = resolve; });
 const afterStartup = (fn) => { startupDone.then(fn).catch((err) => console.warn('[startup] deferred work failed:', err?.message ?? err)); };
 // Paid-tier packages (src/paid-wiring.js): each registers itself if present; nothing here may block startup.
-try { require('./src/paid-wiring.js').registerAll({ afterStartup, setCostGuardReport: (fn) => { costGuardReport = fn; }, setCostGuardResume: (fn) => { costGuardResume = fn; }, setTaskStartGuard: (fn) => { taskStartGuard = fn; }, app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, settingsAllowed: settingsPane('privacy'), setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; }, teamMemory: (req) => TeamActivity.memoryPage(req), gallery: { takePending: () => galleryService?.takePending() ?? null }, openTimeline: (s) => SessionTimelineMain.openSession(s) }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); } // privacy-flow: team-memory
+try { require('./src/paid-wiring.js').registerAll({ afterStartup, setCostGuardReport: (fn) => { costGuardReport = fn; }, setCostGuardResume: (fn) => { costGuardResume = fn; }, setTaskStartGuard: (fn) => { taskStartGuard = fn; }, app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, settingsAllowed: settingsPane('privacy'), phoneAllowed: phonePage, phoneViews: () => ['phone', `settings:${SettingsPanes.PHONE_PAIRING}`].map((id) => buddyWin?.pageWebContents(id)), setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; }, teamMemory: (req) => TeamActivity.memoryPage(req), gallery: { takePending: () => galleryService?.takePending() ?? null }, openTimeline: (s) => SessionTimelineMain.openSession(s) }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); } // privacy-flow: team-memory
 
 // Settings → Account & team, and the widget's one-time Team hint. Each
 // handler checks its sender; the page to open is never taken from the renderer.
@@ -2166,7 +2168,7 @@ function closeBurstNote(key) {
 // Burst's own event file (notices.json); while it is watched the poll-diff events below stay quiet.
 const BurstNotices = require('./src/burst-notices.js').createBurstNotices({ isMac: IS_MAC, onEvents: (events) => notifyBurstEvents(events), onResolve: closeBurstNote, config: () => loadConfig(), burst: () => BurstIpc, isGhostty: (sid) => (aggregateState().sessions || []).some((x) => x.sessionId === sid && /ghostty/i.test(x.hostApp || '')), log: console.log });
 // The visual harness points Burst at an empty home (CLAUDE_TRAFFIC_LIGHT_BURST_HOME) so this machine's own Burst can't leak into baselines.
-const BurstIpc = require('./src/burst-ipc.js').register({ utilityHandle, settingsOnly: settingsPane('none'), chipAllowed: (e) => widgetOnly(e) || fromUtilityPage(e, 'usage'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessionsAllowed: sessionsSender, stateFile: path.join(ROOT_DIR, 'burst-handover.json'), runner: { live: () => !!buddyWin?.runnerLive?.(), send: (m) => buddyWin?.burstFacts?.(m) }, accountAllowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, dialog, shell, scriptDir: path.join(ROOT_DIR, 'burst-scripts'), optimiserAllowed: (e) => fromUtilityPage(e, 'optimiser'), aitoolsAllowed: (e) => fromUtilityPage(e, 'aitools'), snapshotFile: require('./src/burst-snapshot.js').snapshotPath(ROOT_DIR), transcriptFor: (id) => transcriptIndex().get(id) || null, onView: (view) => { const events = BurstEvents.observe(view, Date.now()); if (!BurstNotices.active()) notifyBurstEvents(events); }, log: console.log, home: process.env.CLAUDE_TRAFFIC_LIGHT_BURST_HOME || undefined });
+const BurstIpc = require('./src/burst-ipc.js').register({ utilityHandle, settingsOnly: settingsPane('none'), chipAllowed: (e) => widgetOnly(e) || fromUtilityPage(e, 'usage'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessionsAllowed: sessionsSender, stateFile: path.join(ROOT_DIR, 'burst-handover.json'), runner: { live: () => !!buddyWin?.runnerLive?.(), send: (m) => buddyWin?.burstFacts?.(m) }, accountAllowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, dialog, shell, scriptDir: path.join(ROOT_DIR, 'burst-scripts'), optimiserAllowed: (e) => fromUtilityPage(e, 'optimiser'), aitoolsAllowed: aiToolsPage, snapshotFile: require('./src/burst-snapshot.js').snapshotPath(ROOT_DIR), transcriptFor: (id) => transcriptIndex().get(id) || null, onView: (view) => { const events = BurstEvents.observe(view, Date.now()); if (!BurstNotices.active()) notifyBurstEvents(events); }, log: console.log, home: process.env.CLAUDE_TRAFFIC_LIGHT_BURST_HOME || undefined });
 BurstIpc.setOpener(() => openBuddy('optimiser'));
 if (IS_MAC) BurstNotices.start();
 onQuit(app, () => BurstNotices.stop());
@@ -3451,7 +3453,7 @@ function broadcastStatus() {
   lightsWin?.webContents.send('status-changed');
   sendToRules('status-changed');
   onboardingWin?.webContents.send('status-changed');
-  for (const id of ['usage', 'stats', 'help', 'aitools']) buddyWin?.sendToPage(id, 'status-changed');
+  for (const id of ['usage', 'stats', 'help', 'aitools', `settings:${SettingsPanes.AITOOLS_SETUP}`]) buddyWin?.sendToPage(id, 'status-changed');
   try {
     const st = aggregateState();
     statusGate.mark(st);
@@ -5154,8 +5156,8 @@ ipcMain.handle('native-board-connect', nativeBoardAction((s, input) => {
 }));
 ipcMain.handle('native-board-disconnect', nativeBoardAction((s, target) => s.disconnect(target)));
 onQuit(app, () => { nativeBoardService?.stop().catch(() => {}); });
-utilityHandle('mcp-status', (e) => fromUtilityPage(e, 'aitools'), () => McpInstall.status(mcpOpts()));
-utilityHandle('mcp-set-enabled', (e) => fromUtilityPage(e, 'aitools'), (_e, on) => {
+utilityHandle('mcp-status', aiToolsPage, () => McpInstall.status(mcpOpts()));
+utilityHandle('mcp-set-enabled', aiToolsPage, (_e, on) => {
   try {
     const r = on ? McpInstall.install(mcpOpts()) : McpInstall.uninstall(mcpOpts());
     console.log(`[mcp] ${on ? 'registered' : 'unregistered'} in ${r.path}${r.changed ? '' : ' (no change)'}`);
@@ -5169,7 +5171,7 @@ utilityHandle('mcp-set-enabled', (e) => fromUtilityPage(e, 'aitools'), (_e, on) 
   }
 });
 
-const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }), onClaudeHooks: (installed) => noteAskHooks(installed && !!loadConfig().askFromWidget) });
+const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: aiToolsPage, focusAllowed: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }), onClaudeHooks: (installed) => noteAskHooks(installed && !!loadConfig().askFromWidget) });
 const aiToolsOpen = (destination) => AiTools.open(destination);
 // Find agents (src/agents-find-main.js). The ledger key lives only here: it
 // is made on the first add, peeked (never made) for reads, and Health sees it

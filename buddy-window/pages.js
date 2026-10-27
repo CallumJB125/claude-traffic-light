@@ -87,7 +87,9 @@ const RULES_PANE = sheetDoc(SettingsPanes.RULES_PANE, 'lights', 'lights.html', '
 // R8-3b-1: the Widget page (widget-page.html) and Hatch (hatch.html) as sheet documents, each with its own preload and guard.
 const WIDGET_LOOK_PANE = sheetDoc(SettingsPanes.WIDGET_LOOK, 'lights', 'widget-page.html', 'widget-page-preload.js', { embedded: '1', sheet: '1' });
 const CHARACTER_PANE = sheetDoc(SettingsPanes.CHARACTER, 'puzzle', 'hatch.html', 'hatch-preload.js', { embedded: '1' });
-const SHEET_DOCS = Object.freeze([RULES_PANE, WIDGET_LOOK_PANE, CHARACTER_PANE]);
+const PHONE_PAIRING_PANE = sheetDoc(SettingsPanes.PHONE_PAIRING, 'bell', 'phone-pairing.html', 'phone-pairing-preload.js', { embedded: '1', sheet: '1' });
+const AITOOLS_SETUP_PANE = sheetDoc(SettingsPanes.AITOOLS_SETUP, 'plug', 'aitools.html', 'aitools-preload.js', { embedded: '1', sheet: '1' });
+const SHEET_DOCS = Object.freeze([RULES_PANE, WIDGET_LOOK_PANE, CHARACTER_PANE, PHONE_PAIRING_PANE, AITOOLS_SETUP_PANE]);
 function paneById(id) { return typeof id === 'string' ? [...SETTINGS_PANES, ...SHEET_DOCS].find((p) => p.id === id) ?? null : null; }
 
 // R7-2: Usage's tabs (chat-first preview only). Each tab is its own document with its own guard; Today is the one new
