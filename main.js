@@ -587,6 +587,8 @@ try { WorkScope = require('./src/work-scope.js'); } catch (e) { if (!(e.code ===
 // Specs inject scope states through a mock that is never packaged.
 if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_TRAFFIC_LIGHT_WORK_SCOPE_MOCK) WorkScope = require('./test-visual/work-scope-mock.js').create(process.env.CLAUDE_TRAFFIC_LIGHT_WORK_SCOPE_MOCK);
 const WorkScopeView = require('./src/work-scope-view.js');
+// Redesign preview (plan-redesign §R3.8): dev runs of an unpackaged app only; read once, here.
+const CHAT_PREVIEW = require('./src/chat-preview.js').chatPreviewOn({ isDevRun: IS_DEV_RUN, isPackaged: app.isPackaged, env: process.env });
 // O3: the Tasks helper's wrapped tasks that did real work, as session-shaped records with the scope a session in
 // that folder gets, handed to Buddy's automatic cards only.
 let wrappedWorkRows = [];
@@ -1606,6 +1608,9 @@ function getBuddy() {
   if (!buddyWin) {
     buddyWin = createBuddyWindow({
       isConstrained: () => lowPowerOn,
+      chatFirst: CHAT_PREVIEW,
+      // The chat-first sidebar's collapsed groups (only read or written with the preview on).
+      sidebarGroups: { load: () => loadConfig().ui?.sidebarGroups ?? null, save: (v) => saveConfig({ ui: { ...(loadConfig().ui ?? {}), sidebarGroups: v } }) },
       simpleMode: () => loadConfig().simpleMode === true,
       // O4: Home stays alive while a task its box started is live; its retired document drops that task's slot.
       homeBusy: () => Compose.busy(),
@@ -1778,7 +1783,7 @@ if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{over
 // Team depth lane C: board presence over the person's own hub sign-in (who views which card, who runs where); feeds Team sessions and beats this computer's open shared session.
 const PresenceLink=require('./src/team-presence-link').createPresenceLink({links:async()=>devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[],WebSocket:require('ws'),log:m=>console.log(m),onChange:()=>OverviewMain.directoryChanged(),onInbox:(hub,item)=>ingestTeamInbox(hub,[item])}); // privacy-flow: team-hub
 const OverviewMain=require('./src/overview-main').createOverviewMain({
-  buddy:()=>buddyWin,sessions:()=>aggregateState().sessions||[],
+  buddy:()=>buddyWin,chatPreview:CHAT_PREVIEW,sessions:()=>aggregateState().sessions||[],
   // Burst's loose ends per repository (BurstIpc is created further down; null until then and whenever Burst lacks the check).
   looseEnds:()=>{try{return BurstIpc.looseEndsView();}catch{return null;}},
   presence:team=>{void PresenceLink.refresh();return PresenceLink.latest(team);},presenceView:r=>PresenceLink.view(r),

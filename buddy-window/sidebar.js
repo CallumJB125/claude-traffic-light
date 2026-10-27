@@ -175,12 +175,24 @@ function paint() {
 // ↑/↓ move between entries, like a native source list.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  if (chatFirst) return; // the chat-first sidebar's tree and filter have their own keys
   const all = [...document.querySelectorAll('#nav button, #nav-foot button')].filter((b) => !b.closest('[hidden]'));
   const i = all.indexOf(document.activeElement);
   if (i < 0) return;
   e.preventDefault();
   all[(i + (e.key === 'ArrowDown' ? 1 : -1) + all.length) % all.length].focus();
 });
+
+// The chat-first sidebar (dev-only preview, redesign R1): its two scripts are
+// added only when main says the preview is on, so the ordinary sidebar loads
+// exactly what it always has.
+let chatFirst = false;
+function startChatFirst(r) {
+  chatFirst = true;
+  const add = (src) => new Promise((resolve, reject) => { const s = el('script', { src }); s.onload = resolve; s.onerror = reject; document.head.append(s); });
+  // State pushed before these scripts loaded landed in `state`; hand over the current page so the footer starts right.
+  add('../src/work-organise.js').then(() => add('sidebar-chat.js')).then(() => window.SidebarChat.start({ ...r, selected: state.selected })).catch(() => {});
+}
 
 // Workspace switcher: the board on this Mac, every team on each signed-in
 // hub (grouped by hub when there are several), then the account actions.
@@ -233,5 +245,5 @@ window.buddy.pages().then((r) => {
   document.title = r.brand.name;
   document.getElementById('brand').textContent = r.brand.name;
   document.querySelector('.sidebar').setAttribute('aria-label', r.brand.name);
-  build();
+  if (r.chatFirst === true) startChatFirst(r); else build();
 });

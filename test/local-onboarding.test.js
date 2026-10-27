@@ -89,8 +89,11 @@ test('signed-out Team and Integrations copy: plain, no hub address, status is wo
 
 test('open(id) starts the account flows the way the sidebar switcher does: tray, Settings and the widget can open the sign-in screen', () => {
   const idx = read(dir, 'index.js');
-  assert.match(idx, /const FLOW_IDS = \['signin', 'join', 'create-team'\];/);
-  assert.match(idx, /const goTo = \(id\) => \(FLOW_IDS\.includes\(id\) \? flow\.startFlow\(id\) : select\(id\)\);/);
+  // FLOW_IDS moved next to PAGES (redesign R1); route() is select() unless the dev-only chat preview is on.
+  assert.deepEqual([...require('../buddy-window/pages.js').FLOW_IDS], ['signin', 'join', 'create-team']);
+  assert.match(idx, /const \{ PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS,/);
+  assert.match(idx, /const goTo = \(id\) => \(FLOW_IDS\.includes\(id\) \? flow\.startFlow\(id\) : route\(id\)\);/);
+  assert.match(idx, /function route\(id, from = null\) \{\n    if \(chatFirst !== true\) \{ select\(id\); return; \}/);
   assert.match(idx, /if \(pageId\) goTo\(pageId\);/, 'an open window routes the id');
   assert.match(idx, /else goTo\(pageId \?\? selected\);/, 'a fresh window routes the id too');
   assert.doesNotMatch(idx, /if \(pageId\) select\(pageId\);/, 'the old route that ignored the flow ids is gone');
