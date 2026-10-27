@@ -73,10 +73,10 @@ test('Backups: the diff names what differs, and a subset restores with a before-
   await settings.evaluate(() => document.getElementById('backups').scrollIntoView({ block: 'start' }));
   await settings.waitForTimeout(300);
   // the open diff is taller than the window, so shoot the window, not the element
-  // The embedded page can land a row off between a lone and a full run (≈1.7k px of 950k).
-  // Measured cause: without snapToPixels the page sits at a fractional scroll offset, so every horizontal edge
-  // anti-aliases half a pixel differently. 3 lone renders agreed with each other exactly and differed from the
-  // baseline by up to 1.29%. Left as it is on purpose; the fix is to snap the scroll offset and re-baseline.
+  // Lone renders differ from the baseline by ≤1.29% by a strict count without the AA exemption, and pass
+  // Playwright's comparison at 0.008 (7/7 lone runs). Cause: without snapToPixels the page sits at a fractional
+  // scroll offset, so every horizontal edge anti-aliases half a pixel differently. Tracked in the follow-up
+  // (snap the scroll offset, re-baseline, then set to 0).
   await expect(settings).toHaveScreenshot('backups-diff.png', { maxDiffPixelRatio: 0.008 });
   await picks.nth(0).locator('input').uncheck();
   await picks.nth(2).locator('input').uncheck();
