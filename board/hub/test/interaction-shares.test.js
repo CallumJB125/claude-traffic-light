@@ -1234,3 +1234,19 @@ test('T0: a create that never answers is cut off at its 15 s deadline, and the l
     assert.deepEqual(deadlines.map((d) => d.ms), [15_000, 15_000, 15_000]);
   } finally { AbortSignal.timeout = realTimeout; globalThis.fetch = realFetch; await r.close(); }
 });
+
+test('T0: a create that throws releases the lock, and the next create for the same session and team goes through', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch(), state = r.mac.hub.state.bind(r.mac.hub);
+    let boom = true;
+    r.mac.hub.state = (...args) => { if (boom) { boom = false; throw new Error('provider state failed'); } return state(...args); };
+    const first = r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' });
+    const queued = r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact', expiresInS: 3600 });
+    await assert.rejects(first, /provider state failed/);
+    const made = await queued;
+    assert.equal(made.ok, true);
+    assert.deepEqual(live(r, s.session).map((x) => x.scope), ['interact']);
+    assert.equal((await r.mac.shareSessionAutomatic({ session: s.session, team: r.org, scope: 'watch' })).status, 'exists');
+  } finally { await r.close(); }
+});
