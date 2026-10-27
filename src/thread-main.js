@@ -12,6 +12,11 @@
 // through main's confirmDialog and the thread's own ticket (index.js
 // threadConfirm); this file never raises one and never skips one.
 // Every other Tasks act stays on tasks-main.js owner() (the Tasks page) until R6a.
+// R4-2 (plan-r4-2.md) adds a terminal session's hook requests: thread:inputs reads
+// only the bound session's, and thread:answer-input answers one of them through
+// main's `hook` (main.js), the same rebuilt answer and decision hash as the widget.
+// The 600 ms arm and C-F's second click ("Allow anyway") are both held here, per
+// document, from what main actually returned to it; the page's say-so is never enough.
 //
 // Guard T, for every channel: the exact thread webContents and its main frame,
 // the document generation, the request's row id === the row the document was
@@ -23,7 +28,7 @@
 
 const ROW_ID = /^[0-9a-f]{64}$/;
 const EFFECT_MS = 500;
-const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act']);
+const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act', 'thread:inputs', 'thread:answer-input']);
 // The reply's own bound: guard's (TV.LIMITS.message), checked before any await.
 const MESSAGE_BYTES = 8192;
 const REPLY_TEXT = Object.freeze({
@@ -62,10 +67,23 @@ const ACT_KEYS = Object.freeze({
   switchAi: ['action', 'ai', 'id'], // the preview; the apply names the review instead (below)
 });
 const SWITCH_APPLY_KEYS = 'action,id,review';
+// thread:answer-input (R4-2). The extras are checked again by main (AnswerMore.check) before any write.
+const INPUT_ID_MAX = 100;
+const INPUT_KEYS = new Set(['id', 'inputId', 'optionId', 'more']);
+const INPUT_TEXT = Object.freeze({
+  FOCUS: 'Focus this chat and answer again.',
+  BUSY: 'Still sending your last answer.',
+  OFF: 'Answering from Plexiform is off. Answer in the terminal.',
+  GONE: 'This request is no longer waiting.',
+  NOT_FOUND: 'This request isn’t this chat’s.',
+  FLAGGED: 'Needs a careful look. Press Allow anyway if you mean it.',
+  NOT_READY: 'This request changed. Look at it again, then choose.',
+  VALIDATION: 'That answer could not be sent. Look at it again.',
+});
 // Provisional, awaiting Callum (plan-r2.md §7 item 3): the link form may change.
 const LINK = (id) => `plexiform://thread/${id}`;
 
-function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, copy = () => {}, header = () => null, now = Date.now }) {
+function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, hook = null, copy = () => {}, header = () => null, now = Date.now }) {
   let slot = null; // { wcId, generation, taskId }
   // Documents that asked the Tasks service for a slot: only these are closed, so a terminal
   // session's thread (or a document that never read) never reaches, or starts, the service.
@@ -191,7 +209,10 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
   // The act in flight per document: tasks-service may call a preview's `current` again at apply time,
   // so "refused before the send" is recorded on whichever act is running now (plan-r4 §10 S1 nit).
   const running = new Map(); // wcId → { refused }
-  function forget(wcId) { for (const k of shown.keys()) if (k.startsWith(`${wcId}:`)) shown.delete(k); reviews.delete(wcId); }
+  function forget(wcId) {
+    for (const m of [shown, hookShown, anyway, inputsRead]) for (const k of m.keys()) if (String(k).startsWith(`${wcId}:`)) m.delete(k);
+    reviews.delete(wcId);
+  }
   function record(c, taskId, detail) {
     if (!detail || typeof detail !== 'object') return;
     const wcId = c.contents.id, live = new Set(), t = now();
@@ -350,6 +371,108 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     return { ...fail(code, ACT_TEXT[code] ?? (typeof r?.text === 'string' ? r.text.slice(0, 300) : '')), ...(r?.cancelled === true ? { cancelled: true } : {}) };
   }
 
+  // ── R4-2: the bound session's hook requests (plan-r4-2.md) ──
+  // `${wcId}:${generation}:${inputId}` → { hash, danger, at }: what thread:inputs returned to this document.
+  const hookShown = new Map();
+  // C-F (plan-r4-2 §8 S1): a FLAGGED reply arms "Allow anyway" for that request, option, hash and danger only.
+  const anyway = new Map(); // `${wcId}:${generation}:${inputId}` → { optionId, hash, danger, at }
+  const inputsRead = new Map(); // `${wcId}:${generation}` → { at, reply, key }
+  const hookKey = (c, inputId) => `${c.contents.id}:${c.generation}:${inputId}`;
+  const sessionOf = (c) => { const t = resolve(c.boundId); return t && t.kind === 'session' && typeof t.sessionId === 'string' ? t : null; };
+  function hookRead(t) {
+    let r = null;
+    try { r = hook?.inputs?.({ source: t.source, sessionId: t.sessionId }) ?? null; } catch { r = null; }
+    const items = Array.isArray(r?.items) ? r.items.filter((x) => x && x.input && typeof x.input.id === 'string') : [];
+    return { answering: r?.answering === true, items };
+  }
+  const viewKey = (items) => JSON.stringify(items.map((x) => [x.input.id, x.hash ?? null, x.danger ?? null, x.input.answerable === true]));
+  function inputs(e, args) {
+    const c = guard(e, args);
+    if (!c) return null;
+    const t = sessionOf(c);
+    if (!t) return GONE;
+    const rk = `${c.contents.id}:${c.generation}`, last = inputsRead.get(rk), t0 = now();
+    // At most one fresh read per 500 ms per document; inside it, the last reply again (nothing new is armed).
+    if (last && !last.stale && t0 - last.at < EFFECT_MS) return last.reply;
+    const { answering, items } = hookRead(t);
+    if (!still(c)) return null;
+    const live = new Set();
+    for (const x of items) {
+      if (typeof x.hash !== 'string' || x.input.answerable !== true) continue;
+      const key = hookKey(c, x.input.id), old = hookShown.get(key);
+      live.add(key);
+      hookShown.set(key, old && old.hash === x.hash && old.danger === (x.danger ?? null) ? old : { hash: x.hash, danger: x.danger ?? null, at: t0 });
+    }
+    const prefix = `${rk}:`;
+    for (const key of hookShown.keys()) if (key.startsWith(prefix) && !live.has(key)) { hookShown.delete(key); anyway.delete(key); }
+    const reply = { inputs: items.map((x) => x.input), answering };
+    inputsRead.set(rk, { at: t0, reply, key: viewKey(items) });
+    return reply;
+  }
+  function answerInput(e, args) {
+    const fail = (code, text = INPUT_TEXT[code] ?? '') => ({ ok: false, code, text });
+    // 1. Sender, frame, argc.
+    const before = ctx();
+    if (!before || !e || e.sender !== before.contents || e.senderFrame !== before.frame || args.length !== 1) return null;
+    // 2. Foreground.
+    if (before.foreground !== true) return fail('ILLEGAL_TRANSITION', INPUT_TEXT.FOCUS);
+    // 3. The exact shape and the bound id, before anything else.
+    const req = args[0];
+    if (!plain(req) || req.id !== before.boundId || !Object.keys(req).every((k) => INPUT_KEYS.has(k))) return fail('VALIDATION');
+    const short = (v) => typeof v === 'string' && v.length > 0 && v.length <= INPUT_ID_MAX;
+    if (!short(req.inputId) || !short(req.optionId)) return fail('VALIDATION');
+    const more = Object.hasOwn(req, 'more') ? req.more : {};
+    let okMore = false;
+    try { okMore = hook?.checkMore?.(more) === true; } catch { okMore = false; }
+    if (!okMore) return fail('VALIDATION');
+    // 4. One answer in flight per document, and the per-document rate.
+    const busy = `${before.contents.id}:${before.generation}`;
+    if (sending.has(busy) || !rateOk(before, 'answer-input')) return fail('BUSY');
+    // 5. Main resolves the session; a task's thread answers through thread:act.
+    const t = sessionOf(before);
+    if (!t) return fail('NOT_FOUND');
+    // 6. Main's own checks, from the request file: the setting, the session, the rebuilt answer.
+    let p = null;
+    try { p = hook?.prepare?.({ source: t.source, sessionId: t.sessionId }, req.inputId, req.optionId, more) ?? null; } catch { p = null; }
+    if (!p || p.ok !== true) return fail(typeof p?.code === 'string' && Object.hasOwn(INPUT_TEXT, p.code) ? p.code : 'GONE');
+    // 7. The arm: returned to this document, still the same hash and danger, on screen for 600 ms.
+    const key = hookKey(before, req.inputId), armed = hookShown.get(key);
+    if (!armed || typeof p.hash !== 'string' || armed.hash !== p.hash || armed.danger !== (p.danger ?? null) || now() - armed.at < ARM_MS) return fail('NOT_READY');
+    // 8. C-F: a flagged allow takes a second click, which main itself offered (S1).
+    if (p.flagged === true) {
+      const tok = anyway.get(key);
+      if (more.anyway !== true || !tok) {
+        anyway.set(key, { optionId: req.optionId, hash: p.hash, danger: p.danger ?? null, at: now() });
+        return fail('FLAGGED');
+      }
+      anyway.delete(key);
+      if (tok.optionId !== req.optionId || tok.hash !== p.hash || tok.danger !== (p.danger ?? null)) return fail('NOT_READY');
+      if (now() - tok.at < ARM_MS) { anyway.set(key, tok); return fail('NOT_READY'); }
+    }
+    // 9. The document is still this one, focused, on the same session; then the one write.
+    if (!still(before, true) || sessionOf(before)?.sessionId !== t.sessionId) return fail('NOT_READY');
+    sending.add(busy);
+    let w = null;
+    try { w = p.write(); } catch { w = null; } finally { sending.delete(busy); }
+    hookShown.delete(key); anyway.delete(key); inputsRead.delete(busy);
+    if (w && w.ok === true) return { ok: true };
+    return fail('GONE', typeof w?.error === 'string' ? `That answer wasn’t sent (${w.error.slice(0, 200)}).` : INPUT_TEXT.GONE);
+  }
+  // main's broadcastStatus: a ping, with no data, when the bound session's requests changed.
+  function inputsChanged() {
+    const c = ctx();
+    if (!c || !hook) return;
+    const t = sessionOf(c);
+    if (!t) return;
+    // Only a document that has read is pinged; its next read is then fresh, whatever the rate.
+    const last = inputsRead.get(`${c.contents.id}:${c.generation}`);
+    if (!last) return;
+    const key = viewKey(hookRead(t).items);
+    if (last.key === key) return;
+    last.key = key; last.stale = true;
+    try { c.contents.send('thread:inputs-changed', { id: c.boundId }); } catch { /* closed */ }
+  }
+
   // Copy link: the clipboard gets this row's link, nothing else.
   function copyLink(e, args) {
     const c = guard(e, args, { effect: true });
@@ -369,6 +492,8 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       ipc.handle('thread:copy-link', (e, ...a) => copyLink(e, a));
       ipc.handle('thread:message', (e, ...a) => message(e, a));
       ipc.handle('thread:act', (e, ...a) => act(e, a));
+      ipc.handle('thread:inputs', (e, ...a) => inputs(e, a));
+      ipc.handle('thread:answer-input', (e, ...a) => answerInput(e, a));
     },
     // tasks-service onEvent, before the Tasks pages: true when the event is the thread slot's.
     onEvent(wcId, taskId, event) {
@@ -384,9 +509,10 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     },
     // index.js: the thread document is gone, reloaded, hidden or left.
     retire(wcId) { if (Number.isSafeInteger(wcId)) void closeSlot(wcId); },
+    inputsChanged,
     slot: () => (slot ? { ...slot } : null),
     stop() { stopped = true; if (slot) void closeSlot(slot.wcId); },
   };
 }
 
-module.exports = { createThreadMain, CHANNELS, EFFECT_MS, LINK, REPLY_TEXT, MESSAGE_BYTES, ACT_TEXT, ARM_MS };
+module.exports = { createThreadMain, CHANNELS, EFFECT_MS, LINK, REPLY_TEXT, MESSAGE_BYTES, ACT_TEXT, ARM_MS, INPUT_TEXT };

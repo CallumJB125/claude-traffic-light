@@ -156,8 +156,16 @@ const COLUMNS = [
   { ch: 'thread:act', name: 'discard', args: (s) => [{ id: own(s), action: 'discard', confirmed: true }] },
   { ch: 'thread:act', name: 'act with two arguments', args: (s) => [{ id: own(s), action: 'stop', confirmed: true }, 'more'] },
   { ch: 'thread:act', name: 'act with a bare string', args: (s) => [own(s)] },
+  // R4-2: thread:answer-input. Valid only for the focused session thread, on its own session's request, read 600 ms ago.
+  { ch: 'thread:answer-input', name: 'answer its own session\'s request', args: (s) => [{ id: own(s), inputId: 'req-1', optionId: 'allow' }], valid: true },
+  { ch: 'thread:answer-input', name: 'answer a request in chat A', args: () => [{ id: A, inputId: 'req-1', optionId: 'allow' }], valid: true },
+  { ch: 'thread:answer-input', name: 'answer with Enter (oneKey)', args: (s) => [{ id: own(s), inputId: 'req-1', optionId: 'allow', more: { oneKey: true } }] },
+  { ch: 'thread:answer-input', name: 'answer with an extra key', args: (s) => [{ id: own(s), inputId: 'req-1', optionId: 'allow', action: 'approve' }] },
+  { ch: 'thread:answer-input', name: 'answer an over-long id', args: (s) => [{ id: own(s), inputId: 'x'.repeat(101), optionId: 'allow' }] },
+  { ch: 'thread:answer-input', name: 'answer with two arguments', args: (s) => [{ id: own(s), inputId: 'req-1', optionId: 'allow' }, 'more'] },
+  { ch: 'thread:answer-input', name: 'answer with a bare string', args: (s) => [own(s)] },
   // Every other thread:* channel (R2a's reads and navigation effects), for its own row and for A.
-  ...CHANNELS.filter((c) => c !== 'thread:message' && c !== 'thread:act').flatMap((ch) => [
+  ...CHANNELS.filter((c) => c !== 'thread:message' && c !== 'thread:act' && c !== 'thread:answer-input').flatMap((ch) => [
     { ch, name: `${ch} for its own row`, args: (s) => [own(s)] },
     { ch, name: `${ch} for row A`, args: () => [A] },
   ]),
@@ -166,6 +174,7 @@ const COLUMNS = [
 // The allowed cells, explicitly. Anything not here must make zero service calls and zero effects.
 function allowed(s, col, args) {
   if (col.ch === 'thread:message' || col.ch === 'thread:act') return !!s.live && !!s.focused && !s.session && col.valid === true && args[0].id === s.bound;
+  if (col.ch === 'thread:answer-input') return !!s.live && !!s.focused && !!s.session && col.valid === true && args[0].id === s.bound;
   if (col.ch.startsWith('tasks:')) return !!s.tasksPage;
   if (col.ch.startsWith('compose:')) return !!s.home;
   // The new chat: its own document only. create also needs focus and a valid draft; open-in-tasks only for an id it started (none here).
@@ -187,6 +196,8 @@ for (const s of SENDERS) {
       await settle();
       // thread:act: the live thread document (if any) has read its chat, and 600 ms have passed.
       if (col.ch === 'thread:act') { const live = r.w.doc(); if (live) await r.w.ipc.handlers['thread:open'](live, r.w.peek().threadId); r.clock.t += 700; }
+      // thread:answer-input: the live thread document has read its session's requests, and 600 ms have passed.
+      if (col.ch === 'thread:answer-input') { const live = r.w.doc(); if (live) await r.w.ipc.handlers['thread:inputs'](live, r.w.peek().threadId); r.clock.t += 700; }
       const before = r.calls.length, effects = r.w.effects.length;
       const out = await r.w.ipc.handlers[col.ch](e, ...args);
       await settle();
@@ -194,7 +205,13 @@ for (const s of SENDERS) {
       if (!ok) {
         assert.deepEqual(made, [], 'no act, create, preflight or openTerminal');
         assert.deepEqual(did, [], 'no navigation effect');
-        if (col.ch === 'thread:message' || col.ch === 'thread:act') assert.ok(out === null || out.ok === false, JSON.stringify(out));
+        if (col.ch === 'thread:message' || col.ch === 'thread:act' || col.ch === 'thread:answer-input') assert.ok(out === null || out.ok === false, JSON.stringify(out));
+        return;
+      }
+      if (col.ch === 'thread:answer-input') {
+        assert.deepEqual(out, { ok: true });
+        assert.deepEqual(made, [], 'a hook answer never reaches the Tasks service');
+        assert.deepEqual(did, [['answer', 'req-1', 'allow']]);
         return;
       }
       if (col.ch === 'thread:act') {
@@ -244,6 +261,9 @@ test('completeness: every registered thread:* and tasks:* channel has a column, 
   const mine = (t, row) => [`${t} · allow once in its own chat`, `${t} · deny in its own chat`, `${t} · answer in its own chat`, `${t} · stop its own chat`, `${t} · allow once in chat ${row}`, `${t} · allow for this task (R4-1b)`, `${t} · preview a switch to Codex (R4-1b)`];
   assert.deepEqual(acts, [...mine('thread:A focused', 'A'), ...mine('thread:B focused', 'B')]);
   assert.deepEqual([...ENGINE_ACTIONS].sort(), ['answer', 'approve', 'deny', 'discard', 'handback', 'merge', 'message', 'openPr', 'pause', 'resume', 'retry', 'stop', 'switchAi', 'takeover'].sort());
+  // R4-2: the allowed thread:answer-input cell is exactly the focused session thread answering its own session's request.
+  const hooks = SENDERS.flatMap((s) => COLUMNS.filter((c) => c.ch === 'thread:answer-input').filter((c) => allowed(s, c, c.args(s))).map((c) => `${s.name} · ${c.name}`));
+  assert.deepEqual(hooks, ['a terminal session\'s thread · answer its own session\'s request']);
   // The allowed thread:message cells are exactly the two focused task threads sending to their own chat.
   const cells = SENDERS.flatMap((s) => COLUMNS.filter((c) => c.ch === 'thread:message').filter((c) => allowed(s, c, c.args(s))).map((c) => `${s.name} · ${c.name}`));
   assert.deepEqual(cells, ['thread:A focused · send to its own chat', 'thread:A focused · send to chat A', 'thread:B focused · send to its own chat', 'thread:B focused · send to chat B']);

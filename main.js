@@ -659,6 +659,7 @@ function withDanger(inputs, requests) {
 const PaneDialogs = require('./src/pane-dialogs.js');
 const Owned = require('./hooks/owned.js');
 const AnswerFile = require('./hooks/answer-file.js');
+const AnswerMore = require('./src/answer-more.js');
 const AskPolicy = require('./hooks/ask-policy.js');
 const TourMain = require('./src/first-run-tour-main.js');
 let paneDialogs = [];
@@ -2370,6 +2371,46 @@ async function threadGoToTerminal({ source, sessionId }) {
   const r = await jumpToSession(session, String(session.cwd || '').split('/').filter(Boolean).pop() || '', session.hostApp);
   return { ok: !!r && !r.cant, ...(r && r.cant ? { note: r.cant } : {}) };
 }
+// R4-2 (plan-r4-2.md): a terminal session's hook requests, for its own thread only. This computer's own
+// session row, by source, session id and host; a VM sharing the requests folder is answered from the widget.
+const threadSession = ({ source, sessionId }) => localSessions(aggregateState().sessions || []).find((s) => s && !s.device && s.sessionId === sessionId && (s.source ?? 'claude') === source) ?? null;
+// The danger label as withDanger and homeAnswerRefusal see it: a rules error is never "not flagged".
+const dangerOf = (req) => { if (req.kind !== undefined && req.kind !== 'permission') return null; try { return AutoRules.danger(req); } catch { return 'it could not be checked'; } };
+const threadHook = {
+  checkMore: (more) => AnswerMore.check(more),
+  inputs(t) {
+    const s = threadSession(t);
+    if (!s) return { answering: false, items: [] };
+    const st = aggregateState();
+    if (st.reason === 'travel') return { answering: !!loadConfig().askFromWidget, items: [] };
+    const reqs = new Map(readRequests().map((r) => [r.id, r]));
+    const mine = (st.inputs || []).filter((i) => i && i.session === s.sessionId && i.host === s.host && (i.provider ?? 'claude') === t.source && !TourMain.isDemoId(String(i.id)));
+    return { answering: !!loadConfig().askFromWidget, items: mine.map((i) => { const r = i.source === 'hook' ? reqs.get(i.id) : null; return { input: i, hash: r && typeof r.decisionHash === 'string' ? r.decisionHash : null, danger: r ? dangerOf(r) : null }; }) };
+  },
+  prepare(t, inputId, optionId, more) {
+    if (!loadConfig().askFromWidget) return { ok: false, code: 'OFF' };
+    if (TourMain.isDemoId(inputId)) return { ok: false, code: 'VALIDATION' };
+    const req = readRequests().find((r) => r.id === inputId);
+    if (!req) return { ok: false, code: 'GONE' };
+    const s = threadSession(t);
+    if (!s || t.source !== 'claude' || req.sessionId !== s.sessionId || req.host !== s.host) {
+      console.log(`[thread] cross-session answer refused: ${req.id}`);
+      return { ok: false, code: 'NOT_FOUND' };
+    }
+    if (typeof req.decisionHash !== 'string') return { ok: false, code: 'NOT_READY' };
+    const answer = rebuildAnswer(req, optionId, more);
+    if (!answer) return { ok: false, code: 'VALIDATION' };
+    return {
+      ok: true, hash: req.decisionHash, danger: dangerOf(req), flagged: homeAnswerRefusal(req, optionId),
+      write() {
+        const w = AnswerFile.writeAnswer(REQUESTS_DIR, req.id, answer.decision, { by: 'thread', extra: answer.extra, key: keyFor(req.id), decisionHash: req.decisionHash });
+        console.log(`[answer] ${req.kind || 'permission'} ${req.tool} ${req.id}: ${optionId} → ${w.ok ? answer.decision : `not sent (${w.error})`} (thread)`);
+        setTimeout(broadcastStatus, 250);
+        return w;
+      },
+    };
+  },
+};
 if (CHAT_PREVIEW) {
   const SidebarRows = require('./src/overview-sidebar-rows');
   ThreadMain = require('./src/thread-main').createThreadMain({
@@ -2383,6 +2424,7 @@ if (CHAT_PREVIEW) {
     openInTasks: (taskId) => { if (!devMockReady) return false; openBuddy('tasks'); return buddyWin?.tasksReveal?.(taskId) ?? false; },
     // This computer's own session only; a paired device's session never resolves to a target.
     goToTerminal: threadGoToTerminal,
+    hook: threadHook,
   });
   ThreadMain.register(ipcMain);
   // Redesign R2b-2: the new chat, Home's task box bound to its own document (src/newchat-main.js).
@@ -3388,6 +3430,7 @@ function broadcastStatus() {
     maybeRoam(st);
     maybeRandomEvent(st);
   } catch (e) { console.log('[status]', e.message); }
+  try { ThreadMain?.inputsChanged(); } catch (e) { console.log('[thread]', e.message); }
 }
 
 // ── Roaming: walk to the terminal's Dock icon and knock ────────────────────
@@ -4732,6 +4775,8 @@ function homeAnswerRefusal(req, optionId) {
   if (!/^allow/.test(optionId)) return false;
   try { return AutoRules.danger(req) !== null; } catch { return true; }
 }
+// The answer an option stands for, rebuilt from the request file: the widget's and a thread's (R4-2) are the same call.
+const rebuildAnswer = (req, optionId, m) => PendingInputs.answerFor(req, String(optionId), { answers: m.answers, content: m.content, message: m.message });
 ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   if (!inputSenderOk(e)) return { ok: false, error: 'not allowed' };
   // Answering from the widget is a setting: off means off, even for a request file still on disk.
@@ -4740,7 +4785,7 @@ ipcMain.handle('answer-input', (e, id, optionId, more = {}) => {
   const req = readRequests().find((r) => r.id === String(id));
   if (!req) return { ok: false, error: 'no longer waiting (answered, timed out, or answer it in the terminal)' };
   const m = more && typeof more === 'object' ? more : {};
-  const answer = PendingInputs.answerFor(req, String(optionId), { answers: m.answers, content: m.content, message: m.message });
+  const answer = rebuildAnswer(req, optionId, m);
   if (!answer) return { ok: false, error: 'not an option for this request' };
   // Enter is decided again here, from the request file, never from the renderer's say-so.
   const oneKey = m.oneKey === true;

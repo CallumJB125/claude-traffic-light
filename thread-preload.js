@@ -5,6 +5,7 @@
 // action). R4-1a: thread:act, a choice on a request main showed this chat
 // (approve once, deny, answer, choose, stop); main checks every key. R4-1b adds
 // approve for this task and switch AI (`ai` to preview, `review` to apply).
+// R4-2: a terminal session's hook requests (read, and answer one; the push is a ping with no data).
 const { contextBridge, ipcRenderer } = require('electron');
 
 const ROW_ID = /^[0-9a-f]{64}$/;
@@ -29,6 +30,14 @@ contextBridge.exposeInMainWorld('threadApi', {
     for (const k of ['action', 'approvalId', 'scope', 'askId', 'answer', 'choiceId', 'ai', 'review']) if (typeof o[k] === 'string') out[k] = o[k];
     if (o.confirmed === true) out.confirmed = true;
     return ipcRenderer.invoke('thread:act', out);
+  },
+  // R4-2: the bound session's waiting requests, and an answer to one of them. `more` is passed as plain data; main checks it.
+  inputs: (row) => ipcRenderer.invoke('thread:inputs', id(row)),
+  onInputsChanged: (cb) => ipcRenderer.on('thread:inputs-changed', (_e, m) => cb(id(m?.id))),
+  answerInput: (row, inputId, optionId, more) => {
+    const out = { id: id(row), inputId: typeof inputId === 'string' ? inputId : '', optionId: typeof optionId === 'string' ? optionId : '' };
+    if (more && typeof more === 'object') out.more = JSON.parse(JSON.stringify(more));
+    return ipcRenderer.invoke('thread:answer-input', out);
   },
   // Back to Board from an ended chat.
   board: () => ipcRenderer.send('thread:board'),

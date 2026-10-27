@@ -278,7 +278,8 @@ test('tasks:* authority is unchanged: the thread webContents is never a Tasks pa
   assert.doesNotMatch(block, /localViews/);
   const preload = fs.readFileSync(path.join(root, 'thread-preload.js'), 'utf8');
   const channels = [...preload.matchAll(/ipcRenderer\.(?:invoke|send|on)\('([^']+)'/g)].map((m) => m[1]).sort();
-  assert.deepEqual(channels, [...CHANNELS, 'thread:board', 'thread:event', 'thread:ready'].sort(), 'the bridge is exactly the thread set: no tasks:*, and its one act is thread:message (R2b-1)');
+  // R4-2 adds main's data-free ping, thread:inputs-changed.
+  assert.deepEqual(channels, [...CHANNELS, 'thread:board', 'thread:event', 'thread:ready', 'thread:inputs-changed'].sort(), 'the bridge is exactly the thread set: no tasks:*');
 });
 
 

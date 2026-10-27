@@ -60,10 +60,30 @@ function fakeTasks() {
   };
 }
 
+// R4-2: main's hook side (main.js threadHook), faked at the request-file boundary. One request per session;
+// prepare() refuses another session's, and write() is the one place an answer leaves (logged as an effect).
+function fakeHook(effects, { requests = [{ id: 'req-1', sessionId: 's-1', hash: 'dh-1', danger: null, kind: 'permission' }], answering = true, flagged = () => false } = {}) {
+  const hook = {
+    requests, answering, writes: [],
+    checkMore: (m) => !!m && typeof m === 'object' && !Array.isArray(m) && Object.keys(m).every((k) => ['answers', 'content', 'message', 'anyway'].includes(k)) && (!('anyway' in m) || m.anyway === true),
+    inputs: (t) => ({ answering: hook.answering, items: hook.requests.filter((r) => r.sessionId === t.sessionId).map((r) => ({ input: { id: r.id, session: r.sessionId, kind: r.kind, source: 'hook', answerable: true, options: [{ id: 'allow', label: 'Allow once' }, { id: 'deny', label: 'Deny' }] }, hash: r.hash, danger: r.danger })) }),
+    prepare(t, inputId, optionId) {
+      if (!hook.answering) return { ok: false, code: 'OFF' };
+      const r = hook.requests.find((x) => x.id === inputId);
+      if (!r) return { ok: false, code: 'GONE' };
+      if (r.sessionId !== t.sessionId) return { ok: false, code: 'NOT_FOUND' };
+      if (!['allow', 'deny'].includes(optionId)) return { ok: false, code: 'VALIDATION' };
+      return { ok: true, hash: r.hash, danger: r.danger, flagged: flagged(r, optionId) === true, write: () => { hook.writes.push([inputId, optionId]); effects.push(['answer', inputId, optionId]); return { ok: true }; } };
+    },
+  };
+  return hook;
+}
+
 // The real index.js thread lifecycle + attach() + threadContext(), in a vm.
-function world({ targets = { [A]: { kind: 'task', taskId: 'task-a' }, [B]: { kind: 'task', taskId: 'task-b' }, [SESSION]: { kind: 'session', source: 'claude', sessionId: 's-1', origin: 'iTerm' } }, tasks = fakeTasks(), now } = {}) {
+function world({ targets = { [A]: { kind: 'task', taskId: 'task-a' }, [B]: { kind: 'task', taskId: 'task-b' }, [SESSION]: { kind: 'session', source: 'claude', sessionId: 's-1', origin: 'iTerm' } }, tasks = fakeTasks(), now, hook: hookOpts } = {}) {
   const win = fakeWindow();
   const effects = [];
+  const hook = fakeHook(effects, hookOpts);
   const retired = [];
   let thread = null;
   const ctx = {
@@ -98,13 +118,14 @@ function world({ targets = { [A]: { kind: 'task', taskId: 'task-a' }, [B]: { kin
     openInTasks: async (taskId) => { effects.push(['tasks', taskId]); return true; },
     goToTerminal: async (s) => { effects.push(['terminal', s.sessionId]); return { ok: true }; },
     copy: (t) => effects.push(['copy', t]),
+    hook,
     ...(now ? { now } : {}),
   });
   thread.register(ipc);
   const call = (name, e, ...a) => ipc.handlers[name](e, ...a);
   const doc = () => { const v = ctx.peek().threadView; return v ? { sender: v.webContents, senderFrame: v.webContents.mainFrame } : null; };
-  return { ctx, win, tasks, effects, retired, thread, ipc, call, doc, peek: () => ctx.peek() };
+  return { ctx, win, tasks, effects, retired, thread, ipc, call, doc, hook, peek: () => ctx.peek() };
 }
 
 
-module.exports = { world, fakeContents, fakeWindow, fakeTasks, between, A, B, DEVICE, SESSION, root, src };
+module.exports = { world, fakeHook, fakeContents, fakeWindow, fakeTasks, between, A, B, DEVICE, SESSION, root, src };
