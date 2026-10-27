@@ -20,7 +20,7 @@ const winSrc = read('buddy-window/index.js');
 // ── the table ──────────────────────────────────────────────────────────────
 
 test('every channel the Settings preload exposes has exactly one row, and the rows name a real pane or none', () => {
-  const channels = [...preloadSrc.matchAll(/(?:invoke|send)\('([a-z:-]+)'/g)].map((m) => m[1]).filter((c) => c !== 'settings:go-pane');
+  const channels = [...preloadSrc.matchAll(/(?:invoke|send)\('([a-z:-]+)'/g)].map((m) => m[1]).filter((c) => c !== 'settings:go-pane' && c !== 'settings:go-account');
   assert.ok(channels.length > 50, 'found the preload channels');
   for (const c of new Set(channels)) assert.ok(c in SP.CHANNEL_PANE, `${c} needs a row in CHANNEL_PANE`);
   for (const [c, p] of Object.entries(SP.CHANNEL_PANE)) {

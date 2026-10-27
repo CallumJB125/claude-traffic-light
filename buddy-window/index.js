@@ -232,6 +232,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   let hubDocument = 0;
   let infoView = null;
   let accountView = null;
+  let accountFromSheet = false;
   let accountLoad = Promise.resolve();
   let accountLoadGeneration = 0;
   const localViews = new Map(); // page id → its own view; the lifecycle below keeps only the recent ones alive
@@ -655,10 +656,12 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     // Flow changes can arrive while the initial account navigation is still
     // loading. Serialize loads and skip superseded screens so an earlier
     // navigation cannot leave its URL/renderer behind the current flow.
+    // Captured NOW, at request time: a later select() clears the flag, but this load was asked for while it was set.
+    const query = chatFirst === true && accountFromSheet ? { screen, back: '1' } : { screen };
     const view = accountView, generation = ++accountLoadGeneration;
     accountLoad = accountLoad.catch(() => {}).then(async () => {
       if (!win || view !== accountView || generation !== accountLoadGeneration || view.webContents.isDestroyed()) return;
-      await view.webContents.loadFile(path.join(DIR, 'account.html'), { query: { screen } });
+      await view.webContents.loadFile(path.join(DIR, 'account.html'), { query });
     }).catch((e) => log('account page load failed', e.message));
     attach(accountView);
   }
@@ -1073,9 +1076,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // A page, or with the dev chat preview on a Settings pane (R8-1: not in PAGES, so the ids do not exist with it off).
   const pageOf = (id) => pageById(id) ?? (chatFirst === true ? paneById(id) ?? usagePaneById(id) : null);
 
-  function select(id) {
+  function select(id, { fromSheet = false } = {}) {
     const page = pageOf(id);
     if (!page) return;
+    accountFromSheet = fromSheet === true; // the account page's Back to Settings: only for a visit that began in the sheet (R8-3c-2)
     if (page.kind === 'window') { openWindow(page.window); return; }
     setupLocalGeneration++;
     tasksGeneration++;
@@ -1093,7 +1097,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
 
   const fromSidebar = (e) => sidebar && e.sender === sidebar.webContents && isLocalPage(e.senderFrame?.url ?? '');
   const fromInfo = (e) => infoView && e.sender === infoView.webContents && isLocalPage(e.senderFrame?.url ?? '');
-  const fromAccount = (e) => accountView && e.sender === accountView.webContents && isLocalPage(e.senderFrame?.url ?? '');
+  const fromAccount = (e) => accountView && e.sender === accountView.webContents && e.senderFrame === accountView.webContents.mainFrame && isLocalPage(e.senderFrame?.url ?? '');
 
   function onSelect(e, id) {
     if (!fromSidebar(e)) return;
@@ -1318,6 +1322,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // R8-1: a Settings pane opens another pane. Navigation only: pane documents only, a closed id list, nothing else opens.
   const fromSettingsPane = (e) => SettingsPanes.OWNERS.some((p) => { const wc = localViews.get(`settings:${p}`)?.webContents; return !!wc && e.sender === wc && e.senderFrame === wc.mainFrame && isLocalPage(e.senderFrame?.url ?? ''); });
   if (chatFirst === true) ipcMain.on('settings:go-pane', (e, pane) => { if (fromSettingsPane(e) && SettingsPanes.isOwner(pane)) select(`settings:${pane}`); });
+  // R8-3c-2: the sheet nav's Account & team / This Mac / Team. Navigation only, from a settings.html pane, a closed id map; select() does what a
+  // sidebar click does (the flow decides which screen it lands on). No data goes back.
+  const fromSettingsHtmlPane = (e) => SettingsPanes.PANES.some((p) => { const wc = localViews.get(`settings:${p}`)?.webContents; return !!wc && e.sender === wc && e.senderFrame === wc.mainFrame && isLocalPage(e.senderFrame?.url ?? ''); });
+  if (chatFirst === true) ipcMain.on('settings:go-account', (e, id) => { if (fromSettingsHtmlPane(e) && typeof id === 'string' && Object.hasOwn(SettingsPanes.ACCOUNT_NAV, id)) select(SettingsPanes.ACCOUNT_NAV[id], { fromSheet: true }); });
   if (chatFirst === true) ipcMain.on('buddy:open-newchat', (e) => { if (fromSidebar(e)) openNewChat(); });
   // R7-2: the Usage tab strip's one effect: one of the five tabs, from the strip itself, while it is showing.
   if (chatFirst === true) ipcMain.on('usage-tabs:select', (e, ...args) => {
@@ -1382,6 +1390,12 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   ipcMain.handle('buddy:continue-in', async (e, cardId) => {
     if (!fromHubView(e) || !continueIn) return null;
     try { return await continueIn({ load: async () => (await sessionBridge.localHandover(cardId))?.markdown ?? null, window: win, showSessions: () => select('sessions') }); } catch { return null; }
+  });
+  // R8-3c-2: Back to Settings on the account page when the visit began in the sheet. No arguments, one fixed target, the account view only.
+  if (chatFirst === true) ipcMain.handle('buddy:acct:back-to-settings', (e, ...args) => {
+    if (!fromAccount(e) || args.length !== 0) return { ok: false, error: 'Not allowed.' };
+    select(`settings:${SettingsPanes.HOME_PANE}`);
+    return { ok: true };
   });
   ipcMain.handle('buddy:acct:captureEnabled', (e, on) => {
     if (!fromAccount(e) || typeof on !== 'boolean' || !captureEnabled) return { ok: false, error: 'Not allowed.' };

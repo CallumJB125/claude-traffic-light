@@ -32,7 +32,7 @@ test('the two documents are sheet pages with their own file and preload, outside
   assert.ok(SP.isOwner('widget-look') && SP.isOwner('character'));
   assert.equal(SP.isPane('widget-look'), false);
   assert.deepEqual(SP.CONFIG_OWNERS.filter((p) => ['widget-look', 'character'].includes(p)), [], 'they never use get-config / save-config');
-  assert.deepEqual(SP.NAV.slice(-7), ['widget-rules', 'widget-look', 'character', 'phone-pairing', 'aitools-setup', 'account-plan', 'account-sync']);
+  assert.deepEqual(SP.NAV.slice(-10, -3), ['widget-rules', 'widget-look', 'character', 'phone-pairing', 'aitools-setup', 'account-plan', 'account-sync']);
   assert.deepEqual({ ...SP.SHEET_TARGET }, { widget: 'widget-look', hatch: 'character', lights: 'widget-rules', settings: 'general', phone: 'phone-pairing', aitools: 'aitools-setup', upgrade: 'account-plan', sync: 'account-sync' });
   for (const [oldId, pane] of Object.entries(SP.SHEET_TARGET)) {
     assert.ok(Pages.pageById(oldId), `${oldId} is an old page`);

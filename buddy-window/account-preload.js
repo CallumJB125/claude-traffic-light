@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('buddyAccount', {
   keepAwakeSet: (enabled, mode) => ipcRenderer.invoke('keepawake:set', { enabled: !!enabled, ...(mode ? { mode: str(mode) } : {}) }),
   openClients: () => call('openClients'),
   go: (screen) => call('go', str(screen)),
+  // Only drawn when main loaded the page with back=1 (the visit began in the Settings sheet); fixed target, no argument.
+  backToSettings: () => call('back-to-settings'),
   hub: (address) => call('hub', str(address)),
   confirm: (yes) => call('confirm', !!yes),
   email: (email) => call('email', str(email)),

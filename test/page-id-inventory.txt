@@ -7,6 +7,7 @@ account	buddy-window/dev-walk.js	select	3
 account	buddy-window/pages.js	PAGES	1
 account	main.js	openBuddy	1
 account	test-visual/planner.spec.js	select	1
+account	test/sheet-docs-d.test.js	select	2
 agents-find	buddy-window/pages.js	PAGES	1
 agents-find	main.js	openBuddy	2
 aitools	buddy-window/pages.js	PAGES	1
@@ -21,6 +22,7 @@ board	test-visual/ownership.spec.js	select	1
 board	test-visual/thread.spec.js	data-page	1
 board	test-visual/two-mode.spec.js	select	1
 board	test/account-hub-routing.test.js	select	5
+board	test/sheet-docs-d.test.js	select	2
 board	test/thread-authority.test.js	select	1
 board	test/thread-confirm.test.js	select	2
 board:calendar	buddy-window/pages.js	PAGES	1

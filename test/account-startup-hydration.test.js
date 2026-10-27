@@ -20,7 +20,7 @@ function block(from, to) {
 }
 const vaultBlock = block('  const credentialStorage = createSecureStorage(safeStorage);', '  const clients =');
 const restoreBlock = block('  function resumeRestored(origin) {', '  // ── hub view');
-const selectBlock = block('  function select(id) {', '  const fromSidebar =');
+const selectBlock = block('  function select(id, { fromSheet = false } = {}) {', '  const fromSidebar =');
 const switchBlock = block('  function switchWorkspace(id, { show = true } = {}) {', '  async function onSignOut');
 const resumeMethod = block('    resumeDevices() {', '    /** Subscribe to validated runner events');
 const stopMethod = block('    async stop() {', '    status: () =>');

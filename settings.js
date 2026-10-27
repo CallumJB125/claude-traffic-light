@@ -301,6 +301,7 @@
     function showSection(id) {
       if (!SECTIONS.includes(id)) id = 'general';
       // R8-1: a pane document never swaps panes in place; another pane is another document (main opens it, pane senders only).
+      if (PANE && window.SettingsPanes.ACCOUNT_NAV[id]) { window.settingsApi.goAccount?.(id); return; }
       if (PANE && id !== PANE) { window.settingsApi.goPane?.(id); return; }
       for (const p of document.querySelectorAll('.pane')) p.hidden = p.dataset.section !== id;
       for (const b of document.querySelectorAll('#section-nav button')) { if (b.dataset.go === id) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }
