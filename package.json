@@ -200,6 +200,7 @@
       "tasks-preload.js",
       "thread.html",
       "thread.js",
+      "thread-shared.js",
       "thread.css",
       "thread-transcript.css",
       "thread-preload.js",

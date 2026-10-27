@@ -108,6 +108,9 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
   directoryChanged(){if(stopped||!authority||!same(authority,true))return;try{authority.contents.send('overview:directory-changed');}catch{}},
   // Redesign R2a: main-only, for the thread document's guard (src/thread-main.js).
   threadTarget:id=>stopped?null:service.threadTarget(id),
+  // T2: a teammate's shared session as a thread. Bind once from the shared list; read on the thread's own cadence.
+  sharedThreadBind:(id,alive)=>stopped?Promise.resolve(false):service.sharedThreadBind(id,()=>!stopped&&(typeof alive!=='function'||alive()===true)),
+  sharedThreadRead:(id,alive)=>stopped?Promise.resolve(null):service.sharedThreadRead(id,()=>!stopped&&(typeof alive!=='function'||alive()===true)),
   // R2b-2: main-only, for the new chat's handoff (src/newchat-main.js).
   threadForTask:id=>stopped?null:service.threadForTask(id),
   // R7-1: main-only, for the new chat's Needs-you rows (src/newchat-home-main.js): the sidebar's projection, read with the caller's liveness.

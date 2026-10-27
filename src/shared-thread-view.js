@@ -1,0 +1,49 @@
+'use strict';
+// T2: the thread document's whole view of a teammate's shared session. A fixed
+// projection of one relayed `state` read (team-hub-client inspect) plus the share's
+// current terms. Nothing here is a ref, card id, entry id, selection, capability
+// or hub object; the renderer sets every string with textContent.
+const MAX_DELIVERIES = 10; // the newest; the hub client already keeps at most 20
+const MAX_TEXT = 4000;
+const MAX_RESPONSE = 16000; // the relay's own bound for a response
+const STALE_MS = 90_000;
+const STATES = Object.freeze(['queued', 'accepted', 'acknowledged', 'echoed', 'responding', 'replied', 'completed', 'interrupted', 'unconfirmed', 'failed', 'unknown']);
+const CATEGORIES = Object.freeze(['Thinking', 'Running a command', 'Editing files', 'Reading files', 'Searching', 'Using a tool', 'Coordinating agents']);
+const TOP_KEYS = Object.freeze(['header', 'banner', 'activity', 'deliveries', 'status', 'generation', 'canSendLater']);
+const HEADER_KEYS = Object.freeze(['title', 'owner', 'initials', 'provider', 'scope', 'expiresAt', 'fake']);
+const DELIVERY_KEYS = Object.freeze(['id', 'by', 'text', 'state', 'response', 'at']);
+
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f‪-‮⁦-⁩]/g;
+const prose = (v, max) => (typeof v === 'string' ? v.replace(CONTROL, '').slice(0, max) : '');
+const line = (v, max) => prose(v, max).replace(/\s+/g, ' ').trim();
+const initialsOf = (name) => { const w = line(name, 80).split(' ').filter(Boolean); return ((w[0]?.[0] ?? '?') + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase().slice(0, 2); };
+
+function project({ state, share, route, now }) {
+  const s = state && typeof state === 'object' ? state : {};
+  const provider = line(s.provider?.label, 60) || 'AI';
+  const owner = line(route.ownerName, 80) || 'Teammate';
+  const scope = share?.scope === 'interact' ? 'interact' : 'watch';
+  const exp = typeof share?.expiresAt === 'string' ? Date.parse(share.expiresAt) : NaN;
+  const act = s.activity && typeof s.activity === 'object' && CATEGORIES.includes(s.activity.label) && Number.isSafeInteger(s.activity.observed_at) ? s.activity : null;
+  const ageMs = act ? Math.max(0, now - act.observed_at) : null;
+  const deliveries = (Array.isArray(s.deliveries) ? s.deliveries : []).slice(-MAX_DELIVERIES).map((d) => (d && typeof d === 'object' && typeof d.id === 'string' && d.id ? {
+    id: line(d.id, 80),
+    by: line(d.by, 80) || null,
+    text: prose(d.text, MAX_TEXT),
+    state: STATES.includes(d.state) ? d.state : 'unknown',
+    response: prose(d.response, MAX_RESPONSE),
+    at: Number.isSafeInteger(d.sentAt) ? d.sentAt : null,
+  } : null)).filter(Boolean);
+  return {
+    header: { title: line(s.task_title, 120) || `${owner}'s ${provider} session`, owner, initials: initialsOf(owner), provider, scope, expiresAt: Number.isFinite(exp) ? new Date(exp).toISOString() : null, fake: route.fake === true },
+    banner: true,
+    activity: { category: act ? act.label : null, ageMs, stale: act ? ageMs > STALE_MS : false },
+    deliveries,
+    status: ['ready', 'working', 'compacting', 'ended'].includes(s.status) ? s.status : 'ready',
+    generation: Number.isSafeInteger(s.generation) ? s.generation : 0,
+    canSendLater: scope === 'interact',
+  };
+}
+
+module.exports = { project, TOP_KEYS, HEADER_KEYS, DELIVERY_KEYS, MAX_DELIVERIES, MAX_TEXT, MAX_RESPONSE, STALE_MS, STATES, CATEGORIES };

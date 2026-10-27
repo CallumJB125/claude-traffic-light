@@ -13,6 +13,7 @@ const Ids=require('./focus/ids');
 const Surface=require('./session-surface');
 const {sessionRow}=require('./session-row');
 const {createTeamSessionControls}=require('./team-session-controls');
+const SharedThread=require('./shared-thread-view');
 const {personHandoffs}=require('./handoff-people');
 const FollowupSchedules=require('./recipe-schedules');
 const PROVIDERS=Object.freeze({codex:'Codex',claude:'Claude Code','claude-code':'Claude Code',cursor:'Cursor',gemini:'Gemini',hermes:'Hermes',opencode:'OpenCode',copilot:'Copilot',ollama:'Ollama',lmstudio:'LM Studio','llama.cpp':'llama.cpp',local:'Local model'});
@@ -176,6 +177,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
  function threadTarget(rowId){
   if(typeof rowId!=='string'||!/^[0-9a-f]{64}$/.test(rowId))return null;
   const known=lastRefs.get(rowId)??null;
+  if(!known&&sharedRoutes.has(rowId))return sharedTargetOf(rowId);
   if(!known||known.ref.origin==='chat'){
    let snap=null;try{snap=managed();}catch{snap=null;}
    if(snap?.conn?.status==='connected'&&Array.isArray(snap.tasks)){
@@ -406,6 +408,58 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   }
   return{viewerScope:scope,teams,teamsTotal:Number.isSafeInteger(got.teamsTotal)&&got.teamsTotal>=teams.length?got.teamsTotal:teams.length,entries,partial:got.partial===true};
  }
+
+ // T2: a teammate's shared session opened as a read-only thread. The route (hub, ref, team, card) stays in main and
+ // never reaches a renderer. A thread reads through hub.inspect only: no selection, token, controls or route state, so
+ // Overview's epochs, handles and presence are untouched. Every use re-checks the hub and the signed-in viewer.
+ const sharedRoutes=new Map();
+ const sharedLive=r=>{const hub=safe(teamHub,null);return!!r&&hub===r.hub&&viewerOf(hub)?.id===r.viewerId;};
+ function sharedTargetOf(rowId){
+  const r=sharedRoutes.get(rowId);
+  if(!sharedLive(r)){sharedRoutes.delete(rowId);return null;}
+  return{kind:'shared',teamId:r.team,cardId:r.cardId,fake:r.fake,vm:null};
+ }
+ async function sharedThreadBind(rowId,alive=()=>true){
+  if(typeof rowId!=='string'||!/^[0-9a-f]{64}$/.test(rowId))return false;
+  const hub=safe(teamHub,null),viewer=viewerOf(hub);
+  if(!hub||!viewer||typeof hub.sharedEntries!=='function'||typeof hub.inspect!=='function')return false;
+  const ok=()=>{try{return alive()===true;}catch{return false;}},still=()=>ok()&&safe(teamHub,null)===hub&&viewerOf(hub)?.id===viewer.id;
+  let got;try{got=await hub.sharedEntries(viewer);}catch{got=null;}
+  if(!still()||!object(got)||!Array.isArray(got.teams))return false;
+  const origin=passiveOrigin(hub);
+  for(const t of got.teams.filter(t=>object(t)&&typeof t.id==='string').slice(0,4)){
+   const hubEntries=Array.isArray(t.entries)?t.entries:[];
+   const model=directoryModel.team({team:{key:teamKey(origin,t.id),name:clean(t.name,80)||'Team',id:t.id},viewer,member:true,personal:[],hubEntries});
+   for(const e of model.entries){
+    if(stable(['shared',e.id])!==rowId)continue;
+    const ref=model.refs.get(e.id);
+    if(!ref||typeof ref.ref!=='string'||!UUID.test(ref.ref))return false;
+    const x=hubEntries.find(h=>object(h)&&h.ref===ref.ref),cardId=typeof x?.card?.id==='string'&&x.card.id&&x.card.id.length<=128?x.card.id:null;
+    sharedRoutes.delete(rowId);
+    sharedRoutes.set(rowId,{hub,viewerId:viewer.id,team:t.id,ref:ref.ref,cardId,scope:ref.scope,ownerName:clean(e.owner?.name,80)||'Teammate',fake:hub.fake===true});
+    while(sharedRoutes.size>20)sharedRoutes.delete(sharedRoutes.keys().next().value);
+    return true;
+   }
+  }
+  return false;
+ }
+ // → the fixed projection, {gone,reason} when the share is over, {unavailable} for a failed read, null when this read is stale.
+ async function sharedThreadRead(rowId,alive=()=>true){
+  const r=sharedRoutes.get(rowId);
+  if(!sharedLive(r)){sharedRoutes.delete(rowId);return{gone:true,reason:'unavailable'};}
+  const hub=r.hub,viewer=viewerOf(hub);
+  const ok=()=>{try{return alive()===true;}catch{return false;}},still=()=>ok()&&sharedRoutes.get(rowId)===r&&sharedLive(r);
+  let out;try{out=await hub.inspect(viewer,r.team,r.ref);}catch{out=null;}
+  if(!still())return null;
+  if(!object(out))return{unavailable:true};
+  if(out.ok!==true){
+   if(out.status==='forbidden'||out.status==='stale'){sharedRoutes.delete(rowId);return{gone:true,reason:out.status==='forbidden'?'removed':'ended'};}
+   return{unavailable:true};
+  }
+  if(!object(out.state))return{unavailable:true};
+  if(out.state.status==='ended'){sharedRoutes.delete(rowId);return{gone:true,reason:'ended'};}
+  return SharedThread.project({state:out.state,share:object(out.share)?out.share:null,route:r,now:now()});
+ }
  // Message a teammate's session shared with the selected team to send.
  async function teamMessage(request){
   if(!closed(request,['id','text'])||typeof request.id!=='string'||!/^[0-9a-f]{40}$/.test(request.id)||typeof request.text!=='string'||request.text.includes('\0')||!request.text.trim()||request.text.trim().length>4000||Buffer.byteLength(request.text.trim())>8192)return response('invalid');
@@ -423,7 +477,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   if(!alive())return{ok:false,status:'unconfirmed',error:'The view changed. Inspect the receipt before sending again.'};
   return out?.ok===true?out:{ok:false,status:['forbidden','stale','busy','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
- return{snapshot,passiveRows,clearViewing,passiveTeamRows,viewerScope,threadTarget,threadForTask,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
+ return{snapshot,passiveRows,clearViewing,sharedThreadBind,sharedThreadRead,passiveTeamRows,viewerScope,threadTarget,threadForTask,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
   followupReview,followupEnqueue,
   coordinatorRequestOwner:coordinator.requestOwner,coordinatorRemoteList:coordinator.remoteList,coordinatorRemoteSend:coordinator.remoteSend,coordinatorRemoteCancel:coordinator.remoteCancel,coordinatorRemoteReplace:coordinator.remoteReplace,
   coordinatorInventory:coordinator.inventory,coordinatorPropose:coordinator.propose,coordinatorConfirm:coordinator.confirm,coordinatorResults:coordinator.results,coordinatorCancel:coordinator.cancel,
@@ -431,6 +485,6 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   followupCancel:r=>{const owner=followupScope(),epoch=routeEpoch;return actionPermitted()&&closed(r,['id'])&&followups?followups.cancel(r.id,()=>actionPermitted()&&owner===followupScope()&&epoch===routeEpoch):followupUnavailable();},
   followupDiscard:r=>{const owner=followupScope(),epoch=routeEpoch;return actionPermitted()&&closed(r,['id'])&&followups?followups.discard(r.id,()=>actionPermitted()&&owner===followupScope()&&epoch===routeEpoch):followupUnavailable();},
   pumpFollowups:()=>actionPermitted()&&followups?followups.advance(resolveFollowup):Promise.resolve(),
-  open:r=>action(r),message:r=>action(r,true),invalidate(){clearViewing();epoch++;directoryEpoch++;routeEpoch++;teamView=null;handles.clear();teamRefs.clear();personalRefs.clear();followupSelections.clear();controls.invalidate();coordinator?.invalidate();}};
+  open:r=>action(r),message:r=>action(r,true),invalidate(){clearViewing();sharedRoutes.clear();epoch++;directoryEpoch++;routeEpoch++;teamView=null;handles.clear();teamRefs.clear();personalRefs.clear();followupSelections.clear();controls.invalidate();coordinator?.invalidate();}};
 }
 module.exports={createOverviewService,PROVIDERS,provider,response};

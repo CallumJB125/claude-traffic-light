@@ -270,7 +270,9 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     const target = await sharedTarget(viewerArg, teamId, ref);
     if (target.error) return target.error;
     const out = await readShared(target.row, viewerArg);
-    return viewerArg?.id === who && sameViewer(viewerArg) ? out : failed('forbidden', REASONS.forbidden);
+    if (!(viewerArg?.id === who && sameViewer(viewerArg))) return failed('forbidden', REASONS.forbidden);
+    // T2: the share's current terms ride with a good read, so a thread never shows a cached scope.
+    return out.ok ? { ...out, share: { scope: target.row.scope, expiresAt: target.row.expiresAt } } : out;
   }
   async function act(viewerArg, teamId, ref, action, requestId, fresh = () => true) {
     const who = viewerArg?.id;
@@ -664,6 +666,21 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     } finally { clearTimeout(cutTimer); }
   }
 
+  // T2: the shared list alone, as passiveSessions' rows, with no state read and no board read. A thread binds
+  // from this: one relay call (listShared), the same entries a sidebar row id is derived from.
+  async function sharedEntries(viewerArg) {
+    const result = { teams: [] };
+    if (!sameViewer(viewerArg)) return result;
+    const all = await listShared();
+    const ids = [];
+    for (const r of all) if (!ids.includes(r.team.id) && ids.length < PASSIVE_TEAMS) ids.push(r.team.id);
+    for (const id of ids) {
+      const mine = all.filter((r) => r.team.id === id).slice(0, MAX_PER_TEAM);
+      result.teams.push({ id, name: mine[0].team.name, entries: mine.map(baseEntry) });
+    }
+    return result;
+  }
+
   async function send(viewerArg, teamId, ref, text, requestId, fresh = () => true) {
     const message = typeof text === 'string' ? text.trim() : '';
     if (!message || message.includes('\0') || message.length > MAX_TEXT || Buffer.byteLength(message) > MAX_BYTES) return failed('invalid', REASONS.invalid);
@@ -752,7 +769,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     };
   }
 
-  return Object.defineProperty({ teams, sessions, passiveSessions, inspect, act, send, proposals, onChange, viewer }, 'origin', { value: new URL(base).origin, enumerable: true });
+  return Object.defineProperty({ teams, sessions, passiveSessions, sharedEntries, inspect, act, send, proposals, onChange, viewer }, 'origin', { value: new URL(base).origin, enumerable: true });
 }
 
 module.exports = { createTeamHubClient, parseBase };
