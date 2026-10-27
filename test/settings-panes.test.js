@@ -42,7 +42,7 @@ test('every config key has exactly one owner: the defaults and everything the pa
   for (const k of savedKeys) assert.ok(SP.isPane(SP.KEY_OWNER[k]), `${k} is saved by the page-wide save, so a pane must own it`);
   // The pages' own saves (voice, compaction) are inside owned keys too.
   assert.equal(SP.KEY_OWNER.voice, 'general');
-  assert.equal(SP.KEY_OWNER.compaction, 'advanced');
+  assert.equal(SP.KEY_OWNER.compaction, 'aitools');
 });
 
 test('helpers: ownership, reads, whole-write check, and a hostile ?pane= value gains nothing', () => {
@@ -109,7 +109,7 @@ test('main.js: no unbound settingsOnly(...) guard is left, and guards never read
   assert.doesNotMatch(helper, /searchParams|location|\.query|\.url/, 'authority is the page id main created, not anything the page sent');
   assert.doesNotMatch(mainSrc, /settingsPane\(\s*['"`]?\*|settings:\*/, 'no generic settings:* predicate');
   // Each wiring site names exactly one pane (a variable would let one site go generic).
-  for (const m of mainSrc.matchAll(/settingsPane\(([^)]*)\)/g)) assert.match(m[1], /^'(general|notifications|spend|widget|privacy|advanced|none)'$|^pane$/, m[0]);
+  for (const m of mainSrc.matchAll(/settingsPane\(([^)]*)\)/g)) assert.match(m[1], /^'(general|notifications|aitools|widget|spend|privacy|phone|advanced|none)'$|^pane$/, m[0]);
 });
 
 test('every guarded channel is bound to the pane its table row names', () => {
@@ -128,12 +128,13 @@ test('every guarded channel is bound to the pane its table row names', () => {
     [/data-rights-main\.js'\)\.register\(\{ utilityHandle, allowed: settingsPane\('privacy'\)/, 'data:*'],
     [/spend-safety-main\.js'\)\.install\(\{[^\n]*allowed: \(e\) => analyticsSender\(e\) \|\| settingsPane\('spend'\)\(e\)/, 'spend-safety:*'],
     [/deploy-status-main\.js'\)\.install\(\{[^\n]*allowedSettings: settingsPane\('advanced'\)/, 'deploy:*'],
-    [/cli-install\.js'\)\.register\(\{ utilityHandle, allowed: settingsPane\('advanced'\)/, 'cli-install*'],
-    [/GhosttyDockInstall\.register\(\{ utilityHandle, allowed: \(e\) => settingsPane\('advanced'\)\(e\) \|\| fromUtilityPage\(e, 'home'\)/, 'ghostty-dock-install'],
-    [/const fromNativeBoardSettings = settingsPane\('advanced'\);/, 'native-board-*'],
+    [/cli-install\.js'\)\.register\(\{ utilityHandle, allowed: settingsPane\('general'\)/, 'cli-install*'],
+    [/GhosttyDockInstall\.register\(\{ utilityHandle, allowed: \(e\) => settingsPane\('aitools'\)\(e\) \|\| fromUtilityPage\(e, 'home'\)/, 'ghostty-dock-install'],
+    [/const fromNativeBoardSettings = settingsPane\('aitools'\);/, 'native-board-*'],
     [/const backupsSenderOk = settingsPane\('privacy'\);/, 'backups-*'],
     [/settingsAllowed: settingsPane\('privacy'\)/, 'policy:*'],
     [/settingsOnly: settingsPane\('none'\)/, 'burst:*'],
+    [/ipcMain\.handle\('health-fix', \(e, id\) => \{\n  if \(!settingsPane\('advanced'\)\(e\)\)/, 'health-fix (Health is Advanced, not AI tools)'],
   ];
   for (const [re, what] of bound) assert.match(mainSrc, re, what);
   assert.equal(SP.CHANNEL_PANE['policy:state'], 'privacy');
@@ -305,7 +306,9 @@ async function boot({ pane, search, config = {} }) {
   });
   await new Promise((r) => setTimeout(r, 600));
   const w = dom.window;
-  const shown = [...w.document.querySelectorAll('.pane')].filter((p) => !p.hidden && p.style.display !== 'none' && !p.classList.contains('hidden') && w.getComputedStyle(p).display !== 'none').map((p) => p.id);
+  // What is on screen: the top-level elements of every visible .pane that are not switched off, by their data-pane.
+  const on = (el) => w.getComputedStyle(el).display !== 'none';
+  const shown = [...w.document.querySelectorAll('.pane')].filter((p) => !p.hidden && on(p)).flatMap((p) => [...p.children].filter(on).map((c) => c.dataset.pane ?? 'untagged'));
   return { w, calls, timers, errors, shown, close: () => w.close() };
 }
 // The api method each channel is reached by, so the boot test can compare what a pane called with the table.
@@ -317,7 +320,8 @@ test('a pane page shows only its own pane, calls only its own channels, and star
   for (const pane of SP.PANES) {
     const b = await boot({ pane });
     try {
-      assert.deepEqual(b.shown, [`pane-${pane}`], `${pane} shows only its pane`);
+      assert.ok(b.shown.length > 0, `${pane} shows something`);
+      assert.deepEqual([...new Set(b.shown)], [pane], `${pane} shows only its own sections`);
       assert.deepEqual(b.errors, [], `${pane} boots clean`);
       for (const c of b.calls) {
         const ch = METHOD_CHANNEL[c.name];
@@ -337,8 +341,9 @@ test('a pane that owns nothing of a loader starts none of it (timers and calls),
     const names = (b) => new Set(b.calls.map((c) => c.name));
     for (const n of ['health', 'remoteDevices', 'cliStatus', 'gitStatus', 'signalEndpoint', 'interactionHostStatus', 'privacyText', 'compactionStats', 'busyStatus']) {
       assert.ok(!names(spend).has(n), `spend must not call ${n}`);
-      assert.ok(!names(general).has(n), `general must not call ${n}`);
+      if (n !== 'cliStatus') assert.ok(!names(general).has(n), `general must not call ${n}`);
     }
+    assert.ok(names(general).has('cliStatus'), 'Command line is in General now');
     assert.ok(names(spend).has('spend'));
     assert.ok(names(general).has('voiceStatus'));
     assert.ok(!names(general).has('spend'));
@@ -349,6 +354,8 @@ test('the old page (no query) still shows every section and runs every loader', 
   const b = await boot({ pane: null });
   try {
     assert.ok(b.shown.length >= 1);
+    assert.deepEqual([...new Set(b.shown)], ['general'], 'the old page still shows one div.pane at a time (its first)');
+    assert.equal(b.w.document.querySelectorAll('#section-nav button').length, 6, 'and keeps its six-button nav');
     const names = new Set(b.calls.map((c) => c.name));
     for (const n of ['spend', 'voiceStatus', 'cliStatus', 'gitStatus', 'signalEndpoint', 'compactionStats', 'getConfig']) assert.ok(names.has(n), n);
     assert.equal(b.w.SettingsPanes.current, null);
@@ -368,7 +375,7 @@ test('hostile ?pane= values render the old page and gain nothing; the main side 
 
 const settle = (ms = 400) => new Promise((r) => setTimeout(r, ms));
 const lastSave = (b) => { const s = b.calls.filter((c) => c.name === 'saveConfig'); return s.length ? s[s.length - 1].args[0] : null; };
-const firstControl = (b, pane) => b.w.document.querySelector(`#pane-${pane} input[type=checkbox][id]:not([id^=voice-]):not([id^=compact-]):not([id^=spend-]):not([id^=safety-]):not([id^=native-board-]):not(#busyCalendar)`);
+const firstControl = (b, pane) => b.w.document.querySelector(`[data-pane="${pane}"] input[type=checkbox][id]:not([id^=voice-]):not([id^=compact-]):not([id^=spend-]):not([id^=safety-]):not([id^=native-board-]):not(#busyCalendar)`);
 
 test('a pane saves only the keys it owns: the whole form is never sent from a pane, and a round trip changes exactly the edited key', async () => {
   for (const pane of SP.PANES) {
@@ -376,7 +383,7 @@ test('a pane saves only the keys it owns: the whole form is never sent from a pa
     let base;
     try {
       const c = firstControl(probe, pane);
-      if (!c) { probe.close(); continue; }
+      if (!c || !SP.ownedKeys(pane).some((k) => !['voice', 'compaction'].includes(k))) { probe.close(); continue; }
       probe.calls.length = 0;
       c.dispatchEvent(new probe.w.Event('change', { bubbles: true }));
       await settle();
@@ -422,11 +429,132 @@ test('a pane that is shown again re-reads config: a value another sender changed
     await settle();
     assert.ok(b.calls.some((c) => c.name === 'getConfig'), 're-read on show');
     assert.equal(box.checked, true, 'the new value shows');
-    const other = b.w.document.querySelector('#pane-notifications input[type=checkbox][id]:not(#oneKeyApprove):not(#busyCalendar)');
+    const other = b.w.document.querySelector('[data-pane="notifications"] input[type=checkbox][id]:not(#oneKeyApprove):not(#busyCalendar)');
     b.calls.length = 0;
     other.checked = !other.checked;
     other.dispatchEvent(new b.w.Event('change', { bubbles: true }));
     await settle();
     assert.equal(lastSave(b).oneKeyApprove, true, 'the next save does not revert it');
   } finally { b.close(); }
+});
+
+// ── R8-2a: the sections are re-split by data-pane ──────────────────────────
+
+// §9 of plan-r8.md as built: h2 (or block id) -> pane. 'none' = the old page only.
+const SECTION_TABLE = {
+  Sessions: 'general', Voice: 'general', 'How much to show': 'general', 'Command line': 'general',
+  Alerts: 'notifications', 'Permission prompts': 'notifications', 'Busy & Focus': 'notifications',
+  'Claude Code helpers': 'aitools', 'Boards in your AI apps': 'aitools', Compactor: 'aitools', 'Other tools': 'aitools',
+  Widget: 'widget',
+  Spend: 'spend', 'Runaway sessions': 'spend',
+  Privacy: 'privacy', 'Crash reports': 'privacy', Policies: 'privacy', Backups: 'privacy',
+  'Sharing and remote control': 'phone', 'Remote devices': 'phone',
+  Health: 'advanced', 'Git and CI': 'advanced', 'Agent bus': 'advanced',
+};
+
+function settingsDoc() { return new JSDOM(read('settings.html')).window.document; }
+
+test('every top-level element of every pane carries a data-pane, each section is whole, and the table is the one in the plan', () => {
+  const doc = settingsDoc();
+  const seen = new Map();
+  let section = null;
+  for (const el of doc.querySelectorAll('.pane > *')) {
+    const pane = el.dataset.pane;
+    assert.ok(pane === 'none' || SP.isPane(pane), `${el.tagName}#${el.id} has no valid data-pane (${pane})`);
+    const name = el.tagName === 'H2' ? el.textContent.trim() : el.id === 'crash-reports' ? 'Crash reports' : el.id === 'policies' ? 'Policies' : el.id === 'backups' ? 'Backups' : el.id === 'health' ? 'Health' : null;
+    if (name) { section = name; seen.set(name, new Set()); }
+    assert.ok(section, 'content before the first heading');
+    seen.get(section).add(pane);
+  }
+  for (const [name, panes] of seen) {
+    const nothingNew = [...panes].filter((p) => p !== 'none');
+    assert.equal(nothingNew.length, 1, `${name} is in exactly one pane: ${[...panes]}`);
+    assert.equal(nothingNew[0], SECTION_TABLE[name], name);
+  }
+  assert.deepEqual([...seen.keys()].sort(), Object.keys(SECTION_TABLE).sort(), 'no section lost or invented');
+  // The second "Permission prompts" heading is the answering block; both are Notifications.
+  assert.equal(doc.getElementById('data-rights').dataset.pane, 'privacy', 'Your data (a section, not a heading) follows Privacy');
+  assert.equal(doc.getElementById('answering-title').dataset.pane, 'notifications');
+  assert.equal(doc.getElementById('askFromWidget-moved').closest('[data-pane]').dataset.pane, 'none', 'the "moved to Widget" note is for the old page only');
+});
+
+test('a key is only ever written by controls in the pane that owns it (no key spans two panes)', () => {
+  const doc = settingsDoc();
+  const js = read('settings.js');
+  const save = js.slice(js.indexOf('async function saveAll()'), js.indexOf('const body = PANE'));
+  const ids = { workingStaleMinutes: ['workingStaleMinutes'], stuckMinutes: ['stuckMinutes'], waitingStaleHours: ['waitingStaleHours'] };
+  let checked = 0;
+  let key = null;
+  for (const line of save.split('\n')) {
+    const m = line.match(/^ {8}([A-Za-z]+):/);
+    if (m) key = m[1];
+    if (!key) continue;
+    for (const id of [...line.matchAll(/getElementById\('([\w-]+)'\)/g)].map((x) => x[1]).concat([...line.matchAll(/commaList\('(\w+)'/g)].map((x) => x[1]))) {
+      const el = doc.getElementById(id);
+      if (!el) continue;
+      const pane = el.closest('[data-pane]')?.dataset.pane;
+      assert.equal(pane, SP.KEY_OWNER[key], `${key} is written by #${id}, which sits in ${pane}, but ${SP.KEY_OWNER[key]} owns it`);
+      checked++;
+    }
+  }
+  assert.ok(checked > 35, `checked ${checked} controls`);
+  assert.ok(Object.keys(ids).length);
+});
+
+test('nothing in a pane document survives on screen from another pane (the switch-off class), and a pane\'s nav lists every pane', async () => {
+  const b = await boot({ pane: 'phone' });
+  try {
+    const buttons = [...b.w.document.querySelectorAll('#section-nav button')].map((x) => x.dataset.go);
+    assert.deepEqual(buttons, SP.PANES);
+    assert.equal(b.w.document.getElementById('answering-title').textContent, 'Answering from the widget');
+    for (const el of b.w.document.querySelectorAll('.pane > *')) {
+      assert.equal(el.classList.contains('not-pane'), el.dataset.pane !== 'phone', `${el.tagName}#${el.id}`);
+    }
+  } finally { b.close(); }
+  const old = await boot({ pane: null });
+  try {
+    assert.equal(old.w.document.querySelectorAll('.not-pane').length, 0, 'the old page switches nothing off');
+    assert.equal(old.w.document.getElementById('answering-title').textContent, 'Permission prompts');
+  } finally { old.close(); }
+});
+
+// ── deep links (ledger 20) ─────────────────────────────────────────────────
+
+function deepLinks({ preview }) {
+  const code = between(mainSrc, 'const SECTION_PANE = ', '// Preferences scrolled to its Health section');
+  const calls = [];
+  const ctx = { CHAT_PREVIEW: preview, openBuddy: (id) => calls.push(['open', id]), buddyWin: { sendToPage: (...a) => calls.push(['send', ...a]) } };
+  vm.runInNewContext(`${code}\nglobalThis.out = { openSettingsAt, SECTION_PANE };`, ctx);
+  return { ...ctx.out, calls };
+}
+
+test('deep links: gate off is exactly the old calls; gate on selects the pane from a closed table; unknown sections do nothing new', () => {
+  for (const section of ['widget', 'health']) {
+    const off = deepLinks({ preview: false });
+    off.openSettingsAt(section);
+    assert.deepEqual(off.calls, [['open', 'settings'], ['send', 'settings', 'show-section', section]], `gate off ${section}`);
+  }
+  const w = deepLinks({ preview: true });
+  w.openSettingsAt('widget');
+  assert.deepEqual(w.calls, [['open', 'settings:widget']], 'the pane is the destination, no push needed');
+  const h = deepLinks({ preview: true });
+  h.openSettingsAt('health');
+  assert.deepEqual(h.calls, [['open', 'settings:advanced'], ['send', 'settings:advanced', 'show-section', 'health']], 'Health scroll push goes to the Advanced pane only');
+  for (const bad of ['__proto__', 'constructor', 'nope', '', undefined, null, 5]) {
+    const x = deepLinks({ preview: true });
+    x.openSettingsAt(bad);
+    assert.deepEqual(x.calls, [['open', 'settings'], ['send', 'settings', 'show-section', bad]], `unknown ${String(bad)} falls back to the old call`);
+  }
+  for (const pane of Object.values(deepLinks({ preview: true }).SECTION_PANE)) assert.ok(SP.isPane(pane));
+  assert.match(mainSrc, /function showHealth\(\) \{ openSettingsAt\('health'\); \}/, 'the tray item');
+  assert.match(mainSrc, /ipcMain\.handle\('open-widget-settings', \(e\) => \{ if \(!inputSenderOk\(e\)\) return false; openSettingsAt\('widget'\); return true; \}\);/);
+});
+
+test('route() takes a pane id only with the preview on', () => {
+  const off = world(false); off.api.route(`settings:${'advanced'}`);
+  assert.deepEqual(off.calls, []);
+  const on = world(true); on.api.route(`settings:${'advanced'}`);
+  assert.deepEqual(on.calls, [['state'], ['local', 'settings:advanced']]);
+  const bad = world(true); bad.api.route(`settings:${'nope'}`);
+  assert.deepEqual(bad.calls, [], 'not a pane, not a page');
 });

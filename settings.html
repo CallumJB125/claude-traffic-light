@@ -76,6 +76,7 @@
   .pane > h2:first-child { border-top: none; margin-top: 0; padding-top: 0; }
   .pane { display: flex; flex-direction: column; gap: 18px; }
   .pane[hidden] { display: none; }
+  .not-pane { display: none !important; }
   button.link { background: none; border: none; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
   #section-nav { display: flex; flex-wrap: wrap; gap: 6px; }
   #section-nav button { background: var(--panel-2); color: var(--text); border: 1px solid var(--line-input); font-weight: 500; padding: 5px 12px; }
@@ -257,9 +258,9 @@
   <div class="hint" id="autosave-hint">Changes save as you make them.</div>
 
   <div class="pane" id="pane-general" data-section="general">
-  <h2 class="dev-only">Sessions</h2>
+  <h2 class="dev-only" data-pane="general">Sessions</h2>
 
-  <div class="field dev-only">
+  <div class="field dev-only" data-pane="general">
     <label for="workingStaleMinutes">Working session considered closed after</label>
     <div class="row">
       <input type="number" id="workingStaleMinutes" min="1" max="60" aria-describedby="hint-working" />
@@ -268,7 +269,7 @@
     <div class="hint" id="hint-working">A green (actively working) session pings constantly, so silence this long really does mean it's gone.</div>
   </div>
 
-  <div class="field dev-only">
+  <div class="field dev-only" data-pane="general">
     <label for="stuckMinutes">Show "Stuck?" after</label>
     <div class="row">
       <input type="number" id="stuckMinutes" min="0" max="60" aria-describedby="hint-stuck" />
@@ -277,7 +278,7 @@
     <div class="hint" id="hint-stuck">A working session that has sent no hook or activity event for this long turns the light amber with an hourglass (⌛) and says "Stuck?" with its last tool. It clears the moment the session moves, and never applies to a session that is waiting for you or finished. It is part of the closed-after window above, not a second timer: the session stays listed for the longer of the two.</div>
   </div>
 
-  <div class="field dev-only">
+  <div class="field dev-only" data-pane="general">
     <label for="waitingStaleHours">Waiting session considered closed after</label>
     <div class="row">
       <input type="number" id="waitingStaleHours" min="1" max="24" aria-describedby="hint-waiting" />
@@ -287,8 +288,8 @@
   </div>
 
   <!-- ── Voice (F7 push-to-talk questions) ── self-contained: saves on change -->
-  <h2>Voice</h2>
-  <div class="field">
+  <h2 data-pane="general">Voice</h2>
+  <div class="field" data-pane="general">
     <label for="voice-hotkey">Hold to ask a question</label>
     <div class="row">
       <select id="voice-hotkey" aria-describedby="voice-hint"><option value="">Off — pick a key</option></select>
@@ -306,19 +307,19 @@
   </div>
 
   <div class="pane" id="pane-notifications" data-section="notifications" hidden>
-  <h2>Alerts</h2>
+  <h2 data-pane="notifications">Alerts</h2>
 
-  <div class="field">
+  <div class="field" data-pane="notifications">
     <label class="row"><input type="checkbox" id="sounds" /> Play sounds</label>
     <div class="hint">Every sound Plexiform makes: a rule's alert when the light turns amber or red, and the knock. Off silences them all.</div>
   </div>
 
-  <div class="field dev-only" id="agent-mail">
+  <div class="field dev-only" id="agent-mail" data-pane="notifications">
     <label class="row"><input type="checkbox" id="agentMailInbox" aria-describedby="agent-mail-hint" /> Show teammates' AI questions and hand-offs to me (agent mail)</label>
     <div class="hint" id="agent-mail-hint">Off by default. When on, while you are signed in to your team, Plexiform asks your team server every minute for questions and hand-offs teammates' AIs sent you and shows them on Sessions → Agent mail, with a notification for each. Nothing reaches your AI unless you choose Ask my AI (it sees only the question, never your code), and a hand-off runs only after you accept it and confirm its full text. Messages your own AI drafts for teammates, and hand-offs your AI asks for, are never sent or started until you press Send or Confirm, whether this is on or off. See the privacy notice, "Agent mail".</div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="notifications">
     <label class="row"><input type="checkbox" id="notifyOnStates" /> Send a notification when something needs you</label>
     <div class="hint">A macOS notification once each time a state starts, so you hear about it even when the widget is hidden. Click it to jump to that terminal.</div>
     <div id="notify-kinds" role="group" aria-label="Notify me about">
@@ -329,7 +330,7 @@
     </div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="notifications">
     <label class="row"><input type="checkbox" id="quietEnabled" /> Quiet hours</label>
     <div class="row">
       <label for="quietStart">From</label> <input type="time" id="quietStart" />
@@ -347,24 +348,24 @@
     <div class="hint">Sounds, notifications and knocks stay quiet in this window; the light keeps showing every state. A session that needs your input still adds a silent count to the app badge. A night that starts on a ticked day runs until the morning. Snooze from the tray or widget menu.</div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="notifications">
     <label for="mutedProjects">Muted projects</label>
     <textarea id="mutedProjects" rows="3" aria-describedby="hint-muted" spellcheck="false"></textarea>
     <div class="hint" id="hint-muted">One per line: a folder path (covers everything under it) or a folder or repo name. Muted projects make no sound and send no notification; their light state still shows. The tray menu can mute the current project in one click.</div>
   </div>
 
-  <h2>Permission prompts</h2>
-  <div class="field">
+  <h2 data-pane="notifications">Permission prompts</h2>
+  <div class="field" data-pane="none">
     <div class="hint" id="askFromWidget-moved">Answering permission prompts from the widget moved to the <button type="button" class="link" id="go-widget-answering">Widget</button> tab. Allowing read-only requests with one key, below, needs answering on.</div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="notifications">
     <label class="row"><input type="checkbox" id="oneKeyApprove" /> Allow one-key approval for read-only requests</label>
     <div class="hint">Off by default. When on, pressing Enter on an open permission request in the Waiting list allows it, but only for reading inside the project (Read, Grep, Glob, LS, and plain ls, pwd, git status or git log). Anything else, writes and edits included, always needs a click on Allow. Nothing is ever approved without a key press, and each one-key approval is recorded in one-key-approvals.jsonl in the data folder. Needs "Answer permission prompts from the widget".</div>
   </div>
 
-  <h2>Busy &amp; Focus</h2>
-  <div class="field">
+  <h2 data-pane="notifications">Busy &amp; Focus</h2>
+  <div class="field" data-pane="notifications">
     <label class="row"><input type="checkbox" id="busyHold" /> Hold pings while I'm busy</label>
     <div class="hint">In a meeting or a Focus, amber and green sounds, notifications and knocks wait; red (permission asks, limits, offline) still comes through. The lights keep updating. When you're free a “While you were away” card sums up what happened — click a line to go there. Per rule, change it in Lights → <i>While you're busy</i>; <b>busy</b> and <b>free</b> are also rule conditions.</div>
     <label class="row"><input type="checkbox" id="slackPresence" /> Set my Slack status from Plexiform (Working / AI waiting on me / Away)</label>
@@ -377,13 +378,13 @@
       <div class="busy-state" id="busy-focus-state"></div>
     </div>
   </div>
-  <div class="field">
+  <div class="field" data-pane="notifications">
     <label for="busyIcsUrl">Calendar feed (ICS), optional</label>
     <input type="url" id="busyIcsUrl" placeholder="https://… or webcal://… .ics" spellcheck="false" aria-describedby="hint-ics" />
     <div class="busy-state" id="busy-ics-state" style="padding-left:0"></div>
     <div class="hint" id="hint-ics">For a calendar that isn't in macOS Calendar: paste its secret iCal address (Google: Settings › your calendar › “Secret address in iCal format”). Refreshed every 10 minutes; events marked Free are ignored.</div>
   </div>
-  <div class="field">
+  <div class="field" data-pane="notifications">
     <label for="busyFocusShortcut">Focus Shortcut, optional</label>
     <input type="text" class="wide" id="busyFocusShortcut" placeholder="e.g. Plexiform Focus" spellcheck="false" aria-describedby="hint-focus" />
     <div class="hint" id="hint-focus">macOS only lets Plexiform read a Focus you turn on by hand, and only where it can read the Focus files (often it can't without Full Disk Access, which Plexiform never asks for). Scheduled Focus isn't visible either. For both, make a Shortcut with the single action <b>Get Current Focus</b> and type its name here.</div>
@@ -391,8 +392,8 @@
   </div>
 
   <div class="pane" id="pane-spend" data-section="spend" hidden>
-  <h2>Spend</h2>
-  <div class="field">
+  <h2 data-pane="spend">Spend</h2>
+  <div class="field" data-pane="spend">
     <label for="spend-mode">How you pay for Claude Code</label>
     <div class="row">
       <select id="spend-mode" aria-describedby="hint-spend-mode">
@@ -404,7 +405,7 @@
     <div class="hint" id="spend-now" role="status" aria-live="polite"></div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="spend">
     <label for="safety-plan">Your Claude plan</label>
     <div class="row">
       <select id="safety-plan" aria-describedby="safety-detected">
@@ -420,7 +421,7 @@
     <div class="hint">On Pro or Max you are not charged per token. Plexiform then shows an estimate of how close you are to your plan's 5-hour and weekly limits instead of dollar amounts.</div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="spend">
     <label for="safety-caps">Daily cap per project</label>
     <textarea id="safety-caps" rows="3" placeholder="my-app = 20" aria-describedby="hint-safety-caps"></textarea>
     <div class="hint" id="hint-safety-caps">One project folder per line, then = and dollars a day. Over its cap, you get one notification that day and an alert on the widget.</div>
@@ -428,7 +429,7 @@
     <div class="hint" id="safety-status" role="status" aria-live="polite"></div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="spend">
     <div id="budget-label" class="group-label">Budget</div>
     <div class="row wrap" role="group" aria-labelledby="budget-label">
       <label class="row" for="spend-daily">$ <input type="number" id="spend-daily" min="0" step="1" /> a day</label>
@@ -442,8 +443,8 @@
     <div class="hint" id="hint-budget">0 turns a budget off. Weeks start on Monday. Near it, a finished turn shows amber with money eyes; over it, red.</div>
   </div>
 
-  <h2>Runaway sessions</h2>
-  <div class="field">
+  <h2 data-pane="spend">Runaway sessions</h2>
+  <div class="field" data-pane="spend">
     <div id="runaway-label" class="group-label">Runaway session</div>
     <div class="row wrap" role="group" aria-labelledby="runaway-label">
       <label class="row" for="spend-runaway-dollars">$ <input type="number" id="spend-runaway-dollars" min="0" step="1" /></label>
@@ -458,30 +459,30 @@
   </div>
 
   <div class="pane" id="pane-widget" data-section="widget" hidden>
-  <h2>How much to show</h2>
-  <div class="field">
+  <h2 data-pane="general">How much to show</h2>
+  <div class="field" data-pane="general">
     <label class="row"><input type="checkbox" id="simpleMode" aria-describedby="hint-simple" /> Simple mode</label>
     <div class="hint" id="hint-simple">For building apps with Claude on your own. Hides team features, the detailed rule fields, helper chips, session timers and token limits, and keeps Home to what needs you. Turn it off to see everything.</div>
   </div>
-  <div class="field">
+  <div class="field" data-pane="general">
     <label class="row"><input type="checkbox" id="homeComposer" aria-describedby="hint-home-composer" /> Show the task box on Home</label>
     <div class="hint" id="hint-home-composer">Give Plexiform a task from Home and it picks Claude or Codex, then waits for you to press Run. Turn it off if you only use your AI tools directly; New task… in the menu bar then opens Tasks.</div>
   </div>
 
-  <h2>Widget</h2>
-  <div class="hint">A live preview, its size and the corner it sits in are on the <b>Widget</b> page in the sidebar. Both pages change the same settings.</div>
+  <h2 data-pane="widget">Widget</h2>
+  <div class="hint" data-pane="widget">A live preview, its size and the corner it sits in are on the <b>Widget</b> page in the sidebar. Both pages change the same settings.</div>
 
-  <div class="field">
+  <div class="field" data-pane="widget">
     <label class="row"><input type="checkbox" id="showWidget" /> Show the floating widget</label>
     <div class="hint">Turn this off to live in the menu bar only.</div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="widget">
     <label class="row"><input type="checkbox" id="menuBarMode" /> Claude in the menu bar</label>
     <div class="hint">Animates the menu bar icon with the same lights, eyes, pose and costume as the widget.</div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="widget">
     <label class="row">Low-power mode
       <select id="lowPower">
         <option value="auto">Automatic</option>
@@ -492,34 +493,34 @@
     <div class="hint">Stops confetti, idle pet loops, blinking and the lamp glow to save battery and CPU; status lights and colours keep working. Automatic turns it on while on battery and on Windows.</div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="widget">
     <label class="row"><input type="checkbox" id="seasonal" /> Seasonal costumes</label>
     <div class="hint">Santa hat and snow in December, pumpkin at Halloween, bunny ears at Easter — unless a rule already picked a costume.</div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="widget">
     <label class="row"><input type="checkbox" id="showTasks" /> Show task progress on the sign</label>
     <div class="hint">A tiny 3/7 on the crossbar while Claude works through a task list.</div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="widget">
     <label class="row"><input type="checkbox" id="roam" /> Run to the terminal and knock</label>
     <div class="hint">When something needs you and the terminal isn't in front, Claude runs to its Dock icon, knocks, and runs home. Again every 10 minutes while ignored.</div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="widget">
     <label class="row"><input type="checkbox" id="randomEvents" /> Rare events</label>
     <div class="hint">A UFO, a portal or a meteor, roughly once an hour while working, and on milestones.</div>
   </div>
 
-  <h2 class="dev-only">Claude Code helpers</h2>
-  <div class="field dev-only">
+  <h2 class="dev-only" data-pane="aitools">Claude Code helpers</h2>
+  <div class="field dev-only" data-pane="aitools">
     <div class="hint">When a Claude Code session starts subagents, teammates or background workers, each gets a small chip under Claude while it runs. Hover Claude to see who's doing what.</div>
     <label class="row"><input type="checkbox" id="showAgents" /> Show helper chips under Claude</label>
     <label class="row"><input type="checkbox" id="agentRoster" /> Show the list of helpers when hovering</label>
   </div>
 
-  <div class="field dev-only">
+  <div class="field dev-only" data-pane="aitools">
     <div id="which-agents" class="group-label">Which Claude Code helpers</div>
     <div role="group" aria-labelledby="which-agents" class="stack">
     <label class="row"><input type="checkbox" id="kind-subagent" /> Subagents</label>
@@ -528,7 +529,7 @@
     </div>
   </div>
 
-  <div class="field dev-only">
+  <div class="field dev-only" data-pane="aitools">
     <label for="agentChipSize">Chip size</label>
     <div class="row">
       <select id="agentChipSize">
@@ -539,22 +540,22 @@
     </div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="aitools">
     <div class="group-label" id="legend-title">What the lights mean</div>
     <ul class="legend" id="legend" aria-labelledby="legend-title"></ul>
     <div class="hint">To change what the widget does for each, open <b>Settings → Widget rules</b> in the sidebar.</div>
   </div>
 
-  <h2 id="answering-title">Permission prompts</h2>
-  <div class="field">
+  <h2 id="answering-title" data-pane="notifications">Permission prompts</h2>
+  <div class="field" data-pane="notifications">
     <label class="row"><input type="checkbox" id="askFromWidget" /> Answer permission prompts from the widget</label>
     <div class="hint">When Claude asks to run a tool, Allow / Deny buttons appear under the widget and the request text above it. If you don't answer in time, the normal terminal prompt takes over. A Claude Code session that was already open when this went on keeps asking in the terminal: restart it to answer here.</div>
   </div>
   </div>
 
   <div class="pane" id="pane-privacy" data-section="privacy" hidden>
-  <h2>Privacy</h2>
-  <div class="field" id="privacy">
+  <h2 data-pane="privacy">Privacy</h2>
+  <div class="field" id="privacy" data-pane="privacy">
     <div class="hint">Plexiform reads your sessions on this machine. Your prompts, conversation logs and code stay here; the notice below lists exactly what leaves, and when. It is a draft pending legal review.</div>
     <details id="leaves-machine" class="pv" open>
       <summary>What leaves your machine, in plain words</summary>
@@ -600,7 +601,7 @@
   </div>
 
   <!-- Your data: self-contained; its script is settings-data.js, main side src/data-rights-main.js. -->
-  <section class="field" id="data-rights" aria-labelledby="data-rights-title">
+  <section class="field" id="data-rights" aria-labelledby="data-rights-title" data-pane="privacy">
     <h2 id="data-rights-title">Your data</h2>
     <div class="hint">Everything Plexiform keeps about you on this Mac, by kind. Export a copy or delete it here; nothing is sent anywhere.</div>
     <ul id="data-list" aria-label="Data Plexiform keeps on this Mac"></ul>
@@ -632,8 +633,8 @@
     <div class="hint" id="data-receipt"></div>
   </section>
 
-  <h2 class="dev-only">Sharing and remote control</h2>
-  <div class="field dev-only" id="sharing">
+  <h2 class="dev-only" data-pane="phone">Sharing and remote control</h2>
+  <div class="field dev-only" id="sharing" data-pane="phone">
     <label class="row"><input type="checkbox" id="teamSessionSharing" /> Share sessions started on a team workspace with that team</label>
     <div class="hint">Team members can send messages using your provider account and quota; viewers can watch. The team server relays message and reply text. Personal sessions stay separate. Stop an individual share from Overview.</div>
     <label class="row"><input type="checkbox" id="explainMode" aria-describedby="explain-mode-hint" /> Explain mode: plain-English help for people who don't read code</label>
@@ -650,7 +651,7 @@
   </div>
 
   <!-- Crash reports: self-contained; its script is settings-crash-reports.js. -->
-  <div class="field" id="crash-reports">
+  <div class="field" id="crash-reports" data-pane="privacy">
     <h3 class="pv-h">Crash reports</h3>
     <label class="row"><input type="checkbox" id="crash-opt-in" /> Allow sending crash reports</label>
     <div class="hint">Off by default. Sends new crash reports to Plexiform: app version, OS family, processor type, time and error type or renderer exit reason/code. No messages, stack traces, paths, prompts, account identifiers or file contents are sent. Reports are kept for up to 30 days. Your network address is visible to the server and its hosting provider. Older consent must be renewed. Export diagnostics includes more local detail.</div>
@@ -665,7 +666,7 @@
   </div>
 
   <!-- Policies: self-contained; its script is settings-policies.js. -->
-  <div class="field" id="policies">
+  <div class="field" id="policies" data-pane="privacy">
     <h3 class="pv-h">Policies</h3>
     <div class="hint">A policy says what AI sessions may do in a repo: tools they may not use, paths they may not edit, a daily spend cap, and whether prompts with secrets or personal numbers are refused. Claude Code sessions are checked by Plexiform's hooks on this Mac; nothing is sent anywhere. A repo's <code>.plexiform/policy.json</code> wins over your default. A file that can't be read is ignored with a warning, never enforced.</div>
     <label for="policy-repo">Apply to</label>
@@ -691,7 +692,7 @@
     <div class="hint" id="policy-status" role="status" aria-live="polite"></div>
   </div>
 
-  <details id="backups">
+  <details id="backups" data-pane="privacy">
     <summary><h2 id="backups-title">Backups</h2><span class="toggle" aria-hidden="true"></span></summary>
     <div id="backups-body">
     <div class="hint">Your settings, rules, faces and usage history are copied to a folder outside Plexiform's data folder, so deleting that folder doesn't lose them. Secrets and live session state are never copied.</div>
@@ -709,8 +710,8 @@
   </div>
 
   <div class="pane" id="pane-advanced" data-section="advanced" hidden>
-  <h2>Boards in your AI apps</h2>
-  <div class="field">
+  <h2 data-pane="aitools">Boards in your AI apps</h2>
+  <div class="field" data-pane="aitools">
     <label for="native-board-app">App</label>
     <select id="native-board-app">
       <option value="codex">Codex desktop app and CLI</option>
@@ -729,26 +730,26 @@
     <div class="hint" id="native-board-hint" role="status" aria-live="polite">Choose boards to use in your AI app. Keep Plexiform open and signed in. New local sessions pick up the connection; active sessions may need restarting in their app. Hosted chats require a remote connector.</div>
   </div>
 
-  <h2>Git and CI</h2>
-  <div class="field">
+  <h2 data-pane="advanced">Git and CI</h2>
+  <div class="field" data-pane="advanced">
     <label class="row"><input type="checkbox" id="gitSignals" /> Light up for pull requests and CI</label>
     <div class="hint">Review requests, changes requested on your PRs, and GitHub Actions runs you started (CI on the branch you're on, deploys anywhere), checked with your own <code>gh</code> login about every 90 seconds while a session is open. Each shows once, for a few minutes.</div>
     <div class="hint" id="git-status" role="status" aria-live="polite"></div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="advanced">
     <label for="gitRepos">Also watch</label>
     <input type="text" id="gitRepos" placeholder="owner/repo, owner/other" aria-describedby="hint-git-repos" />
     <div class="hint" id="hint-git-repos">Open sessions' repos are found from their git remote; add any others here.</div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="advanced">
     <label for="gitDeployWorkflows">Deploy workflows</label>
     <input type="text" id="gitDeployWorkflows" placeholder="Any with deploy, release or publish in the name" aria-describedby="hint-git-deploy" />
     <div class="hint" id="hint-git-deploy">Workflow names that count as a deploy, comma-separated.</div>
   </div>
 
-  <div class="field" id="deploys">
+  <div class="field" id="deploys" data-pane="advanced">
     <label class="row"><input type="checkbox" id="deploySignals" /> Show deploys for Vercel, Netlify and Cloudflare projects</label>
     <div class="hint">For an open session's project that has been linked with <code>vercel</code>, <code>netlify</code> or <code>wrangler</code>, Plexiform asks that host for the latest deploy with your own signed-in CLI, or with a token you paste below. Building, live and failed show on Home and in the widget.</div>
     <div class="row"><label for="deploy-token-vercel">Vercel token</label> <input type="password" id="deploy-token-vercel" autocomplete="off" data-provider="vercel" /> <button type="button" data-save="vercel">Use token</button> <button type="button" data-remove="vercel">Remove</button></div>
@@ -759,8 +760,8 @@
   </div>
 
   <!-- Compactor (src/compaction.js) -->
-  <h2>Compactor</h2>
-  <div class="field">
+  <h2 data-pane="aitools">Compactor</h2>
+  <div class="field" data-pane="aitools">
     <label class="row"><input type="checkbox" id="compact-enabled" aria-describedby="hint-compact" /> Compact long sessions in the background</label>
     <div class="hint" id="hint-compact">When a session gets full, the older part of the conversation is summarised while you keep working, and the summary is in place before your next message. Only applies to sessions Plexiform started; sessions you started in a terminal can't be compacted from here.</div>
     <div id="compact-providers-label" class="group-label">For</div>
@@ -768,7 +769,7 @@
       <label class="row"><input type="checkbox" id="compact-codex" /> Codex sessions Plexiform started</label>
     </div>
   </div>
-  <div class="field">
+  <div class="field" data-pane="aitools">
     <label for="compact-threshold">Compact when the context is</label>
     <div class="row">
       <input type="range" id="compact-threshold" min="30" max="90" step="5" aria-describedby="hint-compact-threshold" />
@@ -776,7 +777,7 @@
     </div>
     <div class="hint" id="hint-compact-threshold">full. Nothing is summarised (and no model is asked) until a session passes this.</div>
   </div>
-  <div class="field">
+  <div class="field" data-pane="aitools">
     <div class="group-label">What compaction did so far</div>
     <div class="hint" id="compact-saved" role="status" aria-live="polite"></div>
     <div class="hint" id="compact-last"></div>
@@ -785,8 +786,8 @@
     <div class="hint">For sessions you started in a terminal, Claude Code has its own setting: the <code>CLAUDE_AUTOCOMPACT_PCT_OVERRIDE</code> environment variable (for example 55) sets how full the context gets before it compacts itself. Plexiform doesn't change it for you.</div>
   </div>
 
-  <h2>Remote devices</h2>
-  <div class="field" id="remote-devices">
+  <h2 data-pane="phone">Remote devices</h2>
+  <div class="field" id="remote-devices" data-pane="phone">
     <div class="hint">Claude Code on another machine (a server, tmux over SSH) can light this widget: pair the machine here, then run Plexiform's hooks there in reporter mode. Its sessions show under the device's name. Plexiform never opens their folders or jumps to their terminals.</div>
     <label for="remote-name">Pair a device</label>
     <div class="row">
@@ -812,12 +813,12 @@
     <div class="hint">Pairing a phone instead? Use Phone in the sidebar.</div>
   </div>
 
-  <h2>Other tools</h2>
-  <div class="field">
+  <h2 data-pane="aitools">Other tools</h2>
+  <div class="field" data-pane="aitools">
     <div class="hint" id="connect-hint">Connect Cursor, Codex, Gemini CLI and Hermes from AI tools in the sidebar. Anything else can run <code id="emit-path">emit.js</code>, or POST to <code id="endpoint">http://127.0.0.1:47172/signal</code> with an <code>x-buddy-token</code> header set to the contents of <code id="token-path">~/.claude-traffic-light/token</code>.</div>
   </div>
 
-  <div class="field">
+  <div class="field" data-pane="aitools">
     <label class="row">Ghostty Dock
       <select id="ghosttyDock">
         <option value="auto">Use it when installed</option>
@@ -833,14 +834,14 @@
     <div class="hint">Ghostty Dock is a third-party terminal app by Andrew Baker (github.com/andrewbakercloudscale/ghossty-dock) with no license; Plexiform does not include any of it. Install opens Terminal with Andrew's own installer command and runs it only when you press Return there. Once it is installed, clicking a session that runs in it goes to that exact tab, even one Plexiform first saw in another terminal, and a task you take over can open in it. Plexiform only asks it to list its sessions, focus a tab or open a new one, never to type, press keys or read the screen. Whether it was found shows under Health.</div>
   </div>
 
-  <h2>Command line</h2>
-  <div class="field">
+  <h2 data-pane="general">Command line</h2>
+  <div class="field" data-pane="general">
     <div class="hint">The <code>plexiform</code> command shows status, sessions, spend, handovers and anything waiting on you, in a terminal or from Raycast. Add <code>--json</code> for scripts.</div>
     <div class="row"><button type="button" class="secondary" id="cli-install">Install command line tool</button></div>
     <div class="hint" id="cli-status" role="status" aria-live="polite"></div>
   </div>
 
-  <section id="health" aria-labelledby="health-title">
+  <section id="health" aria-labelledby="health-title" data-pane="advanced">
     <h2 id="health-title">Health</h2>
     <div id="health-summary" role="status" aria-live="polite"></div>
     <ul class="checks" id="health-checks"></ul>
@@ -856,8 +857,8 @@
   </section>
 
   <!-- Agent bus (src/agent-bus-main.js, board/AGENT-BUS.md) -->
-  <h2>Agent bus</h2>
-  <div class="field" id="agent-bus-settings">
+  <h2 data-pane="advanced">Agent bus</h2>
+  <div class="field" id="agent-bus-settings" data-pane="advanced">
     <label class="row"><input type="checkbox" id="agentBusEnabled" aria-describedby="hint-agent-bus" /> Let AI tools on this Mac hand work to each other</label>
     <div class="hint" id="hint-agent-bus">An AI session can hand a bounded piece of work to another AI tool here (for example Claude Code to Codex). It starts on its own in a new git worktree with no network access, so it cannot push or open a pull request. Its result goes back to the session that asked. Stop agent bus in the menu bar stops every such run.</div>
     <label class="row"><input type="checkbox" id="agentBusAutoAccept" /> Start handed-off work without asking me</label>

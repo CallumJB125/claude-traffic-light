@@ -247,10 +247,12 @@
         homeComposer: document.getElementById('homeComposer').checked,
       };
       // R8-1: a pane document saves only the keys its pane owns (main refuses a write with any other key, whole).
-      await window.settingsApi.saveConfig(PANE ? window.SettingsPanes.pick(payload, window.SettingsPanes.ownedKeys(PANE)) : payload);
-      if (inPane('privacy')) setTimeout(showInteractionHost, 1500);
+      const body = PANE ? window.SettingsPanes.pick(payload, window.SettingsPanes.ownedKeys(PANE)) : payload;
+      if (PANE && !Object.keys(body).length) return; // this pane's controls write nothing through the page-wide save
+      await window.settingsApi.saveConfig(body);
+      if (inPane('phone')) setTimeout(showInteractionHost, 1500);
       if (inPane('notifications')) setTimeout(showBusy, 1500);
-      if (inPane('advanced')) showRemote(await window.settingsApi.remoteDevices());
+      if (inPane('phone')) showRemote(await window.settingsApi.remoteDevices());
       flash();
       } catch (err) { flash(err); }
     }
@@ -276,7 +278,17 @@
       saving = saving.then(saveAll);
     });
 
-    const SECTIONS = ['general', 'notifications', 'spend', 'widget', 'privacy', 'advanced'];
+    const SECTIONS = PANE ? window.SettingsPanes.PANES : ['general', 'notifications', 'spend', 'widget', 'privacy', 'advanced'];
+    // R8-2a: a pane document shows the elements tagged data-pane=<its pane>, wherever they sit; the old page keeps its six div.pane.
+    if (PANE) {
+      const nav = document.getElementById('section-nav');
+      nav.replaceChildren(...window.SettingsPanes.PANES.map((id) => { const b = document.createElement('button'); b.type = 'button'; b.dataset.go = id; b.textContent = window.SettingsPanes.TITLE[id]; return b; }));
+      for (const p of document.querySelectorAll('.pane')) {
+        for (const c of p.children) c.classList.toggle('not-pane', c.dataset.pane !== PANE);
+        p.dataset.section = [...p.children].some((c) => c.dataset.pane === PANE) ? PANE : '';
+      }
+      document.getElementById('answering-title').textContent = 'Answering from the widget';
+    }
     function showSection(id) {
       if (!SECTIONS.includes(id)) id = 'general';
       // R8-1: a pane document never swaps panes in place; another pane is another document (main opens it, pane senders only).
@@ -300,7 +312,7 @@
       else if (r.blocked) el.textContent = `Something else is already at ${r.link}; Plexiform won't replace it.`;
       else el.textContent = `Creates a link at ${r.link}. You'll be asked to confirm first.`;
     };
-    if (inPane('advanced')) window.settingsApi.cliStatus().then(showCli);
+    if (inPane('general')) window.settingsApi.cliStatus().then(showCli);
     document.getElementById('cli-install').addEventListener('click', async () => showCli(await window.settingsApi.cliInstall()));
     // Ghostty Dock: Install only where it can be installed and isn't yet; Check again when installed but not usable.
     const showDock = (r, note) => {
@@ -317,7 +329,7 @@
         || (r.show === 'recheck' ? `Installed, but not used yet: ${r.reason}.` : r.reason === 'ready' ? 'Installed and in use.' : '');
     };
     const dockAct = async (action) => {
-      if (!inPane('advanced')) return;
+      if (!inPane('aitools')) return;
       try { showDock(await window.settingsApi.ghosttyDock(action)); } catch (err) { showDock({}, err.message); }
     };
     dockAct('status');
@@ -326,7 +338,7 @@
     document.getElementById('ghostty-dock-github').addEventListener('click', () => dockAct('github'));
     document.getElementById('ghosttyDock').addEventListener('change', () => setTimeout(() => dockAct('status'), 300));
     window.settingsApi.onGhosttyDockChanged((r) => { showDock(r); document.getElementById('health-recheck')?.click(); });
-    if (inPane('advanced')) window.settingsApi.signalEndpoint().then((e) => { document.getElementById('endpoint').textContent = `http://127.0.0.1:${e.port}/signal`; document.getElementById('emit-path').textContent = e.emit; if (e.token) document.getElementById('token-path').textContent = e.token; });
+    if (inPane('aitools')) window.settingsApi.signalEndpoint().then((e) => { document.getElementById('endpoint').textContent = `http://127.0.0.1:${e.port}/signal`; document.getElementById('emit-path').textContent = e.emit; if (e.token) document.getElementById('token-path').textContent = e.token; });
     const showGit = (g) => {
       if (!g) return;
       const n = g.repos.length;
@@ -402,9 +414,9 @@
     });
     remoteEl('copy').addEventListener('click', async () => { if (await window.settingsApi.remoteCopyCode(remoteEl('code-text').textContent)) remoteEl('pair-status').textContent = 'Code copied; the clipboard forgets it in a minute.'; });
     remoteEl('done').addEventListener('click', () => { remoteEl('code-text').textContent = ''; remoteEl('code').hidden = true; });
-    if (inPane('advanced')) window.settingsApi.remoteDevices().then(showRemote);
+    if (inPane('phone')) window.settingsApi.remoteDevices().then(showRemote);
     async function showInteractionHost() { document.getElementById('interaction-host-status').textContent = (await window.settingsApi.interactionHostStatus().catch(() => null)) ?? ''; }
-    if (inPane('privacy')) showInteractionHost();
+    if (inPane('phone')) showInteractionHost();
     const pvStatus = document.getElementById('privacy-status');
     const pvDone = (r) => { pvStatus.textContent = !r ? '' : r.error ? r.error : (r.file || r.path) ? `Saved ${r.file || r.path}` : typeof r === 'string' && r ? `Could not open the folder: ${r}` : ''; };
     document.getElementById('privacy-export-stats').addEventListener('click', async () => pvDone(await window.settingsApi.exportStats('json', 60)));
@@ -563,7 +575,7 @@
 
     // ── Compactor ── its own saves. Numbers come only from recorded before/after counts.
     (async () => {
-      if (!inPane('advanced')) return;
+      if (!inPane('aitools')) return;
       const $ = (id) => document.getElementById(`compact-${id}`);
       const NAMES = { codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini', local: 'Local model' };
       const fmt = (n) => Math.abs(n).toLocaleString();

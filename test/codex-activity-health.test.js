@@ -114,7 +114,7 @@ test('Codex health fix requires current Settings and an installed app, and prese
     let handler; let calls = 0;
     vm.runInNewContext(source.slice(start, end), {
       ipcMain: { handle: (_name, fn) => { handler = fn; } },
-      fromNativeBoardSettings: e => e === 'settings', AUTO_INSTALL_HOOKS: installed,
+      settingsPane: () => e => e === 'settings', AUTO_INSTALL_HOOKS: installed,
       app: { isPackaged: packaged },
       Adapters: { get: () => ({ installActivity: () => { calls++; return { ok: succeeds, error: 'fixture refusal' }; } }) },
       os: { homedir: () => '/synthetic' }, HOOK_RUNTIME: {}, healthReport: () => ({ checks: [] }), console: { log() {} },

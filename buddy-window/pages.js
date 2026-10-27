@@ -75,9 +75,8 @@ const PAGES = [
 // Redesign R8-1: the Settings sheet's panes. NOT in PAGES (so with the dev chat preview off no such id exists, and
 // pageById() stays null); index.js consults paneById() only when chatFirst is on. Each pane is its own document
 // (own webContents, own guard); the ?pane= query only chooses what it renders (main builds it from this closed list).
-const PANE_TITLE = Object.freeze({ general: 'General', notifications: 'Notifications', spend: 'Spend and limits', widget: 'Widget', privacy: 'Privacy and data', advanced: 'Advanced' });
 const SETTINGS_PANES = Object.freeze(SettingsPanes.PANES.map((pane) => Object.freeze({
-  id: `settings:${pane}`, title: PANE_TITLE[pane], icon: 'gear', kind: 'local', file: 'settings.html', preload: 'settings-preload.js',
+  id: `settings:${pane}`, title: SettingsPanes.TITLE[pane], icon: 'gear', kind: 'local', file: 'settings.html', preload: 'settings-preload.js',
   query: Object.freeze({ embedded: '1', pane }), group: 'you', unlisted: true, pane,
 })));
 function paneById(id) { return typeof id === 'string' ? SETTINGS_PANES.find((p) => p.id === id) ?? null : null; }

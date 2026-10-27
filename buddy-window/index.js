@@ -1013,6 +1013,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // is never redirected.
   function route(id, from = null) {
     if (chatFirst !== true) { select(id); return; }
+    if (paneById(id)) { select(id); return; } // a Settings pane (R8-1/2): named by main from a closed table
     const target = sectionTarget(id) ?? id;
     const r = resolve(target, { chatFirst: true, from });
     // R8-1: with the preview on, Settings is the sheet (its first pane); the old page stays reachable by its own id elsewhere.
