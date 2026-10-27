@@ -8,7 +8,9 @@ const { test, expect } = require('@playwright/test');
 const { launchApp, embedded, focusMainWindow, snapToPixels } = require('./app');
 const { shortTmp } = require('./tasks-mock');
 
-const SHOT = { threshold: 0.05, stylePath: path.join(__dirname, 'no-hover-chrome.css'), maxDiffPixelRatio: 0.02, timeout: 20000 };
+// No pixel allowance (the repo default, 0): rendered 3x each with a temp HOME, every shot matched its baseline
+// exactly at threshold 0.05 and the renders matched each other.
+const SHOT = { threshold: 0.05, stylePath: path.join(__dirname, 'no-hover-chrome.css'), timeout: 20000 };
 const api = (f) => pathToFileURL(path.join(__dirname, '..', 'board', 'tasks-api', f)).href;
 const window = { resetsAt: Date.now() + 3600e3, status: 'allowed' };
 

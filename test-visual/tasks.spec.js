@@ -9,6 +9,8 @@ const { test, expect } = require('@playwright/test');
 const { launchApp, embedded, focusMainWindow } = require('./app');
 const { startTasksMock, shortTmp } = require('./tasks-mock');
 
+// No pixel allowance unless a shot says why (the repo default is 0): rendered with a temp HOME, thread-flagged
+// and no-supervisor matched their baselines and each other exactly every time.
 const SHOT = { threshold: 0.05, stylePath: path.join(__dirname, 'no-hover-chrome.css') };
 const openTasks = (app) => embedded(app, 'tasks', 'tasks.html');
 const row = (page, text) => page.locator('#list .row', { hasText: text });
@@ -35,7 +37,12 @@ test.describe('with a supervisor', () => {
     await expect(page.locator('#list .row').first()).toContainText(/Needs you|Stalled/, { timeout: 5000 });
     await page.waitForTimeout(2500);
     await page.mouse.move(0, 0);
-    await expect(page).toHaveScreenshot('list-empty-detail.png', { ...SHOT, mask: [page.locator('.age')], maxDiffPixelRatio: 0.02 });
+    // Allowance measured, not guessed: the mock creates its tasks back to back, so pairs that land in the same
+    // millisecond come in either order. Across 8 renders, 'Add retry with backoff' / 'Update the API client' swapped
+    // (0.28% of pixels, with 'last seen Ns ago' on the stalled row, which the .age mask misses), and so did the
+    // stalled 'Migrate the test fixtures' / 'Add a dark mode toggle' (0.62%; orphaned and blocked share rank 0 in
+    // tasks-view.js, so newest first decides). Both at once is about 0.9%.
+    await expect(page).toHaveScreenshot('list-empty-detail.png', { ...SHOT, mask: [page.locator('.age')], maxDiffPixelRatio: 0.01 });
   });
 
   test('open a task: the transcript appears and the approval is answerable; an action round-trips', async () => {
@@ -48,7 +55,8 @@ test.describe('with a supervisor', () => {
     await expect(page.locator('#d-banners .ask')).toContainText('Wants to use Bash');
     expect(await page.evaluate(() => document.body.innerHTML.includes('btk_'))).toBe(false);
     await page.waitForTimeout(500);
-    await expect(page.locator('#main')).toHaveScreenshot('detail-needs-you.png', { ...SHOT, mask: [page.locator('.age'), page.locator('.d-meta')], maxDiffPixelRatio: 0.03 });
+    // One render in 8 was 31 px off (0.004%; its images were not kept, so the cause is not known yet); the rest were exact.
+    await expect(page.locator('#main')).toHaveScreenshot('detail-needs-you.png', { ...SHOT, mask: [page.locator('.age'), page.locator('.d-meta')], maxDiffPixelRatio: 0.0001 });
     await focusMainWindow(h.app);
     await page.getByRole('button', { name: 'Allow once' }).click();
     await expect(page.locator('#d-head .d-state')).not.toContainText('Needs you', { timeout: 15000 });
@@ -89,7 +97,9 @@ test.describe('with a supervisor', () => {
     await expect(page.locator('#c-folder')).toContainText(path.basename(work));
     await expect(page.locator('#c-ai option')).not.toHaveCount(1, { timeout: 10000 });
     await page.mouse.move(0, 0);
-    await expect(page.locator('#main')).toHaveScreenshot('composer.png', { ...SHOT, maxDiffPixelRatio: 0.03 });
+    // Allowance measured, not guessed: the chosen folder is a fresh temp dir (/tmp/ptm-XXXXXX), whose random name
+    // is shown unmasked, and the scrollbar thumb differed with it. In 3 renders that cost at most 0.65% of pixels.
+    await expect(page.locator('#main')).toHaveScreenshot('composer.png', { ...SHOT, maxDiffPixelRatio: 0.007 });
     await focusMainWindow(h.app);
     await page.locator('#c-go').click();
     await expect(page.locator('#d-head .d-title')).toContainText('Add a cache', { timeout: 15000 });
@@ -117,7 +127,7 @@ test.describe('with a supervisor', () => {
     await expect(flagged.locator('.st')).toContainText('suspicious');
     await expect(row(page, 'Update the API client').locator('.badge')).toHaveCount(0, { timeout: 5000 });
     await page.mouse.move(0, 0);
-    await expect(page.locator('#main')).toHaveScreenshot('thread-flagged.png', { ...SHOT, mask: [page.locator('.d-meta')], maxDiffPixelRatio: 0.03 });
+    await expect(page.locator('#main')).toHaveScreenshot('thread-flagged.png', { ...SHOT, mask: [page.locator('.d-meta')] });
   });
 
   test('markup in a message is shown as text, never run', async () => {
@@ -148,7 +158,7 @@ test.describe('no supervisor', () => {
       await expect(page.getByRole('button', { name: 'Try again now' })).toBeVisible();
       await expect(page.locator('#list-empty')).toHaveText('');
       await page.mouse.move(0, 0);
-      await expect(page).toHaveScreenshot('no-supervisor.png', { ...SHOT, maxDiffPixelRatio: 0.02 });
+      await expect(page).toHaveScreenshot('no-supervisor.png', SHOT);
       // the page cannot start a task without it, and says so in words
       await page.keyboard.press('Alt+Meta+T');
       await expect(page.locator('.composer .err').first()).toContainText('not running');
