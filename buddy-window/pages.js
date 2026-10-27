@@ -89,7 +89,10 @@ const WIDGET_LOOK_PANE = sheetDoc(SettingsPanes.WIDGET_LOOK, 'lights', 'widget-p
 const CHARACTER_PANE = sheetDoc(SettingsPanes.CHARACTER, 'puzzle', 'hatch.html', 'hatch-preload.js', { embedded: '1' });
 const PHONE_PAIRING_PANE = sheetDoc(SettingsPanes.PHONE_PAIRING, 'bell', 'phone-pairing.html', 'phone-pairing-preload.js', { embedded: '1', sheet: '1' });
 const AITOOLS_SETUP_PANE = sheetDoc(SettingsPanes.AITOOLS_SETUP, 'plug', 'aitools.html', 'aitools-preload.js', { embedded: '1', sheet: '1' });
-const SHEET_DOCS = Object.freeze([RULES_PANE, WIDGET_LOOK_PANE, CHARACTER_PANE, PHONE_PAIRING_PANE, AITOOLS_SETUP_PANE]);
+// R8-3c-1: Plan & billing (upgrade.html) and Sync (sync.html). The account screens (account, thismac, team) are not documents (R8-3c-2).
+const ACCOUNT_PLAN_PANE = sheetDoc(SettingsPanes.ACCOUNT_PLAN, 'user', 'upgrade.html', 'upgrade-preload.js', { embedded: '1', sheet: '1' });
+const ACCOUNT_SYNC_PANE = sheetDoc(SettingsPanes.ACCOUNT_SYNC, 'layers', 'sync.html', 'sync-preload.js', { embedded: '1', sheet: '1' });
+const SHEET_DOCS = Object.freeze([RULES_PANE, WIDGET_LOOK_PANE, CHARACTER_PANE, PHONE_PAIRING_PANE, AITOOLS_SETUP_PANE, ACCOUNT_PLAN_PANE, ACCOUNT_SYNC_PANE]);
 function paneById(id) { return typeof id === 'string' ? [...SETTINGS_PANES, ...SHEET_DOCS].find((p) => p.id === id) ?? null : null; }
 
 // R7-2: Usage's tabs (chat-first preview only). Each tab is its own document with its own guard; Today is the one new

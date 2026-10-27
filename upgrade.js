@@ -52,4 +52,10 @@
   $('refresh').addEventListener('click', async () => { $('note').textContent = 'Checking…'; show(await api.refresh().catch(() => null)); $('note').textContent = ''; });
   window.addEventListener('focus', () => api.state().then(show).catch(() => {}));
   api.state().then(show).catch(() => {});
+  // In the Settings sheet (preview): a link back and a fresh read when the sheet shows this page again.
+  if (new URLSearchParams(location.search).get('sheet') === '1') {
+    $('back-settings').hidden = false;
+    $('back-settings').addEventListener('click', () => api.goPane?.('general'));
+    api.onShown?.(() => api.state().then(show).catch(() => {}));
+  }
 })();

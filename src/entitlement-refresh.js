@@ -160,7 +160,8 @@ function register(ctx) {
   every(() => refresher.check('daily'), DAY_MS);
   ctx.onQuit?.(() => { for (const t of timers) { clearTimeout(t); clearInterval(t); } });
 
-  const fromUpgrade = (e) => { try { return ctx.fromPage(e, 'upgrade'); } catch { return false; } };
+  // ctx.upgradeAllowed (R8-3c-1): the Plan & billing page, and the Settings sheet's Plan & billing document too; default = the page only.
+  const fromUpgrade = (e) => { try { return typeof ctx.upgradeAllowed === 'function' ? ctx.upgradeAllowed(e) : ctx.fromPage(e, 'upgrade'); } catch { return false; } };
   const open = (url) => shell.openExternal(url); // privacy-flow: billing-checkout-link
   ipcMain.handle('entitlement:state', (e) => (fromUpgrade(e) ? { ...describe(), signedIn: !!refresher.current(), lastCheck: refresher.last() } : null));
   ipcMain.handle('entitlement:refresh', async (e) => { if (!fromUpgrade(e)) return null; await refresher.check('manual'); return { ...describe(), signedIn: !!refresher.current(), lastCheck: refresher.last() }; });
