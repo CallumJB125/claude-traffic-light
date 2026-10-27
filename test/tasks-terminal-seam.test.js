@@ -98,6 +98,13 @@ test('stampTakeover: only a requested launch stamps, a failed write changes noth
     // An unwritable place: the launch result is unchanged, nothing throws.
     assert.equal(T.stampTakeover(requested, path.join(file, 'not-a-dir'), () => 9), requested);
     assert.equal(T.takeoverUsedAt(dir), 1793095200000);
+    // A rename that fails (a folder in the way) leaves no temp file behind.
+    const blocked = tmp();
+    fs.mkdirSync(path.join(blocked, T.STATE_FILE));
+    fs.writeFileSync(path.join(blocked, T.STATE_FILE, 'x'), '');
+    assert.equal(T.stampTakeover(requested, blocked, () => 9), requested);
+    assert.deepEqual(fs.readdirSync(blocked), [T.STATE_FILE]);
+    fs.rmSync(blocked, { recursive: true, force: true });
     fs.writeFileSync(file, '{"takeoverUsedAt":"soon"}');
     assert.equal(T.takeoverUsedAt(dir), null);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }

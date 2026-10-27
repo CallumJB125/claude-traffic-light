@@ -86,6 +86,9 @@ test('openInTerminalOf agrees with canOpen\'s task half for every combination', 
       n++;
     }
   assert.equal(n, 96);
+  // Outside the table: a task with no cost object. canOpen throws on it, the
+  // predicate says budgeted (unavailable). Engine tasks always carry cost.
+  assert.equal(S.openInTerminalOf({ state: 'handed_over', repo: { name: 'r' }, workInPlace: false, hub: false, ai: { id: 'claude' } }).reason, 'budgeted');
 });
 
 test('openInTerminalOf reasons', () => {

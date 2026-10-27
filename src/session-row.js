@@ -5,15 +5,12 @@
 // page draws, so its bucket and status are that page's (plan-pr0s §6 ruling 1).
 // Strings only where a string is shown, and never a path. Nothing in the app
 // builds these yet: R2 and T2/T4 adopt it, and R2 makes the chat-first
-// sidebar's rows (overview-sidebar-rows.js) a projection of it.
-const { NO_PROJECT } = require('./overview-sidebar-rows');
+// sidebar's rows (overview-sidebar-rows.js) a projection of it. The title rules
+// live in session-title.js, so that projection creates no require cycle.
+const { AI, NO_PROJECT, text, pathy } = require('./session-title');
 const Surface = require('./session-surface');
 
 const BUCKETS = Object.freeze(['needs', 'working', 'check', 'stuck', 'idle']);
-// The same title rule as the sidebar's (plan-organised-views §2.3 item 7), so R2's projection is a pure move.
-const AI = Object.freeze({ claude: 'Claude', 'claude-code': 'Claude', codex: 'Codex', cursor: 'Cursor', gemini: 'Gemini', copilot: 'Copilot', opencode: 'OpenCode' });
-const text = (v, n) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, n) : '');
-const pathy = (s) => /(^|\s)(~|\/|[A-Za-z]:\\)/.test(s) || s.includes('/Users/') || s.includes('\\');
 const usd = (v) => (Number.isFinite(v) && v >= 0 ? v : null);
 
 function approvalsOf(a) {

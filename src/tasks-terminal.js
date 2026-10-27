@@ -27,7 +27,7 @@ function launcherFor(app) {
 }
 
 // "Has this person used take-over before" for T3's upgrade migration
-// (§R3.10 m3): stamped when the launch was requested, which is exactly when
+// (§R3.10 m3): the last time, stamped each time the launch was requested, which is exactly when
 // tasks:open-terminal returns OK. Machine state, not a setting, so it lives
 // beside config.json and Backups (an allow-list) never copies or restores it.
 // A failed write never changes the launch result.
@@ -37,7 +37,7 @@ function stampTakeover(result, dataDir, now = Date.now) {
   try {
     const file = path.join(dataDir, STATE_FILE), tmp = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify({ takeoverUsedAt: now() }) + '\n', { mode: 0o600 });
-    fs.renameSync(tmp, file);
+    try { fs.renameSync(tmp, file); } catch (e) { fs.rmSync(tmp, { force: true }); throw e; }
   } catch { /* the stamp is a hint for a later migration, never a reason to fail */ }
   return result;
 }

@@ -40,7 +40,7 @@ const EXCLUDED = [
   { name: 'token', why: 'the local signal secret; a copied backup must not carry a live credential' },
   { name: 'approval-secret.json', why: 'the approval-counter signing secret' },
   { name: 'approval-counts.json', why: 'live counters derived from that secret' },
-  { name: 'terminal-state.json', why: 'machine state (when Open in Terminal was first used), not a setting' },
+  { name: 'terminal-state.json', why: 'machine state (when Open in Terminal was last used), not a setting' },
   { name: 'devices.json / remote.json', why: 'paired-device keys' },
   { name: 'hub token and team-hub account files', why: 'account credentials, sealed to this machine' },
   { name: 'requests/, sessions/, owned/', why: 'live state about running agents, stale within minutes' },

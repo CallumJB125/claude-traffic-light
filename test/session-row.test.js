@@ -90,6 +90,17 @@ test('sessionRow: the diff count, approvals and a SessionRef, when main supplies
   assert.equal(sessionRow({ id: 'nope' }), null);
 });
 
+test('the shared title rules equal R1 sidebar\'s copy until R2 imports them', () => {
+  const T = require('../src/session-title');
+  const sidebar = require('../src/overview-sidebar-rows');
+  assert.deepEqual([...T.NO_PROJECT].sort(), [...sidebar.NO_PROJECT].sort());
+  const src = fs.readFileSync(path.join(__dirname, '../src/overview-sidebar-rows.js'), 'utf8');
+  const def = (name, from) => from.match(new RegExp(`^const ${name} = .*$`, 'm'))?.[0];
+  const mine = fs.readFileSync(path.join(__dirname, '../src/session-title.js'), 'utf8');
+  for (const name of ['AI', 'text', 'pathy']) assert.equal(def(name, mine), def(name, src), name);
+  assert.doesNotMatch(mine, /require\(/, 'a leaf module');
+});
+
 test('frozen sidebar payload (generated from main before PR 0s): R2\'s projection must keep it', async () => {
   const { out } = await built();
   const golden = JSON.parse(fs.readFileSync(GOLDEN, 'utf8'));
