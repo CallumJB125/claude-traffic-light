@@ -9,4 +9,7 @@ contextBridge.exposeInMainWorld('phonePairing', {
   revoke: deviceId => ipcRenderer.invoke('phone:revoke', deviceId),
   upgrade: () => ipcRenderer.invoke('phone:upgrade'),
   changed: cb => ipcRenderer.on('phone:changed', () => cb()),
+  // R8-3b-2: only the Settings sheet's document is answered (settings:go-pane / settings:shown); inert on the Phone page
+  goPane: pane => ipcRenderer.send('settings:go-pane', typeof pane === 'string' ? pane : ''),
+  onShown: cb => ipcRenderer.on('settings:shown', () => cb()),
 });

@@ -185,5 +185,11 @@ async function takeFocus() {
   focusId = f; scrolled = false; draw();
 }
 api.onChanged(() => { if (!busy && !previews.size) refresh().catch(() => {}); });
-window.addEventListener('focus', () => { takeFocus().catch(() => {}); });
-refresh().then(takeFocus).catch(() => { status.textContent = 'Could not look for tools. Try Check again.'; });
+// In the Settings sheet (preview, ?sheet=1) this page never asks for a pending focus: that belongs to the page aiToolsOpen opens.
+const inSheet = new URLSearchParams(location.search).get('sheet') === '1';
+if (inSheet) {
+  document.getElementById('back-settings').hidden = false;
+  document.getElementById('back-settings').addEventListener('click', () => api.goPane?.('aitools'));
+  api.onShown?.(() => { if (!busy && !previews.size) refresh().catch(() => {}); });
+} else window.addEventListener('focus', () => { takeFocus().catch(() => {}); });
+refresh().then(inSheet ? undefined : takeFocus).catch(() => { status.textContent = 'Could not look for tools. Try Check again.'; });

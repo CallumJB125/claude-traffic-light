@@ -18,4 +18,7 @@ contextBridge.exposeInMainWorld('aiToolsApi', {
   burstCodex: () => ipcRenderer.invoke('burst:codex-routing'),
   burstAction: (id) => ipcRenderer.invoke('burst-action', id, {}),
   onChanged: (cb) => ipcRenderer.on('status-changed', () => cb()),
+  // R8-3b-2: only the Settings sheet's document is answered (settings:go-pane / settings:shown); inert on the AI tools page
+  goPane: (pane) => ipcRenderer.send('settings:go-pane', typeof pane === 'string' ? pane : ''),
+  onShown: (cb) => ipcRenderer.on('settings:shown', () => cb()),
 });

@@ -316,6 +316,8 @@ function createRemoteApprovals({ dir, requestsDir, keyFor = () => null, entitlem
 /** Paid-wiring entry point (src/paid-wiring.js). */
 function register(ctx) {
   const { ipcMain, rootDir, entitlements, fromPage, onQuit, log } = ctx;
+  // phoneAllowed / phoneViews: the Phone page, and (R8-3b-2) the Settings sheet's pairing document too; defaults are the old page only.
+  const phoneAllowed = typeof ctx.phoneAllowed === 'function' ? ctx.phoneAllowed : (e) => fromPage(e, 'phone');
   const { net } = require('electron'); // privacy-flow: phone-approvals
   const core = createRemoteApprovals({
     dir: path.join(rootDir, 'remote'),
@@ -331,9 +333,9 @@ function register(ctx) {
   });
   ctx.setInteractionHostExtras?.(() => core.hostOptions());
 
-  const page = () => ctx.buddy?.()?.pageWebContents?.('phone') ?? null;
-  core.onChange(() => { const wc = page(); if (wc && !wc.isDestroyed()) wc.send('phone:changed'); });
-  const ok = (e) => fromPage(e, 'phone');
+  const views = () => (typeof ctx.phoneViews === 'function' ? ctx.phoneViews() : [ctx.buddy?.()?.pageWebContents?.('phone')]);
+  core.onChange(() => { for (const wc of views()) if (wc && !wc.isDestroyed()) wc.send('phone:changed'); });
+  const ok = phoneAllowed;
   ipcMain.handle('phone:state', (e) => (ok(e) ? core.state() : null));
   ipcMain.handle('phone:set', (e, patch) => { if (!ok(e) || !object(patch) || typeof patch.enabled !== 'boolean') return null; core.setEnabled(patch.enabled); return core.state(); });
   ipcMain.handle('phone:pair-start', (e) => (ok(e) ? core.startPairing() : null));
