@@ -32,7 +32,56 @@ function freePort() {
 
 // Variables that point back into the real home whatever HOME is set to.
 const HOME_POINTERS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'ZDOTDIR'];
-const homeEnv = (userHome, base = process.env) => ({ ...Object.fromEntries(Object.entries(base).filter(([k]) => !HOME_POINTERS.includes(k))), HOME: userHome, USERPROFILE: userHome });
+const homeEnv = (userHome, base = process.env) => ({
+  ...Object.fromEntries(Object.entries(base).filter(([k]) => !HOME_POINTERS.includes(k))),
+  HOME: userHome,
+  USERPROFILE: userHome,
+  // A bare `claude` (voice helper, tool probes) finds the fakes below before any real install.
+  PATH: [path.join(userHome, '.local', 'bin'), base.PATH].filter(Boolean).join(path.delimiter),
+});
+
+// Fake provider CLIs. The finders look below $HOME first (findClaudeBin, findCodexBin, findGeminiBin, findAcpBin),
+// and ai-tools probes PATH, so a fake at each HOME-relative spot means no spec can start a real provider. Each fake
+// appends {name, argv, cwd} (and stdin chunks) to the marker file, answers --version, then runs the repo's own wire
+// fixture where one exists, else exits 0.
+const FAKE_FIXTURES = {
+  claude: path.join(ROOT, 'test', 'fixtures', 'fake-claude-stream.js'),
+  codex: path.join(ROOT, 'test', 'fixtures', 'fake-codex-app-server.js'),
+  gemini: path.join(ROOT, 'test', 'fixtures', 'fake-gemini-acp.js'),
+};
+// These speak ACP over stdio like gemini --acp (src/acp-agents.js).
+const ACP_NAMES = ['cursor-agent', 'agent', 'copilot', 'opencode', 'hermes'];
+const FAKE_PROVIDER_PATHS = {
+  claude: ['.local/bin/claude', '.claude/local/claude'], codex: ['.local/bin/codex'], gemini: ['.local/bin/gemini'],
+  'cursor-agent': ['.local/bin/cursor-agent'], agent: ['.local/bin/agent'], copilot: ['.local/bin/copilot'],
+  opencode: ['.local/bin/opencode', '.opencode/bin/opencode'], hermes: ['.local/bin/hermes'], goose: ['.local/bin/goose'], aider: ['.local/bin/aider'],
+};
+const fakeProviderMark = (userHome) => path.join(userHome, 'fake-providers.log');
+function installFakeProviders(userHome) {
+  const mark = fakeProviderMark(userHome);
+  for (const [name, rels] of Object.entries(FAKE_PROVIDER_PATHS)) {
+    const fixture = FAKE_FIXTURES[name] || (ACP_NAMES.includes(name) ? FAKE_FIXTURES.gemini : null);
+    const body = [
+      `#!${process.execPath}`,
+      "'use strict';",
+      "const fs = require('node:fs');",
+      `const note = (o) => { try { fs.appendFileSync(${JSON.stringify(mark)}, JSON.stringify({ name: ${JSON.stringify(name)}, ...o }) + '\\n'); } catch { /* best effort */ } };`,
+      'const argv = process.argv.slice(2);',
+      "note({ argv, cwd: process.cwd() });",
+      "if (argv.includes('--version')) { process.stdout.write('9.9.9 (fake)\\n'); process.exit(0); }",
+      fixture ? `process.stdin.on('data', (c) => note({ stdin: String(c) }));\nrequire(${JSON.stringify(fixture)});` : 'process.exit(0);',
+      '',
+    ].join('\n');
+    for (const rel of rels) {
+      const file = path.join(userHome, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, body, { mode: 0o755 });
+    }
+  }
+}
+const fakeProviderCalls = (userHome) => {
+  try { return fs.readFileSync(fakeProviderMark(userHome), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; }
+};
 
 // homeFiles seeds files below the app's own HOME (.claude.json, .claude/settings.json), as files does for the data dir.
 async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = {}, env = {} } = {}) {
@@ -48,6 +97,7 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = 
   // The app's own HOME: hook state (~/.claude, ~/.codex), the setup checklist and the Help window read it, so
   // a baseline must not depend on which AI tools this machine has. An empty one, per launch.
   const userHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-user-'));
+  installFakeProviders(userHome);
   for (const [name, content] of Object.entries(homeFiles)) {
     fs.mkdirSync(path.dirname(path.join(userHome, name)), { recursive: true });
     fs.writeFileSync(path.join(userHome, name), content);
@@ -179,4 +229,4 @@ async function focusMainWindow(app) {
 }
 
 module.exports = {
-  HOME_POINTERS, homeEnv, focusMainWindow, launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };
+  HOME_POINTERS, homeEnv, installFakeProviders, fakeProviderCalls, FAKE_PROVIDER_PATHS, focusMainWindow, launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };

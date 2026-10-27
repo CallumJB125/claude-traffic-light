@@ -6,7 +6,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { test, expect } = require('@playwright/test');
-const { launchApp, signal, windowByFile } = require('./app');
+const { launchApp, signal, windowByFile, fakeProviderCalls } = require('./app');
 
 const DOC = [
   '<!-- plexiform-session-handover v1 -->',
@@ -93,11 +93,18 @@ test('hand off lists, previews, cancels and confirms through the real app', asyn
     await h.app.evaluate(() => { globalThis.__handoff.response = 1; });
     await open();
     const head = () => inspect('sessions.html', 'document.querySelector(".continue-panel .continue-note")?.textContent ?? ""');
-    await expect.poll(head, { timeout: 15000 }).toContain('Claude Code is reading the handover…');
+    // The fake answers at once, so the panel may already have moved on from "reading" to "replied".
+    await expect.poll(head, { timeout: 15000 }).toMatch(/Claude Code (is reading the handover…|replied\. Answer below)/);
     o = await observed();
     expect(o.confirms).toHaveLength(2);
     expect(o.confirms[1].detail).toBe(o.confirms[0].detail);
     expect(o.clip).toHaveLength(0);
+    // The tool that started is the fake in this test's HOME, and it was sent the scrubbed handover as its prompt.
+    await expect.poll(() => fakeProviderCalls(h.userHome).some((c) => c.stdin?.includes('Finish the importer'))).toBe(true);
+    const calls = fakeProviderCalls(h.userHome);
+    expect(calls.find((c) => c.argv)?.name).toBe('claude');
+    expect(calls.find((c) => c.argv).argv).toContain('-p');
+    expect(calls.map((c) => c.stdin ?? '').join('')).not.toContain('sk-abcdefghijklmnopqrstuvwx');
     await inspect('sessions.html', '[...document.querySelectorAll(".continue-panel button")].find(b => b.textContent === "End").click(); true');
     await expect.poll(head, { timeout: 15000 }).toContain('This Claude Code session has ended.');
   } finally {

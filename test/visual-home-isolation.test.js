@@ -15,7 +15,7 @@ test('visual launches: HOME is never the real home, and nothing inherited points
   assert.equal(env.USERPROFILE, '/tmp/cbuddy-visual-user-x');
   assert.notEqual(env.HOME, os.homedir());
   for (const k of HOME_POINTERS) assert.equal(k in env, false, k);
-  assert.equal(env.PATH, '/usr/bin');
+  assert.equal(env.PATH, '/tmp/cbuddy-visual-user-x/.local/bin:/usr/bin'); // the fake providers come first
 });
 
 test('visual launches: launchApp builds the app env from homeEnv and cleans the temp home up', () => {
