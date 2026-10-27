@@ -200,7 +200,7 @@ test('get-config from a pane returns only its keys and shared reads; the old pag
 function world(chatFirst) {
   const calls = [];
   const ctx = {
-    calls, pageById: Pages.pageById, paneById: Pages.paneById, resolve: Pages.resolve, sectionTarget: Pages.sectionTarget, chatFirst,
+    calls, pageById: Pages.pageById, paneById: Pages.paneById, usagePaneById: Pages.usagePaneById, resolve: Pages.resolve, sectionTarget: Pages.sectionTarget, chatFirst,
     setupLocalGeneration: 0, tasksGeneration: 0, homeGeneration: 0, selected: 'board', content: null, hubInfo: null,
     sidebar: { webContents: { isDestroyed: () => false, focus: () => {} } },
     getTeamHub: () => null, forgetHub: () => {}, optimiser: { open: () => {} }, flow: { show: () => {}, leftAccountPages: () => {} }, openWindow: () => {},

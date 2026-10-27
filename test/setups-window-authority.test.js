@@ -39,7 +39,7 @@ test('only one owned native modal and actual foreground/current view can return 
 });
 test('same-URL document retirement invalidates pending native approval even with retained mainFrame',async()=>{
  const f=fixture(),frame=f.wc.mainFrame;let release;const before=f.api.setupsContext().generation,pending=f.api.setupsConfirm(()=>new Promise(r=>release=r));f.context.retireDocument();assert.equal(f.wc.mainFrame,frame);assert.ok(f.api.setupsContext().generation>before);release({approved:true});assert.equal(await pending,null);
- const registration=source.slice(source.indexOf("      if(['setups','overview'].includes(page.id)){"),source.indexOf("      v.webContents.on('did-finish-load'"));
+ const regAt=source.indexOf("      if(['setups','overview'].includes(page.id)){"),registration=source.slice(regAt,source.indexOf("      v.webContents.on('did-finish-load'",regAt));
  for(const pageId of ['setups','overview']){
   const listeners=new Map();let setupRetired=0,overviewRetired=0;
   const ctx={page:{id:pageId},v:{webContents:{on:(n,fn)=>listeners.set(n,fn),once:(n,fn)=>listeners.set(n,fn)}},overviewDocument:0,retireSetupDocument:()=>setupRetired++,onOverviewRetired:()=>overviewRetired++};
