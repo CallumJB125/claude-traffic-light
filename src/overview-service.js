@@ -189,6 +189,13 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   const raw=(Array.isArray(input)?input:[]).find(x=>object(x)&&!x.remote&&!x.device&&(x.source??'claude')===ref.provider&&x.sessionId===ref.sessionId);
   return raw?{kind:'session',source:ref.provider,sessionId:raw.sessionId,cwd:typeof raw.cwd==='string'?raw.cwd:'',origin:Ids.originOf(raw),vm:known.vm??null}:null;
  }
+ // R2b-2 (S3): the thread row of a task this Mac just started, or null while the
+ // tasks snapshot doesn't list it yet. Resolved through threadTarget, never guessed.
+ function threadForTask(taskId){
+  if(!id(taskId))return null;
+  const rowId=stable(['task',taskId]);
+  return threadTarget(rowId)?.taskId===taskId?rowId:null;
+ }
  // Read-only rows for another document (the chat-first sidebar). The same
  // build, but it never touches this service's epochs, action handles, team
  // route or caches, so it cannot disturb the Overview page; its liveness is the
@@ -384,7 +391,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   if(!alive())return{ok:false,status:'unconfirmed',error:'The view changed. Inspect the receipt before sending again.'};
   return out?.ok===true?out:{ok:false,status:['forbidden','stale','busy','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
- return{snapshot,passiveRows,threadTarget,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
+ return{snapshot,passiveRows,threadTarget,threadForTask,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
   followupReview,followupEnqueue,
   coordinatorRequestOwner:coordinator.requestOwner,coordinatorRemoteList:coordinator.remoteList,coordinatorRemoteSend:coordinator.remoteSend,coordinatorRemoteCancel:coordinator.remoteCancel,coordinatorRemoteReplace:coordinator.remoteReplace,
   coordinatorInventory:coordinator.inventory,coordinatorPropose:coordinator.propose,coordinatorConfirm:coordinator.confirm,coordinatorResults:coordinator.results,coordinatorCancel:coordinator.cancel,

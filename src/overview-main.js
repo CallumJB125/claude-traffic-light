@@ -69,6 +69,8 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
   directoryChanged(){if(stopped||!authority||!same(authority,true))return;try{authority.contents.send('overview:directory-changed');}catch{}},
   // Redesign R2a: main-only, for the thread document's guard (src/thread-main.js).
   threadTarget:id=>stopped?null:service.threadTarget(id),
+  // R2b-2: main-only, for the new chat's handoff (src/newchat-main.js).
+  threadForTask:id=>stopped?null:service.threadForTask(id),
   invalidate(){authority=null;sidebarRead=null;service.invalidate();},close(){stopped=true;authority=null;sidebarRead=null;if(pump)clearInterval(pump);service.invalidate();},
  };
 }
