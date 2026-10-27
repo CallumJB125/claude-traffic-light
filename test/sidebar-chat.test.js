@@ -210,6 +210,14 @@ test('a refresh while the tree has focus keeps it on the same item', async () =>
   assert.ok(s.calls.sessions >= 2);
 });
 
+test('a refresh with unchanged rows leaves the tree nodes alone', async () => {
+  const s = await boot();
+  const before = s.q(`[data-key="r:${id(1)}"]`);
+  await s.push({ selected: 'board' });
+  assert.ok(s.calls.sessions >= 2);
+  assert.equal(s.q(`[data-key="r:${id(1)}"]`), before, 'same node');
+});
+
 test('collapsed-groups IPC: registered only with the gate on, sidebar only, BUCKETS ids only', () => {
   const src = read('buddy-window/index.js');
   assert.match(src, /if \(chatFirst === true\) ipcMain\.on\('buddy:sidebar-groups', \(e, ids\) => \{\n    if \(!fromSidebar\(e\)\) return;\n    const clean = sidebarCollapsed\(ids\);/);

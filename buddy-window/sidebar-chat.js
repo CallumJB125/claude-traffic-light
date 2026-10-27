@@ -257,12 +257,17 @@
 
   // ── data ─────────────────────────────────────────────────────────────────
   let refreshing = false;
+  let rowsKey = '';
   async function refresh() {
     if (refreshing) return;
     refreshing = true;
     try {
       const out = await window.buddy.sessions();
-      if (out && Array.isArray(out.sessions)) { ui.rows = out.sessions; ui.loaded = true; render(); }
+      if (!out || !Array.isArray(out.sessions)) return;
+      // Unchanged rows: keep the DOM as it is (no node churn under the cursor, the focus or a screenshot).
+      const key = JSON.stringify(out.sessions);
+      if (ui.loaded && key === rowsKey) return;
+      rowsKey = key; ui.rows = out.sessions; ui.loaded = true; render();
     } catch { /* keep the last rows */ } finally { refreshing = false; }
   }
 

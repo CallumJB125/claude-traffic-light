@@ -35,6 +35,8 @@ async function open({ rows = ROWS, theme = 'dark', env = { CLAUDE_TRAFFIC_LIGHT_
   await side.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
   await side.waitForFunction(() => !!window.buddy);
   await side.evaluate(() => document.fonts.ready);
+  // The content area starts on Board: wait for that, so the footer's current row is settled before any shot.
+  if (env.CLAUDE_TRAFFIC_LIGHT_CHAT_PREVIEW) await expect(side.locator('#nav-foot [data-page="board"]')).toHaveAttribute('aria-current', 'page');
   return { h, side };
 }
 const shot = async (locator, name) => expect(await snapToPixels(locator)).toHaveScreenshot(name);
