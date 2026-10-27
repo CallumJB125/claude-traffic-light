@@ -99,6 +99,8 @@
     tree = el('ul', { class: 'sb-tree', role: 'tree', 'aria-label': 'Sessions' });
     tree.addEventListener('keydown', onTreeKey);
     tree.addEventListener('click', onTreeClick);
+    // Focus that arrives by mouse or script moves the roving tab stop too, so the arrows start from it.
+    tree.addEventListener('focusin', (e) => { const key = keyOf(e.target); if (key && key !== ui.focusKey) { ui.focusKey = key; for (const i of treeItems()) i.tabIndex = i.dataset.key === key ? 0 : -1; } });
     const connect = el('button', { type: 'button', class: 'sb-connect', id: 'sb-connect', hidden: true }, 'How to connect a tool');
     connect.addEventListener('click', () => window.buddy.select('aitools'));
     nav.append(top, filter, el('div', { class: 'sb-scroll' }, tree, el('p', { class: 'sb-empty', id: 'sb-empty', hidden: true }), connect));

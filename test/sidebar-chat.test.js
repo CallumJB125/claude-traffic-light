@@ -168,6 +168,15 @@ test('tree keyboard: roving tabindex, ↑↓ Home End, ←→ collapse and expan
   assert.equal(tab().length, 1);
 });
 
+test('focus that arrives by mouse or script moves the tab stop, and the arrows start from it', async () => {
+  const s = await boot();
+  s.q(`[data-key="r:${id(3)}"]`).focus();
+  assert.equal(s.q(`[data-key="r:${id(3)}"]`).tabIndex, 0);
+  assert.equal(s.qa('[role="treeitem"]').filter((n) => n.tabIndex === 0).length, 1);
+  s.key('ArrowUp');
+  assert.equal(s.doc.activeElement.dataset.key, 'g:working');
+});
+
 test('the saved open/closed state is used, and a header click toggles it', async () => {
   const s = await boot({ collapsed: ['working'] });
   assert.equal(s.q('[data-key="g:working"]').getAttribute('aria-expanded'), 'false');

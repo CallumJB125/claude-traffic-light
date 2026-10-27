@@ -1,0 +1,11 @@
+# R1: five new baselines, all from the new test-visual/sidebar-chat.spec.js (chat-first preview gate on). No existing baseline changes; no accent flip, so no classifier run.
+test-visual/__screenshots__/sidebar-chat.spec.js/sidebar-buckets-light-darwin.png
+# reason: new. The chat-first sidebar in light: Needs you, Working on it, Check it, Stuck or failed with their §1.3 shapes, Idle folded, whole filter labels, Board/Usage/Settings footer.
+test-visual/__screenshots__/sidebar-chat.spec.js/sidebar-buckets-dark-darwin.png
+# reason: new. The same seven fixed rows in dark; the shapes read without colour, and the Stuck triangle and Needs you dot use --st-* tokens.
+test-visual/__screenshots__/sidebar-chat.spec.js/sidebar-empty-darwin.png
+# reason: new. No sessions: §5's sentence and the How to connect a tool button, no groups.
+test-visual/__screenshots__/sidebar-chat.spec.js/sidebar-row-focused-selected-light-darwin.png
+# reason: new. Proves Q13's deliberate override: a keyboard-focused, selected row draws the inset ring (outline-offset -4px plus inset halo), unclipped by the scroll container; the age shows on selection.
+test-visual/__screenshots__/sidebar-chat.spec.js/sidebar-row-focused-selected-dark-darwin.png
+# reason: new. The same inset ring in dark, over --accent-soft.
