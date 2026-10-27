@@ -37,7 +37,7 @@
 
   const ui = {
     filter: 'all', rows: [], collapsed: new Set(['idle']), selectedRow: null, focusKey: null,
-    seq: 0, selectedPage: 'board', sections: [], loaded: false,
+    seq: 0, selectedPage: null, sections: [], loaded: false,
   };
 
   function el(tag, attrs = {}, ...kids) {
@@ -69,7 +69,7 @@
     return h < 24 ? `${h} h` : `${Math.floor(h / 24)} d`;
   };
   const visibleRows = () => {
-    if (ui.filter === 'chats') return [];
+    if (ui.filter === 'chats') return ui.rows.filter((r) => r.chat);
     if (ui.filter === 'terminals') return ui.rows.filter((r) => r.terminal);
     if (ui.filter === 'team') return ui.rows.filter((r) => r.team);
     return ui.rows;
@@ -141,7 +141,7 @@
           'aria-selected': String(ui.selectedRow === r.id), tabindex: -1 },
         el('span', { class: 'sb-dot', 'data-bucket': r.bucket, 'aria-hidden': 'true' }),
         el('span', { class: 'sb-text' }, el('span', { class: 'sb-title' }, r.title), meta ? el('span', { class: 'sb-meta' }, meta) : null),
-        r.age_ms != null ? el('span', { class: 'sb-age' }, age(r.age_ms)) : null);
+        el('span', { class: 'sb-age' }, age(r.age_ms)));
         list.append(row);
       }
       group.append(list);
@@ -190,11 +190,13 @@
   }
 
   function openRow(key) {
-    ui.selectedRow = key.slice(2);
+    const id = key.slice(2), r = ui.rows.find((x) => x.id === id);
+    ui.selectedRow = id;
     ui.focusKey = key;
-    // Until the thread view exists (R2) a row opens Overview; a select from
-    // the sidebar is never redirected back here.
-    window.buddy.select('overview');
+    // A row with a thread opens it (main resolves the row again). One with
+    // none (a paired device's session) opens Overview, as in R1; a select
+    // from the sidebar is never redirected back here.
+    if (r?.thread) window.buddy.openThread(id); else window.buddy.select('overview');
     render();
     focusKey(key);
   }
@@ -265,14 +267,28 @@
       const out = await window.buddy.sessions();
       if (!out || !Array.isArray(out.sessions)) return;
       // Unchanged rows: keep the DOM as it is (no node churn under the cursor, the focus or a screenshot).
-      const key = JSON.stringify(out.sessions);
-      if (ui.loaded && key === rowsKey) return;
+      // Ages tick on every read, so they're left out of the key and updated in place.
+      const key = JSON.stringify(out.sessions.map(({ age_ms, ...rest }) => rest));
+      if (ui.loaded && key === rowsKey) { ui.rows = out.sessions; paintAges(); return; }
       rowsKey = key; ui.rows = out.sessions; ui.loaded = true; render();
     } catch { /* keep the last rows */ } finally { refreshing = false; }
   }
 
+  function paintAges() {
+    for (const r of ui.rows) {
+      const n = tree.querySelector(`[data-key="r:${CSS.escape(r.id)}"] .sb-age`);
+      const text = age(r.age_ms);
+      if (n && n.textContent !== text) n.textContent = text;
+    }
+  }
+
   function onState(s) {
     if (typeof s?.selected === 'string') ui.selectedPage = s.selected;
+    // The thread on screen is the selected row; any other page selects none.
+    if (s?.chat && 'thread' in s.chat) {
+      const next = s.selected === 'thread' && typeof s.chat.thread === 'string' ? s.chat.thread : null;
+      if (next !== ui.selectedRow) { ui.selectedRow = next; render(); }
+    }
     const f = s?.chat?.focus;
     if (f && Number.isSafeInteger(f.seq) && f.seq !== ui.seq) {
       ui.seq = f.seq;

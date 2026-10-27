@@ -152,7 +152,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   if(!alive())return null;
   rows.sort((a,b)=>(a.age_ms??Infinity)-(b.age_ms??Infinity));
   lastTargets=targets;
-  return{rows,next,partial,omitted,meta,origins};
+  return{rows,next,partial,omitted,meta,origins,targets};
  }
  // A thread's target (redesign R2a), resolved without a build: the latest
  // build's map names the candidate, and it is re-checked against the in-memory
@@ -183,7 +183,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   const time=now(),built=await build(time,alive);
   if(!built||!alive())return null;
   for(const row of built.rows)row.handle=null;
-  return{status:built.partial||built.omitted?'partial':'complete',observed_at:time,omitted:built.omitted,rows:built.rows,origins:built.origins};
+  return{status:built.partial||built.omitted?'partial':'complete',observed_at:time,omitted:built.omitted,rows:built.rows,origins:built.origins,threads:new Set(built.targets.keys())};
  }
  async function action(request,message=false){
   if(!closed(request,message?['handle','text']:['handle'])||typeof request.handle!=='string'||!UUID.test(request.handle)||message&&(typeof request.text!=='string'||!request.text.trim()||request.text.includes('\0')||request.text.trim().length>4000||Buffer.byteLength(request.text.trim())>8192))return response('invalid');

@@ -1173,7 +1173,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   function chatPagesExtra() {
     let saved = null;
     try { saved = sidebarCollapsed(sidebarGroups.load()); } catch { saved = null; }
-    return { collapsed: saved ?? [...DEFAULT_COLLAPSED], focus: sidebarFocus };
+    return { collapsed: saved ?? [...DEFAULT_COLLAPSED], focus: sidebarFocus, selected };
   }
   // The thread page's "Back to Board" (navigation only, from that document's main frame).
   const fromThread = (e) => !!threadView && e.sender === threadView.webContents && e.senderFrame === threadView.webContents.mainFrame && e.sender.getURL() === threadUrl();
@@ -1284,7 +1284,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0',
       show: false,
     });
-    sidebar = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, preload: path.join(DIR, 'sidebar-preload.js') } });
+    // The chat-first channels exist in the sidebar's bridge only when the gate is on (main also refuses them while it is off).
+    sidebar = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, preload: path.join(DIR, 'sidebar-preload.js'), ...(chatFirst === true ? { additionalArguments: ['--plexiform-chat-preview'] } : {}) } });
     lockLocal(sidebar);
     win.contentView.addChildView(sidebar);
     sidebar.webContents.loadFile(path.join(DIR, 'sidebar.html')).catch(() => {});

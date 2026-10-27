@@ -189,10 +189,10 @@ test('sidebarRows: pinned keys, clamped values, path-like labels dropped, at mos
   ];
   const out = sidebarRows({ status: 'complete', rows, origins: new Map([[id(1), 'iTerm'], [id(2), '/Applications/Evil.app']]) });
   assert.deepEqual(out, { schema: 1, status: 'complete', sessions: [
-    { id: id(1), bucket: 'needs', title: 'Ship it', project: 'alpha', origin: 'iTerm', age_ms: 1200, team: true, terminal: true },
-    { id: id(2), bucket: 'idle', title: 'AI session', project: '', origin: null, age_ms: null, team: false, terminal: true },
-    { id: id(3), bucket: 'working', title: 'Claude session in billing', project: 'billing', origin: null, age_ms: null, team: false, terminal: false },
-    { id: id(4), bucket: 'idle', title: 'AI session', project: '', origin: null, age_ms: null, team: false, terminal: false },
+    { id: id(1), bucket: 'needs', title: 'Ship it', project: 'alpha', origin: 'iTerm', age_ms: 1200, team: true, terminal: true, chat: false, thread: false },
+    { id: id(2), bucket: 'idle', title: 'AI session', project: '', origin: null, age_ms: null, team: false, terminal: true, chat: false, thread: false },
+    { id: id(3), bucket: 'working', title: 'Claude session in billing', project: 'billing', origin: null, age_ms: null, team: false, terminal: false, chat: false, thread: false },
+    { id: id(4), bucket: 'idle', title: 'AI session', project: '', origin: null, age_ms: null, team: false, terminal: false, chat: false, thread: false },
   ] });
   const many = Array.from({ length: 250 }, (_, i) => ({ id: id(i + 10), bucket: 'idle' }));
   assert.equal(sidebarRows({ status: 'partial', rows: many }).sessions.length, 200);
