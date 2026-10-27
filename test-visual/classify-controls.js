@@ -16,6 +16,11 @@ const image = (fill) => {
   return { width: W, height: H, data };
 };
 const box = (x, y, x0, y0, x1, y1) => x >= x0 && x < x1 && y >= y0 && y < y1;
+ // An anti-aliased stroke profile, period 20 px: 4 px soft edges around a 4 px core. `ramp2` is the same glyph
+// one pixel bolder; `rampSub` is a sub-pixel bolder variant (edges moved 0.25 px).
+const ramp = (x, off = 0) => { const u = (x + off) % 20; return u < 6 ? 0 : u < 10 ? (u - 6) / 4 : u < 14 ? 1 : u < 18 ? (18 - u) / 4 : 0; };
+const ramp2 = (x) => { const u = x % 20; return u < 5 ? 0 : u < 9 ? (u - 5) / 4 : u < 15 ? 1 : u < 19 ? (19 - u) / 4 : 0; };
+const rampSub = (x) => { const u = x % 20; return u < 5.75 ? 0 : u < 9.75 ? (u - 5.75) / 4 : u < 14.25 ? 1 : u < 18.25 ? (18.25 - u) / 4 : 0; };
 const glyphA = (x, y) => (x * 7 + y * 3) % 11 < 4 && box(x, y, 10, 18, 54, 30);
 const glyphB = (x, y) => (x * 5 + y * 9) % 13 < 5 && box(x, y, 10, 18, 54, 30);
 
@@ -29,7 +34,7 @@ function controls() {
   const out = [];
   for (const [theme, t] of Object.entries(THEMES)) {
     const BG = hex(t.bg); const FG = hex(t.text); const AO = hex(t.accentOld); const AN = hex(t.accentNew);
-    const add = (name, expect, oldFill, newFill) => out.push({ name: `${theme}: ${name}`, theme, expect, old: image(oldFill), new: image(newFill) });
+    const add = (name, expect, oldFill, newFill, extra = {}) => out.push({ name: `${theme}: ${name}`, theme, expect, old: image(oldFill), new: image(newFill), ...extra });
     // (a) a neutral grey shifted by ΔE ≥ 2, no accent involved: a surface, a grey box, and a surface beside a real swap
     const S = shift(BG, theme === 'light' ? -10 : -12);
     add('(a) surface region shifted ΔE ≥ 2', 'fail', () => BG, (x, y) => (box(x, y, 10, 10, 40, 30) ? S : BG));
@@ -45,6 +50,37 @@ function controls() {
     // (d) text content changed, in text colour and in accent colour
     add('(d) text content changed', 'fail', (x, y) => (glyphA(x, y) ? FG : BG), (x, y) => (glyphB(x, y) ? FG : BG));
     add('(d) accent text content changed', 'fail', (x, y) => (glyphA(x, y) ? AO : BG), (x, y) => (glyphB(x, y) ? AN : BG));
+    // ── S4 (review): subtler and boundary cases ──
+    // (e) an element in a grey that is no surface token, shifted ΔE 3–5, no accent anywhere
+    const G1 = theme === 'dark' ? [33, 34, 36] : [215, 214, 213]; const G2 = theme === 'dark' ? [21, 22, 24] : [193, 192, 191];
+    add('(e) non-token grey element shifted', 'fail', (x, y) => (box(x, y, 8, 8, 56, 40) ? G1 : BG), (x, y) => (box(x, y, 8, 8, 56, 40) ? G2 : BG));
+    // (f) the whole surface shifted by under ΔE 1, densely (M2)
+    add('(f) dense surface shift under ΔE 1', 'fail', () => BG, () => shift(BG, theme === 'dark' ? 1 : -1));
+    // (g1) an accent button swapped while its shadow shrinks from 6 px to 3 px
+    const shade = (y, len) => (y >= 24 && y < 24 + len ? 0.25 * (1 - (y - 24) / len) : 0);
+    add('(g1) accent button + its shadow 6 px → 3 px', 'fail',
+      (x, y) => (box(x, y, 12, 10, 52, 24) ? AO : box(x, y, 12, 24, 52, 34) ? mix([0, 0, 0], BG, shade(y, 6)) : BG),
+      (x, y) => (box(x, y, 12, 10, 52, 24) ? AN : box(x, y, 12, 24, 52, 34) ? mix([0, 0, 0], BG, shade(y, 3)) : BG));
+    // (g2) an accent button swapped while a 4 px panel band around it shifts by 8
+    const P2 = hex(theme === 'dark' ? '#292d34' : '#eef0f3'); const SURF = hex(theme === 'dark' ? '#17191d' : '#f4f5f7');
+    add('(g2) accent button + a 4 px band around it shifted', 'fail',
+      (x, y) => (box(x, y, 14, 12, 50, 36) ? AO : box(x, y, 10, 8, 54, 40) ? P2 : SURF),
+      (x, y) => (box(x, y, 14, 12, 50, 36) ? AN : box(x, y, 10, 8, 54, 40) ? shift(P2, -8) : SURF));
+    // (h) accent text swapped AND one pixel bolder (S2): the core changed, so it must fail
+    const strip = (x, y) => box(x, y, 2, 16, 62, 32);
+    add('(h) accent text swapped and 1 px bolder', 'fail', (x, y) => (strip(x, y) ? mix(AO, BG, ramp(x)) : BG), (x, y) => (strip(x, y) ? mix(AN, BG, ramp2(x)) : BG));
+    // (h′) KNOWN LIMIT, recorded: a sub-pixel bolder accent glyph (edges 0.25 px) passes; a per-pixel colour test
+    // can't tell it from gamma. The structural gate (no layout/size property may change) is what covers it.
+    add('(h′) KNOWN LIMIT: accent text swapped and 0.25 px bolder passes', 'pass', (x, y) => (strip(x, y) ? mix(AO, BG, ramp(x)) : BG), (x, y) => (strip(x, y) ? mix(AN, BG, rampSub(x)) : BG));
+    // (i1) a grey border 1 px → 2 px; (i2) neutral text opacity 1 → 0.8
+    const LINE = theme === 'dark' ? [60, 64, 72] : [214, 218, 224];
+    add('(i1) grey border 1 px → 2 px', 'fail', (x, y) => (box(x, y, 6, 6, 58, 42) && !box(x, y, 7, 7, 57, 41) ? LINE : BG), (x, y) => (box(x, y, 6, 6, 58, 42) && !box(x, y, 8, 8, 56, 40) ? LINE : BG));
+    add('(i2) neutral text opacity 1 → 0.8', 'fail', (x, y) => (strip(x, y) ? mix(FG, BG, ramp(x)) : BG), (x, y) => (strip(x, y) ? mix(FG, BG, 0.8 * ramp(x)) : BG));
+    // (j) a change of ~0.3 % of the image (9 of 3,072 px): under the cap, so the gate passes, but it must produce
+    // crops (the reviewer sign-off list is never silently empty)
+    add('(j) 0.3 % non-accent change passes the gate with crops', 'pass', (x, y) => (box(x, y, 30, 20, 33, 23) ? hex(t.stuck) : BG), (x, y) => (box(x, y, 30, 20, 33, 23) ? hex(t.other) : BG), { crops: true });
+    // (k) neutral text, same coverage, different glyph shapes (a font change)
+    add('(k) neutral glyph shapes changed at the same coverage', 'fail', (x, y) => (glyphA(x, y) ? FG : BG), (x, y) => (glyphA(63 - x, y) ? FG : BG));
     // positive controls: the swap itself, anti-aliased accent text, and text on a selected (soft) row
     add('accent button swapped in place', 'pass', (x, y) => (box(x, y, 10, 10, 50, 30) ? AO : BG), (x, y) => (box(x, y, 10, 10, 50, 30) ? AN : BG));
     add('anti-aliased accent text swapped', 'pass',
@@ -77,7 +113,7 @@ function judgeControl(c, families) {
   const fam = c.theme === 'infer' ? lib.familiesFor(families, c.baseline, c.old, c.new) : families[c.theme];
   const result = lib.classifyImage(c.old, c.new, fam);
   const verdict = lib.verdictOf([{ baseline: `controls/${c.name}.png`, ...result }]);
-  return { failed: verdict.failures.length > 0, result };
+  return { failed: verdict.failures.length > 0, result, crops: verdict.crops };
 }
 
 module.exports = { controls, judgeControl, W, H };

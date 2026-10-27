@@ -267,10 +267,11 @@ test('classifier: an old pixel that is a neutral is never a pass, and near-N ver
 test('classifier controls: every negative control fails the gate and every positive one passes, in both themes', () => {
   const { controls, judgeControl } = require('../test-visual/classify-controls');
   const all = controls();
-  assert.ok(all.filter((c) => c.expect === 'fail').length >= 16);
+  assert.ok(all.filter((c) => c.expect === 'fail').length >= 35);
   for (const c of all) {
-    const { failed, result } = judgeControl(c, MIXED);
+    const { failed, result, crops } = judgeControl(c, MIXED);
     assert.equal(failed, c.expect === 'fail', `${c.name}: expected the gate to ${c.expect} (unexpected ${result.unexpected} of ${result.changed})`);
+    if (c.crops) assert.ok(crops > 0, `${c.name}: must produce review crops`);
   }
 });
 
@@ -374,4 +375,18 @@ test('classifier mixes: base and head are never pooled, and the unmodelled cases
   const js = "el.style.background = 'color-mix(in srgb, var(--accent) 20%, transparent)';";
   const listed = lib.familiesOf(TOKENS, GRAPHITE, { old: [sheet], new: [sheet], js: [js] }).mixes.skipped.map((x) => x.why).sort();
   assert.deepEqual(listed, ['alias', 'fallback', 'js', 'nested']);
+});
+
+test('classifier (iii): an unresolved color-mix fails closed in the light theme too', () => {
+  const sheet = 'x{c:color-mix(in srgb, var(--accent) 45%, var(--local-only))}';
+  const fam = lib.familiesOf(TOKENS, GRAPHITE, { old: [sheet], new: [sheet] });
+  assert.deepEqual(fam.mixes.unresolved, ['color-mix(in srgb, var(--accent) 45%, var(--local-only))']);
+  assert.ok(!fam.light.members.some((m) => m.key.startsWith('mix ')));
+  const g = hex('#9aa0a8');
+  const o = hex('#a34425').map((v, i) => Math.round(v * 0.45 + g[i] * 0.55));
+  const n = hex('#24292f').map((v, i) => Math.round(v * 0.45 + g[i] * 0.55));
+  const fill = (c) => image(12, 12, () => c);
+  assert.equal(lib.classifyImage(fill(o), fill(n), fam.light).unexpected, 144);
+  const known = sheet.replace('var(--local-only)', '#9aa0a8');
+  assert.equal(lib.classifyImage(fill(o), fill(n), lib.familiesOf(TOKENS, GRAPHITE, { old: [known], new: [known] }).light).unexpected, 0);
 });

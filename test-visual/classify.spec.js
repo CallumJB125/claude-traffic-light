@@ -210,13 +210,14 @@ test('classifier controls: synthetic PNG pairs through the real decode and gate'
     const png = (img) => { const p = new PNG({ width: img.width, height: img.height }); img.data.copy(p.data); return PNG.sync.write(p); };
     for (const c of controls()) {
       const decoded = { ...c, old: await decode(page, png(c.old)), new: await decode(page, png(c.new)) };
-      const { failed, result } = judgeControl(decoded, families);
-      rows.push({ name: c.name, expect: c.expect, gate: failed ? 'fail' : 'pass', changed: result.changed, unexpected: result.unexpected });
+      const { failed, result, crops } = judgeControl(decoded, families);
+      rows.push({ name: c.name, expect: c.expect, gate: failed ? 'fail' : 'pass', changed: result.changed, unexpected: result.unexpected, crops, wantCrops: !!c.crops });
     }
   } finally {
     await browser.close();
   }
   await testInfo.attach('classify-controls.json', { body: JSON.stringify(rows, null, 2), contentType: 'application/json' });
   expect(rows.filter((r) => r.gate !== r.expect), 'controls whose gate result is wrong').toEqual([]);
-  expect(rows.filter((r) => r.expect === 'fail').length).toBeGreaterThanOrEqual(16);
+  expect(rows.filter((r) => r.wantCrops && !r.crops), 'controls that must produce crops').toEqual([]);
+  expect(rows.filter((r) => r.expect === 'fail').length).toBeGreaterThanOrEqual(35);
 });
