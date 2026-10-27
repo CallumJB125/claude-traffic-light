@@ -2268,6 +2268,8 @@ function createWaitingWindow() { openBuddy('waiting'); }
 // The chat-first thread document (src/thread-main.js), created below with the gate on.
 let ThreadMain = null;
 let NewChat = null;
+// R7-2: Home's gatherer (src/home-main.js register), shared with Usage › Today; and Today's digest binding, set only under the preview.
+let HomeState = null, todayDigest = null;
 let tasksSvc = null;
 let tasksProcess = null;
 const tasksPages = () => [buddyWin?.pageWebContents('tasks')].filter((w) => w && !w.isDestroyed());
@@ -2477,6 +2479,10 @@ if (CHAT_PREVIEW) {
     ciFailedRepos: () => gitEvents(loadConfig()).filter((ev) => ev && ev.signal === 'ci-failed').map((ev) => ev.repo),
     repoOf: (url) => GitSignals.normalizeRemote(url),
   }).register(ipcMain);
+  // Redesign R7-2: Usage › Today (usage-today.html, the usage:today pane), its own guard and channels.
+  const todayAllowed = (e) => fromUtilityPage(e, 'usage:today');
+  require('./src/usage-today-main.js').register({ ipcMain, allowed: todayAllowed, snapshot: () => (HomeState ? HomeState.snapshot() : null), openPage: (id) => openBuddy(id) });
+  todayDigest = { prefix: 'usage-today:digest-', allowed: todayAllowed, only: ['get', 'copy', 'save', 'email'] };
 }
 // Tray and shortcut: focus Home's box, or with the box hidden ("Show the task box on Home" off) the Tasks composer.
 // Either only focuses an empty or kept draft; nothing starts until Run.
@@ -5195,7 +5201,7 @@ const AgentsFind = (() => {
     openMine: () => { reg.showMine(); openBuddy('agents-find'); buddyWin?.sendToPage('agents-find', 'agents:show', 'mine'); },
   };
 })();
-require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null), resumeCap: () => (costGuardResume ? costGuardResume() : null), demo: Demo, simple: () => loadConfig().simpleMode === true, firstRunTour: () => FirstRunTour.homeStatus() });
+HomeState = require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), state: () => aggregateState(), localSessions, tools: () => AiTools.quick(), myDay: MyDay, openPage: openBuddy, openAiTools: aiToolsOpen, collisions: CollisionAlerts.rowCollisions(collisionAlerts), costGuard: () => (costGuardReport ? costGuardReport() : null), resumeCap: () => (costGuardResume ? costGuardResume() : null), demo: Demo, simple: () => loadConfig().simpleMode === true, firstRunTour: () => FirstRunTour.homeStatus() });
 require('./src/guardrails-main.js').install({ ipcMain, dialog, shell, BrowserWindow, rootDir: ROOT_DIR, allowed: (e) => fromUtilityPage(e, 'home'), broadcast: () => broadcastStatus(), log: console.log });
 explainSvc = require('./src/explain-main.js').install({ ipcMain, rootDir: ROOT_DIR, home: os.homedir(), config: loadConfig, inputs: () => aggregateState().inputs || [], sessions: () => aggregateState().sessions || [], inputAllowed: inputSenderOk, homeAllowed: (e) => fromUtilityPage(e, 'home'), clipboard, shell, Notification, openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // explain mode (opt-in, config.explainMode)
 require('./src/widget-lane-main.js').install({ ipcMain, send: (ch, v) => { if (win && !win.isDestroyed()) win.webContents.send(ch, v); }, allowed: (e) => !!win && !win.isDestroyed() && e.sender === win.webContents, sources: { state: () => aggregateState(), local: localSessions, collisions: collisionAlerts, git: { active: () => gitEvents(loadConfig()) }, spend: () => spendSnapshot(loadConfig()), warnAt: () => loadConfig().spend.warnAt } });
@@ -5208,7 +5214,7 @@ deployStatus = require('./src/deploy-status-main.js').install({ ipcMain, file: p
   onQuit(app, () => starter.close());
 }
 require('./src/home-alerts.js').wire({ ipcMain, dialog, clipboard, homeAllowed: (e) => fromUtilityPage(e, 'home'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessions: () => aggregateState().sessions || [], burst: () => BurstIpc.snapshot().d, burstView: () => BurstIpc.status(), burstLooseEnds: () => BurstIpc.looseEndsView(), burstAct: async (kind) => { const r = await BurstIpc.act(kind); return r && r.error === 'Unknown action.' ? BurstIpc.runAction(kind) : r; }, tasksRows: () => tasksSvc?.snapshot().tasks || [], tasksService: getTasks, handoverText: (key) => SessionHandoverMain.writer.text(key), jump: (s) => jumpToSession(s, Rules.folderOf(s.cwd), s.hostApp), mail: () => AgentMail.pending(), openMail: async () => { openBuddy('sessions'); }, busNotices: () => (MCP_AUTO_ON ? McpAuto.notices() : []), busAct: (handle, action) => McpAuto.act(handle, action, { undo: async () => { commitConfig({ mcpBusUserOff: true }); } }) });
-require('./src/digest-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), rootDir: ROOT_DIR, userData: app.getPath('userData'), safeStorage: require('electron').safeStorage, clipboard, dialog, shell, Notification, fetch: (...a) => net.fetch(...a), usageTurns: () => getUsageTurns(), costGuard: () => (costGuardReport ? costGuardReport() : null), workCost: () => workCostReport(), scheduledRuns: (from, to) => (recipeScheduler ? recipeScheduler.runsBetween(from, to).map((h) => ({ ...h, title: recipes.find(h.id)?.title || 'A recipe' })) : []), teamBrief: (cwd) => (loadConfig().teamBrief === true ? TeamActivity.call('team_brief', { cwd }) : null), interruptible: () => InterruptGate.isInterruptible(), openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // privacy-flow: digest-slack
+require('./src/digest-main.js').register({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), rootDir: ROOT_DIR, userData: app.getPath('userData'), safeStorage: require('electron').safeStorage, clipboard, dialog, shell, Notification, fetch: (...a) => net.fetch(...a), usageTurns: () => getUsageTurns(), costGuard: () => (costGuardReport ? costGuardReport() : null), workCost: () => workCostReport(), scheduledRuns: (from, to) => (recipeScheduler ? recipeScheduler.runsBetween(from, to).map((h) => ({ ...h, title: recipes.find(h.id)?.title || 'A recipe' })) : []), teamBrief: (cwd) => (loadConfig().teamBrief === true ? TeamActivity.call('team_brief', { cwd }) : null), interruptible: () => InterruptGate.isInterruptible(), openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), bindings: todayDigest ? [todayDigest] : [] }); // privacy-flow: digest-slack
 { const TeamToday = require('./src/team-today.js'); const fake = IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_FAKE_TEAM_TODAY; TeamToday.wire({ ipcMain, allowed: (e) => fromUtilityPage(e, 'home'), file: path.join(ROOT_DIR, 'team-today.json'), log: (m) => console.log(m), ...(fake ? TeamToday.fixtureSources(JSON.parse(fs.readFileSync(fake, 'utf8'))) : { links: async () => (await buddyWin?.teamMemoryLinks?.()) ?? [], board: async (route) => (await buddyWin?.teamBoardSnapshot?.(route)) ?? null, mine: () => buddyWin?.workCostRows?.().records ?? [], fetch: (...a) => net.fetch(...a) }) }); } // privacy-flow: team-today
 // Team depth lane B: the hub inbox. Live rows arrive as `inbox.item` on the
 // lane C presence sockets (one per linked board, PresenceLink above) and are

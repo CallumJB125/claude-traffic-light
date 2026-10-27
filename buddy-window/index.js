@@ -17,7 +17,7 @@ const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage, dialog, clipboard } = require('electron'); // privacy-flow: team-hub-account
-const { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, DEFAULT_COLLAPSED, sidebarCollapsed, sectionsFor, pageById, paneById, resolve, sectionTarget, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
+const { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, DEFAULT_COLLAPSED, sidebarCollapsed, sectionsFor, pageById, paneById, usagePaneById, USAGE_TAB_IDS, resolve, sectionTarget, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const SettingsPanes = require('../src/settings-panes');
 const { createHubSupervisor } = require('./hub-process');
 const { MAIN_WINDOW } = require('../src/widget-placement.js');
@@ -41,6 +41,7 @@ const { createMyDayBroker } = require('../src/my-day-broker');
 const { createSessionBridge } = require('./session-bridge');
 
 const SIDEBAR_W = 216;
+const USAGE_TABS_H = 40; // R7-2: the Usage tab strip, over the content area (chat-first preview only)
 const DIR = __dirname;
 const LOCAL_PAGES = new Set([
   ...['sidebar.html', 'info.html', 'account.html'].map((f) => pathToFileURL(path.join(DIR, f)).href),
@@ -272,7 +273,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     win: () => win,
     isContent: () => !!content && content === localViews.get('optimiser'),
     isSelected: () => selected === 'optimiser',
-    bounds: () => { const { width, height } = win.getContentBounds(); return { x: SIDEBAR_W, width: Math.max(0, width - SIDEBAR_W), height }; },
+    bounds: () => { const { width, height } = win.getContentBounds(); const top = usageTabsShown() ? USAGE_TABS_H : 0; return { x: SIDEBAR_W, y: top, width: Math.max(0, width - SIDEBAR_W), height: Math.max(0, height - top) }; },
     sendState: () => { const wc = localViews.get('optimiser')?.webContents; if (wc && !wc.isDestroyed()) wc.send('optimiser:state', optimiser.payload()); },
     navChanged: () => pushState(),
     injector: createThemeInjector(),
@@ -451,8 +452,52 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     if (!win) return;
     const { width, height } = win.getContentBounds();
     sidebar?.setBounds({ x: 0, y: 0, width: SIDEBAR_W, height });
-    content?.setBounds({ x: SIDEBAR_W, y: 0, width: Math.max(0, width - SIDEBAR_W), height });
+    const top = placeUsageTabs(width);
+    content?.setBounds({ x: SIDEBAR_W, y: top, width: Math.max(0, width - SIDEBAR_W), height: Math.max(0, height - top) });
     optimiser.layout();
+  }
+
+  // ── Usage tab strip (R7-2, chat-first preview only) ──────────────────────
+  // Its own navigation-only document: it may name one of USAGE_TAB_IDS and nothing else, and it shows only over one of
+  // those pages. With the preview off it is never created, and layout() is what it always was (top 0).
+  let usageTabsView = null;
+  const usageTabsUrl = () => pathToFileURL(path.join(DIR, '..', 'usage-tabs.html')).href;
+  const usageTabsShown = () => chatFirst === true && !!win && USAGE_TAB_IDS.includes(selected) && !!content && localViews.get(selected) === content;
+  function dropUsageTabs() {
+    const v = usageTabsView;
+    usageTabsView = null;
+    if (!v) return;
+    try { if (win && !win.isDestroyed() && win.contentView.children.includes(v)) win.contentView.removeChildView(v); } catch { /* closed */ }
+    dispose(v, null);
+  }
+  function placeUsageTabs(width) {
+    if (chatFirst !== true) return 0;
+    if (!usageTabsShown()) {
+      if (usageTabsView && win.contentView.children.includes(usageTabsView)) win.contentView.removeChildView(usageTabsView);
+      return 0;
+    }
+    if (usageTabsView && usageTabsView.webContents.isDestroyed()) usageTabsView = null;
+    if (!usageTabsView) {
+      const v = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, preload: path.join(DIR, '..', 'usage-tabs-preload.js') } });
+      v.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
+      lockLocal(v);
+      v.webContents.on('render-process-gone', () => { if (usageTabsView === v) dropUsageTabs(); });
+      v.webContents.on('did-finish-load', () => sendUsageTabs());
+      v.webContents.loadFile(path.join(DIR, '..', 'usage-tabs.html')).catch(() => {});
+      usageTabsView = v;
+    }
+    if (!win.contentView.children.includes(usageTabsView)) win.contentView.addChildView(usageTabsView);
+    usageTabsView.setBounds({ x: SIDEBAR_W, y: 0, width: Math.max(0, width - SIDEBAR_W), height: USAGE_TABS_H });
+    return USAGE_TABS_H;
+  }
+  function fromUsageTabs(e) {
+    const wc = usageTabsView?.webContents;
+    return !!wc && !wc.isDestroyed() && e?.sender === wc && e.senderFrame === wc.mainFrame && wc.getURL() === usageTabsUrl();
+  }
+  function sendUsageTabs() {
+    const wc = usageTabsView?.webContents;
+    if (!wc || wc.isDestroyed()) return;
+    try { wc.send('usage-tabs:state', { selected: USAGE_TAB_IDS.includes(selected) ? selected : null }); } catch { /* closed */ }
   }
 
   function attach(view) {
@@ -469,6 +514,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   }
 
   function pushState() {
+    if (chatFirst === true) sendUsageTabs();
     // The selection left the thread before its next view is attached (a hub page loads first).
     if (threadView && selected !== 'thread') retireThread();
     if (newChatView && selected !== 'newchat') retireNewChat();
@@ -1014,6 +1060,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   function route(id, from = null) {
     if (chatFirst !== true) { select(id); return; }
     if (paneById(id)) { select(id); return; } // a Settings pane (R8-1/2): named by main from a closed table
+    if (usagePaneById(id)) { select(id); return; } // R7-2: Usage › Today
     const target = sectionTarget(id) ?? id;
     const r = resolve(target, { chatFirst: true, from });
     // R8-1: with the preview on, Settings is the sheet (its first pane); the old page stays reachable by its own id elsewhere.
@@ -1024,7 +1071,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   }
 
   // A page, or with the dev chat preview on a Settings pane (R8-1: not in PAGES, so the ids do not exist with it off).
-  const pageOf = (id) => pageById(id) ?? (chatFirst === true ? paneById(id) : null);
+  const pageOf = (id) => pageById(id) ?? (chatFirst === true ? paneById(id) ?? usagePaneById(id) : null);
 
   function select(id) {
     const page = pageOf(id);
@@ -1050,7 +1097,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
 
   function onSelect(e, id) {
     if (!fromSidebar(e)) return;
-    if (typeof id !== 'string' || !(pageById(id) || (chatFirst === true && sectionTarget(id)))) return;
+    if (typeof id !== 'string' || !(pageById(id) || (chatFirst === true && (sectionTarget(id) || usagePaneById(id))))) return;
     route(id, 'sidebar');
   }
 
@@ -1254,6 +1301,11 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   const fromSettingsPane = (e) => SettingsPanes.OWNERS.some((p) => { const wc = localViews.get(`settings:${p}`)?.webContents; return !!wc && e.sender === wc && e.senderFrame === wc.mainFrame && isLocalPage(e.senderFrame?.url ?? ''); });
   if (chatFirst === true) ipcMain.on('settings:go-pane', (e, pane) => { if (fromSettingsPane(e) && SettingsPanes.isOwner(pane)) select(`settings:${pane}`); });
   if (chatFirst === true) ipcMain.on('buddy:open-newchat', (e) => { if (fromSidebar(e)) openNewChat(); });
+  // R7-2: the Usage tab strip's one effect: one of the five tabs, from the strip itself, while it is showing.
+  if (chatFirst === true) ipcMain.on('usage-tabs:select', (e, ...args) => {
+    if (!fromUsageTabs(e) || !usageTabsShown() || args.length !== 1 || !USAGE_TAB_IDS.includes(args[0])) return;
+    if (args[0] !== selected) select(args[0]);
+  });
   // A sidebar row opens its thread (navigation only; main resolves the row).
   if (chatFirst === true) ipcMain.on('buddy:open-thread', (e, id) => {
     if (!fromSidebar(e) || typeof id !== 'string' || !ROW_ID.test(id)) return;
@@ -1401,6 +1453,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       // Close every page: detached views otherwise keep running (and the board
       // page keeps its socket). The hub keeps running while the app runs, so
       // reopening is instant; it stops with the app.
+      dropUsageTabs();
       for (const v of [sidebar, infoView, hubView, accountView, ...localViews.values()]) dispose(v, null);
       optimiser.drop();
       optimiser.stop();

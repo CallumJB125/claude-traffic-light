@@ -114,9 +114,13 @@ test('gate on: the top row, the filter and the footer', async () => {
   assert.equal(s.q('.sb-filter').getAttribute('role'), 'radiogroup');
   assert.deepEqual(s.qa('#nav-foot button').map((b) => b.textContent), ['Board', 'Usage', 'Settings']);
   s.qa('#nav-foot button')[1].click();
-  assert.deepEqual(s.calls.select, ['usage']);
-  await s.push({ selected: 'stats' });
-  assert.equal(s.qa('#nav-foot button')[1].getAttribute('aria-current'), 'page', 'Stats lives in the Usage section');
+  assert.deepEqual(s.calls.select, ['usage:today'], 'R7-2: Usage opens on Today');
+  for (const id of ['usage:today', 'usage', 'stats', 'optimiser', 'clients']) {
+    await s.push({ selected: id });
+    assert.equal(s.qa('#nav-foot button')[1].getAttribute('aria-current'), 'page', `${id} is one of Usage's tabs`);
+  }
+  await s.push({ selected: 'board' });
+  assert.equal(s.qa('#nav-foot button')[1].getAttribute('aria-current'), null);
 });
 
 test('filters: In terminals, Team, and Chats (empty until R2)', async () => {
@@ -220,7 +224,7 @@ test('a page selected before the chat scripts loaded still sets the footer', asy
   const help = await boot({ early: { selected: 'help' } });
   assert.deepEqual(help.qa('#nav-foot [aria-current]').map((b) => b.dataset.page), [], 'Help open: no footer row is current');
   const usage = await boot({ early: { selected: 'usage' } });
-  assert.deepEqual(usage.qa('#nav-foot [aria-current]').map((b) => b.dataset.page), ['usage']);
+  assert.deepEqual(usage.qa('#nav-foot [aria-current]').map((b) => b.dataset.page), ['usage:today']);
 });
 
 test('a refresh with unchanged rows leaves the tree nodes alone', async () => {
@@ -318,7 +322,7 @@ test('R1 follow-up 8c: a read that changes only ages keeps every node and update
 
 test('R1 follow-up 8d: the footer starts from buddy:pages\' selection, and with none marks nothing', async () => {
   const s = await boot({ selected: 'usage' });
-  assert.deepEqual(s.qa('.sb-foot[aria-current="page"]').map((b) => b.dataset.page), ['usage']);
+  assert.deepEqual(s.qa('.sb-foot[aria-current="page"]').map((b) => b.dataset.page), ['usage:today']);
   const t = await boot({ selected: null });
   assert.equal(t.qa('.sb-foot').length, 3);
   assert.deepEqual(t.qa('.sb-foot[aria-current="page"]'), [], 'not Board by default');

@@ -123,7 +123,8 @@ function createOptimiser({
     const w = win();
     if (!w || !view || !w.contentView.children.includes(view)) return;
     const b = bounds();
-    view.setBounds({ x: b.x, y: BAR_H, width: b.width, height: Math.max(0, b.height - BAR_H) });
+    // R7-2: below the Usage tab strip when it shows (b.y is 0 otherwise, as before).
+    view.setBounds({ x: b.x, y: (b.y || 0) + BAR_H, width: b.width, height: Math.max(0, b.height - BAR_H) });
   }
 
   // The handshake result decides everything: only `present` loads the dashboard.

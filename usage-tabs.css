@@ -1,0 +1,10 @@
+/* The Usage tab strip (redesign R7-2). Tokens only. */
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: var(--text-sm)/1.3 var(--font); -webkit-font-smoothing: antialiased; overflow: hidden; }
+* { box-sizing: border-box; }
+.ut { height: 100%; display: flex; align-items: flex-end; padding: 0 var(--space-6); border-bottom: 1px solid var(--line); }
+.ut-tabs { display: flex; gap: var(--space-1); }
+.ut-tab { font: inherit; color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent; padding: var(--space-2) var(--space-3); margin-bottom: -1px; cursor: pointer; white-space: nowrap; }
+.ut-tab:hover { color: var(--text); }
+.ut-tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.ut-tab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; border-radius: var(--radius-sm); }
+@media (forced-colors: active) { .ut-tab[aria-selected="true"] { border-bottom-color: Highlight; } }

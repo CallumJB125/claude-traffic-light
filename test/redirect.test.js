@@ -8,7 +8,7 @@ const P = require('../buddy-window/pages.js');
 
 const ALL_IDS = [...P.flat().map((p) => p.id), ...P.FLOW_IDS];
 // Destinations that are built: they redirect with the preview on.
-const BUILT = ['home', 'myday'];
+const BUILT = ['home', 'myday', 'stats', 'optimiser', 'clients'];
 
 // §R2.5, in the plan's words → the encoded row.
 const TABLE = {
@@ -74,7 +74,9 @@ test('the preview on: the sidebar filters (R1) and Home and My day → the new c
   assert.deepEqual(moved, { overview: { sidebar: 'all' }, waiting: { sidebar: 'needs' }, sessions: { sidebar: 'terminals' }, home: { newchat: true }, myday: { newchat: true } });
   // Review S3: tasks' fallback is the new chat too, but tasks itself is unbuilt (R2) and stays put.
   assert.deepEqual(P.resolve('tasks', { chatFirst: true }), { page: 'tasks' });
+  // R7-2 (review nit): Usage's tabs are built, and each tab is the page itself, so they resolve to themselves.
   for (const id of ['stats', 'optimiser', 'clients', 'usage']) assert.deepEqual(P.resolve(id, { chatFirst: true }), { page: id }, id);
+  for (const id of ['stats', 'optimiser', 'clients']) assert.equal(P.REDIRECTS[id].until, undefined, `${id} is built`);
 });
 
 test('a select from the sidebar itself is never redirected (a row click on overview stays on overview)', () => {
