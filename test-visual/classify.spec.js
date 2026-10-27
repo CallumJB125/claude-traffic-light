@@ -219,5 +219,5 @@ test('classifier controls: synthetic PNG pairs through the real decode and gate'
   await testInfo.attach('classify-controls.json', { body: JSON.stringify(rows, null, 2), contentType: 'application/json' });
   expect(rows.filter((r) => r.gate !== r.expect), 'controls whose gate result is wrong').toEqual([]);
   expect(rows.filter((r) => r.wantCrops && !r.crops), 'controls that must produce crops').toEqual([]);
-  expect(rows.filter((r) => r.expect === 'fail').length).toBeGreaterThanOrEqual(35);
+  expect(rows.filter((r) => r.expect === 'fail').length).toBeGreaterThanOrEqual(38);
 });

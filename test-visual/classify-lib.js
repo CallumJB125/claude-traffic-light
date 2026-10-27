@@ -507,6 +507,7 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
   const cache = new Map();
   const expl = new Array(total);
   const strong = new Uint8Array(total);
+  const exCore = new Uint8Array(total);
   for (let i = 0; i < total; i += 1) {
     if (!changed[i]) continue;
     const j = i * 4;
@@ -528,21 +529,31 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
         const neutrals = local ? [local, ...families.surfaces] : families.surfaces;
         e = explainPixel(oldPx, newPx, neutrals, families.members);
         if (e.verdict === 'unexpected' && exceptions.length) {
-          const x2 = explainPixel(oldPx, newPx, neutrals, exceptions);
-          if (x2.verdict === 'pass') e = { ...x2, verdict: 'exception' };
+          // N2 (review round 2): an exception is its exact colour pair. Only the core (old within ΔE 1 of the
+          // exception's old colour AND new within ΔE 1 of its paired new colour) is strong. A blend along the
+          // exception's segment is accepted only within EVIDENCE_RADIUS of a core pixel and is never evidence for
+          // anything else, so a grey shifted along the same direction can't pass on its own.
+          const oL = lab(oldPx); const nL = lab(newPx);
+          const core = exceptions.find((x) => deltaE00(oL, lab(x.old)) <= DE_NOISE && deltaE00(nL, lab(x.new)) <= DE_NOISE);
+          if (core) e = { verdict: 'exception', core: true, key: core.key };
+          else {
+            const x2 = explainPixel(oldPx, newPx, neutrals, exceptions);
+            if (x2.verdict === 'pass') e = { ...x2, verdict: 'exception', core: false };
+          }
         }
       }
       cache.set(key, e);
     }
     expl[i] = e;
-    if ((e.verdict === 'pass' && !e.weak) || e.verdict === 'exception') strong[i] = 1;
+    if (e.verdict === 'pass' && !e.weak) strong[i] = 1;
+    else if (e.verdict === 'exception' && e.core) { strong[i] = 1; exCore[i] = 1; }
   }
-  const near = (i) => {
+  const near = (i, grid = strong) => {
     const x = i % w; const y = (i - x) / w;
     for (const [dx, dy, d2] of offsets) {
       if (d2 > EVIDENCE_RADIUS * EVIDENCE_RADIUS) break;
       const xx = x + dx; const yy = y + dy;
-      if (xx >= 0 && yy >= 0 && xx < w && yy < h && strong[yy * w + xx]) return true;
+      if (xx >= 0 && yy >= 0 && xx < w && yy < h && grid[yy * w + xx]) return true;
     }
     return false;
   };
@@ -554,6 +565,7 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
     let e = expl[i];
     const needsEvidence = e.verdict === 'unchanged' || e.verdict === 'skipped' || (e.verdict === 'pass' && e.weak);
     if (needsEvidence && !near(i)) e = { ...e, verdict: 'unexpected', reason: 'no strong evidence within 2 px' };
+    else if (e.verdict === 'exception' && !e.core && !near(i, exCore)) e = { ...e, verdict: 'unexpected', reason: 'exception blend with no exception core within 2 px' };
     out[e.verdict] += 1;
     if (e.verdict === 'noise') {
       const xn = i % w; const yn = (i - xn) / w; const tn = `${Math.floor(xn / tile)},${Math.floor(yn / tile)}`;
@@ -579,13 +591,13 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
 }
 
 // Exception entries from classify.config.json → members, for one baseline.
-// A named exception applies to the baselines it lists, or to every baseline with "baselines": "*". An optional
-// "theme" ('light' | 'dark') scopes it to baselines classified in that theme (themeFor's result), so a dark-only
-// token fix can't explain a light pixel. Each entry is still only its exact old→new colour pairs.
+// A named exception applies only to the baselines it lists (N2, review round 2: no wildcard). An optional "theme"
+// ('light' | 'dark') also requires the baseline to be classified in that theme (themeFor's result). In
+// classifyImage only the exact pair (± ΔE 1) is strong; blends along it need a core pixel within 2 px.
 function exceptionsFor(baseline, config, theme) {
   const out = [];
   for (const e of (config && config.exceptions) || []) {
-    if (!(e.baselines === '*' || (Array.isArray(e.baselines) && e.baselines.includes(baseline)))) continue;
+    if (!(Array.isArray(e.baselines) && e.baselines.includes(baseline))) continue;
     if (e.theme && e.theme !== theme) continue;
     for (const o of e.old || []) for (const n of e.new || []) out.push({ key: `exception:${e.name}`, old: parseColour(o).slice(0, 3), new: parseColour(n).slice(0, 3) });
   }

@@ -105,13 +105,25 @@ function controls() {
   // a mixed image (light page, dark panel, about half each) is ambiguous and fails closed
   out.push({ name: 'mixed light and dark image', theme: 'infer', baseline: 'controls/mixed-darwin.png', expect: 'fail',
     old: image((x, y) => (box(x, y, 20, 18, 28, 26) ? DO : x < 32 ? DB : L)), new: image((x, y) => (box(x, y, 20, 18, 28, 26) ? DN : x < 32 ? DB : L)) });
+  // N2 (review round 2): with the dark idle exception loaded, a grey element shifted along the idle direction
+  // (no Idle dot anywhere) must fail; the Idle dot itself, solid and anti-aliased, must pass.
+  const IDLE = [{ key: 'exception:idle', old: hex('#726c62'), new: hex('#7c766b') }];
+  const PANEL = hex('#202329');
+  const el = (x, y) => box(x, y, 4, 4, 60, 44);
+  for (const [o, n] of [[[30, 30, 30], [39, 39, 39]], [[60, 58, 55], [67, 65, 62]], [[90, 86, 80], [99, 95, 89]]]) {
+    out.push({ name: `dark: grey ${o.join(',')} shifted along the idle direction, exception loaded`, theme: 'dark', expect: 'fail', exceptions: IDLE,
+      old: image((x, y) => (el(x, y) ? o : PANEL)), new: image((x, y) => (el(x, y) ? n : PANEL)) });
+  }
+  const dot = (x, y, c) => { const d = Math.hypot(x - 32, y - 24); return d <= 5 ? c : d < 7 ? mix(c, PANEL, (7 - d) / 2) : PANEL; };
+  out.push({ name: 'dark: the Idle dot (solid + anti-aliased) passes as the idle exception', theme: 'dark', expect: 'pass', exceptions: IDLE,
+    old: image((x, y) => dot(x, y, hex('#726c62'))), new: image((x, y) => dot(x, y, hex('#7c766b'))) });
   return out;
 }
 
 // Runs one control through the classifier and the gate. Returns { failed, result }.
 function judgeControl(c, families) {
   const fam = c.theme === 'infer' ? lib.familiesFor(families, c.baseline, c.old, c.new) : families[c.theme];
-  const result = lib.classifyImage(c.old, c.new, fam);
+  const result = lib.classifyImage(c.old, c.new, fam, { exceptions: c.exceptions || [] });
   const verdict = lib.verdictOf([{ baseline: `controls/${c.name}.png`, ...result }]);
   return { failed: verdict.failures.length > 0, result, crops: verdict.crops };
 }

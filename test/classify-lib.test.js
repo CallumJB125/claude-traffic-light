@@ -267,7 +267,7 @@ test('classifier: an old pixel that is a neutral is never a pass, and near-N ver
 test('classifier controls: every negative control fails the gate and every positive one passes, in both themes', () => {
   const { controls, judgeControl } = require('../test-visual/classify-controls');
   const all = controls();
-  assert.ok(all.filter((c) => c.expect === 'fail').length >= 35);
+  assert.ok(all.filter((c) => c.expect === 'fail').length >= 38);
   for (const c of all) {
     const { failed, result, crops } = judgeControl(c, MIXED);
     assert.equal(failed, c.expect === 'fail', `${c.name}: expected the gate to ${c.expect} (unexpected ${result.unexpected} of ${result.changed})`);
@@ -394,12 +394,16 @@ test('classifier (iii): an unresolved color-mix fails closed in the light theme 
 test('classifier: the idle exception is the dark #726c62 → #7c766b pair only', () => {
   const config = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'test-visual', 'classify.config.json'), 'utf8'));
   const idle = config.exceptions.find((e) => e.name === 'idle');
-  assert.deepEqual([idle.old, idle.new, idle.theme, idle.baselines], [['#726c62'], ['#7c766b'], 'dark', '*']);
+  assert.deepEqual([idle.old, idle.new, idle.theme], [['#726c62'], ['#7c766b'], 'dark']);
+  assert.ok(Array.isArray(idle.baselines), 'an explicit list, never a wildcard');
   assert.match(idle.reason, /R0b contrast fix, §R2\.2/);
-  const dark = lib.exceptionsFor('x/any-darwin.png', config, 'dark');
+  const listed = { exceptions: [{ ...idle, baselines: ['x/any-darwin.png'] }] };
+  const dark = lib.exceptionsFor('x/any-darwin.png', listed, 'dark');
   assert.deepEqual(dark.map((e) => e.key), ['exception:idle']);
-  assert.deepEqual(lib.exceptionsFor('x/any-darwin.png', config, 'light'), []);
-  assert.deepEqual(lib.exceptionsFor('x/any-darwin.png', config, 'none'), []);
+  assert.deepEqual(lib.exceptionsFor('x/other-darwin.png', listed, 'dark'), []);
+  assert.deepEqual(lib.exceptionsFor('x/any-darwin.png', listed, 'light'), []);
+  assert.deepEqual(lib.exceptionsFor('x/any-darwin.png', listed, 'none'), []);
+  assert.deepEqual(lib.exceptionsFor('x/any-darwin.png', { exceptions: [{ ...idle, baselines: '*' }] }, 'dark'), [], 'a wildcard matches nothing');
   const fill = (c) => image(6, 6, () => c);
   const ok = lib.classifyImage(fill(hex('#726c62')), fill(hex('#7c766b')), ALL.dark, { exceptions: dark });
   assert.equal(ok.exception, 36);
@@ -410,4 +414,25 @@ test('classifier: the idle exception is the dark #726c62 → #7c766b pair only',
   // listed baselines still work
   assert.equal(lib.exceptionsFor('a.png', { exceptions: [{ name: 'n', baselines: ['a.png'], old: ['#000'], new: ['#111'] }] }).length, 1);
   assert.equal(lib.exceptionsFor('b.png', { exceptions: [{ name: 'n', baselines: ['a.png'], old: ['#000'], new: ['#111'] }] }).length, 0);
+});
+
+test('classifier N2: an exception is strong only at its core; a grey moved along its direction fails', () => {
+  const config = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'test-visual', 'classify.config.json'), 'utf8'));
+  const idle = config.exceptions.find((e) => e.name === 'idle');
+  const ex = lib.exceptionsFor('x/a-darwin.png', { exceptions: [{ ...idle, baselines: ['x/a-darwin.png'] }] }, 'dark');
+  assert.equal(ex.length, 1);
+  // labfix-review round 2: a 160×80 element on --panel, no accent and no Idle dot anywhere
+  const P = hex('#202329');
+  for (const [o, n] of [[[30, 30, 30], [39, 39, 39]], [[60, 58, 55], [67, 65, 62]], [[90, 86, 80], [99, 95, 89]]]) {
+    const el = (x, y) => x >= 20 && x < 180 && y >= 20 && y < 100;
+    const r = lib.classifyImage(image(200, 120, (x, y) => (el(x, y) ? o : P)), image(200, 120, (x, y) => (el(x, y) ? n : P)), ALL.dark, { exceptions: ex });
+    assert.equal(r.exception, 0, `${o} → ${n}`);
+    assert.equal(r.unexpected, 12800, `${o} → ${n}`);
+  }
+  // a blend on the idle segment two pixels from the core is accepted; a lone one is not
+  const blend = mix(hex('#726c62'), P, 0.5); const blendN = mix(hex('#7c766b'), P, 0.5);
+  const near = lib.classifyImage(image(10, 10, (x) => (x < 3 ? hex('#726c62') : x === 4 ? blend : P)), image(10, 10, (x) => (x < 3 ? hex('#7c766b') : x === 4 ? blendN : P)), ALL.dark, { exceptions: ex });
+  assert.equal(near.unexpected, 0);
+  const lone = lib.classifyImage(image(10, 10, (x) => (x === 6 ? blend : P)), image(10, 10, (x) => (x === 6 ? blendN : P)), ALL.dark, { exceptions: ex });
+  assert.equal(lone.unexpected, lone.changed);
 });
