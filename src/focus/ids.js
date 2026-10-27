@@ -84,4 +84,21 @@ function hostIs(s, app, termProgram) {
   return !!termProgram && str(envOf(s).TERM_PROGRAM).toLowerCase() === termProgram.toLowerCase();
 }
 
-module.exports = { hostIs, envOf, inTmux, itermUuid, tty, kittyWindow, kittyListen, weztermPane, tmuxPane, tmuxSocket, tmuxServerPid, launchCwd, safePath, okPath };
+// The sidebar's origin label (redesign R1): which terminal a session runs in,
+// as one of a closed set of display names, or null. Raw host strings never
+// leave main. The order and the host-over-TERM_PROGRAM rule are hostIs's, and
+// each pair is the one its focus adapter uses (iterm.js, terminal-app.js).
+// Plexiform Terminal has no app id until that app ships; its row is inert.
+const PLEXIFORM_TERMINAL_APP = null;
+const ORIGINS = Object.freeze([
+  ['iTerm', 'iTerm2', 'iTerm.app'],
+  ['Terminal', 'Terminal', 'Apple_Terminal'],
+  ['Plexiform Terminal', PLEXIFORM_TERMINAL_APP, null],
+]);
+function originOf(s) {
+  if (!s || typeof s !== 'object') return null;
+  for (const [label, app, termProgram] of ORIGINS) if (app && hostIs(s, app, termProgram)) return label;
+  return null;
+}
+
+module.exports = { originOf, ORIGINS, hostIs, envOf, inTmux, itermUuid, tty, kittyWindow, kittyListen, weztermPane, tmuxPane, tmuxSocket, tmuxServerPid, launchCwd, safePath, okPath };

@@ -994,6 +994,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // Chat-first preview only (redesign R1): which sidebar filter a redirect asked for.
   // `seq` counts requests so the sidebar refocuses even when the filter is unchanged.
   let sidebarFocus = { filter: 'all', seq: 0 };
+  // The sidebar document's own read generation: bumped when it navigates or reloads, never by select().
+  let sidebarGeneration = 0;
 
   // Every navigation by id (openBuddy via goTo, and the sidebar) comes through
   // here. Preview off, it is select(). Preview on, a section id opens its
@@ -1208,6 +1210,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     win.contentView.addChildView(sidebar);
     sidebar.webContents.loadFile(path.join(DIR, 'sidebar.html')).catch(() => {});
     sidebar.webContents.once('did-finish-load', () => { pushState(); win?.show(); });
+    if (chatFirst === true) sidebar.webContents.on('did-start-navigation', () => { sidebarGeneration++; });
     win.on('resize', layout);
     win.on('blur',()=>{if(!setupModalTicket)setupLocalGeneration++;});
     win.on('blur',()=>{if(!tasksModalTicket)tasksGeneration++;});
@@ -1245,6 +1248,16 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     // Main-only (bus_card_add): a card an AI session asked for, on the board its own verified session routes to.
     addAgentCard: (session, args) => (captureEnabled ? workCapture.addAgentCard(session, args) : Promise.resolve({ reason: 'CARDS_OFF', message: 'Automatic cards are off in Plexiform, so AI sessions cannot add cards.' })),
     sessionFacts: (session) => workCapture.sessionFacts?.(session) ?? null,
+    // Chat-first preview only: the sidebar document, for read-only session rows
+    // (src/overview-main.js sidebarOwner). Visible, not necessarily focused.
+    sidebarReadContext(){
+      if(chatFirst!==true)return null;
+      const wc=sidebar?.webContents;
+      if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||!win.contentView.children.includes(sidebar)||!win.isVisible()||win.isMinimized())return null;
+      const expected=pathToFileURL(path.join(DIR,'sidebar.html')).href;
+      if(wc.getURL()!==expected||wc.mainFrame?.url!==expected||wc.isLoading())return null;
+      return {window:win,contents:wc,generation:sidebarGeneration,document:0,foreground:false};
+    },
     overviewReadContext(){
       const v=localViews.get('overview'),wc=v?.webContents;
       if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='overview'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized())return null;

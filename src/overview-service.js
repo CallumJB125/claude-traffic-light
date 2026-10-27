@@ -9,6 +9,7 @@ const Machine=require('../hooks/session-machine');
 const AgentReports=require('./agent-self-report');
 const {clean}=require('./work-capture');
 const Directory=require('./session-directory');
+const Ids=require('./focus/ids');
 const {createTeamSessionControls}=require('./team-session-controls');
 const {personHandoffs}=require('./handoff-people');
 const FollowupSchedules=require('./recipe-schedules');
@@ -96,7 +97,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
  async function build(time,alive){
   let all;try{all=await sourcesData();}catch{all={sources:[],capture:[],partial:true};}
   if(!alive())return null;
-  const next=new Map(),rows=[],usedCards=new Set(),meta=new Map();let partial=all.partial,omitted=0;
+  const next=new Map(),rows=[],usedCards=new Set(),meta=new Map(),origins=new Map();let partial=all.partial,omitted=0;
   const teamMeta=(source,row)=>source.kind==='team'&&id(row.team_id)?{teamKey:teamKey(source.key,row.team_id),teamName:clean(row.team_name,80)||'Team'}:{};
   const good=all.sources.filter(({source,data})=>{try{const ok=validData(source,data);if(!ok||data.status!=='complete')partial=true;return ok;}catch{partial=true;return false;}});
   const binding=(raw)=>{if(raw.remote||raw.device)return null;const capture=all.capture.find(c=>c.provider===raw.source&&c.session_id===raw.sessionId&&c.task_id===(raw.taskId??'session')&&!c.untracked&&id(c.card_id));if(!capture)return null;
@@ -109,6 +110,8 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
    const projected=Session.snapshot({sessions:[{...raw,remote:false,device:null}],now:time}).sessions[0];
    let status=projected?.status??Organise.headingOf(null),bucket=projected?.bucket??'idle',detail=projected?.detail??null;if(raw.source==='codex'&&Machine.codexInputPending?.(raw,time)){bucket='needs';status=Organise.headingOf(bucket);detail=null;}
    const dto={id:identity,handle:null,label:parentId?'Agent':'Session',provider:provider(raw.source,raw.model),device:{label:raw.remote||raw.device?clean(raw.deviceName||'Paired device',80):'This device',local:!raw.remote&&!raw.device},board:{label:bound?clean(bound.row.board_name,80)||'Board':raw.scope?.state==='personal'?'Personal':'Unassigned',kind:bound?bound.source.kind:raw.scope?.state==='personal'?'personal':'unknown'},project:Session.snapshot({sessions:[{cwd:raw.cwd}],now:time}).sessions[0]?.project??Organise.FALLBACK,looseEnds:parentId?null:looseBadge(raw.cwd),status,bucket,...(detail?{detail}:{}),freshness:fresh,age_ms:elapsed,task:task(card??(typeof raw.taskTitle==='string'?{title:raw.taskTitle}:null)),children:[],handoffs:personHandoffs(card,bound?.data.principal?.member_id??null),capabilities:{open:capability(!!bound,'Open card',bound?'':'No current tracked card is available.'),message:capability(!!bound&&liveOwn(bound.data,bound.row)&&fresh==='recent'&&!!card.repo?.id&&typeof bound.source.send==='function','Message',(!bound&&unmanaged(raw.source))||'A current owned runner with messaging is required.')}};
+   // The terminal it runs in, for the chat-first sidebar only: main-side, a closed label set (focus/ids originOf).
+   origins.set(identity,Ids.originOf(raw));
    if(bound){usedCards.add(cardIdentity(bound.source,bound.data,bound.row));register(dto,{kind:'board',bound,pin:keyOf(bound.row)},next);meta.set(identity,{kind:'board',boardRunId:card.run?.id,...teamMeta(bound.source,bound.row)});}else{register(dto,{kind:'reported'},next);meta.set(identity,{kind:'reported',nativeSessionId:raw.sessionId,nativeTurnId:raw.codexTurnId??null});}
    const children=Array.isArray(raw.source==='codex'?raw.codexAgents:raw.agents)?(raw.source==='codex'?raw.codexAgents:raw.agents):[];
    for(const child of children.slice(0,64)){
@@ -143,7 +146,18 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   }
   if(!alive())return null;
   rows.sort((a,b)=>(a.age_ms??Infinity)-(b.age_ms??Infinity));
-  return{rows,next,partial,omitted,meta};
+  return{rows,next,partial,omitted,meta,origins};
+ }
+ // Read-only rows for another document (the chat-first sidebar). The same
+ // build, but it never touches this service's epochs, action handles, team
+ // route or caches, so it cannot disturb the Overview page; its liveness is the
+ // caller's, not the Overview page's. The rows carry no handles.
+ async function passiveRows(alive){
+  if(typeof alive!=='function'||!alive())return null;
+  const time=now(),built=await build(time,alive);
+  if(!built||!alive())return null;
+  for(const row of built.rows)row.handle=null;
+  return{status:built.partial||built.omitted?'partial':'complete',observed_at:time,omitted:built.omitted,rows:built.rows,origins:built.origins};
  }
  async function action(request,message=false){
   if(!closed(request,message?['handle','text']:['handle'])||typeof request.handle!=='string'||!UUID.test(request.handle)||message&&(typeof request.text!=='string'||!request.text.trim()||request.text.includes('\0')||request.text.trim().length>4000||Buffer.byteLength(request.text.trim())>8192))return response('invalid');
@@ -329,7 +343,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   if(!alive())return{ok:false,status:'unconfirmed',error:'The view changed. Inspect the receipt before sending again.'};
   return out?.ok===true?out:{ok:false,status:['forbidden','stale','busy','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
- return{snapshot,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
+ return{snapshot,passiveRows,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
   followupReview,followupEnqueue,
   coordinatorRequestOwner:coordinator.requestOwner,coordinatorRemoteList:coordinator.remoteList,coordinatorRemoteSend:coordinator.remoteSend,coordinatorRemoteCancel:coordinator.remoteCancel,coordinatorRemoteReplace:coordinator.remoteReplace,
   coordinatorInventory:coordinator.inventory,coordinatorPropose:coordinator.propose,coordinatorConfirm:coordinator.confirm,coordinatorResults:coordinator.results,coordinatorCancel:coordinator.cancel,

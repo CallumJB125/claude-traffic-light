@@ -1781,7 +1781,7 @@ if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{over
 // Team depth lane C: board presence over the person's own hub sign-in (who views which card, who runs where); feeds Team sessions and beats this computer's open shared session.
 const PresenceLink=require('./src/team-presence-link').createPresenceLink({links:async()=>devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[],WebSocket:require('ws'),log:m=>console.log(m),onChange:()=>OverviewMain.directoryChanged(),onInbox:(hub,item)=>ingestTeamInbox(hub,[item])}); // privacy-flow: team-hub
 const OverviewMain=require('./src/overview-main').createOverviewMain({
-  buddy:()=>buddyWin,sessions:()=>aggregateState().sessions||[],
+  buddy:()=>buddyWin,chatPreview:CHAT_PREVIEW,sessions:()=>aggregateState().sessions||[],
   // Burst's loose ends per repository (BurstIpc is created further down; null until then and whenever Burst lacks the check).
   looseEnds:()=>{try{return BurstIpc.looseEndsView();}catch{return null;}},
   presence:team=>{void PresenceLink.refresh();return PresenceLink.latest(team);},presenceView:r=>PresenceLink.view(r),
