@@ -178,7 +178,7 @@ test('classifier: every changed baseline changed only by the accent swap', async
   await testInfo.attach('classify-report.json', { body, contentType: 'application/json' });
   for (const b of report.baselines) {
     if (b.added || b.removed) console.log(`classify ${b.baseline}: ${b.added ? 'added' : 'removed'}`);
-    else console.log(`classify ${b.baseline} [${b.theme} by ${b.themeSource}, ${b.themeShare}]: changed ${b.changed}, noise ${b.noise}, pass ${b.pass}, unchanged ${b.unchanged}, skipped ${b.skipped}, exception ${b.exception}, unexpected ${b.unexpected} (${b.unexpectedPct} %)`);
+    else console.log(`classify ${b.baseline} [${b.theme} by ${b.themeSource}, ${b.themeShare}]: changed ${b.changed}, noise ${b.noise} (dense tiles ${b.noiseTiles}, max tile ${b.maxNoiseTileShare}), pass ${b.pass}, unchanged ${b.unchanged}, skipped ${b.skipped}, exception ${b.exception}, unexpected ${b.unexpected} (${b.unexpectedPct} %)`);
   }
   console.log(`classify totals: ${JSON.stringify(report.totals)}, crops ${report.crops}`);
   console.log(`classify mixes: ${report.mixes.parsed} accent color-mix rules parsed, ${report.mixes.unresolved.length} unresolved: ${report.mixes.unresolved.join(' | ')}`);

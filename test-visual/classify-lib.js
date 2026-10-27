@@ -447,7 +447,7 @@ const classifyPixel = (oldPx, newPx, neutrals, members) => explainPixel(oldPx, n
 function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, onPixel = null } = {}) {
   const total = oldImg.width * oldImg.height;
   if (oldImg.width !== newImg.width || oldImg.height !== newImg.height) {
-    return { total, changed: total, noise: 0, pass: 0, unchanged: 0, skipped: 0, exception: 0, unexpected: total, sizeChanged: true, tiles: [], samples: [] };
+    return { total, changed: total, noise: 0, pass: 0, unchanged: 0, skipped: 0, exception: 0, unexpected: total, sizeChanged: true, tiles: [], samples: [], noiseTiles: 0, maxNoiseTileShare: 0 };
   }
   const { width: w, height: h } = oldImg;
   const A = oldImg.data; const B = newImg.data;
@@ -458,7 +458,7 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
     if (A[j + 3] === 0 && B[j + 3] === 0) continue;
     if (A[j] !== B[j] || A[j + 1] !== B[j + 1] || A[j + 2] !== B[j + 2] || A[j + 3] !== B[j + 3]) { changed[i] = 1; nChanged += 1; }
   }
-  const out = { total, changed: nChanged, noise: 0, pass: 0, unchanged: 0, skipped: 0, exception: 0, unexpected: 0, sizeChanged: false, tiles: [], samples: [] };
+  const out = { total, changed: nChanged, noise: 0, pass: 0, unchanged: 0, skipped: 0, exception: 0, unexpected: 0, sizeChanged: false, tiles: [], samples: [], noiseTiles: 0, maxNoiseTileShare: 0 };
   if (!nChanged) return out;
   const offsets = [];
   for (let dy = -RADIUS; dy <= RADIUS; dy += 1) for (let dx = -RADIUS; dx <= RADIUS; dx += 1) if ((dx || dy) && dx * dx + dy * dy <= RADIUS * RADIUS) offsets.push([dx, dy, dx * dx + dy * dy]);
@@ -506,6 +506,7 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
     return false;
   };
   const tiles = new Map();
+  const noiseTiles = new Map();
   const hx = (buf, j) => `#${buf.subarray(j, j + 3).reduce((s, v) => s + v.toString(16).padStart(2, '0'), '')}`;
   for (let i = 0; i < total; i += 1) {
     if (!changed[i]) continue;
@@ -513,7 +514,11 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
     const needsEvidence = e.verdict === 'unchanged' || e.verdict === 'skipped' || (e.verdict === 'pass' && e.weak);
     if (needsEvidence && !near(i)) e = { ...e, verdict: 'unexpected', reason: 'no strong evidence within 2 px' };
     out[e.verdict] += 1;
-    if (e.verdict === 'noise') continue;
+    if (e.verdict === 'noise') {
+      const xn = i % w; const yn = (i - xn) / w; const tn = `${Math.floor(xn / tile)},${Math.floor(yn / tile)}`;
+      noiseTiles.set(tn, (noiseTiles.get(tn) || 0) + 1);
+      continue;
+    }
     const j = i * 4; const x = i % w; const y = (i - x) / w;
     if (onPixel) onPixel(x, y, hx(A, j), hx(B, j), e);
     if (e.verdict !== 'unexpected') continue;
@@ -521,8 +526,14 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
     const t = `${Math.floor(x / tile)},${Math.floor(y / tile)}`;
     tiles.set(t, (tiles.get(t) || 0) + 1);
   }
-  out.tiles = [...tiles.entries()].map(([k, count]) => { const [tx, ty] = k.split(',').map(Number); return { x: tx * tile, y: ty * tile, w: Math.min(tile, w - tx * tile), h: Math.min(tile, h - ty * tile), count }; })
-    .sort((p, q) => q.count - p.count);
+  const tileOf = (k, count, kind) => { const [tx, ty] = k.split(',').map(Number); return { x: tx * tile, y: ty * tile, w: Math.min(tile, w - tx * tile), h: Math.min(tile, h - ty * tile), count, kind }; };
+  out.tiles = [...tiles.entries()].map(([k, count]) => tileOf(k, count, 'unexpected')).sort((p, q) => q.count - p.count);
+  // M2 (review): noise is real render noise only when it is sparse. A tile that is mostly noise is a dense shift
+  // under ΔE 1 (a token nudged one step): it fails the gate and goes in the crops, marked as noise.
+  const dense = [...noiseTiles.entries()].map(([k, count]) => tileOf(k, count, 'noise')).filter((t) => t.count >= NOISE_TILE_SHARE * t.w * t.h);
+  out.noiseTiles = dense.length;
+  out.maxNoiseTileShare = +Math.max(0, ...[...noiseTiles.entries()].map(([k, c]) => { const t = tileOf(k, c); return c / (t.w * t.h); })).toFixed(3);
+  out.tiles.push(...dense.sort((p, q) => q.count - p.count));
   return out;
 }
 
@@ -537,7 +548,11 @@ function exceptionsFor(baseline, config) {
 }
 
 // The gate: § R3.10 item 6.
-const CAPS = { unexpectedRatio: 0.005, crops: 200 };
+// M2 (review): noise caps. Calibrated on the real R0b run over the 65 changed baselines (before these fixes; the
+// noise pre-filter itself is unchanged): the highest noise share was 0.691 % (home-compose routed-light), the next
+// 0.12 %. The cap is that maximum plus ~0.3 points: 1.0 %. A tile counts as dense noise at ≥ 50 % of its pixels.
+const NOISE_TILE_SHARE = 0.5;
+const CAPS = { unexpectedRatio: 0.005, crops: 200, noiseRatio: 0.01 };
 function verdictOf(results) {
   const failures = [];
   let crops = 0;
@@ -547,9 +562,11 @@ function verdictOf(results) {
     if (/(^|\/)characters\.spec\.js\//.test(r.baseline) && r.changed) failures.push(`${r.baseline}: characters may not change (${r.changed} pixels)`);
     if (r.sizeChanged) failures.push(`${r.baseline}: size changed`);
     else if (r.unexpected / r.total > CAPS.unexpectedRatio) failures.push(`${r.baseline}: ${(100 * r.unexpected / r.total).toFixed(3)} % unexpected (cap 0.5 %)`);
+    if (!r.sizeChanged && r.noise / r.total > CAPS.noiseRatio) failures.push(`${r.baseline}: ${(100 * r.noise / r.total).toFixed(3)} % noise (cap ${100 * CAPS.noiseRatio} %)`);
+    if (r.noiseTiles) failures.push(`${r.baseline}: ${r.noiseTiles} tile(s) at least ${100 * NOISE_TILE_SHARE} % noise (a dense shift under ΔE 1)`);
   }
   if (crops > CAPS.crops) failures.push(`${crops} review crops (cap ${CAPS.crops})`);
   return { failures, crops };
 }
 
-module.exports = { EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, surfaceCoverage, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
+module.exports = { NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, surfaceCoverage, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };

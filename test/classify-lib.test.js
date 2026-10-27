@@ -332,3 +332,22 @@ test('classifier S3: a zero-length segment explains nothing', () => {
   const r = lib.explainPixel(mix(hex('#251c18'), bg, 0.8), bg, [bg], ALL.dark.members);
   assert.ok(!(r.verdict === 'pass' && r.key === 'ink'), `explained as ${r.verdict} ${r.key}`);
 });
+
+test('classifier M2: a dense shift under ΔE 1 fails (noise tiles and the 1 % cap); sparse edge noise does not', () => {
+  const bg = hex('#eef0f3'); const nudged = [237, 239, 242];
+  assert.ok(lib.deltaE00(lib.lab(bg), lib.lab(nudged)) <= lib.DE_NOISE);
+  // a 60×40 region nudged one step in a 96×72 image: every pixel is noise, densely
+  const dense = lib.classifyImage(image(96, 72, () => bg), image(96, 72, (x, y) => (x >= 10 && x < 70 && y >= 10 && y < 50 ? nudged : bg)), ALL.light);
+  assert.equal(dense.noise, 2400);
+  assert.equal(dense.unexpected, 0);
+  assert.ok(dense.noiseTiles > 0);
+  assert.ok(dense.tiles.some((t) => t.kind === 'noise'), 'noise tiles are in the crops');
+  const failures = lib.verdictOf([{ baseline: 'x/a-light-darwin.png', ...dense }]).failures;
+  assert.ok(failures.some((f) => /noise \(cap 1 %\)/.test(f)) && failures.some((f) => /tile\(s\) at least 50 % noise/.test(f)), failures.join('; '));
+  // sparse: one noisy pixel every 4th column on a single row, as anti-aliased edges are
+  const sparse = lib.classifyImage(image(96, 72, () => bg), image(96, 72, (x, y) => (y === 30 && x % 4 === 0 ? nudged : bg)), ALL.light);
+  assert.equal(sparse.noiseTiles, 0);
+  assert.deepEqual(lib.verdictOf([{ baseline: 'x/a-light-darwin.png', ...sparse }]).failures, []);
+  assert.equal(lib.CAPS.noiseRatio, 0.01);
+  assert.equal(lib.NOISE_TILE_SHARE, 0.5);
+});
