@@ -1,3 +1,7 @@
+// Node defines these web globals as V8 lazy data properties. A first read inside the startup
+// whenReady microtask can trip V8's CHECK in Accessors::ReplaceAccessorWithDataProperty and kill
+// main with SIGTRAP (outputs/boot-sigtrap-diag-report.md), so they are read here, before anything else.
+void [globalThis.AbortSignal, globalThis.AbortController, globalThis.TextEncoder, globalThis.TextDecoder, globalThis.structuredClone, globalThis.atob, globalThis.btoa];
 // Only a private stdio crypto service, before normal app startup touches data.
 if (process.argv.includes('--plexiform-account-storage-worker')) {
   require('./buddy-window/account-storage-worker').start();
