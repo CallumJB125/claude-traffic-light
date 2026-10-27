@@ -293,6 +293,13 @@ test('R2a: a row with no thread opens Overview and stays selected through its st
   assert.equal(s.qa('.sidebar-row[aria-selected="true"]').length, 0);
 });
 
+test('R2a: Overview from the nav after a thread selects no row', async () => {
+  const s = await boot({ rows: THREAD_ROWS });
+  await s.push({ selected: 'thread', chat: { focus: { filter: 'all', seq: 0 }, thread: id(3) } });
+  await s.push({ selected: 'overview', chat: { focus: { filter: 'all', seq: 0 }, thread: null } });
+  assert.equal(s.qa('.sidebar-row[aria-selected="true"]').length, 0);
+});
+
 test('R1 follow-up 8c: a read that changes only ages keeps every node and updates the age in place', async () => {
   let n = 0;
   const s = await boot({ rows: () => THREAD_ROWS.map((r) => ({ ...r, age_ms: r.age_ms + n * 60000 })) });

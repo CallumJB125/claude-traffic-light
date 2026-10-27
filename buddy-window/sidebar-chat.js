@@ -189,6 +189,10 @@
     focusKey(`g:${bucket}`);
   }
 
+  // Set only when a row with no thread opened Overview, so Overview from the
+  // nav doesn't leave the last thread's row highlighted.
+  let overviewFromRow = false;
+
   function openRow(key) {
     const id = key.slice(2), r = ui.rows.find((x) => x.id === id);
     ui.selectedRow = id;
@@ -196,6 +200,7 @@
     // A row with a thread opens it (main resolves the row again). One with
     // none (a paired device's session) opens Overview, as in R1; a select
     // from the sidebar is never redirected back here.
+    overviewFromRow = !r?.thread;
     if (r?.thread) window.buddy.openThread(id); else window.buddy.select('overview');
     render();
     focusKey(key);
@@ -284,11 +289,13 @@
 
   function onState(s) {
     if (typeof s?.selected === 'string') ui.selectedPage = s.selected;
-    // The thread on screen is the selected row. Overview is the view a row
-    // with no thread opens (R1), so it keeps the row; any other page selects none.
+    // The thread on screen is the selected row. Overview keeps the row only
+    // when that row (one with no thread) opened it, as in R1; any other page
+    // selects none.
     if (s?.chat && 'thread' in s.chat) {
+      if (s.selected !== 'overview') overviewFromRow = false;
       const next = s.selected === 'thread' && typeof s.chat.thread === 'string' ? s.chat.thread
-        : s.selected === 'overview' ? ui.selectedRow : null;
+        : s.selected === 'overview' && overviewFromRow ? ui.selectedRow : null;
       if (next !== ui.selectedRow) { ui.selectedRow = next; render(); }
     }
     const f = s?.chat?.focus;
