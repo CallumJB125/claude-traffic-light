@@ -402,7 +402,17 @@ function lightnessVotes(baseImg, headImg) {
   }
   return votes;
 }
-function themeFor(families, baseline, baseImg, headImg) {
+// A theme known from source (classify.config.json `themes`: { theme, source, reason, baselines }) replaces the
+// vote for exactly the listed baselines, e.g. the widget window, which index.html pins to data-theme="dark"; its
+// transparent window composites light and dark mascot pixels, so the vote is always ambiguous. Unlisted
+// baselines still vote and still fail closed.
+function themeFromConfig(baseline, config) {
+  const hit = ((config && config.themes) || []).find((t) => Array.isArray(t.baselines) && t.baselines.includes(baseline));
+  return hit && (hit.theme === 'light' || hit.theme === 'dark') ? hit : null;
+}
+function themeFor(families, baseline, baseImg, headImg, config) {
+  const pinned = themeFromConfig(baseline, config);
+  if (pinned) return { theme: pinned.theme, source: `config (${pinned.source})`, coverage: null, share: 1, families: families[pinned.theme] };
   const named = themeOf(baseline);
   if (!baseImg) return { theme: 'none', source: 'no image', coverage: null, share: 0, families: families.none };
   const votes = lightnessVotes(baseImg, headImg);
@@ -413,7 +423,7 @@ function themeFor(families, baseline, baseImg, headImg) {
   if (named !== 'both' && named !== inferred) return { theme: 'none', source: `mismatch (name ${named}, image ${inferred})`, coverage: votes, share, families: families.none };
   return { theme: inferred, source: named === 'both' ? 'image' : 'name+image', coverage: votes, share, families: families[inferred] };
 }
-const familiesFor = (families, baseline, baseImg, headImg) => themeFor(families, baseline, baseImg, headImg).families;
+const familiesFor = (families, baseline, baseImg, headImg, config) => themeFor(families, baseline, baseImg, headImg, config).families;
 
 // (d) The expected-list file for a branch, and whether it asks for the classifier (first line `# classify`).
 const expectedFileFor = (branch) => `test-visual/expected/${String(branch).trim().replace(/\//g, '-')}.txt`;
@@ -528,7 +538,11 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
       else {
         const neutrals = local ? [local, ...families.surfaces] : families.surfaces;
         e = explainPixel(oldPx, newPx, neutrals, families.members);
-        if (e.verdict === 'unexpected' && exceptions.length) {
+        // An exception is tried whenever the members give no strong pass: unexpected, or a verdict that would
+        // still need evidence (a weak pass, unchanged, skipped). Its core is strong; anything else keeps the
+        // member's verdict unless that was unexpected.
+        const needsEvidence = e.verdict === 'unchanged' || e.verdict === 'skipped' || (e.verdict === 'pass' && e.weak);
+        if ((e.verdict === 'unexpected' || needsEvidence) && exceptions.length) {
           // N2 (review round 2): an exception is its exact colour pair. Only the core (old within ΔE 1 of the
           // exception's old colour AND new within ΔE 1 of its paired new colour) is strong. A blend along the
           // exception's segment is accepted only within EVIDENCE_RADIUS of a core pixel and is never evidence for
@@ -536,7 +550,7 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
           const oL = lab(oldPx); const nL = lab(newPx);
           const core = exceptions.find((x) => deltaE00(oL, lab(x.old)) <= DE_NOISE && deltaE00(nL, lab(x.new)) <= DE_NOISE);
           if (core) e = { verdict: 'exception', core: true, key: core.key };
-          else {
+          else if (e.verdict === 'unexpected') {
             const x2 = explainPixel(oldPx, newPx, neutrals, exceptions);
             if (x2.verdict === 'pass') e = { ...x2, verdict: 'exception', core: false };
           }
@@ -599,7 +613,9 @@ function exceptionsFor(baseline, config, theme) {
   for (const e of (config && config.exceptions) || []) {
     if (!(Array.isArray(e.baselines) && e.baselines.includes(baseline))) continue;
     if (e.theme && e.theme !== theme) continue;
-    for (const o of e.old || []) for (const n of e.new || []) out.push({ key: `exception:${e.name}`, old: parseColour(o).slice(0, 3), new: parseColour(n).slice(0, 3) });
+    // `pairs` ([[old, new], …]) keeps each old colour with its own new one; `old`/`new` lists are crossed.
+    const pairs = e.pairs || (e.old || []).flatMap((o) => (e.new || []).map((n) => [o, n]));
+    for (const [o, n] of pairs) out.push({ key: `exception:${e.name}`, old: parseColour(o).slice(0, 3), new: parseColour(n).slice(0, 3) });
   }
   return out;
 }
@@ -633,4 +649,4 @@ function verdictOf(results, config) {
   return { failures, crops };
 }
 
-module.exports = { aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, noiseCapFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
+module.exports = { aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, themeFromConfig, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, noiseCapFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };

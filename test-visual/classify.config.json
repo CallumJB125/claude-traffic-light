@@ -1,5 +1,5 @@
 {
-  "//": "Redesign classifier config (plan-redesign §R3.10, §R4.4). The accent families come from tokens.css at the base and the head, so only the named exceptions live here. Entry shape: { \"name\", \"reason\", \"baselines\": [\"test-visual/__screenshots__/<spec>/<file>.png\"], \"theme\"?: \"light\" | \"dark\", \"old\": [\"#hex\"], \"new\": [\"#hex\"] }. Only the listed baselines; only the exact old→new pair (±ΔE00 1) is strong, and its anti-aliased blends count only within 2 px of such a core pixel. `noise`: per-baseline noise allowances { baseline, maxRatio, reason } above the general cap (CAPS.noiseRatio 0.25 %), each with a named cause.",
+  "//": "Redesign classifier config (plan-redesign §R3.10, §R4.4). The accent families come from tokens.css at the base and the head, so only the named exceptions live here. Entry shape: { \"name\", \"reason\", \"baselines\": [\"test-visual/__screenshots__/<spec>/<file>.png\"], \"theme\"?: \"light\" | \"dark\", \"old\": [\"#hex\"], \"new\": [\"#hex\"] }. Only the listed baselines; only the exact old→new pair (±ΔE00 1) is strong, and its anti-aliased blends count only within 2 px of such a core pixel. `noise`: per-baseline noise allowances { baseline, maxRatio, reason } above the general cap (CAPS.noiseRatio 0.25 %), each with a named cause. `pairs` ([[old, new], …]) keeps each old colour with its own new one. `themes`: { theme, source, reason, baselines } sets a baseline's theme from source instead of the lightness vote, for exactly those baselines.",
   "exceptions": [
     {
       "name": "idle",
@@ -13,6 +13,71 @@
         "#7c766b"
       ],
       "//": "Derived from the R0b run (2026-10-27): none of the 65 changed baselines contains a #726c62 → #7c766b change, so the list is empty. Add a baseline here only when a run shows the dark Idle colour in it."
+    },
+    {
+      "name": "tint-lights-window",
+      "reason": "selected-row tint, terracotta 0.08 → Graphite 0.14 over white (§R2.2); too pale for the M1 discriminability rule",
+      "theme": "light",
+      "baselines": [
+        "test-visual/__screenshots__/windows.spec.js/lights-window-darwin.png"
+      ],
+      "pairs": [
+        [
+          "#f7f1ef",
+          "#e0e1e2"
+        ],
+        [
+          "#ede8e8",
+          "#d7d8db"
+        ]
+      ],
+      "//": "Measured (base 47ad8ac1): #f7f1ef → #e0e1e2 18,762 px (over #ffffff, model ΔE 0.59); #ede8e8 → #d7d8db 1,591 px (over --bg #f4f5f7, ΔE 0.79/0.43)."
+    },
+    {
+      "name": "tint-lights-template-minimal",
+      "reason": "selected-row tint, terracotta 0.08 → Graphite 0.14 over white (§R2.2); too pale for the M1 discriminability rule",
+      "theme": "light",
+      "baselines": [
+        "test-visual/__screenshots__/templates.spec.js/lights-template-minimal-darwin.png"
+      ],
+      "pairs": [
+        [
+          "#f7f1ef",
+          "#e0e1e2"
+        ],
+        [
+          "#ede8e8",
+          "#d7d8db"
+        ]
+      ],
+      "//": "Measured: #f7f1ef → #e0e1e2 12,349 px; #ede8e8 → #d7d8db 1,488 px."
+    },
+    {
+      "name": "tint-lights-templates-menu",
+      "reason": "selected-row tint, terracotta 0.08 → Graphite 0.14 over white (§R2.2); too pale for the M1 discriminability rule",
+      "theme": "light",
+      "baselines": [
+        "test-visual/__screenshots__/templates.spec.js/lights-templates-menu-darwin.png"
+      ],
+      "pairs": [
+        [
+          "#f7f1ef",
+          "#e0e1e2"
+        ],
+        [
+          "#f2ecea",
+          "#dcddde"
+        ],
+        [
+          "#f0eae8",
+          "#dadbdc"
+        ],
+        [
+          "#eee8e7",
+          "#d8d9da"
+        ]
+      ],
+      "//": "Measured: #f7f1ef → #e0e1e2 14,622 px; siblings over the native menu's near-white greys (model ΔE ≤ 0.78): #f2ecea → #dcddde 131, #f0eae8 → #dadbdc 76, #eee8e7 → #d8d9da 69 (neighbouring pairs within ΔE 1 of these fall in their core)."
     }
   ],
   "noise": [
@@ -20,6 +85,46 @@
       "baseline": "test-visual/__screenshots__/home-compose.spec.js/routed-light-darwin.png",
       "maxRatio": 0.0075,
       "reason": "R0b light --focus-halo #f4f5f7 → #ffffff: the halo's anti-aliased edge overlaps the focused compose textarea's 1 px --line-input border, moving its top and bottom hairlines (y 59, 122, x 31–882) by one sRGB step. 1,706 px = 0.693 %; allowance 0.75 %."
+    }
+  ],
+  "themes": [
+    {
+      "theme": "dark",
+      "source": "index.html:2",
+      "reason": "The widget window: index.html:2 pins <html data-theme=\"dark\"> (confirmed in the Q13 review). Its transparent window composites light and dark mascot pixels, so the lightness vote is always ambiguous. Every listed baseline is shot from windowByFile(…, 'index.html'); widget-compose-taken (widget-page.html) is not.",
+      "baselines": [
+        "test-visual/__screenshots__/ask.spec.js/widget-ask-edit-darwin.png",
+        "test-visual/__screenshots__/ask.spec.js/widget-ask-long-command-darwin.png",
+        "test-visual/__screenshots__/ask.spec.js/widget-ask-long-command-open-darwin.png",
+        "test-visual/__screenshots__/away.spec.js/widget-away-recap-darwin.png",
+        "test-visual/__screenshots__/budget-notice.spec.js/widget-budget-notice-darwin.png",
+        "test-visual/__screenshots__/git-signals.spec.js/widget-ci-failed-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-allow-anyway-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-blocked-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-codex-ask-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-collapsed-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-dialog-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-expanded-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-first-use-notice-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-permission-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-permission-off-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-plan-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-pre-hook-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-question-darwin.png",
+        "test-visual/__screenshots__/inputs.spec.js/bubble-stacked-tags-darwin.png",
+        "test-visual/__screenshots__/team-entry.spec.js/widget-team-hint-darwin.png",
+        "test-visual/__screenshots__/updates.spec.js/widget-update-armed-darwin.png",
+        "test-visual/__screenshots__/updates.spec.js/widget-update-hub-darwin.png",
+        "test-visual/__screenshots__/updates.spec.js/widget-update-ready-darwin.png",
+        "test-visual/__screenshots__/voice.spec.js/widget-voice-listening-darwin.png",
+        "test-visual/__screenshots__/voice.spec.js/widget-voice-talking-darwin.png",
+        "test-visual/__screenshots__/widget.spec.js/widget-blocked-red-darwin.png",
+        "test-visual/__screenshots__/widget.spec.js/widget-idle-off-darwin.png",
+        "test-visual/__screenshots__/widget.spec.js/widget-runaway-red-darwin.png",
+        "test-visual/__screenshots__/widget.spec.js/widget-working-green-darwin.png",
+        "test-visual/__screenshots__/widget.spec.js/widget-working-green-reduced-motion-darwin.png",
+        "test-visual/__screenshots__/widget.spec.js/widget-your-turn-amber-darwin.png"
+      ]
     }
   ]
 }

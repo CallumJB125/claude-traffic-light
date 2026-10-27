@@ -450,3 +450,49 @@ test('classifier: noise allowance is per named baseline only, with a reason', ()
   assert.equal(lib.verdictOf([row('x/other.png', 30)], config).failures.length, 1);
   assert.deepEqual(lib.verdictOf([row('x/other.png', 25)], config).failures, []);
 });
+
+test('classifier: widget baselines take dark from index.html, which must still pin it', () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const root = path.join(__dirname, '..');
+  const config = JSON.parse(fs.readFileSync(path.join(root, 'test-visual', 'classify.config.json'), 'utf8'));
+  const [entry] = config.themes;
+  assert.equal(entry.theme, 'dark');
+  assert.equal(entry.source, 'index.html:2');
+  // the cited source line: if index.html stops pinning dark, this mapping is stale and must be revisited
+  assert.match(fs.readFileSync(path.join(root, 'index.html'), 'utf8').split('\n')[1], /^<html\b[^>]*\bdata-theme="dark"/);
+  // every listed baseline is shot from the index.html window
+  for (const b of entry.baselines) {
+    const spec = b.split('/')[2];
+    const text = fs.readFileSync(path.join(root, 'test-visual', spec), 'utf8');
+    assert.match(text, /windowByFile\([^,]+, 'index\.html'\)/, `${b}: its spec must shoot the index.html widget`);
+    assert.ok(fs.existsSync(path.join(root, b)), b);
+  }
+  assert.ok(!entry.baselines.some((b) => /widget-compose-taken/.test(b)), 'widget-page.html is not index.html');
+  // listed: dark without a vote; unlisted: the vote still decides and still fails closed
+  const L = hex('#eef0f3'); const D = hex('#292d34');
+  const mixed = image(20, 20, (x) => (x < 12 ? L : D));
+  const listed = lib.themeFor(ALL, entry.baselines[0], mixed, mixed, config);
+  assert.deepEqual([listed.theme, listed.source], ['dark', 'config (index.html:2)']);
+  assert.equal(lib.themeFor(ALL, 'x/other-darwin.png', mixed, mixed, config).theme, 'none');
+});
+
+test('classifier: the pale-tint exceptions are exact pairs, scoped to their baselines', () => {
+  const config = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'test-visual', 'classify.config.json'), 'utf8'));
+  const tints = config.exceptions.filter((e) => e.name.startsWith('tint-'));
+  assert.deepEqual(tints.map((e) => e.baselines.length), [1, 1, 1]);
+  for (const e of tints) {
+    assert.match(e.reason, /terracotta 0\.08 → Graphite 0\.14/);
+    const ex = lib.exceptionsFor(e.baselines[0], config, 'light');
+    assert.deepEqual(ex.map((x) => x.key).filter((k) => k === `exception:${e.name}`).length, e.pairs.length, 'pairs are not crossed');
+    assert.deepEqual(lib.exceptionsFor(e.baselines[0], config, 'dark'), []);
+  }
+  const W = tints[0].baselines[0];
+  const ex = lib.exceptionsFor(W, config, 'light');
+  const fill = (c) => image(30, 30, () => hex(c));
+  // the measured pair passes as its core; a near-white grey darkening the same amount does not
+  assert.equal(lib.classifyImage(fill('#f7f1ef'), fill('#e0e1e2'), ALL.light, { exceptions: ex }).unexpected, 0);
+  assert.equal(lib.classifyImage(fill('#f4f4f4'), fill('#dedfe0'), ALL.light, { exceptions: ex }).unexpected, 900);
+  // crossed pairs (old of one, new of another) are not explained
+  assert.equal(lib.classifyImage(fill('#f7f1ef'), fill('#d7d8db'), ALL.light, { exceptions: ex }).unexpected, 900);
+  assert.equal(lib.exceptionsFor('x/elsewhere-darwin.png', config, 'light').length, 0);
+});
