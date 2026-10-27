@@ -1,12 +1,14 @@
 'use strict';
 // The chat-first thread document's main side (redesign R2a, plan-r2.md §2).
 // It shows one row's chat or session activity and offers two navigation
-// effects. R2b-1 adds exactly one act: thread:message, a reply to the bound
-// task only (plan-r2b-auth.md §2.1), through tasksService.act and
-// guard.validateAct unchanged. Approve, deny, answer, stop and every other
-// Tasks act stay on tasks-main.js owner() (the Tasks page) until R6a.
-// Provisional, awaiting Callum (plan-r2b-auth §7 item 1): no Stop from the chat
-// before R6a (the alternative is a thread:stop shaped like compose:stop).
+// effects. R2b-1 adds thread:message, a reply to the bound task only
+// (plan-r2b-auth.md §2.1), through tasksService.act and guard.validateAct
+// unchanged. R4-1a (plan-r4.md §2, §11) adds thread:act: Allow once, Deny,
+// an answer, a supervisor resume choice and Stop, for the bound task only, each
+// on a request main delivered to this document at least 600 ms ago and still
+// showing the same thing. Nothing here raises a dialog: the kinds that need one
+// (Allow for this task, StartTask, switch AI) are R4-1b's and are refused here.
+// Every other Tasks act stays on tasks-main.js owner() (the Tasks page) until R6a.
 //
 // Guard T, for every channel: the exact thread webContents and its main frame,
 // the document generation, the request's row id === the row the document was
@@ -18,7 +20,7 @@
 
 const ROW_ID = /^[0-9a-f]{64}$/;
 const EFFECT_MS = 500;
-const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message']);
+const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act']);
 // The reply's own bound: guard's (TV.LIMITS.message), checked before any await.
 const MESSAGE_BYTES = 8192;
 const REPLY_TEXT = Object.freeze({
@@ -28,6 +30,29 @@ const REPLY_TEXT = Object.freeze({
   NOT_FOUND: 'This chat has ended or moved.',
   VALIDATION: 'That message could not be sent. Check it and try again.',
   CONFIRM_REQUIRED: 'This needs the Tasks page. Use Open in Tasks.',
+});
+// thread:act (R4-1a). BUSY is shared with a reply; CONFLICT only once the act may have been sent (plan-r4 §10 S1).
+const ARM_MS = 600;
+const ID_MAX = 128;
+const ANSWER_MAX = 20000; // guard's TV.LIMITS.answer
+const ACT_TEXT = Object.freeze({
+  FOCUS: 'Focus this chat and try again.',
+  BUSY: 'Still sending your last choice.',
+  NOT_READY: 'This request changed. Look at it again, then choose.',
+  CONFLICT: 'Your answer may have been sent. Check the chat before choosing again.',
+  CONFLICT_STOP: 'Stop may have been sent. Check the chat before stopping again.',
+  NOT_FOUND: 'This request has already been answered, or it has gone.',
+  ALREADY_ANSWERED: 'This request has already been answered.',
+  VALIDATION: 'That choice could not be sent. Look at it again.',
+  CONFIRM_REQUIRED: 'This needs the Tasks page. Use Open in Tasks.',
+});
+// The exact keys of each request; anything else is refused before any await.
+const ACT_KEYS = Object.freeze({
+  approve: ['action', 'approvalId', 'id', 'scope'],
+  deny: ['action', 'approvalId', 'id'],
+  answer: ['action', 'answer', 'askId', 'id'],
+  choose: ['action', 'askId', 'choiceId', 'id'],
+  stop: ['action', 'confirmed', 'id'],
 });
 // Provisional, awaiting Callum (plan-r2.md §7 item 3): the link form may change.
 const LINK = (id) => `plexiform://thread/${id}`;
@@ -72,6 +97,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
 
   async function closeSlot(wcId) {
     if (slot && slot.wcId === wcId) slot = null;
+    forget(wcId);
     if (!asked.delete(wcId)) return;
     try { await tasks()?.closeTask?.(wcId); } catch { /* already closed */ }
   }
@@ -90,6 +116,8 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       if (!still(c)) { await closeSlot(wcId); return null; }
       if (!r || r.ok !== true) { await closeSlot(wcId); return { kind: 'task', header: head, error: r?.error ?? 'This chat could not be opened.' }; }
       slot = { wcId, generation: c.generation, taskId: t.taskId };
+      // The detail reaches this document as this reply: what it shows is now armed (plan-r4 §2.2 step 6).
+      record(c, t.taskId, r.detail);
       return { kind: 'task', header: head, detail: r.detail, replay: r.replay };
     }
     if (t.kind === 'session') {
@@ -143,6 +171,33 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     return r && typeof r === 'object' ? { ok: r.ok === true, ...(typeof r.note === 'string' ? { note: r.note.slice(0, 300) } : {}) } : { ok: false };
   }
 
+  // ── the shown arm (plan-r4 §2.2 step 6, §11.2) ──
+  // `${wcId}:${generation}:${kind}:${id}` → { hash, tool, at, choices? }. Recorded only for a detail main actually
+  // delivered to this document, with the hash tasks-service relayed for it (shownHash). The same hash keeps its first
+  // delivery time; a changed hash re-arms that one request only.
+  const shown = new Map();
+  const shownKey = (c, kind, id) => `${c.contents.id}:${c.generation}:${kind}:${id}`;
+  const relayedHash = (wcId, taskId, kind, id) => { try { return tasks()?.shownHash?.(wcId, taskId, kind, id) ?? null; } catch { return null; } };
+  function forget(wcId) { for (const k of shown.keys()) if (k.startsWith(`${wcId}:`)) shown.delete(k); }
+  function record(c, taskId, detail) {
+    if (!detail || typeof detail !== 'object') return;
+    const wcId = c.contents.id, live = new Set(), t = now();
+    const put = (kind, id, extra) => {
+      const h = relayedHash(wcId, taskId, kind, id);
+      if (!h || typeof h.hash !== 'string') return;
+      const key = shownKey(c, kind, id), old = shown.get(key);
+      live.add(key);
+      shown.set(key, old && old.hash === h.hash ? old : { hash: h.hash, tool: h.tool ?? null, at: t, ...extra });
+    };
+    // Up to 10 approvals, as sanitizeDetail relays (tasks-guard.js:110); one ask.
+    for (const a of (Array.isArray(detail.openApprovals) ? detail.openApprovals : []).slice(0, 10)) if (a && typeof a.approvalId === 'string') put('approval', a.approvalId, {});
+    const k = detail.openAsk;
+    if (k && typeof k.askId === 'string') put('ask', k.askId, { choices: Array.isArray(k.choices) ? k.choices.map((ch) => ({ id: ch.id, action: ch.action, payload: ch.payload })) : [] });
+    // This document's other requests are gone: drop them, so nothing outlives what the page shows.
+    const prefix = `${wcId}:`;
+    for (const key of shown.keys()) if (key.startsWith(prefix) && !live.has(key)) shown.delete(key);
+  }
+
   // Reply (R2b-1, plan-r2b-auth §2.1): {id, body} only; main resolves the task and fixes the action.
   const sending = new Set(); // `${wcId}:${generation}` with a reply in flight
   const refuse = (code, text = REPLY_TEXT[code] ?? '') => ({ ok: false, code, text });
@@ -179,6 +234,85 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     return refuse(code, REPLY_TEXT[code] ?? (typeof r?.text === 'string' ? r.text.slice(0, 300) : ''));
   }
 
+  // thread:act (R4-1a, plan-r4 §2): approve once, deny, answer, choose (resume) or stop, for the bound task only.
+  async function act(e, args) {
+    const fail = (code, text = ACT_TEXT[code] ?? '') => ({ ok: false, code, text });
+    // 1. Sender, frame, argc.
+    const before = ctx();
+    if (!before || !e || e.sender !== before.contents || e.senderFrame !== before.frame || args.length !== 1) return null;
+    // 2. Foreground.
+    if (before.foreground !== true) return fail('ILLEGAL_TRANSITION', ACT_TEXT.FOCUS);
+    // 3. The exact shape, the bound id, field bounds: all before any await.
+    const req = args[0];
+    if (!plain(req) || typeof req.action !== 'string' || !Object.hasOwn(ACT_KEYS, req.action)) return fail('VALIDATION');
+    const extra = req.action !== 'stop' && Object.hasOwn(req, 'confirmed');
+    const keys = Object.keys(req).filter((k) => !(extra && k === 'confirmed')).sort().join(',');
+    if (keys !== ACT_KEYS[req.action].join(',') || req.id !== before.boundId) return fail('VALIDATION');
+    if (extra && req.confirmed !== true) return fail('VALIDATION');
+    const id = (v) => typeof v === 'string' && v.length > 0 && v.length <= ID_MAX;
+    if (req.action === 'approve' && (!id(req.approvalId) || !['once', 'task'].includes(req.scope))) return fail('VALIDATION');
+    if (req.action === 'deny' && !id(req.approvalId)) return fail('VALIDATION');
+    if (req.action === 'answer' && (!id(req.askId) || typeof req.answer !== 'string' || !req.answer.trim() || req.answer.trim().length > ANSWER_MAX)) return fail('VALIDATION');
+    if (req.action === 'choose' && (!id(req.askId) || !id(req.choiceId) || req.choiceId.length > 60)) return fail('VALIDATION');
+    if (req.action === 'stop' && req.confirmed !== true) return fail('VALIDATION');
+    // 4. One act or reply in flight per document, and the per-document rate.
+    const busy = `${before.contents.id}:${before.generation}`;
+    if (sending.has(busy) || !rateOk(before, 'message')) return fail('BUSY');
+    // 5. Main resolves the task.
+    const t = resolve(before.boundId);
+    if (!t || t.kind !== 'task' || typeof t.taskId !== 'string') return fail('NOT_FOUND');
+    const taskId = t.taskId, wcId = before.contents.id;
+    // 6. The shown arm: delivered to this document, still the same, and on screen for 600 ms.
+    const kind = req.action === 'approve' || req.action === 'deny' ? 'approval' : req.action === 'stop' ? null : 'ask';
+    const reqId = kind === 'approval' ? req.approvalId : req.askId;
+    let armed = null;
+    if (kind) {
+      armed = shown.get(shownKey(before, kind, reqId)) ?? null;
+      const h = relayedHash(wcId, taskId, kind, reqId);
+      if (!armed) return fail(h ? 'NOT_READY' : 'NOT_FOUND');
+      if (!h || h.hash !== armed.hash || now() - armed.at < ARM_MS) return fail('NOT_READY');
+    }
+    // 7. R4-1a sends nothing that needs a dialog (plan-r4 §2.1): those are R4-1b's.
+    if (req.action === 'approve' && req.scope !== 'once') return fail('CONFIRM_REQUIRED');
+    if (kind === 'approval' && armed.tool === 'StartTask') return fail('CONFIRM_REQUIRED');
+    let send;
+    if (req.action === 'approve') send = { action: 'approve', payload: { approvalId: req.approvalId, scope: 'once' } };
+    else if (req.action === 'deny') send = { action: 'deny', payload: { approvalId: req.approvalId } };
+    else if (req.action === 'answer') send = { action: 'answer', payload: { askId: req.askId, answer: req.answer.trim() } };
+    else if (req.action === 'stop') send = { action: 'stop', confirmed: true };
+    else {
+      // choose: main's own copy of the choice it delivered; the page names only its id.
+      const ch = (armed.choices || []).find((c) => c && c.id === req.choiceId);
+      if (!ch) return fail('VALIDATION');
+      if (ch.action !== 'resume' || !ch.payload || !['now', 'reset'].includes(ch.payload.when)) return fail('CONFIRM_REQUIRED');
+      send = { action: 'resume', payload: { when: ch.payload.when } };
+    }
+    // A task's own task.confirm: the page asked twice; forwarded only when main's row asks for it (plan-r4 §2.6).
+    if (extra) {
+      let row = null;
+      try { row = (tasks()?.snapshot?.()?.tasks || []).find((x) => x && x.id === taskId) ?? null; } catch { row = null; }
+      if (!row || !Array.isArray(row.confirm) || !row.confirm.includes(req.action)) return fail('VALIDATION');
+      send.confirmed = true;
+    }
+    // 8. Checked by tasks-service immediately before client.act: the document, the task, and (for a request) the same hash.
+    const base = () => chatPreview === true && !stopped && still(before, true) && resolve(before.boundId)?.taskId === taskId;
+    const current = () => base() && (!kind || relayedHash(wcId, taskId, kind, reqId)?.hash === armed.hash);
+    let refusedBeforeSend = false;
+    const atSend = () => { const ok = current(); if (!ok) refusedBeforeSend = true; return ok; };
+    sending.add(busy);
+    let r = null;
+    try {
+      try { r = await tasks().act({ id: taskId, ...send }, wcId, atSend); } catch { r = null; }
+    } finally { sending.delete(busy); }
+    // 9. Nothing was sent: the request changed. Sent, or maybe sent: say so (S1).
+    if (refusedBeforeSend) return fail('NOT_READY');
+    if (!current()) return fail('CONFLICT', req.action === 'stop' ? ACT_TEXT.CONFLICT_STOP : ACT_TEXT.CONFLICT);
+    if (r && r.ok === true) return { ok: true };
+    // 10. Engine and guard codes, as plain sentences.
+    const code = typeof r?.code === 'string' ? r.code : 'INTERNAL';
+    return { ...fail(code, ACT_TEXT[code] ?? (typeof r?.text === 'string' ? r.text.slice(0, 300) : '')), ...(r?.cancelled === true ? { cancelled: true } : {}) };
+  }
+
   // Copy link: the clipboard gets this row's link, nothing else.
   function copyLink(e, args) {
     const c = guard(e, args, { effect: true });
@@ -197,13 +331,17 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       ipc.handle('thread:go-to-terminal', (e, ...a) => toTerminal(e, a));
       ipc.handle('thread:copy-link', (e, ...a) => copyLink(e, a));
       ipc.handle('thread:message', (e, ...a) => message(e, a));
+      ipc.handle('thread:act', (e, ...a) => act(e, a));
     },
     // tasks-service onEvent, before the Tasks pages: true when the event is the thread slot's.
     onEvent(wcId, taskId, event) {
       if (!slot || slot.wcId !== wcId) return false;
       const c = ctx();
       if (c && c.contents.id === wcId && c.generation === slot.generation && taskId === slot.taskId) {
-        try { c.contents.send('thread:event', { id: c.boundId, event }); } catch { /* closed */ }
+        let sent = false;
+        try { c.contents.send('thread:event', { id: c.boundId, event }); sent = true; } catch { /* closed */ }
+        // A detail follows remember() (tasks-service refreshOpen): arm what it shows, once it was really sent (S5).
+        if (sent && event && event.type === 'detail') record(c, taskId, event.detail);
       }
       return true;
     },
@@ -214,4 +352,4 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
   };
 }
 
-module.exports = { createThreadMain, CHANNELS, EFFECT_MS, LINK, REPLY_TEXT, MESSAGE_BYTES };
+module.exports = { createThreadMain, CHANNELS, EFFECT_MS, LINK, REPLY_TEXT, MESSAGE_BYTES, ACT_TEXT, ARM_MS };
