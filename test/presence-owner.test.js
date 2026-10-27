@@ -150,3 +150,38 @@ test('page: reannounce resends an open panel once on becoming visible; nothing w
 test('page: overview.js calls reannounce when main sends overview:ready', () => {
   assert.match(read('overview.js'), /dir\?\.refresh\(\); dir\?\.reannounce\?\.\(\);/);
 });
+
+// Real window sequence (attach() is the single content-change point): the extracted attach() drives the real service.
+test('window: Overview A -> thread B (no select) -> thread closes -> back to Overview -> ready re-announce sends A again', async () => {
+  const src = read('buddy-window/index.js');
+  const from = src.indexOf('  function attach(view) {'), to = src.indexOf('  function ', from + 10);
+  const vm = require('node:vm');
+  const { svc, owner, sent } = fixture();
+  const overviewView = { id: 'overview' }, threadView = { id: 'thread' };
+  const ctx = { win: { contentView: { removeChildView() {}, addChildView() {}, children: [] } }, content: overviewView, threadView, newChatView: null, localViews: new Map([['overview', overviewView]]),
+    retireThread: () => {}, retireNewChat: () => {}, layout: () => {}, lifecycle: { setCurrent() {} }, optimiser: { sync() {} }, onOverviewLeft: () => svc.clearViewing() };
+  vm.createContext(ctx);
+  vm.runInContext(src.slice(from, to) + '\nthis.attach = attach; this.state = () => content;', ctx);
+  const [a] = await ids(svc);
+  await svc.viewing({ id: a });
+  const cardA = sent.at(-1).card_id, team = sent.at(-1).team;
+  ctx.attach(threadView);                                   // no select() involved
+  assert.equal(sent.at(-1).card_id, null);                  // Overview's hold is cleared as the thread takes the window
+  owner.set('thread', { team, card: 'card-thread' });
+  assert.equal(sent.at(-1).card_id, 'card-thread');
+  owner.set('thread', null);                                // thread closes: null, not A
+  assert.equal(sent.at(-1).card_id, null);
+  ctx.attach(overviewView);
+  const n = sent.length;
+  assert.equal((await svc.viewing({ id: a })).status, 'viewing');   // overview:ready -> reannounce -> viewing
+  assert.equal(sent.length, n + 1); assert.equal(sent.at(-1).card_id, cardA);
+});
+test('window: leaving Overview clears only Overview\'s slot; a live thread slot survives', async () => {
+  const { svc, owner, sent } = fixture();
+  const [a] = await ids(svc);
+  await svc.viewing({ id: a });
+  owner.set('thread', { team: sent[0].team, card: 'card-thread' });
+  const n = sent.length;
+  svc.clearViewing();
+  assert.equal(sent.length, n);
+});
