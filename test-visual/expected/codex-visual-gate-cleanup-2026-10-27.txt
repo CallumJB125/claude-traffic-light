@@ -1,0 +1,6 @@
+test-visual/__screenshots__/ask.spec.js/widget-ask-long-command-darwin.png
+test-visual/__screenshots__/away.spec.js/widget-away-recap-darwin.png
+test-visual/__screenshots__/windows.spec.js/help-window-darwin.png
+test-visual/__screenshots__/work-scope.spec.js/scope-counting-darwin.png
+test-visual/__screenshots__/work-scope.spec.js/scope-personal-darwin.png
+test-visual/__screenshots__/work-scope.spec.js/scope-watching-darwin.png
