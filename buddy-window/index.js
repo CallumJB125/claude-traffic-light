@@ -1211,7 +1211,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   }
   // C4: "Show chats" (config homeComposer), read on every call. Off: nothing opens the new chat; the callers' own
   // fallbacks apply (Home and My day → their old pages, a link → Board, a resume → Home). Existing chats are unchanged.
-  const chatsAllowed = () => { try { return chatsOn() !== false; } catch { return true; } };
+  // A read that throws counts as off (fails closed, as newchat-home-main does).
+  const chatsAllowed = () => { try { return chatsOn() !== false; } catch { return false; } };
   let chatsFlipPending = false;
   // From main when the setting changed. A showing new chat is retired (its generation moves, so a Run in flight fails
   // same()) and Home shows; a held "Start anyway" dialog defers that until it is answered. Either way the sidebar hears.

@@ -25,7 +25,7 @@ function harness(over = {}) {
     openThread: (id) => { st.opened.push(id); return st.openOk; },
   };
   const svc = NCH.createNewChatHome({
-    ipcMain, buddy: () => buddy, chatsOn: () => st.chats !== false,
+    ipcMain, buddy: () => buddy, chatsOn: () => { if (st.chatsThrow) throw new Error('config unreadable'); return st.chats !== false; },
     rows: async (alive) => { st.rowsCalls++; if (st.rowsGate) await st.rowsGate; return alive() ? { schema: 1, status: 'complete', sessions: st.sessions.map((r) => ({ ...r })) } : null; },
     folderOf: (h) => st.folders[h] ?? null,
     git: async (cwd, args, opts) => { st.git.push({ cwd, args, opts }); if (st.gitFail) throw new Error('boom'); return args[0] === 'remote' ? st.remotes : st.tree; },
@@ -232,4 +232,11 @@ test('C4: with "Show chats" off the three reads answer nothing and read nothing,
   assert.deepEqual(h.st.opened, []);
   h.st.chats = true;
   assert.notEqual(await h.call('newchat:home', h.ev()), null, 'on again');
+});
+
+test('C4: a setting read that throws counts as chats off', async () => {
+  const h = harness();
+  h.st.chatsThrow = true;
+  assert.equal(await h.call('newchat:home', h.ev()), null);
+  assert.equal(h.st.rowsCalls, 0);
 });

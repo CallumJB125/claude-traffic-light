@@ -310,3 +310,11 @@ test('C4 live flip: a held "Start anyway" dialog defers the flip until it is ans
   assert.equal(w.api.newChatWebContents(), null, 'then retired');
   assert.equal(w.ctx.selected, 'home');
 });
+
+test('C4: a setting read that throws counts as chats off (fails closed, like newchat-home)', () => {
+  const w = world();
+  w.ctx.chatsOn = () => { throw new Error('config unreadable'); };
+  assert.equal(w.api.openNewChat(), false);
+  assert.equal(w.api.newChatWebContents(), null);
+  assert.deepEqual(w.retired, []);
+});
