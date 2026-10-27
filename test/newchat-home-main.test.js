@@ -79,6 +79,9 @@ test('home: the summary counts, up to 3 Needs-you rows oldest first, `more`, and
   for (const x of r.rows) assert.deepEqual(Object.keys(x), [...NCH.ROW_KEYS]);
   const empty = harness({ sessions: [] });
   assert.equal((await empty.call('newchat:home', empty.ev())).firstEver, true);
+  // Review: the service down or still starting ({status:'unavailable'|'partial', sessions:[]}) is not a first run.
+  for (const status of ['unavailable', 'partial']) assert.equal(NCH.homeOf({ schema: 1, status, sessions: [] }, 0, 0).firstEver, false, status);
+  assert.equal(NCH.homeOf(null, 0, 0).firstEver, false);
 });
 
 test('home: one shared read per document generation at the sidebar cadence; a new generation reads again; a move mid-read answers null', async () => {

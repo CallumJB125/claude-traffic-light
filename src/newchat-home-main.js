@@ -71,7 +71,7 @@ function homeOf(sidebar, nowMs, midnightMs) {
   const sinceMidnight = Math.max(0, nowMs - midnightMs);
   const check = sessions.filter((r) => r && r.bucket === 'check' && Number.isFinite(r.age_ms) && r.age_ms <= sinceMidnight).length;
   const rows = needs.slice(0, MAX_ROWS).map((r) => ({ id: r.id, title: cleanName(r.title) || 'Untitled', project: cleanName(r.project) }));
-  return { summary: { needs: needs.length, check }, rows, more: Math.max(0, needs.length - rows.length), firstEver: sessions.length === 0 };
+  return { summary: { needs: needs.length, check }, rows, more: Math.max(0, needs.length - rows.length), firstEver: sidebar?.status === 'complete' && sessions.length === 0 }; // an unavailable or partial read is never a first run
 }
 
 const localMidnight = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
