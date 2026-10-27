@@ -110,6 +110,40 @@ test('S1: main clamps the bubble to bubbleRoom and acks against that cap', () =>
   assert.match(main, /WidgetStrip\.shouldAck\(strip, bubbleAsked, bubbleAcked, bubbleCap\)/);
 });
 
+test('S1: the cap goes to the widget when it changes or the bubble asks for more; a capped bubble then asks what fits and is vouched for', () => {
+  assert.equal(W.sendCap(420, 420, 300), false, 'room as before and the bubble fits: nothing to say');
+  assert.equal(W.sendCap(365, 420, 408), true, 'room shrank');
+  assert.equal(W.sendCap(365, 365, 408), true, 'still asking more (a reloaded widget has not heard): say it again');
+  assert.equal(W.sendCap(365, 365, 365), false);
+  assert.equal(W.sendCap(420, 365, 365), true, 'room grew on a taller display: the bubble may grow back');
+  // The round trip on 1280×800 with the largest widget: the bubble asks 408, main caps it at 365 and says so;
+  // the widget caps #bubble at 365 - 8 (it scrolls), measures 357 + 8 = 365 and asks again.
+  const wa = { x: 0, y: 25, width: 1280, height: 775 };
+  const widget = { x: 940, y: 300, width: 320, height: 410 };
+  const cap = W.bubbleRoom(widget.height, wa, 420);
+  const first = W.stripBounds(widget, W.NONE, { kind: 'bubble', px: Math.min(cap, 408), minWidth: 288 }, wa);
+  assert.equal(W.shouldAck(first.strip, 408, null, cap), false, 'before the widget hears the cap: not vouched for');
+  const css = Math.min(400, cap - 8);
+  const asked = Math.ceil(Math.min(392, css)) + 8; // content 392 px tall, capped by CSS
+  assert.equal(asked, cap);
+  assert.ok(W.sameStrip(first.strip, { kind: 'bubble', px: Math.min(cap, asked), minWidth: 288 }), 'the window already has that room: no resize');
+  assert.equal(W.shouldAck(first.strip, asked, null, cap), true, 'now vouched for, so it can be answered');
+  assert.ok(first.bounds.y + first.bounds.height <= wa.y + wa.height && first.bounds.height - widget.height === asked, 'on screen, and the window matches --bubble-h');
+});
+
+test('S1: main sends bubble-cap from applyStrip; the widget caps #bubble at it and asks again', () => {
+  const root = path.join(__dirname, '..');
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const apply = main.slice(main.indexOf('function applyStrip('), main.indexOf('function applyStrip(') + 1400);
+  assert.match(apply, /WidgetStrip\.sendCap\(bubbleCap, bubbleCapSent, asking\)[^\n]*win\.webContents\.send\('bubble-cap', bubbleCap\)/);
+  assert.ok(apply.indexOf("send('bubble-cap'") < apply.indexOf('WidgetStrip.sameStrip('), 'sent before the same-strip early return');
+  assert.match(fs.readFileSync(path.join(root, 'preload.js'), 'utf8'), /onBubbleCap: \(cb\) => ipcRenderer\.on\('bubble-cap'/);
+  const widget = fs.readFileSync(path.join(root, 'widget.js'), 'utf8');
+  assert.match(widget, /onBubbleCap\(\(cap\) => \{[\s\S]{0,200}--bubble-max', `\$\{Math\.max\(0, Math\.round\(n\) - 8\)\}px`\);\s*reportBubble\(\);/);
+  assert.match(widget, /if \(!on\) document\.body\.style\.removeProperty\('--bubble-max'\);\s*if \(fresh\) bubbleEl\.scrollTop = 0;/, 'an empty bubble forgets the cap');
+  assert.match(fs.readFileSync(path.join(root, 'index.html'), 'utf8'), /#bubble \{[^}]*max-height: min\(400px, var\(--bubble-max, 400px\)\);[^}]*overflow-y: auto/);
+});
+
 // ── Session rows (wave 1, lane A) ───────────────────────────────────────────
 const row = (id, signal, min = 0) => ({ sessionId: id, signal, cwd: `/p/${id}`, updatedAt: new Date(Date.parse('2026-10-19T12:00:00Z') - min * 60000).toISOString() });
 

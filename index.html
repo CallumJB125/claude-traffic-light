@@ -76,7 +76,7 @@
 
   /* Everything waiting on you (input-bubble.js), under Claude. main grows
      the window by the height the bubble reports, so Claude keeps his size. */
-  #bubble { display: none; position: absolute; left: 4px; right: 4px; bottom: 4px; max-height: 400px; overflow-y: auto; overflow-x: hidden; }
+  #bubble { display: none; position: absolute; left: 4px; right: 4px; bottom: 4px; max-height: min(400px, var(--bubble-max, 400px)); overflow-y: auto; overflow-x: hidden; }
   body.asking #bubble { display: block; }
   /* Nobody can see the widget: finite animations mid-flight hold too. */
   body.motion-paused * { animation-play-state: paused !important; }

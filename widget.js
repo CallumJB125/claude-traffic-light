@@ -123,10 +123,23 @@ document.addEventListener('plexiform-tour', (e) => {
   bubble.update(withTourInput(lastInputs));
 });
 window.trafficLight.onStripApplied((px) => { stripAck = px; if (px === bubblePx) bubble.revealed(); });
+// On a short display main has less room than the bubble wants: cap the bubble (it scrolls) and ask again,
+// so what it asks fits, the window matches it and main can vouch for it.
+window.trafficLight.onBubbleCap((cap) => {
+  const n = Number(cap);
+  if (!Number.isFinite(n)) return;
+  document.body.style.setProperty('--bubble-max', `${Math.max(0, Math.round(n) - 8)}px`);
+  reportBubble();
+});
 // Also on resize: widening the window rewraps the text, so the height changes.
 function reportBubble() {
   const on = bubbleEl.classList.contains('has-items');
+  const fresh = on && !document.body.classList.contains('asking');
   document.body.classList.toggle('asking', on);
+  // Each new bubble starts from the full height (the widget may be on another display by then; main sends
+  // the room again if it asks for more than there is), scrolled to the top.
+  if (!on) document.body.style.removeProperty('--bubble-max');
+  if (fresh) bubbleEl.scrollTop = 0;
   const px = on ? Math.ceil(bubbleEl.getBoundingClientRect().height) + 8 : 0;
   if (px === bubblePx) return;
   bubblePx = px;

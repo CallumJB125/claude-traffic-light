@@ -4829,9 +4829,11 @@ ipcMain.on('set-bubble-height', (e, px) => {
 // counts as seen and it can't be answered.
 let bubbleAsked = 0;
 let bubbleAcked = null;
-// The bubble height that fits on the widget's display (WidgetStrip.bubbleRoom); a bubble asking more is clamped
-// and scrolls, so it is not vouched for.
+// The bubble height that fits on the widget's display (WidgetStrip.bubbleRoom). main tells the widget
+// ('bubble-cap'), which caps the bubble there, so it scrolls and asks for what fits. A bubble still asking
+// more is clamped and not vouched for.
 let bubbleCap = BUBBLE_MAX_PX;
+let bubbleCapSent = BUBBLE_MAX_PX;
 function ackStrip() {
   if (!WidgetStrip.shouldAck(strip, bubbleAsked, bubbleAcked, bubbleCap) || !win || win.isDestroyed()) return;
   bubbleAcked = bubbleAsked;
@@ -4843,6 +4845,7 @@ function applyStrip(asking, away = false, update = false, budget = false) {
   const base = WidgetStrip.baseOf(cur, strip);
   const workArea = screen.getDisplayMatching(base).workArea;
   bubbleCap = WidgetStrip.bubbleRoom(base.height, workArea, BUBBLE_MAX_PX);
+  if (WidgetStrip.sendCap(bubbleCap, bubbleCapSent, asking) && !win.isDestroyed()) { bubbleCapSent = bubbleCap; win.webContents.send('bubble-cap', bubbleCap); }
   const next = asking ? { kind: 'bubble', px: Math.min(bubbleCap, asking), minWidth: BUBBLE_MIN_W } : budget ? { kind: 'budget', px: BUDGET_PX, minWidth: BUBBLE_MIN_W } : away ? { kind: 'away', px: AWAY_PX } : update ? { kind: 'update', px: UPDATE_PX } : { kind: null };
   if (WidgetStrip.sameStrip(strip, next)) { ackStrip(); return; }
   // The garden or a roam is moving the widget's own rect: grow once it's home
