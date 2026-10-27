@@ -451,6 +451,39 @@ test('classifier: noise allowance is per named baseline only, with a reason', ()
   assert.deepEqual(lib.verdictOf([row('x/other.png', 25)], config).failures, []);
 });
 
+// The window a baseline is shot from: find the toHaveScreenshot call that names it (directly, through a helper
+// such as bubbleShot, or through a `prefix-${…}` template), take the page it is called on, and return the file
+// that page is opened with — only if every assignment of that variable in the spec opens the same file.
+function shotWindow(spec, file) {
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lit = new RegExp(`['"\`]${esc(file)}['"\`]`);
+  const lines = spec.split('\n');
+  let line = lines.find((l) => lit.test(l));
+  if (!line) {
+    line = lines.find((l) => [...l.matchAll(/`([\w-]+)\$\{[^}]+\}([\w.-]*)`/g)].some((m) => file.startsWith(m[1]) && file.endsWith(m[2])));
+  }
+  if (!line) return null;
+  let recv = (line.match(/expect\((\w+)\)\.toHaveScreenshot/) || [])[1];
+  if (!recv) {
+    const helper = (line.match(/(\w+)\(\s*['"`]/) || [])[1];
+    const def = helper && spec.match(new RegExp(`const ${helper} = [\\s\\S]*?expect\\((\\w+)\\)\\.toHaveScreenshot`));
+    recv = def && def[1];
+  }
+  if (!recv) return null;
+  const opens = [...spec.matchAll(new RegExp(`\\b${recv}\\s*=\\s*await\\s+(\\w+)\\([^,]+,\\s*'([^']+)'`, 'g'))].map((m) => `${m[1]}:${m[2]}`);
+  const uniq = [...new Set(opens)];
+  return uniq.length === 1 && uniq[0].startsWith('windowByFile:') ? uniq[0].slice('windowByFile:'.length) : uniq.join(' | ') || null;
+}
+
+test('classifier: shotWindow traces a baseline to the window it is taken from', () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const spec = (n) => fs.readFileSync(path.join(__dirname, '..', 'test-visual', n), 'utf8');
+  assert.equal(shotWindow(spec('home-compose.spec.js'), 'widget-compose-taken.png'), null, 'widget-page.html is embedded, not the index.html window');
+  assert.equal(shotWindow(spec('inputs.spec.js'), 'bubble-collapsed.png'), 'index.html');
+  assert.equal(shotWindow(spec('widget.spec.js'), 'widget-idle-off.png'), 'index.html');
+  assert.equal(shotWindow(spec('updates.spec.js'), 'updates-armed.png'), 'updates.html');
+});
+
 test('classifier: widget baselines take dark from index.html, which must still pin it', () => {
   const fs = require('node:fs'); const path = require('node:path');
   const root = path.join(__dirname, '..');
@@ -464,7 +497,7 @@ test('classifier: widget baselines take dark from index.html, which must still p
   for (const b of entry.baselines) {
     const spec = b.split('/')[2];
     const text = fs.readFileSync(path.join(root, 'test-visual', spec), 'utf8');
-    assert.match(text, /windowByFile\([^,]+, 'index\.html'\)/, `${b}: its spec must shoot the index.html widget`);
+    assert.equal(shotWindow(text, b.split('/').pop().replace(/-darwin\.png$/, '.png')), 'index.html', `${b}: must be taken from the index.html window`);
     assert.ok(fs.existsSync(path.join(root, b)), b);
   }
   assert.ok(!entry.baselines.some((b) => /widget-compose-taken/.test(b)), 'widget-page.html is not index.html');
@@ -530,6 +563,15 @@ test('classifier: exception guards — no old colour near a surface or text toke
     }
   }
   assert.deepEqual(tints.map((e) => e.baselines[0].split('/').pop()).sort(), ['lights-template-minimal-darwin.png', 'lights-templates-menu-darwin.png', 'lights-window-darwin.png']);
+  // inverse (labfix-review round 4): un-blend old with the base soft and new with the head soft; the two surfaces
+  // they imply must agree within ΔE 1.5, whatever `over` says
+  const under = (c, soft) => { const v = lib.parseColour(c); const sf = lib.parseColour(soft); return v.slice(0, 3).map((x, i) => Math.min(255, Math.max(0, (x - sf[i] * sf[3]) / (1 - sf[3])))); };
+  for (const e of tints) for (const [o, n] of e.pairs) {
+    const so = under(o, base.light['--accent-soft']); const sn = under(n, head.light['--accent-soft']);
+    assert.ok(lib.deltaE00(lib.lab(so), lib.lab(sn)) <= 1.5, `${e.name}: ${o} → ${n} imply different surfaces`);
+  }
+  // explicit: the --bg pair's old colour is not --bg or --panel
+  assert.ok(de('#ede8e8', '#f4f5f7') > 2 && de('#ede8e8', head.light['--bg']) > 2 && de('#ede8e8', head.light['--panel']) > 2);
 });
 
 test('classifier: the widget dark mapping — no app script writes data-theme; a contradicting image fails closed', () => {

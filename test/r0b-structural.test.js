@@ -96,7 +96,7 @@ function isColour(value, map, seen = new Set()) {
 function badNewTokenUses(names, files, headMap) {
   const bad = [];
   for (const [file, raw] of files) {
-    const text = /\.(css|html)$/.test(file) ? stripComments(raw) : raw;
+    const text = /\.(css|html|svg)$/.test(file) ? stripComments(raw) : raw;
     for (const name of names) {
       const re = new RegExp(String.raw`var\(\s*${name.replace(/[-]/g, '\\-')}(?![\w-])`, 'g');
       for (const m of text.matchAll(re)) {
@@ -106,7 +106,7 @@ function badNewTokenUses(names, files, headMap) {
         const decl = before.slice(start + 1).match(/(--[\w-]+|[a-z-]+)\s*:[^:]*$/);
         const prop = decl && decl[1];
         const ok = prop && (COLOUR_PROPS.has(prop) || (prop.startsWith('--') && headMap.has(prop) && isColour(`var(${prop})`, headMap)));
-        if (!ok) bad.push(`${file}: ${prop || '(no declaration)'} reads new ${name}`);
+        if (!ok) bad.push(`${file}: ${prop || '(no declaration)'} reads ${headMap.has(name) ? 'new' : 'removed'} ${name}`);
       }
     }
   }
@@ -158,7 +158,7 @@ function changedFiles(base) {
 // Tracked sources that can read a custom property: CSS, HTML and JS, not node_modules and not test/ (node unit
 // tests render nothing; test-visual/ is kept, its CSS and mocks are in the shots).
 function trackedSources() {
-  return git('ls-files', '*.css', '*.html', '*.js', '*.mjs').split('\n')
+  return git('ls-files', '*.css', '*.html', '*.svg', '*.js', '*.mjs').split('\n')
     .filter((f) => f && !f.includes('node_modules/') && !f.startsWith('test/') && fs.existsSync(path.join(ROOT, f)))
     .map((f) => [f, fs.readFileSync(path.join(ROOT, f), 'utf8')]);
 }
@@ -217,11 +217,14 @@ test('structural gate N3: a new custom property may only be read as a colour', (
     ['c.css', 'pre { font: 12px/1.4 var(--font-mono, ui-monospace, monospace); }'],
     ['d.css', '.ok { color: var(--graphite); border-color: var(--graphite); } :root { --accent: var(--graphite); }'],
     ['e.js', "el.style.margin = 'var(--gutter)';"],
+    ['f.svg', '<svg><rect style="rx: var(--radius-md, 4px)"/></svg>'],
   ];
   assert.deepEqual(badNewTokenUses(['--graphite'], files, head), []);
   assert.deepEqual(badNewTokenUses(['--gutter'], files, head), ['a.css: margin reads new --gutter', 'e.js: (no declaration) reads new --gutter']);
-  assert.deepEqual(badNewTokenUses(['--radius-md'], files, head), ['b.html: border-radius reads new --radius-md']);
-  assert.deepEqual(badNewTokenUses(['--font-mono'], files, head), ['c.css: font reads new --font-mono']);
+  assert.deepEqual(badNewTokenUses(['--radius-md'], files, head), ['b.html: border-radius reads removed --radius-md', 'f.svg: rx reads removed --radius-md']);
+  // a REMOVED colour token read through a fallback by a size declaration also fails
+  assert.deepEqual(badNewTokenUses(['--old-gap'], [['g.css', '.y { gap: var(--old-gap, 4px); }']], head), ['g.css: gap reads removed --old-gap']);
+  assert.deepEqual(badNewTokenUses(['--font-mono'], files, head), ['c.css: font reads removed --font-mono']);
 });
 
 test('structural gate: activation is shared with the classifier and survives a renamed branch', () => {
@@ -253,8 +256,11 @@ test('R0b structural gate: only colour declarations change', { skip: !ACTIVE.siz
     if (lines.length) bad[f] = lines;
   }
   assert.deepEqual(bad, {}, 'token stylesheet lines that are not a lone colour declaration');
+  // new at head, and removed at head (removing a colour declaration flips `var(--old, fallback)` readers to their
+  // fallback): both may only be read as a colour
   const fresh = [...maps.head.keys()].filter((n) => !maps.base.has(n));
-  assert.deepEqual(badNewTokenUses(fresh, trackedSources(), maps.head), [], 'new custom properties read by a non-colour declaration');
+  const gone = [...maps.base.keys()].filter((n) => !maps.head.has(n));
+  assert.deepEqual(badNewTokenUses([...fresh, ...gone], trackedSources(), maps.head), [], 'new or removed custom properties read by a non-colour declaration');
 });
 
 module.exports = { badCssLines, badNewTokenUses, isColour, tokenMap };
