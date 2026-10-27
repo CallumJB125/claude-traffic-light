@@ -381,3 +381,11 @@ test('C-R: Connect stamps askHooksAt at the install itself, and Disconnect clear
   assert.match(source, /onClaudeHooks: \(installed\) => noteAskHooks\(installed && !!loadConfig\(\)\.askFromWidget\)/, 'main stamps on every Connect path through AiTools');
   assert.match(source, /if \(done\) noteAskHooks\(!!loadConfig\(\)\.askFromWidget\)/, 'and after the rename rewrites the hooks');
 });
+
+// The test prompt is a textarea: it needs the page's accent focus ring like the other fields, not the global token ring.
+test('onboarding page: the accent focus ring covers the test-prompt textarea', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'onboarding.html'), 'utf8');
+  const rule = html.split('\n').find((l) => /button:focus-visible/.test(l));
+  assert.ok(rule && /textarea:focus-visible/.test(rule), 'textarea:focus-visible is in the page focus rule');
+  assert.match(html, /<textarea id="test-prompt"/);
+});
