@@ -61,6 +61,7 @@ test('Backups: lists snapshots in plain words, damaged ones flagged and not rest
   await settings.evaluate(() => document.getElementById('backups').scrollIntoView({ block: 'start' }));
   await settings.waitForTimeout(300);
   // Same content alone and in a full run, but glyph anti-aliasing differs between the two (~1.3% of pixels).
+  // Unproven: lone runs are exact (3 renders, 0 px off the baseline); the full-suite glyph-AA drift is claimed, not measured.
   await expect(await snapToPixels(settings.locator('#backups'))).toHaveScreenshot('backups-list.png', { maxDiffPixelRatio: 0.015 });
 });
 
@@ -73,6 +74,9 @@ test('Backups: the diff names what differs, and a subset restores with a before-
   await settings.waitForTimeout(300);
   // the open diff is taller than the window, so shoot the window, not the element
   // The embedded page can land a row off between a lone and a full run (≈1.7k px of 950k).
+  // Measured cause: without snapToPixels the page sits at a fractional scroll offset, so every horizontal edge
+  // anti-aliases half a pixel differently. 3 lone renders agreed with each other exactly and differed from the
+  // baseline by up to 1.29%. Left as it is on purpose; the fix is to snap the scroll offset and re-baseline.
   await expect(settings).toHaveScreenshot('backups-diff.png', { maxDiffPixelRatio: 0.008 });
   await picks.nth(0).locator('input').uncheck();
   await picks.nth(2).locator('input').uncheck();
