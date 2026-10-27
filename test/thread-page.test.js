@@ -643,6 +643,13 @@ test('1b switch AI: a Cancelled apply closes the review quietly; Close closes it
   await tick(); await tick();
   assert.equal(p.$('th-cards').querySelector('.th-review'), null);
   assert.equal(p.cards()[0].querySelector('.th-card-note'), null, 'Cancel is not an error');
+  assert.deepEqual([...p.cards()[0].querySelectorAll('button')].map((b) => b.textContent), ['Review the handover again'], 'the spent review is offered afresh');
+  p.advance(600);
+  p.btn(p.cards()[0], 'Review the handover again').click();
+  await tick(); await tick();
+  assert.deepEqual(acts(p).at(-1), { action: 'switchAi', ai: 'codex' });
+  assert.deepEqual([...p.cards()[0].querySelectorAll('button')].map((b) => b.textContent), ['Continue with Codex'], 'a fresh review: back to its own words');
+  p.btn(p.$('th-cards').querySelector('.th-review'), 'Close').click();
   await preview();
   p.btn(p.$('th-cards').querySelector('.th-review'), 'Close').click();
   assert.equal(p.$('th-cards').querySelector('.th-review'), null);

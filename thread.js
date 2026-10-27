@@ -177,8 +177,10 @@
   };
   // Plexiform's own facts about a task a StartTask would start, as the Tasks page lists them.
   const SOURCE = { cli: 'the buddy command', mcp: 'another AI session', board: 'a teammate', phone: 'a phone', slack: 'Slack', voice: 'voice', bus: 'another AI on this Mac' };
+  // After a cancelled switch the review is spent, so its button offers a fresh one (labfix-review's nit).
+  const switchLabel = (c, id, label) => (c.again === id ? 'Review the handover again' : label);
   function switchButtons(row, c, key) {
-    for (const id of switchTargets(detail)) row.append(cardBtn(`Continue with ${TV.AI_NAME[id]}`, '', c, () => preview(key, { action: 'switchAi', ai: id })));
+    for (const id of switchTargets(detail)) row.append(cardBtn(switchLabel(c, id, `Continue with ${TV.AI_NAME[id]}`), '', c, () => preview(key, { action: 'switchAi', ai: id })));
   }
   function renderCards() {
     const box = $('th-cards');
@@ -239,10 +241,10 @@
         const named = new Set();
         for (const ch of r.choices) {
           if (ch.action === 'resume') row.append(cardBtn(ch.label, '', c, () => choose(r.key, { action: 'choose', askId: k.askId, choiceId: ch.id })));
-          else if (ch.action === 'switchAi' && AIS.includes(ch.payload?.ai)) { named.add(ch.payload.ai); row.append(cardBtn(ch.label, '', c, () => preview(r.key, { action: 'choose', askId: k.askId, choiceId: ch.id }))); }
+          else if (ch.action === 'switchAi' && AIS.includes(ch.payload?.ai)) { named.add(ch.payload.ai); row.append(cardBtn(switchLabel(c, ch.payload.ai, ch.label), '', c, () => preview(r.key, { action: 'choose', askId: k.askId, choiceId: ch.id }))); }
           else elsewhere = true;
         }
-        for (const id of switchTargets(detail)) if (!named.has(id)) row.append(cardBtn(`Continue with ${TV.AI_NAME[id]}`, '', c, () => preview(r.key, { action: 'switchAi', ai: id })));
+        for (const id of switchTargets(detail)) if (!named.has(id)) row.append(cardBtn(switchLabel(c, id, `Continue with ${TV.AI_NAME[id]}`), '', c, () => preview(r.key, { action: 'switchAi', ai: id })));
         if (elsewhere) { const go = el('button', 'th-btn', 'Open in Tasks'); go.type = 'button'; go.addEventListener('click', () => api.openInTasks(rowId)); row.append(go); }
         if (row.childNodes.length) card.append(row);
         if (r.answer && approvals) card.append(el('p', 'th-card-sub', 'Or type your answer in the box below.'));
@@ -305,7 +307,7 @@
   function preview(key, req) {
     const c = cards.get(key);
     if (!c || acting || c.state !== 'idle' || Date.now() < c.armedUntil) return;
-    review = null;
+    review = null; c.again = null;
     return runAct(key, req);
   }
   const money = (n) => `$${Number(n).toFixed(2).replace(/\.00$/, '')}`;
@@ -347,7 +349,8 @@
       // A review is used once, whatever came of it. Cancelled says nothing; anything else says what happened.
       review = null;
       const c = cards.get(mine.from);
-      if (c && !(r && r.cancelled)) c.text = r && r.ok === true ? 'Switching…' : ((r && r.text) || 'That wasn’t sent. Try again.');
+      if (c && r && r.cancelled) c.again = mine.data.to;
+      else if (c) c.text = r && r.ok === true ? 'Switching…' : ((r && r.text) || 'That wasn’t sent. Try again.');
     }
     renderCards(); renderReply(); renderStop();
   }
