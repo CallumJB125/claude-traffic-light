@@ -89,6 +89,30 @@ function isColour(value, map, seen = new Set()) {
   return false;
 }
 
+// N3 (review round 3): a custom property that is NEW at head may only be read as a colour. Every var(--name …)
+// use (fallback forms included) in the given files must sit in a declaration of a colour property, or of a
+// custom property whose head value is a colour. Otherwise defining it would hijack an existing
+// `margin: var(--gutter, 16px)` and reset that declaration at computed time. Returns the offending uses.
+function badNewTokenUses(names, files, headMap) {
+  const bad = [];
+  for (const [file, raw] of files) {
+    const text = /\.(css|html)$/.test(file) ? stripComments(raw) : raw;
+    for (const name of names) {
+      const re = new RegExp(String.raw`var\(\s*${name.replace(/[-]/g, '\\-')}(?![\w-])`, 'g');
+      for (const m of text.matchAll(re)) {
+        // the declaration this use sits in: back to the nearest ; { } or newline-free start, then `prop:`
+        const before = text.slice(Math.max(0, m.index - 400), m.index);
+        const start = Math.max(before.lastIndexOf(';'), before.lastIndexOf('{'), before.lastIndexOf('}'));
+        const decl = before.slice(start + 1).match(/(--[\w-]+|[a-z-]+)\s*:[^:]*$/);
+        const prop = decl && decl[1];
+        const ok = prop && (COLOUR_PROPS.has(prop) || (prop.startsWith('--') && headMap.has(prop) && isColour(`var(${prop})`, headMap)));
+        if (!ok) bad.push(`${file}: ${prop || '(no declaration)'} reads new ${name}`);
+      }
+    }
+  }
+  return bad;
+}
+
 // Changed lines (comments stripped, blank lines ignored) that are not a lone colour declaration.
 // `maps` = { head, base }: token maps used to resolve var() (head) and to check a custom property's base value.
 function badCssLines(baseText, headText, maps = { head: tokenMap([headText]), base: tokenMap([baseText]) }) {
@@ -129,6 +153,14 @@ function changedFiles(base) {
     ...git('diff', '--name-only', '--no-renames', base).split('\n'),
     ...git('ls-files', '--others', '--exclude-standard').split('\n'),
   ].filter(Boolean));
+}
+
+// Tracked sources that can read a custom property: CSS, HTML and JS, not node_modules and not test/ (node unit
+// tests render nothing; test-visual/ is kept, its CSS and mocks are in the shots).
+function trackedSources() {
+  return git('ls-files', '*.css', '*.html', '*.js', '*.mjs').split('\n')
+    .filter((f) => f && !f.includes('node_modules/') && !f.startsWith('test/') && fs.existsSync(path.join(ROOT, f)))
+    .map((f) => [f, fs.readFileSync(path.join(ROOT, f), 'utf8')]);
 }
 
 const readHead = (f) => { const p = path.join(ROOT, f); return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null; };
@@ -177,6 +209,21 @@ test('structural checker: colour declarations pass; selectors, layout, sizes and
   assert.deepEqual(badCssLines(base, base.replace('#a34425', 'var(--graphite-light)'), maps), []);
 });
 
+test('structural gate N3: a new custom property may only be read as a colour', () => {
+  const head = tokenMap([':root { --graphite: #24292f; --accent: var(--graphite); --gutter: #000; }']);
+  const files = [
+    ['a.css', '.x { margin: 0 var(--gutter, 16px) 10px; }'],
+    ['b.html', '<style>.c { border-radius: var(--radius-md, 8px); }</style>'],
+    ['c.css', 'pre { font: 12px/1.4 var(--font-mono, ui-monospace, monospace); }'],
+    ['d.css', '.ok { color: var(--graphite); border-color: var(--graphite); } :root { --accent: var(--graphite); }'],
+    ['e.js', "el.style.margin = 'var(--gutter)';"],
+  ];
+  assert.deepEqual(badNewTokenUses(['--graphite'], files, head), []);
+  assert.deepEqual(badNewTokenUses(['--gutter'], files, head), ['a.css: margin reads new --gutter', 'e.js: (no declaration) reads new --gutter']);
+  assert.deepEqual(badNewTokenUses(['--radius-md'], files, head), ['b.html: border-radius reads new --radius-md']);
+  assert.deepEqual(badNewTokenUses(['--font-mono'], files, head), ['c.css: font reads new --font-mono']);
+});
+
 test('structural gate: activation is shared with the classifier and survives a renamed branch', () => {
   assert.equal(wantsClassify('# classify\n'), true);
   assert.equal(wantsClassify('# classify please\n'), false);
@@ -206,6 +253,8 @@ test('R0b structural gate: only colour declarations change', { skip: !ACTIVE.siz
     if (lines.length) bad[f] = lines;
   }
   assert.deepEqual(bad, {}, 'token stylesheet lines that are not a lone colour declaration');
+  const fresh = [...maps.head.keys()].filter((n) => !maps.base.has(n));
+  assert.deepEqual(badNewTokenUses(fresh, trackedSources(), maps.head), [], 'new custom properties read by a non-colour declaration');
 });
 
-module.exports = { badCssLines, isColour, tokenMap };
+module.exports = { badCssLines, badNewTokenUses, isColour, tokenMap };
