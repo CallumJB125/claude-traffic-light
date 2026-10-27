@@ -53,16 +53,28 @@ test('a busy spell ends in a recap of what happened, and the widget shows it', a
   expect(recap.heldPings).toEqual([]);
   // The same record is on disk for other readers (the phone, later).
   expect(JSON.parse(fs.readFileSync(path.join(h.home, 'away.json'), 'utf8')).headline).toBe(recap.headline);
+  // A wait with no request behind it is a Needs-you row (lab fixes PR 6), and the bubble wins over the recap
+  // while anything waits. Check that, then end the waits: the stored recap card shows once nothing is asked.
+  await expect(widget.locator('body')).toHaveClass(/asking/);
+  await expect(widget.locator('#bubble')).toContainText('Needs your permission');
+  await expect(widget.locator('#away')).toBeHidden();
+  await send('api', 'stop');
+  await send('docs', 'stop');
+  await expect(widget.locator('body')).not.toHaveClass(/asking/, { timeout: 10000 });
   // The window grows by the strip's 64 px (main.js AWAY_PX) to make room for
   // the card; shoot only once it has, not the squashed frame before.
   await expect.poll(() => widget.evaluate(() => innerHeight)).toBe(200 + 64);
+  await expect(widget.locator('#away')).toBeVisible();
   // The notification lane (7d002cbe) announces each of the three for 8 s;
   // shoot the recap once those rows have come and gone.
   const lane = widget.locator('#event-lane .lane-row');
   await expect(lane).toHaveCount(3, { timeout: 5000 });
   await expect(lane).toHaveCount(0, { timeout: 15000 });
   await widget.waitForTimeout(600);
-  await expect(widget).toHaveScreenshot('widget-away-recap.png', { threshold: 0.05 });
+  // Only the recap card is under test: shoot just its strip (the bottom 64 px, main.js AWAY_PX). The character and lamp above it
+  // move with the signals, and a mask over them still let the lamp's glow arc show at the mask's edge.
+  const { w, h: ih } = await widget.evaluate(() => ({ w: innerWidth, h: innerHeight }));
+  await expect(widget).toHaveScreenshot('widget-away-recap.png', { threshold: 0.05, clip: { x: 0, y: ih - 64, width: w, height: 64 } });
   await widget.evaluate(() => window.trafficLight.awayDismiss());
   await expect.poll(async () => (await aggregate()).away).toBeNull();
 });

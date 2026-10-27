@@ -8,7 +8,6 @@ const { test, expect } = require('@playwright/test');
 const { launchApp, windowByFile } = require('./app');
 const CharacterStore = require('../src/character-store.js');
 const Hatch = require('../characters/hatch.js');
-const { findClaudeBin } = require('../src/claude-code-session.js');
 
 let h;
 let lights;
@@ -31,12 +30,8 @@ test('Hatch: choices in, a saved character out, picked in Lights, deleted again'
   const hatch = await windowByFile(h.app, 'hatch.html');
   await hatch.waitForLoadState('load');
 
-  // Describe-it runs Claude Code when its binary is installed; without one the box says so instead of pretending.
-  if (findClaudeBin()) await expect(hatch.locator('#desc')).toBeEnabled();
-  else {
-    await expect(hatch.locator('#desc')).toBeDisabled();
-    await expect(hatch.locator('#desc-hint')).toContainText('needs an AI');
-  }
+  // Describe-it runs Claude Code when its binary is installed; this app's HOME holds the fake one (test-visual/app.js).
+  await expect(hatch.locator('#desc')).toBeEnabled();
 
   // the page cannot reach the network or run inline script
   const csp = await hatch.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]').content);

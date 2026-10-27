@@ -4,13 +4,16 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 
 test('native selected-session scheduling reviews, encrypts, cancels and sends once only when due', async () => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-followup-native-'));
-  const app = await _electron.launch({ args: [path.join(__dirname, 'followup-flow-main.js')], env: { ...process.env, PLEXIFORM_FOLLOWUP_FIXTURE: fixture } });
+  const app = await _electron.launch({ args: [path.join(__dirname, 'followup-flow-main.js'), '-ApplePersistenceIgnoreState', 'YES'], env: { ...process.env, PLEXIFORM_FOLLOWUP_FIXTURE: fixture } });
   try {
     const page = await app.firstWindow(), errors = [];
     page.on('pageerror', e => errors.push(e.message));
     await expect(page.getByRole('button', { name: 'Start Synthetic Claude session', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Start Synthetic Claude session', exact: true }).click();
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    // Since the grouped views (#64) a session that has just started sits in the Idle bucket, closed by default.
+    const bucket = page.locator('details.bucket', { hasText: 'Synthetic Claude session' });
+    if (!(await bucket.evaluate((e) => e.open))) await bucket.locator('summary').first().click();
     await page.getByRole('button', { name: 'Prepare follow-up', exact: true }).click();
     const composer = page.locator('.followup-composer');
     await composer.locator('textarea').fill('Synthetic scheduled follow-up');

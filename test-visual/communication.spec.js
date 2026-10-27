@@ -12,7 +12,7 @@ test('desktop task context and messages use the actual authenticated board pane'
   let app;
   try {
     const user = x.users.amember;
-    app = await electron.launch({ args: [path.join(__dirname, 'clients-fixture-main.js'), `--user-data-dir=${temp}`], env: { ...process.env,
+    app = await electron.launch({ args: [path.join(__dirname, 'clients-fixture-main.js'), '-ApplePersistenceIgnoreState', 'YES', `--user-data-dir=${temp}`], env: { ...process.env,
       PLEXIFORM_CLIENT_TEST_HUB: x.h.base, PLEXIFORM_CLIENT_TEST_ACCOUNT: JSON.stringify({ hub: x.h.base, token: user.token, device_id: user.device_id, user: { id: user.id, email: user.email } }) } });
     await expect.poll(() => app.evaluate(() => global.__clientTestInit), { timeout: 15000 }).toMatchObject({ stage: 'connected', result: { ok: true } });
     await app.evaluate(() => global.__clientTestBuddy.open('board'));

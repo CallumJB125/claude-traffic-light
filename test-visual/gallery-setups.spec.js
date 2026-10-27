@@ -21,8 +21,7 @@ const FILE = ITEM.payload.files[0];
 const CMD = FILE.content;
 
 test('a gallery setup opens on a cached Setups page and needs its own tick before Apply', async ({}, testInfo) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gallery-setups-home-'));
-  const h = await launchApp({ env: { HOME: home, USERPROFILE: home } });
+  const h = await launchApp();
   const inspect = (file, script) => h.app.evaluate(async ({ webContents }, { file, script }) => {
     const page = webContents.getAllWebContents().find((w) => { try { return new URL(w.getURL()).pathname.endsWith('/' + file); } catch { return false; } });
     return page ? page.executeJavaScript(script) : null;
@@ -81,13 +80,12 @@ test('a gallery setup opens on a cached Setups page and needs its own tick befor
     expect(await applyDisabled()).toBe(true);
     await inspect('setups.html', '{ const i = document.querySelectorAll("#personal .personal-unit input")[1]; i.checked = true; i.dispatchEvent(new Event("change")); } true');
     expect(await applyDisabled()).toBe(false);
-    expect(fs.existsSync(path.join(home, '.claude'))).toBe(false);
+    expect(fs.existsSync(path.join(h.userHome, '.claude', 'commands'))).toBe(false); // the fake providers own the rest of .claude
     await inspect('setups.html', '[...document.querySelectorAll("#personal button")].find(b => b.textContent.startsWith("Apply selected")).click(); true');
     await expect.poll(personal).toContain('Applied 1 change');
-    expect(fs.readFileSync(path.join(home, FILE.relative_path), 'utf8')).toBe(CMD);
+    expect(fs.readFileSync(path.join(h.userHome, FILE.relative_path), 'utf8')).toBe(CMD);
     expect((await observed()).confirms[1].detail).toContain(FILE.relative_path);
   } finally {
     await h.cleanup();
-    fs.rmSync(home, { recursive: true, force: true });
   }
 });

@@ -16,7 +16,7 @@ async function launchPlannerApp(f, temp) {
   fs.writeFileSync(path.join(home, '.help-shown'), '2000-01-01T00:00:00.000Z');
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ lowPower: 'off', roam: false, randomEvents: false, seasonal: false, hints: { teamSeen: true } }));
   const u = f.users.amember;
-  const app = await electron.launch({ args: [path.join(__dirname, 'planner-fixture-main.js'), '--demo', 'visual', '--buddy-mock-accounts', '--buddy', 'account'], env: { ...process.env,
+  const app = await electron.launch({ args: [path.join(__dirname, 'planner-fixture-main.js'), '-ApplePersistenceIgnoreState', 'YES', '--demo', 'visual', '--buddy-mock-accounts', '--buddy', 'account'], env: { ...process.env,
     CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_BACKUPS: backups, CLAUDE_TRAFFIC_LIGHT_PROJECTS: projects,
     CLAUDE_TRAFFIC_LIGHT_PORT: String(await port()), CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT: String(await port()),
     PLEXIFORM_PLANNER_TEST_HUB: f.h.base, PLEXIFORM_PLANNER_TEST_ACCOUNT: JSON.stringify({ hub: f.h.base, token: u.token, device_id: u.device_id, user: { id: u.id, email: u.email } }) } });
@@ -72,10 +72,13 @@ test('actual main My day opens own work and Calendar/Timeline persist real plans
     await myday.getByRole('button', { name: 'Refresh', exact: true }).click();
     await expect(myday.getByRole('button', { name: `${own.body.card.key} · Synthetic own planner work` })).toBeVisible();
     await myday.getByRole('button', { name: `${own.body.card.key} · Synthetic own planner work` }).click();
-    const pane = code => app.evaluate(async ({ webContents }, [origin, js]) => {
+    // executeJavaScript on a page that navigates before it answers never settles, and the board pane navigates right here
+    // (the card opens, the Calendar loads): a poll that landed on such a call sat out its whole timeout with the
+    // right #card hash already showing. Each probe is bounded, so the poll asks again.
+    const pane = code => Promise.race([app.evaluate(async ({ webContents }, [origin, js]) => {
       const page = webContents.getAllWebContents().find(w => w.getURL().startsWith(`${origin}/?`));
       return page ? page.executeJavaScript(js, true) : null;
-    }, [f.h.base, code]);
+    }, [f.h.base, code]), new Promise(resolve => setTimeout(() => resolve(null), 2500))]);
     await expect.poll(() => pane('location.hash'), { timeout: 15000 }).toBe(`#card=${id}`);
     await sidebar.evaluate(() => window.buddy.select('board:calendar'));
     await expect.poll(() => pane("document.querySelector('.calendar-grid')?.getAttribute('aria-label')"), { timeout: 15000 }).toBe('month calendar');
@@ -96,6 +99,8 @@ test('actual main My day opens own work and Calendar/Timeline persist real plans
     expect(boardPage).toBeTruthy();
     // A real mouse drag in steps: dragTo's single jump does not start Chromium's
     // HTML5 drag session inside the embedded board view (no dragstart fires).
+    // The real clock puts day(6) on the month's last row late in the month, below the fold: scroll it into view first.
+    await boardPage.locator(`[data-planning-day="${day(6)}"]`).scrollIntoViewIfNeeded();
     { const a = await boardPage.locator(`[data-planning-card="${id}"]`).boundingBox(); const b = await boardPage.locator(`[data-planning-day="${day(6)}"]`).boundingBox();
       await boardPage.mouse.move(a.x + a.width / 2, a.y + a.height / 2); await boardPage.mouse.down();
       await boardPage.mouse.move(a.x + a.width / 2 + 10, a.y + a.height / 2, { steps: 5 }); await boardPage.mouse.move(b.x + b.width / 2, b.y + 30, { steps: 20 }); await boardPage.mouse.up(); }

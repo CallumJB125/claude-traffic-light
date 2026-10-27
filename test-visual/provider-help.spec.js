@@ -3,11 +3,10 @@
 const { test, expect } = require('@playwright/test'); const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
 const { launchApp, windowByFile } = require('./app'); const Rules = require('../rules');
 test('actual Help and widget report multiple local providers and preserve the saved human rule', async () => {
-  const syntheticHome = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-provider-help-'));
   const rules = [Rules.normalizeRule({ id: 'working', name: 'Claude is working', when: { signal: ['tool-use'] }, then: { lamp: 'green', pose: 'banner', text: 'MY HUMAN SIGN' } })];
   const now = new Date().toISOString(), files = {};
   for (const provider of ['codex', 'claude', 'cursor', 'gemini']) files[`sessions/${provider}.json`] = JSON.stringify({ sessionId: provider, source: provider, host: 'synthetic', cwd: '/synthetic/project', signal: 'tool-use', updatedAt: now, ...(provider === 'codex' ? { codexLifecycle: 1, codexHookAt: now } : {}) });
-  const h = await launchApp({ config: { rules, rulesVersion: Rules.RULES_VERSION }, files, env: { HOME: syntheticHome, USERPROFILE: syntheticHome } });
+  const h = await launchApp({ config: { rules, rulesVersion: Rules.RULES_VERSION }, files });
   const inspect = (file, js) => h.app.evaluate(async ({ webContents }, { file, js }) => { const wc = webContents.getAllWebContents().find(w => { try { return new URL(w.getURL()).pathname.endsWith('/' + file); } catch { return false; } }); return wc ? wc.executeJavaScript(js) : null; }, { file, js });
   try {
     const widget = await windowByFile(h.app, 'index.html');
@@ -25,5 +24,5 @@ test('actual Help and widget report multiple local providers and preserve the sa
     await expect.poll(() => inspect('help.html', 'document.querySelector("#headline").textContent')).toContain('Codex: Idle');
     await expect.poll(() => widget.locator('#tooltip').textContent()).toContain('Codex: Idle');
     expect(fs.readFileSync(path.join(h.home, 'config.json')).equals(configBefore)).toBe(true);
-  } finally { await h.cleanup(); fs.rmSync(syntheticHome, { recursive: true, force: true }); }
+  } finally { await h.cleanup(); }
 });

@@ -8,8 +8,7 @@ const { launchApp, windowByFile } = require('./app');
 // Actual Electron renderer acceptance, entirely synthetic. HOME also isolates
 // optional read-only probes that do not use the app's per-run data override.
 test('ordinary utilities stay in the main app and Widget rules contains two tabs', async () => {
-  const syntheticHome = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-utility-acceptance-'));
-  const h = await launchApp({ extraArgs: ['--lights'], env: { HOME: syntheticHome, USERPROFILE: syntheticHome } });
+  const h = await launchApp({ extraArgs: ['--lights'] });
   const errors = [];
   // Main's [startup] timing lines go to stderr on dev launches; they are not errors.
   h.app.on('console', message => { if (message.type() === 'error' && !message.text().startsWith('[startup] ')) errors.push(message.text()); });
@@ -77,5 +76,5 @@ test('ordinary utilities stay in the main app and Widget rules contains two tabs
       fs.writeFileSync(path.join(evidence, 'embedded-preferences.png'), Buffer.from(png, 'base64'));
       fs.writeFileSync(path.join(evidence, 'electron-receipt.json'), JSON.stringify({ synthetic: true, utilities: ['usage', 'stats', 'settings', 'help', 'hatch', 'feedback', 'updates', 'sessions'], ordinaryPopupTabs: ['Rules', 'Auto-answer'], windowCount: await windowCount(), errors }, null, 2));
     }
-  } finally { await h.cleanup(); fs.rmSync(syntheticHome, { recursive: true, force: true }); }
+  } finally { await h.cleanup(); }
 });

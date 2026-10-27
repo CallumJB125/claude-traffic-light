@@ -4,8 +4,7 @@ const { test, expect } = require('@playwright/test');
 const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
 const { launchApp, windowByFile } = require('./app');
 test('newly selected own main view captures after paint repeatedly without additional app windows', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-feedback-capture-'));
-  const h = await launchApp({ env: { HOME: home, USERPROFILE: home } });
+  const h = await launchApp();
   const inspect = (file, js) => h.app.evaluate(async ({ webContents }, { file, js }) => {
     const page = webContents.getAllWebContents().find(w => { try { return new URL(w.getURL()).pathname.endsWith('/' + file); } catch { return false; } });
     return page ? page.executeJavaScript(js) : null;
@@ -28,5 +27,5 @@ test('newly selected own main view captures after paint repeatedly without addit
       await inspect('feedback.html', 'window.feedbackApi.clearScreenshot(); true');
     }
     expect(await count()).toBe(before);
-  } finally { await h.cleanup(); fs.rmSync(home, { recursive: true, force: true }); }
+  } finally { await h.cleanup(); }
 });

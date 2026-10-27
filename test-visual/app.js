@@ -2,7 +2,7 @@
 // data dir, signal port and Electron userData, so it can neither read nor
 // write ~/.claude-traffic-light and cannot collide with a running install's
 // single-instance lock.
-const { _electron: electron } = require('@playwright/test');
+const { _electron: electron, test } = require('@playwright/test');
 const fs = require('fs');
 const net = require('net');
 const os = require('os');
@@ -30,7 +30,69 @@ function freePort() {
   });
 }
 
-async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } = {}) {
+// Variables that point back into the real home whatever HOME is set to.
+const HOME_POINTERS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'ZDOTDIR'];
+const homeEnv = (userHome, base = process.env) => ({
+  ...Object.fromEntries(Object.entries(base).filter(([k]) => !HOME_POINTERS.includes(k))),
+  HOME: userHome,
+  USERPROFILE: userHome,
+  // A bare `claude` (voice helper, tool probes) finds the fakes below before any real install.
+  PATH: [path.join(userHome, '.local', 'bin'), base.PATH].filter(Boolean).join(path.delimiter),
+});
+
+// A first start that died: "closed"/"crash" in the error's FIRST line only (Playwright appends the app's own log to the
+// message, and an assertion failure whose app log mentions a crash is not a boot death), and early (under 20 s).
+const BOOT_DEATH_MS = 20000;
+const isBootDeath = (e, elapsedMs) => elapsedMs < BOOT_DEATH_MS && /closed|crash/i.test(String((e && e.message) || '').split('\n')[0]);
+
+// Fake provider CLIs. The finders look below $HOME first (findClaudeBin, findCodexBin, findGeminiBin, findAcpBin),
+// and ai-tools probes PATH, so a fake at each HOME-relative spot means no spec can start a real provider. Each fake
+// appends {name, argv, cwd} (and stdin chunks) to the marker file, answers --version, then runs the repo's own wire
+// fixture where one exists, else exits 0.
+const FAKE_FIXTURES = {
+  claude: path.join(ROOT, 'test', 'fixtures', 'fake-claude-stream.js'),
+  codex: path.join(ROOT, 'test', 'fixtures', 'fake-codex-app-server.js'),
+  gemini: path.join(ROOT, 'test', 'fixtures', 'fake-gemini-acp.js'),
+};
+// These speak ACP over stdio like gemini --acp (src/acp-agents.js).
+const ACP_NAMES = ['cursor-agent', 'agent', 'copilot', 'opencode', 'hermes'];
+const FAKE_PROVIDER_PATHS = {
+  claude: ['.local/bin/claude', '.claude/local/claude'], codex: ['.local/bin/codex'], gemini: ['.local/bin/gemini'],
+  'cursor-agent': ['.local/bin/cursor-agent'], agent: ['.local/bin/agent'], copilot: ['.local/bin/copilot'],
+  opencode: ['.local/bin/opencode', '.opencode/bin/opencode'], hermes: ['.local/bin/hermes'], goose: ['.local/bin/goose'], aider: ['.local/bin/aider'],
+};
+const fakeProviderMark = (userHome) => path.join(userHome, 'fake-providers.log');
+function installFakeProviders(userHome) {
+  const mark = fakeProviderMark(userHome);
+  for (const [name, rels] of Object.entries(FAKE_PROVIDER_PATHS)) {
+    const fixture = FAKE_FIXTURES[name] || (ACP_NAMES.includes(name) ? FAKE_FIXTURES.gemini : null);
+    const body = [
+      `#!${process.execPath}`,
+      "'use strict';",
+      "const fs = require('node:fs');",
+      `const note = (o) => { try { fs.appendFileSync(${JSON.stringify(mark)}, JSON.stringify({ name: ${JSON.stringify(name)}, ...o }) + '\\n'); } catch { /* best effort */ } };`,
+      'const argv = process.argv.slice(2);',
+      "note({ argv, cwd: process.cwd() });",
+      "if (argv.includes('--version')) { process.stdout.write('9.9.9 (fake)\\n'); process.exit(0); }",
+      fixture ? `process.stdin.on('data', (c) => note({ stdin: String(c) }));\nrequire(${JSON.stringify(fixture)});` : 'process.exit(0);',
+      '',
+    ].join('\n');
+    for (const rel of rels) {
+      const file = path.join(userHome, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, body, { mode: 0o755 });
+    }
+  }
+}
+const fakeProviderCalls = (userHome) => {
+  try { return fs.readFileSync(fakeProviderMark(userHome), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; }
+};
+
+// homeFiles seeds files below the app's own HOME (.claude.json, .claude/settings.json), as files does for the data dir.
+async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = {}, env = {} } = {}) {
+  // The app's HOME is the one below; a caller's HOME would drop the fake providers and reach the real CLIs. Use homeFiles.
+  if ('HOME' in env || 'USERPROFILE' in env) throw new Error('launchApp: do not pass env.HOME or env.USERPROFILE; the app gets its own (h.userHome, seeded with homeFiles)');
+  const launchedAt = Date.now();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-home-'));
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-ud-'));
   fs.mkdirSync(path.join(home, 'sessions'), { recursive: true });
@@ -40,6 +102,14 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
   // a real runaway on this machine can't leak into a baseline.
   const projects = path.join(home, 'projects');
   fs.mkdirSync(projects);
+  // The app's own HOME: hook state (~/.claude, ~/.codex), the setup checklist and the Help window read it, so
+  // a baseline must not depend on which AI tools this machine has. An empty one, per launch.
+  const userHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-user-'));
+  installFakeProviders(userHome);
+  for (const [name, content] of Object.entries(homeFiles)) {
+    fs.mkdirSync(path.dirname(path.join(userHome, name)), { recursive: true });
+    fs.writeFileSync(path.join(userHome, name), content);
+  }
   // Pre-mark the first-run help so it never pops up unasked.
   fs.writeFileSync(path.join(home, '.help-shown'), '2000-01-01T00:00:00.000Z');
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ ...FIXED_CONFIG, ...config }));
@@ -54,10 +124,12 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
   // `--demo visual` is an unrecognised demo name: it flags the run as a dev
   // run (no hook installs, no login item, no background pollers) without
   // overriding CLAUDE_TRAFFIC_LIGHT_HOME/PORT.
-  const app = await electron.launch({
-    args: [ROOT, `--user-data-dir=${userData}`, '--demo', 'visual', ...extraArgs],
+  // -ApplePersistenceIgnoreState YES: a native boot crash makes macOS offer to reopen windows on the NEXT launch, a modal that
+  // hangs it with no window ("no window for index.html"). Ignoring saved state keeps a crash a crash (labfix-pr7's boot diagnosis).
+  const launch = () => electron.launch({
+    args: [ROOT, '-ApplePersistenceIgnoreState', 'YES', `--user-data-dir=${userData}`, '--demo', 'visual', ...extraArgs],
     env: {
-      ...process.env,
+      ...homeEnv(userHome),
       CLAUDE_TRAFFIC_LIGHT_HOME: home,
       CLAUDE_TRAFFIC_LIGHT_PORT: String(port),
       CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT: String(remotePort),
@@ -73,9 +145,12 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
       ...env,
     },
   });
+  // Electron now and then dies in the first second under load ("Target page, context or browser has been closed" at the
+  // first evaluate). One fresh start; a second early death is a real failure and surfaces.
+  let app;
   // Pin the main window (a BaseWindow holding the sidebar and page views) to a whole-pixel
   // origin on the primary display, so embedded pages lay out the same every run.
-  await app.evaluate(({ BaseWindow, BrowserWindow, screen }) => {
+  const pinWindow = () => app.evaluate(({ BaseWindow, BrowserWindow, screen }) => {
     const pinned = new WeakSet();
     setInterval(() => {
       for (const w of BaseWindow.getAllWindows()) {
@@ -86,13 +161,34 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
       }
     }, 50);
   });
+  let stderrTail = '';
+  try {
+    app = await launch();
+    app.process().stderr?.on('data', (c) => { stderrTail = (stderrTail + c).slice(-1500); });
+    await pinWindow();
+  } catch (e) {
+    if (!isBootDeath(e, Date.now() - launchedAt)) throw e;
+    // Never silent: the warning and a test annotation say the first start died, with its exit code and stderr.
+    await new Promise((r) => setTimeout(r, 300));
+    let proc = null;
+    try { proc = app?.process(); } catch { /* the handle is already torn down */ }
+    const detail = { error: String(e.message).split('\n')[0], exitCode: proc?.exitCode ?? null, signal: proc?.signalCode ?? null, stderrTail: stderrTail.trim().slice(-600) };
+    console.warn(`[launch-retry] Electron died on its first start; starting it once more. ${JSON.stringify(detail)}`);
+    try { test.info().annotations.push({ type: 'launch-retry', description: JSON.stringify(detail) }); } catch { /* not inside a test */ }
+    // Passing tests show no annotations: playwright.config.js adds these up and prints the total when the run ends.
+    try { if (process.env.PLEXIFORM_VISUAL_RUN_HOME) fs.appendFileSync(path.join(process.env.PLEXIFORM_VISUAL_RUN_HOME, 'launch-retries.log'), `${JSON.stringify(detail)}\n`); } catch { /* best effort */ }
+    try { await app?.close(); } catch { /* already gone */ }
+    app = await launch();
+    await pinWindow();
+  }
   const cleanup = async () => {
     try { await app.close(); } catch { /* already gone */ }
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(userData, { recursive: true, force: true });
     fs.rmSync(backups, { recursive: true, force: true });
+    fs.rmSync(userHome, { recursive: true, force: true });
   };
-  return { app, home, port, remotePort, projects, backups, cleanup };
+  return { app, home, userHome, port, remotePort, projects, backups, cleanup };
 }
 
 // POST /signal needs the per-install token the app writes beside its port file.
@@ -165,4 +261,5 @@ async function focusMainWindow(app) {
   });
 }
 
-module.exports = { focusMainWindow, launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };
+module.exports = {
+  HOME_POINTERS, homeEnv, isBootDeath, installFakeProviders, fakeProviderCalls, FAKE_PROVIDER_PATHS, focusMainWindow, launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };
