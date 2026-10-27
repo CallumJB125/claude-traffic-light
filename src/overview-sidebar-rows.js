@@ -8,16 +8,10 @@
 const KEYS = Object.freeze(['id', 'bucket', 'title', 'project', 'origin', 'age_ms', 'team', 'terminal', 'chat', 'thread']);
 const BUCKET_IDS = Object.freeze(['needs', 'working', 'check', 'stuck', 'idle']);
 const ORIGINS = Object.freeze(['iTerm', 'Terminal', 'Plexiform Terminal']);
-// The title rule's last step (plan-organised-views §2.3 item 7): "<AI> session in <project>".
-const AI = Object.freeze({ claude: 'Claude', 'claude-code': 'Claude', codex: 'Codex', cursor: 'Cursor', gemini: 'Gemini', copilot: 'Copilot', opencode: 'OpenCode' });
-// "We don't know" placeholders from the session DTOs are not project names.
-const NO_PROJECT = new Set(['Other work', 'Project not reported', 'Local project', 'Unknown project']);
+// The title rules live in session-title.js, shared with the row view model.
+const { AI, NO_PROJECT, text, pathy } = require('./session-title');
 const fallbackTitle = (dto, project) => `${AI[dto.provider?.id] ?? 'AI'} session${project ? ` in ${project}` : ''}`;
 const MAX = 200;
-
-const text = (v, n) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, n) : '');
-// A label that looks like a filesystem path is dropped, not shortened.
-const pathy = (s) => /(^|\s)(~|\/|[A-Za-z]:\\)/.test(s) || s.includes('/Users/') || s.includes('\\');
 
 function row(dto, origins, threads) {
   if (!dto || typeof dto !== 'object' || typeof dto.id !== 'string' || !/^[0-9a-f]{64}$/.test(dto.id)) return null;

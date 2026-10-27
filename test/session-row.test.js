@@ -90,14 +90,12 @@ test('sessionRow: the diff count, approvals and a SessionRef, when main supplies
   assert.equal(sessionRow({ id: 'nope' }), null);
 });
 
-test('the shared title rules equal R1 sidebar\'s copy until R2 imports them', () => {
+test('the sidebar uses the shared title rules; session-title stays a leaf', () => {
   const T = require('../src/session-title');
-  const sidebar = require('../src/overview-sidebar-rows');
-  assert.deepEqual([...T.NO_PROJECT].sort(), [...sidebar.NO_PROJECT].sort());
+  assert.equal(require('../src/overview-sidebar-rows').NO_PROJECT, T.NO_PROJECT);
   const src = fs.readFileSync(path.join(__dirname, '../src/overview-sidebar-rows.js'), 'utf8');
-  const def = (name, from) => from.match(new RegExp(`^const ${name} = .*$`, 'm'))?.[0];
+  for (const name of ['AI', 'NO_PROJECT', 'text', 'pathy']) assert.doesNotMatch(src, new RegExp(`^const ${name} = `, 'm'), `${name} has one copy`);
   const mine = fs.readFileSync(path.join(__dirname, '../src/session-title.js'), 'utf8');
-  for (const name of ['AI', 'text', 'pathy']) assert.equal(def(name, mine), def(name, src), name);
   assert.doesNotMatch(mine, /require\(/, 'a leaf module');
 });
 
@@ -107,7 +105,10 @@ test('frozen sidebar payload (generated from main before PR 0s): R2\'s projectio
   const now = sidebarRows(out);
   // Ids are salted per overview-service instance, so the golden holds a placeholder.
   assert.ok(now.sessions.every((s) => /^[0-9a-f]{64}$/.test(s.id)));
-  assert.deepEqual({ ...now, sessions: now.sessions.map((s) => ({ ...s, id: '<per-instance id>' })) }, golden);
+  // R2a adds two keys after the golden was frozen; every other byte must match.
+  const added = now.sessions.map(({ chat, thread }) => ({ chat, thread }));
+  assert.deepEqual({ ...now, sessions: now.sessions.map(({ chat, thread, ...s }) => ({ ...s, id: '<per-instance id>' })) }, golden);
+  assert.ok(added.every((a) => typeof a.chat === 'boolean' && typeof a.thread === 'boolean'), JSON.stringify(added));
   const titles = golden.sessions.map((s) => s.title);
   assert.ok(golden.sessions.some((s) => s.team === true), 'a team row');
   assert.ok(golden.sessions.some((s) => s.title === 'Remote work' && s.terminal === false && s.origin === null), 'a paired-device row');

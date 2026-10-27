@@ -2,8 +2,7 @@
 // The row title rules (plan-organised-views §2.3 item 7), shared by the row
 // view model (session-row.js) and, from R2, the chat-first sidebar. A leaf:
 // it requires nothing, so a sidebar that projects session-row has no cycle.
-// R1's overview-sidebar-rows.js still holds its own copy until R2 imports this
-// one; test/session-row.test.js keeps the two equal until then.
+// overview-sidebar-rows.js imports these (R2a); session-row.test.js pins one copy.
 const AI = Object.freeze({ claude: 'Claude', 'claude-code': 'Claude', codex: 'Codex', cursor: 'Cursor', gemini: 'Gemini', copilot: 'Copilot', opencode: 'OpenCode' });
 // Overview's placeholders when no project was reported: not a project name.
 const NO_PROJECT = Object.freeze(new Set(['Other work', 'Project not reported', 'Local project', 'Unknown project']));
