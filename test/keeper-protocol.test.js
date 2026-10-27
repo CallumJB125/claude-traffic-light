@@ -89,6 +89,9 @@ test('the replay hand-off is the in-band marker (§R3.14), with no attached roun
   assert.ok(!JSON.stringify(transcripts()).includes('"attached"'));
 });
 
+// src/peer-pid.js keeps its literal (bus-main-thread.test.js pins it to require
+// nothing, so main's awareness path does no load-time read); the keeper's Swift
+// constant is generated from the JSON, and this test keeps the two equal.
 test('one source for the provider requirement strings (§R3.6)', () => {
   const json = JSON.parse(fs.readFileSync(path.join(__dirname, '../src/provider-requirements.json'), 'utf8'));
   // The strings src/peer-pid.js held before PR 0s, verbatim.
