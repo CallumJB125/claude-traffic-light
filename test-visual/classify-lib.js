@@ -886,7 +886,11 @@ function exceptionsFor(baseline, config, theme) {
 // 0.134 % (lights-template-minimal), 0.130 %, 0.062 %, all others ≤ 0.024 %. The cap is 0.25 % (about twice
 // the second highest). routed-light has a named cause and a scoped allowance in classify.config.json `noise`.
 const NOISE_TILE_SHARE = 0.5;
-const CAPS = { unexpectedRatio: 0.005, crops: 200, noiseRatio: 0.0025 };
+// crops is a review-load cap, set just above the load that was hand-reviewed: 185 crops across the R0b set, plus
+// the 27 from the work-scope shots (accent text and the pill/avatar edges anti-aliased in the widget's translucent
+// stack: text over the 18 % pill wash over the 0.94 card in a transparent window), reviewed by hand in round 8b.
+// 212 + a margin of 3. Raise it only after reviewing the new crops.
+const CAPS = { unexpectedRatio: 0.005, crops: 215, noiseRatio: 0.0025 };
 // A per-baseline noise allowance from classify.config.json: { baseline, maxRatio, reason }. Exact path only.
 const noiseCapFor = (baseline, config) => {
   const hit = ((config && config.noise) || []).find((n) => n.baseline === baseline);

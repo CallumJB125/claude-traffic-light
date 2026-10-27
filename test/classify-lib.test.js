@@ -108,12 +108,15 @@ test('classifier: named exceptions apply only to their baseline', () => {
   assert.equal(lib.classifyImage(oldImg, newImg, FAM, { exceptions: lib.exceptionsFor('b.png', config) }).unexpected, 16);
 });
 
-test('classifier: the gate fails on characters, on more than 0.5 % unexpected and on more than 200 crops', () => {
+test('classifier: the gate fails on characters, on more than 0.5 % unexpected and on more than 215 crops', () => {
   const row = (baseline, unexpected, tiles = 0, changed = unexpected) => ({ baseline, total: 10000, changed, unexpected, sizeChanged: false, tiles: Array(tiles).fill({}) });
   assert.deepEqual(lib.verdictOf([row('x/usage.spec.js/a.png', 50, 3)]).failures, []);
   assert.equal(lib.verdictOf([row('x/usage.spec.js/a.png', 51, 3)]).failures.length, 1);
   assert.equal(lib.verdictOf([row('test-visual/__screenshots__/characters.spec.js/a.png', 0, 0, 1)]).failures.length, 1);
-  assert.equal(lib.verdictOf([row('x/a.png', 0, 120), row('x/b.png', 0, 81)]).failures.length, 1);
+  // 215 = the hand-reviewed load (185 + 27 work-scope crops) plus 3; see CAPS in classify-lib.js
+  assert.equal(lib.CAPS.crops, 215);
+  assert.deepEqual(lib.verdictOf([row('x/a.png', 0, 120), row('x/b.png', 0, 95)]).failures, []);
+  assert.equal(lib.verdictOf([row('x/a.png', 0, 120), row('x/b.png', 0, 96)]).failures.length, 1);
 });
 
 // ── R0b additions ────────────────────────────────────────────────────────────────────────────────────────────
