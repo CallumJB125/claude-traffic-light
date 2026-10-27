@@ -38,7 +38,10 @@ async function open({ rows = ROWS, theme = 'dark', env = { CLAUDE_TRAFFIC_LIGHT_
   // openHelp() leaves Help in the content area, which no footer row stands for: wait until the
   // footer says so (the sidebar starts from 'board' until it learns the page) before any shot.
   // Board isn't selected on purpose: its hub status line changes as the hub starts.
-  if (env.CLAUDE_TRAFFIC_LIGHT_CHAT_PREVIEW) await expect(side.locator('#nav-foot [aria-current]')).toHaveCount(0);
+  if (env.CLAUDE_TRAFFIC_LIGHT_CHAT_PREVIEW) {
+    await expect(side.locator('#nav-foot .sb-foot')).toHaveCount(3); // built (it starts empty), so the next check isn't vacuous
+    await expect(side.locator('#nav-foot [aria-current]')).toHaveCount(0);
+  }
   return { h, side };
 }
 const shot = async (locator, name) => expect(await snapToPixels(locator)).toHaveScreenshot(name);
