@@ -240,6 +240,9 @@ test('the widget asks for a one-click update when the team board needs one', asy
   await push({ ...fresh('required-by-hub'), status: 'ready', available: states['ready-restart'].available });
   await expect.poll(bodyH).toBe(200 + 72);
   await expect(widget.locator('#update-text')).toHaveText('Update Plexiform to keep using your team board (Acme team needs 1.2.0)');
+  // The permission test just before this one leaves a row in the notification lane ("app needs your OK") for 8 s; shot while
+  // it was still there, this frame differed by its pill (1,024 px, only when the file ran fast). Wait for the lane to empty.
+  await expect(widget.locator('#event-lane .lane-row')).toHaveCount(0, { timeout: 15000 });
   await widget.mouse.move(100, 20);
   await widget.waitForTimeout(600);
   await expect(widget).toHaveScreenshot('widget-update-hub.png', WIDGET_SHOT);

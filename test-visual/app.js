@@ -40,6 +40,11 @@ const homeEnv = (userHome, base = process.env) => ({
   PATH: [path.join(userHome, '.local', 'bin'), base.PATH].filter(Boolean).join(path.delimiter),
 });
 
+// A first start that died: "closed"/"crash" in the error's FIRST line only (Playwright appends the app's own log to the
+// message, and an assertion failure whose app log mentions a crash is not a boot death), and early (under 20 s).
+const BOOT_DEATH_MS = 20000;
+const isBootDeath = (e, elapsedMs) => elapsedMs < BOOT_DEATH_MS && /closed|crash/i.test(String((e && e.message) || '').split('\n')[0]);
+
 // Fake provider CLIs. The finders look below $HOME first (findClaudeBin, findCodexBin, findGeminiBin, findAcpBin),
 // and ai-tools probes PATH, so a fake at each HOME-relative spot means no spec can start a real provider. Each fake
 // appends {name, argv, cwd} (and stdin chunks) to the marker file, answers --version, then runs the repo's own wire
@@ -85,6 +90,9 @@ const fakeProviderCalls = (userHome) => {
 
 // homeFiles seeds files below the app's own HOME (.claude.json, .claude/settings.json), as files does for the data dir.
 async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = {}, env = {} } = {}) {
+  // The app's HOME is the one below; a caller's HOME would drop the fake providers and reach the real CLIs. Use homeFiles.
+  if ('HOME' in env || 'USERPROFILE' in env) throw new Error('launchApp: do not pass env.HOME or env.USERPROFILE; the app gets its own (h.userHome, seeded with homeFiles)');
+  const launchedAt = Date.now();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-home-'));
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-ud-'));
   fs.mkdirSync(path.join(home, 'sessions'), { recursive: true });
@@ -159,7 +167,7 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = 
     app.process().stderr?.on('data', (c) => { stderrTail = (stderrTail + c).slice(-1500); });
     await pinWindow();
   } catch (e) {
-    if (!/closed|crash/i.test(String(e && e.message))) throw e;
+    if (!isBootDeath(e, Date.now() - launchedAt)) throw e;
     // Never silent: the warning and a test annotation say the first start died, with its exit code and stderr.
     await new Promise((r) => setTimeout(r, 300));
     let proc = null;
@@ -167,6 +175,8 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = 
     const detail = { error: String(e.message).split('\n')[0], exitCode: proc?.exitCode ?? null, signal: proc?.signalCode ?? null, stderrTail: stderrTail.trim().slice(-600) };
     console.warn(`[launch-retry] Electron died on its first start; starting it once more. ${JSON.stringify(detail)}`);
     try { test.info().annotations.push({ type: 'launch-retry', description: JSON.stringify(detail) }); } catch { /* not inside a test */ }
+    // Passing tests show no annotations: playwright.config.js adds these up and prints the total when the run ends.
+    try { if (process.env.PLEXIFORM_VISUAL_RUN_HOME) fs.appendFileSync(path.join(process.env.PLEXIFORM_VISUAL_RUN_HOME, 'launch-retries.log'), `${JSON.stringify(detail)}\n`); } catch { /* best effort */ }
     try { await app?.close(); } catch { /* already gone */ }
     app = await launch();
     await pinWindow();
@@ -252,4 +262,4 @@ async function focusMainWindow(app) {
 }
 
 module.exports = {
-  HOME_POINTERS, homeEnv, installFakeProviders, fakeProviderCalls, FAKE_PROVIDER_PATHS, focusMainWindow, launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };
+  HOME_POINTERS, homeEnv, isBootDeath, installFakeProviders, fakeProviderCalls, FAKE_PROVIDER_PATHS, focusMainWindow, launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };

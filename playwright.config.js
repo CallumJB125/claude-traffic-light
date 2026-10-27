@@ -24,7 +24,12 @@ if (!process.env.PLEXIFORM_VISUAL_RUN_HOME) {
   process.env.HOME = runHome;
   process.env.USERPROFILE = runHome;
   process.env.PATH = [path.join(runHome, '.local', 'bin'), process.env.PATH].filter(Boolean).join(path.delimiter);
-  process.on('exit', () => { try { fs.rmSync(runHome, { recursive: true, force: true }); } catch { /* best effort */ } });
+  process.on('exit', () => {
+    let retries = 0;
+    try { retries = fs.readFileSync(path.join(runHome, 'launch-retries.log'), 'utf8').split('\n').filter(Boolean).length; } catch { /* none */ }
+    console.log(`launch-retries: ${retries}`);
+    try { fs.rmSync(runHome, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
 }
 
 module.exports = defineConfig({

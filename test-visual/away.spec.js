@@ -71,7 +71,10 @@ test('a busy spell ends in a recap of what happened, and the widget shows it', a
   await expect(lane).toHaveCount(3, { timeout: 5000 });
   await expect(lane).toHaveCount(0, { timeout: 15000 });
   await widget.waitForTimeout(600);
-  await expect(widget).toHaveScreenshot('widget-away-recap.png', { threshold: 0.05, mask: [widget.locator('#app')] }); // the recap card is under test; the character above it moves with the signals
+  // Only the recap card is under test: shoot just its strip (the bottom 64 px, main.js AWAY_PX). The character and lamp above it
+  // move with the signals, and a mask over them still let the lamp's glow arc show at the mask's edge.
+  const { w, h: ih } = await widget.evaluate(() => ({ w: innerWidth, h: innerHeight }));
+  await expect(widget).toHaveScreenshot('widget-away-recap.png', { threshold: 0.05, clip: { x: 0, y: ih - 64, width: w, height: 64 } });
   await widget.evaluate(() => window.trafficLight.awayDismiss());
   await expect.poll(async () => (await aggregate()).away).toBeNull();
 });

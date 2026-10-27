@@ -3,7 +3,6 @@
 // it can be deleted again. The window is strict-CSP and sandboxed, and the
 // page can only send choices, never art.
 const fs = require('fs');
-const { execFileSync } = require('child_process');
 const path = require('path');
 const { test, expect } = require('@playwright/test');
 const { launchApp, windowByFile } = require('./app');
@@ -31,15 +30,8 @@ test('Hatch: choices in, a saved character out, picked in Lights, deleted again'
   const hatch = await windowByFile(h.app, 'hatch.html');
   await hatch.waitForLoadState('load');
 
-  // Describe-it runs Claude Code when its binary is installed; without one the box says so instead of pretending.
-  // Asked of a child process, not required here: loading that module in the runner pulls an .mjs through Playwright's
-  // CJS transform, and a later spec's import() of the same file then fails ("does not provide an export").
-  const hasClaude = execFileSync(process.execPath, ['-e', "process.stdout.write(require('./src/claude-code-session.js').findClaudeBin() ? '1' : '')"], { cwd: path.join(__dirname, '..'), env: { ...process.env, HOME: h.userHome }, encoding: 'utf8' }) === '1';
-  if (hasClaude) await expect(hatch.locator('#desc')).toBeEnabled();
-  else {
-    await expect(hatch.locator('#desc')).toBeDisabled();
-    await expect(hatch.locator('#desc-hint')).toContainText('needs an AI');
-  }
+  // Describe-it runs Claude Code when its binary is installed; this app's HOME holds the fake one (test-visual/app.js).
+  await expect(hatch.locator('#desc')).toBeEnabled();
 
   // the page cannot reach the network or run inline script
   const csp = await hatch.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]').content);
