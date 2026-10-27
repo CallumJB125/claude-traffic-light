@@ -1017,7 +1017,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     const target = sectionTarget(id) ?? id;
     const r = resolve(target, { chatFirst: true, from });
     // R8-1: with the preview on, Settings is the sheet (its first pane); the old page stays reachable by its own id elsewhere.
-    if (r.sidebar) focusSidebar(r.sidebar); else select(r.page === 'settings' ? 'settings:general' : r.page);
+    if (r.sidebar) { focusSidebar(r.sidebar); return; }
+    // R7-1: Home and My day are the new chat. the new chat is not in PAGES, so a plain select can't open it: open it, else the page asked for.
+    if (r.newchat) { if (!openNewChat()) select(target); return; }
+    select(r.page === 'settings' ? 'settings:general' : r.page);
   }
 
   // A page, or with the dev chat preview on a Settings pane (R8-1: not in PAGES, so the ids do not exist with it off).

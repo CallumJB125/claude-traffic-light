@@ -7,10 +7,12 @@ const assert = require('node:assert/strict');
 const P = require('../buddy-window/pages.js');
 
 const ALL_IDS = [...P.flat().map((p) => p.id), ...P.FLOW_IDS];
+// Destinations that are built: they redirect with the preview on.
+const BUILT = ['home', 'myday'];
 
 // §R2.5, in the plan's words → the encoded row.
 const TABLE = {
-  home: 'new chat (R7)', overview: 'sidebar, All', waiting: 'sidebar, Needs you', myday: 'new chat (R7)',
+  home: 'new chat', overview: 'sidebar, All', waiting: 'sidebar, Needs you', myday: 'new chat',
   sessions: 'sidebar, In terminals', timeline: 'thread by session, else sidebar In terminals (R2)',
   checkpoints: 'thread › Changes by session, else ⌘K "changes in…" (R2)', memory: '⌘K',
   tasks: 'thread by session, else new chat (R2)', discover: 'Library (R14)', 'agents-find': 'Library (R14)',
@@ -34,7 +36,7 @@ const describe = (r) => {
   if (r.to === 'usage') return `Usage › ${{ stats: 'Stats', burst: 'Burst', clients: 'Client billing' }[r.tab]}`;
   if (r.to === 'library') return 'Library (R14)';
   if (r.to === 'palette') return '⌘K';
-  if (r.to === 'newchat') return 'new chat (R7)';
+  if (r.to === 'newchat') return r.until ? `new chat (${r.until})` : 'new chat';
   if (r.to === 'thread' && r.pane === 'changes') return 'thread › Changes by session, else ⌘K "changes in…" (R2)';
   if (r.to === 'thread') return `thread by session, else ${r.otherwise.sidebar ? 'sidebar In terminals' : 'new chat'} (R2)`;
   return JSON.stringify(r);
@@ -56,8 +58,9 @@ test('every destination is a page, a future document, a named destination or a s
   for (const [id, r] of Object.entries(P.REDIRECTS)) {
     assert.ok(ok(r), `${id} → ${JSON.stringify(r)}`);
     if (r.otherwise) assert.ok(ok(r.otherwise), `${id} otherwise → ${JSON.stringify(r.otherwise)}`);
-    // A destination still to be built names the PR that builds it.
-    if (r.to && !r.keep) assert.match(String(r.until), /^(R\d+|palette)$/, `${id} has no until`);
+    // A destination still to be built names the PR that builds it; R7-1 built the new chat (home, myday).
+    if (r.to && !r.keep && !BUILT.includes(id)) assert.match(String(r.until), /^(R\d+|palette)$/, `${id} has no until`);
+    if (BUILT.includes(id)) assert.equal(r.until, undefined, `${id} is built`);
   }
 });
 
@@ -66,20 +69,24 @@ test('the preview off: resolve is the identity for every id', () => {
   for (const id of ALL_IDS) assert.deepEqual(P.resolve(id, { chatFirst: false }), { page: id });
 });
 
-test('the preview on: only the sidebar filters move in R1; unbuilt destinations stay on their page', () => {
+test('the preview on: the sidebar filters (R1) and Home and My day → the new chat (R7-1) move; unbuilt destinations stay on their page', () => {
   const moved = Object.fromEntries(ALL_IDS.map((id) => [id, P.resolve(id, { chatFirst: true })]).filter(([id, r]) => r.page !== id));
-  assert.deepEqual(moved, { overview: { sidebar: 'all' }, waiting: { sidebar: 'needs' }, sessions: { sidebar: 'terminals' } });
+  assert.deepEqual(moved, { overview: { sidebar: 'all' }, waiting: { sidebar: 'needs' }, sessions: { sidebar: 'terminals' }, home: { newchat: true }, myday: { newchat: true } });
+  // Review S3: tasks' fallback is the new chat too, but tasks itself is unbuilt (R2) and stays put.
+  assert.deepEqual(P.resolve('tasks', { chatFirst: true }), { page: 'tasks' });
+  for (const id of ['stats', 'optimiser', 'clients', 'usage']) assert.deepEqual(P.resolve(id, { chatFirst: true }), { page: id }, id);
 });
 
 test('a select from the sidebar itself is never redirected (a row click on overview stays on overview)', () => {
   for (const id of ALL_IDS) assert.deepEqual(P.resolve(id, { chatFirst: true, from: 'sidebar' }), { page: id });
 });
 
-test('one hop at most: a result is either the id itself or a sidebar filter, never another page to redirect', () => {
+test('one hop at most: a result is the id itself, a sidebar filter or the new chat, never another page to redirect', () => {
   for (const id of ALL_IDS) {
     const r = P.resolve(id, { chatFirst: true });
     assert.equal(Object.keys(r).length, 1, id);
     if ('page' in r) assert.equal(r.page, id, `${id} resolved to another page`);
+    else if ('newchat' in r) assert.equal(r.newchat, true, id);
     else assert.ok(P.SIDEBAR_FILTERS.includes(r.sidebar), id);
   }
 });
