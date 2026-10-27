@@ -31,7 +31,7 @@ async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus
   const dom = new JSDOM(HTML, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'file:///app/buddy-window/sidebar.html' });
   const w = dom.window;
   open.push(w);
-  const calls = { select: [], groups: [], sessions: 0, thread: [] };
+  const calls = { select: [], groups: [], sessions: 0, thread: [], newchat: 0 };
   let onState = [];
   w.buddy = {
     pages: async () => ({ pages: Pages.PAGES, groups: Pages.GROUPS, sections: Pages.SECTIONS, footer: Pages.FOOTER, brand: { name: 'Plexiform', hubText: {} },
@@ -40,6 +40,7 @@ async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus
     onState: (fn) => onState.push(fn),
     sessions: async () => { calls.sessions++; return { schema: 1, status: 'complete', sessions: typeof rows === 'function' ? rows() : rows }; },
     openThread: (x) => calls.thread.push(x),
+    openNewChat: () => { calls.newchat++; },
     setGroups: (ids) => calls.groups.push([...ids]),
   };
   w.CSS = w.CSS || {};
@@ -99,14 +100,16 @@ test('gate on: bucket groups in BUCKETS order with label wording and counts; emp
 test('gate on: the top row, the filter and the footer', async () => {
   const s = await boot();
   const [nw, search] = [s.q('.sb-new'), s.q('.sb-search')];
-  assert.equal(nw.getAttribute('aria-disabled'), 'true');
-  assert.equal(nw.title, 'New chats are coming soon');
+  // R2b-2: New chat works (navigation only); Search is still coming.
+  assert.equal(nw.getAttribute('aria-disabled'), null);
+  assert.equal(nw.title, '');
   assert.equal(search.getAttribute('aria-label'), 'Search');
   assert.equal(search.title, 'Search is coming soon');
   assert.doesNotMatch(nw.textContent + search.textContent, /⌘|Ctrl/, 'no shortcut is shown: none is bound');
   assert.doesNotMatch(CHAT, /metaKey|ctrlKey/, 'no ⌘N or ⌘K handler');
   nw.click(); search.click();
   assert.deepEqual(s.calls.select, []);
+  assert.equal(s.calls.newchat, 1, 'New chat asks main to open the new-chat screen, nothing else');
   assert.deepEqual(s.qa('.sb-filter-opt').map((b) => [b.textContent, b.getAttribute('aria-checked')]), [['All', 'true'], ['Chats', 'false'], ['In terminals', 'false'], ['Team', 'false']]);
   assert.equal(s.q('.sb-filter').getAttribute('role'), 'radiogroup');
   assert.deepEqual(s.qa('#nav-foot button').map((b) => b.textContent), ['Board', 'Usage', 'Settings']);
@@ -332,8 +335,9 @@ test('R1 follow-up 8b: the sidebar bridge has the chat-first channels only when 
   };
   const off = exposed(['electron', '--type=renderer']);
   const on = exposed(['electron', '--type=renderer', '--plexiform-chat-preview']);
-  assert.ok(!off.includes('sessions') && !off.includes('setGroups') && !off.includes('openThread'));
-  assert.deepEqual(on.filter((k) => !off.includes(k)), ['openThread', 'sessions', 'setGroups']);
+  assert.ok(!off.includes('sessions') && !off.includes('setGroups') && !off.includes('openThread') && !off.includes('openNewChat'));
+  // R2b-2 adds openNewChat, gate-on only like the rest.
+  assert.deepEqual(on.filter((k) => !off.includes(k)), ['openNewChat', 'openThread', 'sessions', 'setGroups']);
   const index = read('buddy-window/index.js');
   assert.match(index, /preload: path\.join\(DIR, 'sidebar-preload\.js'\), \.\.\.\(chatFirst === true \? \{ additionalArguments: \['--plexiform-chat-preview'\] \} : \{\}\) \} \}\);/);
 });

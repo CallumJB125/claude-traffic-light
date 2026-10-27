@@ -158,3 +158,13 @@ test('new copy is held to the glossary now: the thread page and its reply box (R
   }
   assert.ok(literals(fs.readFileSync(path.join(ROOT, 'src/thread-main.js'), 'utf8')).includes('Your message may have been sent. Check the chat before sending again.'));
 });
+
+test('new copy is held to the glossary now: the new-chat screen (R2b-2) is clean', () => {
+  for (const f of ['newchat.js', 'src/newchat-main.js']) {
+    const strings = literals(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+    assert.ok(strings.length > 5, f);
+    assert.deepEqual(scan(strings.map((s) => [f, s])), [], f);
+  }
+  const page = fs.readFileSync(path.join(ROOT, 'newchat.html'), 'utf8').replace(/<script[^]*?<\/script>/g, '').replace(/<[^>]+>/g, ' ');
+  assert.deepEqual(scan([['newchat.html', page]]), []);
+});

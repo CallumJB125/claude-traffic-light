@@ -18,10 +18,12 @@ contextBridge.exposeInMainWorld('buddy', {
   signOut: (id) => ipcRenderer.send('buddy:signout', String(id)),
   onState: (fn) => ipcRenderer.on('buddy:state', (_e, s) => fn(s)),
   // Chat-first preview only (main refuses them while it is off): the
-  // read-only session rows, which bucket groups are collapsed, and opening a row's thread.
+  // read-only session rows, which bucket groups are collapsed, opening a row's thread, and the new-chat screen.
   ...(chatFirst ? {
     sessions: () => ipcRenderer.invoke('overview:state'),
     setGroups: (ids) => ipcRenderer.send('buddy:sidebar-groups', Array.isArray(ids) ? ids.slice(0, 8).map(String) : []),
     openThread: (id) => ipcRenderer.send('buddy:open-thread', String(id)),
+    // R2b-2: the New chat button (navigation only).
+    openNewChat: () => ipcRenderer.send('buddy:open-newchat'),
   } : {}),
 });

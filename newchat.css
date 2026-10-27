@@ -1,0 +1,53 @@
+/* The chat-first new-chat page (redesign R2b-2). Tokens only; the thread's column and reply box (thread.css). */
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: var(--text-base)/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+.nc { min-height: 100%; display: flex; }
+.nc-col { width: 100%; max-width: 760px; margin: 0 auto; padding: var(--space-8) var(--space-6); display: grid; align-content: start; gap: var(--space-4); }
+.nc-head { display: grid; gap: var(--space-1); }
+.nc-title { margin: 0; font: var(--t-title); font-size: var(--text-lg); line-height: 1.3; }
+.nc-hint { margin: 0; color: var(--muted); font-size: var(--text-sm); }
+.nc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.nc-box { display: grid; gap: var(--space-2); margin: 0; padding: var(--space-2); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel); }
+.nc-box:focus-within { border-color: var(--focus-ring); }
+.nc-text { width: 100%; min-height: 120px; max-height: 50vh; resize: none; field-sizing: content; margin: 0; padding: var(--space-1) var(--space-2); font: inherit; color: var(--text); background: transparent; border: 0; outline: none; }
+.nc-text::placeholder { color: var(--muted); }
+.nc-text:disabled { cursor: not-allowed; }
+.nc-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); padding: 0 var(--space-1); }
+.nc-chip { font: inherit; font-size: var(--text-sm); color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-pill); padding: 3px var(--space-2); max-width: 100%; }
+.nc-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.nc-route, .nc-peers, .nc-held { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: 0 var(--space-1); font-size: var(--text-sm); color: var(--muted); }
+.nc-route:empty, .nc-peers:empty, .nc-held:empty { display: none; }
+.nc-route[data-kind="refused"] .nc-route-text, .nc-warning { color: var(--text); }
+.nc-choices { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.nc-choice { font: inherit; font-size: var(--text-sm); color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); padding: 3px var(--space-2); cursor: pointer; }
+.nc-choice[aria-pressed="true"] { border-color: var(--accent); }
+.nc-link { font: inherit; font-size: var(--text-sm); color: var(--text); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
+.nc-muted { color: var(--muted); }
+
+.nc-row { display: flex; align-items: center; gap: var(--space-2); }
+.nc-note { flex: 1; min-width: 0; margin: 0; padding-left: var(--space-1); font-size: var(--text-sm); color: var(--muted); overflow-wrap: anywhere; }
+.nc-note[data-tone="error"] { color: var(--danger-text); }
+.nc-keys { flex: none; font-size: var(--text-xs); color: var(--muted); }
+
+.nc-btn { font: inherit; font-size: var(--text-sm); color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 5px var(--space-3); cursor: pointer; white-space: nowrap; }
+.nc-btn:hover { background: var(--panel-2); }
+.nc-btn:disabled { opacity: .5; cursor: not-allowed; }
+.nc-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.nc-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.nc-primary:disabled:hover { background: var(--accent); border-color: var(--accent); }
+.nc-btn:focus-visible, .nc-choice:focus-visible, .nc-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; box-shadow: var(--focus); }
+
+.nc-started { display: grid; gap: var(--space-2); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+.nc-started-title { margin: 0; font-size: var(--text-lg); font-weight: 600; }
+.nc-started-text { margin: 0; color: var(--muted); }
+.nc-started-actions { display: flex; gap: var(--space-2); }
+
+@media (max-width: 560px) {
+  .nc-col { padding: var(--space-6) var(--space-4); }
+}
+@media (forced-colors: active) {
+  .nc-box, .nc-chip, .nc-btn { border-color: CanvasText; }
+}

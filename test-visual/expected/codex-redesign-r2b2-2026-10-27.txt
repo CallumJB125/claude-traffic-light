@@ -1,0 +1,15 @@
+# R2b-2: four new baselines from test-visual/newchat.spec.js and three gate-on sidebar baselines changed, all with the chat-first preview gate on. No gate-off baseline changes; no accent flip, so no classifier run.
+test-visual/__screenshots__/newchat.spec.js/newchat-empty-light-darwin.png
+# reason: new. The new-chat screen: "New chat", the hint, the empty box in the 760 px column, the folder, Who and permission chips, ⌘↩ and a disabled Send.
+test-visual/__screenshots__/newchat.spec.js/newchat-empty-dark-darwin.png
+# reason: new. The same screen in dark.
+test-visual/__screenshots__/newchat.spec.js/newchat-peers-darwin.png
+# reason: new. A typed draft, the route line ("Claude: you set Claude for this repo" with Change) and the peers card with Start anyway above a still-disabled Send.
+test-visual/__screenshots__/newchat.spec.js/newchat-started-darwin.png
+# reason: new. Started but not yet listed: "Started." with Open in Tasks and New chat (never Board).
+test-visual/__screenshots__/sidebar-chat.spec.js/sidebar-buckets-dark-darwin.png
+# reason: changed, gate on. The sidebar's New chat button is enabled (outline Rev 1 nit): no aria-disabled, so shell.css:219's opacity .6 no longer applies. Playwright: 58 px over threshold, all inside .sb-new (x 26-97, y 151-159; the button is x 12-165, y 139-171). The committed file is the old baseline with only the .sb-new box replaced from a fresh capture: 0 px differ outside it.
+test-visual/__screenshots__/sidebar-chat.spec.js/sidebar-buckets-light-darwin.png
+# reason: changed, gate on. The same button in light. Playwright: 44 px over threshold, all inside .sb-new; 0 px differ outside it.
+test-visual/__screenshots__/sidebar-chat.spec.js/sidebar-empty-darwin.png
+# reason: changed, gate on. The same button on the empty sidebar. Playwright: 58 px over threshold, all inside .sb-new; 0 px differ outside it.
