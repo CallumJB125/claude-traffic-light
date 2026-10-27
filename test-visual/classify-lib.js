@@ -504,6 +504,11 @@ function themeFromConfig(baseline, config) {
   const hit = ((config && config.themes) || []).find((t) => Array.isArray(t.baselines) && t.baselines.includes(baseline));
   return hit && (hit.theme === 'light' || hit.theme === 'dark') ? hit : null;
 }
+// Review round 6: a vote counts only when the flat near-neutral pixels cover ≥ 2 % of the image or ≥ 500 px;
+// otherwise 10 flat px could decide a theme. Too few votes: an inferred theme is 'none', and a pinned theme
+// keeps its source citation (the mismatch backstop needs enough votes to contradict it).
+const VOTE_MIN_PX = 500; const VOTE_MIN_SHARE = 0.02;
+const enoughVotes = (sum, img) => sum >= VOTE_MIN_PX || sum >= VOTE_MIN_SHARE * img.width * img.height;
 function themeFor(families, baseline, baseImg, headImg, config) {
   const pinned = themeFromConfig(baseline, config);
   if (pinned) {
@@ -513,7 +518,7 @@ function themeFor(families, baseline, baseImg, headImg, config) {
     const sum = votes.light + votes.dark;
     const other = pinned.theme === 'dark' ? 'light' : 'dark';
     const share = sum ? +(votes[pinned.theme] / sum).toFixed(3) : 0;
-    if (sum && votes[other] / sum >= THEME_DOMINANCE) return { theme: 'none', source: `mismatch (config ${pinned.theme}, image ${other})`, coverage: votes, share, families: families.none };
+    if (sum && baseImg && enoughVotes(sum, baseImg) && votes[other] / sum >= THEME_DOMINANCE) return { theme: 'none', source: `mismatch (config ${pinned.theme}, image ${other})`, coverage: votes, share, families: families.none };
     return { theme: pinned.theme, source: `config (${pinned.source})`, coverage: votes, share, families: families[pinned.theme] };
   }
   const named = themeOf(baseline);
@@ -521,6 +526,7 @@ function themeFor(families, baseline, baseImg, headImg, config) {
   const votes = lightnessVotes(baseImg, headImg);
   const sum = votes.light + votes.dark;
   const share = sum ? +(Math.max(votes.light, votes.dark) / sum).toFixed(3) : 0;
+  if (!enoughVotes(sum, baseImg)) return { theme: 'none', source: `too few votes (${sum} px)`, coverage: votes, share, families: families.none };
   const inferred = !sum ? null : votes.light / sum >= THEME_DOMINANCE ? 'light' : votes.dark / sum >= THEME_DOMINANCE ? 'dark' : null;
   if (!inferred) return { theme: 'none', source: 'ambiguous', coverage: votes, share, families: families.none };
   if (named !== 'both' && named !== inferred) return { theme: 'none', source: `mismatch (name ${named}, image ${inferred})`, coverage: votes, share, families: families.none };
@@ -604,6 +610,10 @@ const classifyPixel = (oldPx, newPx, neutrals, members) => explainPixel(oldPx, n
 // but is never strong and never evidence: it must be a member pass or an exception, and a weak one still needs a
 // strong pixel within 2 px. Any other alpha change, and any alpha change in an opaque shot, is unexpected.
 const ALPHA_EDGE_MAX = 2;
+// Review round 6: the gate decodes through a 2D canvas, which stores premultiplied pixels, so a translucent
+// pixel's straight RGB is quantised to about 255/α levels. Below α 64 that error exceeds the classifier's
+// tolerances, so those pixels get no Δα allowance (they fail as before).
+const ALPHA_EDGE_MIN = 64;
 function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, onPixel = null, alphaEdge = false } = {}) {
   const total = oldImg.width * oldImg.height;
   if (oldImg.width !== newImg.width || oldImg.height !== newImg.height) {
@@ -633,7 +643,7 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
     const x = i % w; const y = (i - x) / w;
     let alphaMoved = false;
     if (A[j + 3] !== B[j + 3]) {
-      const ok = alphaEdge && A[j + 3] > 0 && A[j + 3] < 255 && B[j + 3] > 0 && B[j + 3] < 255 && Math.abs(A[j + 3] - B[j + 3]) <= ALPHA_EDGE_MAX;
+      const ok = alphaEdge && A[j + 3] >= ALPHA_EDGE_MIN && A[j + 3] < 255 && B[j + 3] >= ALPHA_EDGE_MIN && B[j + 3] < 255 && Math.abs(A[j + 3] - B[j + 3]) <= ALPHA_EDGE_MAX;
       if (!ok) { expl[i] = { verdict: 'unexpected', reason: 'alpha changed' }; continue; }
       alphaMoved = true;
     }
@@ -729,6 +739,17 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
 // A named exception applies only to the baselines it lists (N2, review round 2: no wildcard). An optional "theme"
 // ('light' | 'dark') also requires the baseline to be classified in that theme (themeFor's result). In
 // classifyImage only the exact pair (± ΔE 1) is strong; blends along it need a core pixel within 2 px.
+// The base the gate compares against: CLASSIFY_BASE, else the merge-base with origin/main. Never a fallback to
+// HEAD (review round 6): with no origin/main the old PNGs would equal the new ones and the gate would pass
+// vacuously, so an active gate fails with a clear message, like the structural gate.
+function resolveBase(envBase, mergeBase) {
+  if (envBase) return envBase;
+  let ref = '';
+  try { ref = String(mergeBase() || '').trim(); } catch { ref = ''; }
+  if (!ref) throw new Error('classify: no merge-base with origin/main (fetch it; CI needs fetch-depth 0), or set CLASSIFY_BASE');
+  return ref;
+}
+
 function exceptionsFor(baseline, config, theme) {
   const out = [];
   for (const e of (config && config.exceptions) || []) {
@@ -770,4 +791,4 @@ function verdictOf(results, config) {
   return { failures, crops };
 }
 
-module.exports = { ALPHA_EDGE_MAX, VOTE_CHROMA, sheetTokensOf, aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, themeFromConfig, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, noiseCapFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
+module.exports = { ALPHA_EDGE_MIN, VOTE_MIN_PX, VOTE_MIN_SHARE, resolveBase, ALPHA_EDGE_MAX, VOTE_CHROMA, sheetTokensOf, aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, themeFromConfig, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, noiseCapFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };

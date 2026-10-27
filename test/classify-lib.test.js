@@ -305,7 +305,7 @@ test('classifier (c′): the theme comes from the unchanged pixels\' lightness; 
   assert.deepEqual(t('x/menu-darwin.png', split(0.6)), ['none', 'ambiguous']);
   // native chrome that is no surface token still votes: a #c3c3c3 menu is light
   assert.deepEqual(t('x/menu-darwin.png', image(10, 10, () => [195, 195, 195])), ['light', 'image']);
-  assert.deepEqual(t('x/menu-darwin.png', image(4, 4, () => [119, 119, 119])), ['none', 'ambiguous']);
+  assert.deepEqual(t('x/menu-darwin.png', image(4, 4, () => [119, 119, 119])), ['none', 'too few votes (0 px)']);
   assert.deepEqual(t('x/menu-dark-darwin.png', split(0.2)), ['dark', 'name+image']);
   assert.deepEqual(t('x/menu-dark-darwin.png', split(0.9)), ['none', 'mismatch (name dark, image light)']);
   assert.deepEqual(t('x/menu-light-darwin.png', split(0.6)), ['none', 'ambiguous']);
@@ -346,6 +346,11 @@ test('classifier round 5: Δα ≤ 2 on a transparent edge is classified on colo
   assert.equal(run(200, 203, { alphaEdge: true }).unexpected, 8, 'Δα 3 fails');
   assert.equal(run(200, 201, {}).unexpected, 8, 'not a transparent-by-construction window: fails');
   assert.equal(run(255, 254, { alphaEdge: true }).unexpected, 8, 'an opaque pixel whose alpha moves by 1 fails');
+  // round 6: below α 64 the canvas's premultiplied storage quantises the colour too coarsely; no allowance
+  assert.equal(run(64, 65, { alphaEdge: true }).unexpected, 0, 'α 64 → 65: allowed');
+  assert.equal(run(63, 64, { alphaEdge: true }).unexpected, 8, 'α 63 on one side: fails');
+  assert.equal(run(40, 41, { alphaEdge: true }).unexpected, 8, 'low α on both sides: fails');
+  assert.equal(lib.ALPHA_EDGE_MIN, 64);
   // never strong: with no strong pixel within 2 px the edge fails (the solid block is moved out of reach)
   const far = (a) => rgba(12, 8, (x) => (x === 8 ? [...mix(a, bg, 0.5), a === O ? 200 : 201] : x < 4 ? [...a, 255] : [...bg, 255]));
   assert.equal(lib.classifyImage(far(O), far(N), ALL.dark, { alphaEdge: true }).unexpected, 8);
@@ -369,6 +374,34 @@ test('classifier round 5: Δα ≤ 2 on a transparent edge is classified on colo
   // (labfix-review) never the theme vote: translucent pixels don't vote, however many
   const edges = rgba(10, 10, () => [244, 245, 247, 200]);
   assert.deepEqual(lib.lightnessVotes(edges, edges), { light: 0, dark: 0 });
+});
+
+test('classifier round 6: a theme needs flat-neutral votes on ≥ 2 % of the image or ≥ 500 px', () => {
+  const t = (img, name = 'x/w-darwin.png', config) => { const r = lib.themeFor(ALL, name, img, img, config); return [r.theme, r.source]; };
+  // 200×200 of saturated art (no votes) with one 4×4 dark flat block (2×2 interior = 4 votes): too few
+  const art = (n) => image(200, 200, (x, y) => (x < n && y < n ? hex('#17191d') : [205, 124, 93]));
+  assert.deepEqual(t(art(4)), ['none', 'too few votes (4 px)']);
+  // 2 % of 40,000 is 800, so 500 px decides: a 24×24 block has 22×22 = 484 votes (too few), 25×25 has 529
+  assert.deepEqual(t(art(24)), ['none', 'too few votes (484 px)']);
+  assert.deepEqual(t(art(25)), ['dark', 'image']);
+  // small images: 2 % of the area is enough (a 20×20 page needs 8 votes)
+  assert.deepEqual(t(image(20, 20, () => hex('#f4f5f7'))), ['light', 'image']);
+  // a pinned theme keeps its citation with too few votes; the mismatch backstop needs enough votes to fire
+  const cfg = { themes: [{ theme: 'dark', source: 'index.html:2', baselines: ['x/w-darwin.png'] }] };
+  const lightArt = (n) => image(200, 200, (x, y) => (x < n && y < n ? hex('#f4f5f7') : [205, 124, 93]));
+  assert.deepEqual(t(lightArt(4), 'x/w-darwin.png', cfg), ['dark', 'config (index.html:2)']);
+  assert.deepEqual(t(lightArt(40), 'x/w-darwin.png', cfg), ['none', 'mismatch (config dark, image light)']);
+  assert.deepEqual([lib.VOTE_MIN_PX, lib.VOTE_MIN_SHARE], [500, 0.02]);
+});
+
+test('classifier round 6: the gate base never falls back to HEAD', () => {
+  assert.equal(lib.resolveBase('abc123', () => { throw new Error('unused'); }), 'abc123');
+  assert.equal(lib.resolveBase('', () => 'deadbeef\n'), 'deadbeef');
+  assert.throws(() => lib.resolveBase('', () => { throw new Error('fatal: Not a valid object name origin/main'); }), /no merge-base with origin\/main/);
+  assert.throws(() => lib.resolveBase(undefined, () => ''), /no merge-base with origin\/main/);
+  const spec = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'test-visual', 'classify.spec.js'), 'utf8');
+  assert.match(spec, /lib\.resolveBase\(process\.env\.CLASSIFY_BASE/);
+  assert.doesNotMatch(spec, /return 'HEAD'/);
 });
 
 test('classifier M1: a pass whose old pixel already fits the new segment is weak, so a non-token grey shift fails', () => {

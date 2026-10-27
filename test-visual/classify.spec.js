@@ -25,8 +25,7 @@ const SHOTS = 'test-visual/__screenshots__';
 const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 });
 
 function baseRef() {
-  if (process.env.CLASSIFY_BASE) return process.env.CLASSIFY_BASE;
-  try { return git('merge-base', 'HEAD', 'origin/main').toString().trim(); } catch { return 'HEAD'; }
+  return lib.resolveBase(process.env.CLASSIFY_BASE, () => git('merge-base', 'HEAD', 'origin/main').toString());
 }
 
 function asksForClassifier() {
