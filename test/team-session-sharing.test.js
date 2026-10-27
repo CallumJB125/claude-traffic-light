@@ -13,6 +13,7 @@ function rig(){
 test('team workspace sessions auto-share once; personal and unrelated-provider sessions stay private',async()=>{
  const r=rig();await Promise.all([r.x.sync(),r.x.sync()]);assert.deepEqual(r.calls,[{session:'one',team:'team',scope:'watch'}],'new automatic shares watch');await r.x.sync();assert.equal(r.calls.length,1);
  for(const mutate of [r=>r.state.board='personal',r=>r.state.ownership='existing-unmanaged']){const r=rig();mutate(r);await r.x.sync();assert.equal(r.calls.length,0);}
+ const both=rig();both.state.provider={id:'claude-channel'};await both.x.sync();assert.equal(both.calls[0].scope,'interact','provider decides, even for a session Plexiform also owns');
  const c=rig();c.state.ownership='existing-unmanaged';c.state.provider={id:'claude-channel'};await c.x.sync();assert.deepEqual(c.calls,[{session:'one',team:'team',scope:'interact'}],'an attached terminal channel keeps send access');
 });
 test('association/account membership removal and disabling stop automatic shares',async()=>{

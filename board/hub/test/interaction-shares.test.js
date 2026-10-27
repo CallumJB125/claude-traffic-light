@@ -1189,3 +1189,21 @@ test('T0: after a restart, the hub ends a send-capable share the new host does n
     assert.equal((await r.call(r.bob, old.id, 'state', { session: s.session })).status, 404);
   } finally { again?.close(); await r.close(); }
 });
+
+test('T0: Allow sending (a replacing interact share) leaves exactly one interact share; an acting member sends, a viewer is refused', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    const auto = (await r.mac.shareSessionAutomatic({ session: s.session, team: r.org, scope: 'watch' })).share;
+    const up = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact', expiresInS: 3000 });
+    assert.equal(up.ok, true);
+    assert.deepEqual(live(r, s.session).map((x) => [x.id, x.scope]), [[up.share.id, 'interact']]);
+    assert.deepEqual(r.mac.shared().map((x) => [x.id, x.scope]), [[up.share.id, 'interact']]);
+    assert.equal((await r.call(r.bob, auto.id, 'state', { session: s.session })).status, 404, 'the watch share is dead');
+    const sent = await r.call(r.bob, up.share.id, 'send', { session: s.session, generation: s.generation, text: 'member send' });
+    assert.equal(sent.body.result.status, 'acknowledged', sent.text);
+    r.h.db.run("UPDATE members SET role = 'viewer' WHERE id = ?", r.h.ids.bob);
+    const refused = await r.call(r.bob, up.share.id, 'send', { session: s.session, generation: s.generation, text: 'viewer send' });
+    assert.equal(refused.status, 403); assert.equal(refused.body.error.reason, 'SCOPE');
+  } finally { await r.close(); }
+});
