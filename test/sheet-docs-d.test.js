@@ -145,14 +145,17 @@ test('buddy:acct:back-to-settings: the account view\'s main frame only, preview 
   assert.deepEqual(J(h({ sender: { id: 'sheet' }, senderFrame: f.accountWc.mainFrame }, 'account')), refused);
   assert.deepEqual(J(h({ sender: f.accountWc, senderFrame: { url: 'x' } })), refused);
   assert.deepEqual(selected, []);
-  assert.deepEqual(J(h({ sender: f.accountWc, senderFrame: f.accountWc.mainFrame }, 'anything', 'else')), { ok: true });
-  assert.deepEqual(J(selected), [['settings:general']], 'one fixed target, arguments ignored');
+  for (const args of [['anything'], ['anything', 'else'], [undefined], [null]]) assert.deepEqual(J(h({ sender: f.accountWc, senderFrame: f.accountWc.mainFrame }, ...args)), refused, `arity: ${args.length} argument(s) refused`);
+  assert.deepEqual(selected, []);
+  assert.deepEqual(J(h({ sender: f.accountWc, senderFrame: f.accountWc.mainFrame })), { ok: true });
+  assert.deepEqual(J(selected), [['settings:general']], 'one fixed target, no arguments');
   assert.match(winSrc, /if \(chatFirst === true\) ipcMain\.handle\('buddy:acct:back-to-settings'/);
   assert.match(read('buddy-window/account-preload.js'), /backToSettings: \(\) => call\('back-to-settings'\),/);
 });
 
 test('back=1 reaches the account page only from showScreen\'s query, only for a visit that began in the sheet; select() clears it otherwise', () => {
-  assert.match(winSrc, /loadFile\(path\.join\(DIR, 'account\.html'\), \{ query: chatFirst === true && accountFromSheet \? \{ screen, back: '1' \} : \{ screen \} \}\)/);
+  assert.match(winSrc, /const query = chatFirst === true && accountFromSheet \? \{ screen, back: '1' \} : \{ screen \};\n\s+const view = accountView, generation = \+\+accountLoadGeneration;/, 'captured at request time, outside the async load');
+  assert.match(winSrc, /loadFile\(path\.join\(DIR, 'account\.html'\), \{ query \}\)/);
   assert.match(winSrc, /function select\(id, \{ fromSheet = false \} = \{\}\) \{\n    const page = pageOf\(id\);\n    if \(!page\) return;\n    accountFromSheet = fromSheet === true;/);
   assert.equal((winSrc.match(/fromSheet: true/g) || []).length, 1, 'only settings:go-account sets it');
   assert.equal((winSrc.match(/\n\s+accountFromSheet = /g) || []).length, 1);
@@ -187,4 +190,42 @@ test('account.js: Back to Settings only for back=1 exactly; a click calls backTo
       assert.doesNotMatch(b.w.document.body.innerHTML, /back=|%3Cb/, q);
     } finally { b.w.close(); }
   }
+});
+
+// ── the flag, driven through the real select() and showScreen() ────────────
+
+function driven() {
+  const loads = []; let flowShow;
+  class View { constructor() { this.webContents = { isDestroyed: () => false, loadFile: async (f, o) => { loads.push(JSON.parse(JSON.stringify(o.query))); } }; } setBackgroundColor() {} }
+  const ctx = {
+    SettingsPanes: SP, chatFirst: true, setupLocalGeneration: 0, tasksGeneration: 0, homeGeneration: 0, accountView: null, accountLoad: Promise.resolve(), accountLoadGeneration: 0, accountFromSheet: false,
+    WebContentsView: View, nativeTheme: { shouldUseDarkColors: false }, path, DIR: '/x', lockLocal() {}, attach() {}, log() {}, pushState() {},
+    win: {}, selected: null, PAGES: [{ id: 'account', screen: 'account' }, { id: 'thismac', screen: 'thismac' }],
+    pageOf: (id) => ({ account: { id, kind: 'local', screen: 'account' }, thismac: { id, kind: 'local', screen: 'thismac' }, board: { id, kind: 'info' } })[id] ?? null,
+    flow: { show: (screen) => flowShow(screen), leftAccountPages() {} }, showInfo() {}, forgetHub() {}, hubInfo: null, getTeamHub: () => null,
+  };
+  vm.runInNewContext(`${slice('  function showScreen(screen) {', '  // ── this Mac as a runner')}\n${slice('  function select(id, { fromSheet = false } = {}) {', '  const fromSidebar =')}\nglobalThis.out = { showScreen, select };`, ctx);
+  flowShow = ctx.out.showScreen;
+  const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
+  return { select: ctx.out.select, showScreen: ctx.out.showScreen, loads, settle };
+}
+
+test('the Back to Settings flag, driven: sidebar -> none; sheet -> back=1 and kept across flow screens; the next sidebar select clears it; a quick sidebar click does not drop it from a load already requested', async () => {
+  const d = driven();
+  d.select('account'); await d.settle();                                    // (a) the sidebar
+  assert.deepEqual(d.loads.splice(0), [{ screen: 'account' }]);
+  d.select('thismac', { fromSheet: true }); await d.settle();                // (b) the sheet
+  d.showScreen('hub'); await d.settle();                                    //     a flow-driven step (sign-in) keeps it
+  d.showScreen('team'); await d.settle();
+  assert.deepEqual(d.loads.splice(0), [{ screen: 'thismac', back: '1' }, { screen: 'hub', back: '1' }, { screen: 'team', back: '1' }]);
+  d.select('board'); d.showScreen('account'); await d.settle();              // (c) any other select clears it
+  assert.deepEqual(d.loads.splice(0), [{ screen: 'account' }]);
+  d.select('account'); await d.settle(); d.loads.length = 0;                //     and a plain account select after the sheet
+  d.select('account', { fromSheet: true }); d.select('board');              // (d) race: sheet click, then a quick sidebar click before the load runs
+  await d.settle();
+  assert.deepEqual(d.loads.splice(0), [{ screen: 'account', back: '1' }], 'the requested load keeps back=1');
+  d.showScreen('account'); await d.settle();
+  assert.deepEqual(d.loads.splice(0), [{ screen: 'account' }], 'but the flag itself was cleared');
+  d.select('account', { fromSheet: 'true' }); await d.settle();              // only the boolean true counts
+  assert.deepEqual(d.loads.splice(0), [{ screen: 'account' }]);
 });

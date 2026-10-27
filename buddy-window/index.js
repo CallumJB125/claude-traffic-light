@@ -656,10 +656,12 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     // Flow changes can arrive while the initial account navigation is still
     // loading. Serialize loads and skip superseded screens so an earlier
     // navigation cannot leave its URL/renderer behind the current flow.
+    // Captured NOW, at request time: a later select() clears the flag, but this load was asked for while it was set.
+    const query = chatFirst === true && accountFromSheet ? { screen, back: '1' } : { screen };
     const view = accountView, generation = ++accountLoadGeneration;
     accountLoad = accountLoad.catch(() => {}).then(async () => {
       if (!win || view !== accountView || generation !== accountLoadGeneration || view.webContents.isDestroyed()) return;
-      await view.webContents.loadFile(path.join(DIR, 'account.html'), { query: chatFirst === true && accountFromSheet ? { screen, back: '1' } : { screen } });
+      await view.webContents.loadFile(path.join(DIR, 'account.html'), { query });
     }).catch((e) => log('account page load failed', e.message));
     attach(accountView);
   }
@@ -1390,8 +1392,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     try { return await continueIn({ load: async () => (await sessionBridge.localHandover(cardId))?.markdown ?? null, window: win, showSessions: () => select('sessions') }); } catch { return null; }
   });
   // R8-3c-2: Back to Settings on the account page when the visit began in the sheet. No arguments, one fixed target, the account view only.
-  if (chatFirst === true) ipcMain.handle('buddy:acct:back-to-settings', (e) => {
-    if (!fromAccount(e)) return { ok: false, error: 'Not allowed.' };
+  if (chatFirst === true) ipcMain.handle('buddy:acct:back-to-settings', (e, ...args) => {
+    if (!fromAccount(e) || args.length !== 0) return { ok: false, error: 'Not allowed.' };
     select(`settings:${SettingsPanes.HOME_PANE}`);
     return { ok: true };
   });
