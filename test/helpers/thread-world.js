@@ -69,6 +69,7 @@ function world({ targets = { [A]: { kind: 'task', taskId: 'task-a' }, [B]: { kin
   const ctx = {
     URL, path, DIR, pathToFileURL, chatFirst: true, win, content: null, selected: 'board',
     setupLocalGeneration: 0, setupSourcesGeneration: 0, tasksGeneration: 0, homeGeneration: 0, localViews: new Map(),
+    tasksModalTicket: null, homeModalTicket: null, setupModalTicket: null, // the other pages' dialogs (R4-1b threadConfirm)
     store: { ws: 'ws-1', active() { return { id: this.ws }; } },
     layout: () => {}, lifecycle: { setCurrent: () => {} }, optimiser: { sync: () => {} },
     flow: { leftAccountPages: () => {} },
@@ -86,7 +87,7 @@ function world({ targets = { [A]: { kind: 'task', taskId: 'task-a' }, [B]: { kin
     + between(src, '  // ── thread (chat-first preview, redesign R2a)', '  // ── workspaces')
     + 'const api = {\n' + between(src, '    threadContext(){', '    openThread,\n') + '};\n'
     + 'globalThis.api = api; globalThis.openThread = openThread; globalThis.retireThread = retireThread; globalThis.resumeThread = resumeThread; globalThis.attach = attach; globalThis.pushState = pushState;'
-    + 'globalThis.peek = () => ({ threadView, threadId, threadDocument, resumeThreadId, content, selected });';
+    + 'globalThis.peek = () => ({ threadView, threadId, threadDocument, resumeThreadId, content, selected, threadModalTicket });';
   vm.runInNewContext(code, ctx);
   const ipc = { handlers: {}, handle(name, fn) { this.handlers[name] = fn; } };
   thread = createThreadMain({

@@ -1,0 +1,9 @@
+# R4-1b: two new baselines and two changed ones, all from test-visual/thread.spec.js (chat-first preview gate on). No accent flip, so no classifier run. Every other thread shot (question, choices, stop-confirm, reply, ended, waiting) is unchanged.
+test-visual/__screenshots__/thread.spec.js/thread-starttask-darwin.png
+# reason: new. A StartTask in the chat, in the Tasks page's layout: "Checked by Plexiform:" with Runs in, AI, Permissions and Source, then "From board: (untrusted)" and the summary, then [Accept and start…] (the "…" because the native dialog follows) and [Deny].
+test-visual/__screenshots__/thread.spec.js/thread-switch-review-darwin.png
+# reason: new. A parked task that allows switchAi: its choices card gains [Continue with Codex]; clicking it shows the review card below (Claude → Codex, the folder and branch, permission, cap and spend, task notes version, the handover and changed files collapsed as text), with [Start reviewed Codex session…] and [Close].
+test-visual/__screenshots__/thread.spec.js/thread-approval-stacked-light-darwin.png
+# reason: changed. Each ordinary approval card gains [Allow for this task] between [Allow once] and [Deny] (D-R4, Allow for this task in the chat with the Tasks dialog). Nothing else in the shot moves.
+test-visual/__screenshots__/thread.spec.js/thread-approval-stacked-dark-darwin.png
+# reason: changed. The same button in dark.

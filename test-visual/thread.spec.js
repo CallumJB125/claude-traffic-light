@@ -340,3 +340,62 @@ test('stop: two steps in the open chat', async () => {
     expect(Object.keys(sent[0][0]).sort()).toEqual(['action', 'confirmed', 'id']);
   } finally { await h.cleanup(); }
 });
+
+// R4-1b (plan-r4 §4, §5 R4-1b): the dialog kinds. The native dialog itself is main's (test/thread-act-service.test.js);
+// these pin the cards that lead to it.
+const START = {
+  ...STACKED,
+  detail: { ...STACKED.detail, permissionLevel: 'auto-edits', source: 'board', openAsk: null,
+    openApprovals: [{ approvalId: 'st1', tool: 'StartTask', inputSummary: 'Add retry with backoff to the S3 upload and cover it with a test.' }] },
+};
+const SWITCHING = {
+  ...CHOICES,
+  detail: { ...CHOICES.detail, actions: ['resume', 'stop', 'switchAi'] },
+};
+
+test('starttask: Plexiform\'s facts above the untrusted summary; Accept and start… sends that approval once', async () => {
+  const { h, side } = await open({ fixture: START });
+  try {
+    await recordActs(h);
+    const page = await openThread(h, side);
+    const card = page.locator('#th-cards .th-card');
+    await expect(card.locator('.th-card-title')).toHaveText('Waiting for you to accept this task');
+    await expect(card.locator('.th-facts')).toContainText('a teammate');
+    const accept = card.getByRole('button', { name: 'Accept and start…' });
+    await expect(accept).toBeEnabled({ timeout: 3000 });
+    await shot(page, 'thread-starttask.png');
+    await accept.click();
+    await expect(page.locator('#th-cards .th-card-receipt')).toHaveText('Accepted');
+    const sent = await h.app.evaluate(() => globalThis.__acts);
+    expect(sent[0][0]).toMatchObject({ action: 'approve', approvalId: 'st1', scope: 'once' });
+  } finally { await h.cleanup(); }
+});
+
+test('switch review: Continue with Codex shows what is handed over, as text, before anything starts', async () => {
+  const { h, side } = await open({ fixture: SWITCHING });
+  try {
+    await h.app.evaluate(({ ipcMain }) => {
+      globalThis.__acts = [];
+      ipcMain.removeHandler('thread:act');
+      ipcMain.handle('thread:act', (e, ...a) => {
+        if (!new URL(e.sender.getURL()).pathname.endsWith('/thread.html')) return null;
+        globalThis.__acts.push(a);
+        if (a[0].ai) return { ok: true, review: { review: '11111111-2222-4333-8444-555555555555', from: 'claude', to: 'codex', permissionLevel: 'auto-edits', planFirst: false, budgetUsd: 10, spentUsd: 2.4, contextVersion: 4,
+          branch: 'fix/flaky-upload', handover: 'Goal: fix the flaky upload test.\nDone: saveUpload() now awaits the stream.\nNext: check the other stream writers.', messagesText: '', files: [{ path: 'src/upload.js', status: 'M' }],
+          patch: '--- a/src/upload.js\n+++ b/src/upload.js\n@@\n-  stream.end();\n+  await finished(stream.end());', expiresAt: Date.now() + 120000 } };
+        return { ok: true };
+      });
+    });
+    const page = await openThread(h, side);
+    const go = page.locator('#th-cards').getByRole('button', { name: 'Continue with Codex' });
+    await expect(go).toBeEnabled({ timeout: 3000 });
+    await go.click();
+    const review = page.locator('#th-cards .th-review');
+    await expect(review.locator('.th-card-title')).toHaveText('Claude → Codex');
+    await expect(review.getByRole('button', { name: 'Start reviewed Codex session…' })).toBeEnabled({ timeout: 3000 });
+    await shot(page, 'thread-switch-review.png');
+    const sent = await h.app.evaluate(() => globalThis.__acts);
+    expect(sent[0][0]).toMatchObject({ action: 'switchAi', ai: 'codex' });
+    expect(Object.keys(sent[0][0]).sort()).toEqual(['action', 'ai', 'id']);
+  } finally { await h.cleanup(); }
+});

@@ -67,6 +67,15 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .th-card-note { margin: 0; font-size: var(--text-sm); color: var(--danger-text); overflow-wrap: anywhere; }
 .th-card-done { padding: var(--space-2) var(--space-4); }
 .th-card-receipt { margin: 0; font-size: var(--text-sm); color: var(--muted); }
+.th-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-4); margin: 0; font-size: var(--text-sm); }
+.th-facts dt { color: var(--muted); }
+.th-facts dd { margin: 0; overflow-wrap: anywhere; }
+.th-review { width: 100%; box-sizing: border-box; justify-items: stretch; }
+.th-review .th-card-btns { justify-content: flex-start; }
+.th-review-part { font-size: var(--text-sm); min-width: 0; }
+.th-review-part summary { cursor: default; color: var(--muted); }
+.th-review-part pre { margin: var(--space-1) 0 0; padding: var(--space-2); max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--text-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 480px) { .th-facts { grid-template-columns: minmax(0, 1fr); gap: 0; } .th-facts dd { margin-bottom: var(--space-1); } }
 .th-danger { color: var(--danger-text); }
 .th-stop { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .th-stop-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }

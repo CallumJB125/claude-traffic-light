@@ -6,8 +6,11 @@
 // unchanged. R4-1a (plan-r4.md §2, §11) adds thread:act: Allow once, Deny,
 // an answer, a supervisor resume choice and Stop, for the bound task only, each
 // on a request main delivered to this document at least 600 ms ago and still
-// showing the same thing. Nothing here raises a dialog: the kinds that need one
-// (Allow for this task, StartTask, switch AI) are R4-1b's and are refused here.
+// showing the same thing. R4-1b (plan-r4 §2.5, §3) adds the kinds that need the
+// Tasks page's native dialog: Allow for this task, StartTask's Accept and Deny,
+// and switch AI (preview, then apply). The dialog is tasks-service's, raised
+// through main's confirmDialog and the thread's own ticket (index.js
+// threadConfirm); this file never raises one and never skips one.
 // Every other Tasks act stays on tasks-main.js owner() (the Tasks page) until R6a.
 //
 // Guard T, for every channel: the exact thread webContents and its main frame,
@@ -45,7 +48,10 @@ const ACT_TEXT = Object.freeze({
   ALREADY_ANSWERED: 'This request has already been answered.',
   VALIDATION: 'That choice could not be sent. Look at it again.',
   CONFIRM_REQUIRED: 'This needs the Tasks page. Use Open in Tasks.',
+  CONFLICT_SWITCH: 'The switch may have started. Check the chat before trying again.',
+  REVIEW_GONE: 'This review has gone. Review the handover again.',
 });
+const AIS = Object.freeze(['claude', 'codex']);
 // The exact keys of each request; anything else is refused before any await.
 const ACT_KEYS = Object.freeze({
   approve: ['action', 'approvalId', 'id', 'scope'],
@@ -53,7 +59,9 @@ const ACT_KEYS = Object.freeze({
   answer: ['action', 'answer', 'askId', 'id'],
   choose: ['action', 'askId', 'choiceId', 'id'],
   stop: ['action', 'confirmed', 'id'],
+  switchAi: ['action', 'ai', 'id'], // the preview; the apply names the review instead (below)
 });
+const SWITCH_APPLY_KEYS = 'action,id,review';
 // Provisional, awaiting Callum (plan-r2.md §7 item 3): the link form may change.
 const LINK = (id) => `plexiform://thread/${id}`;
 
@@ -178,7 +186,12 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
   const shown = new Map();
   const shownKey = (c, kind, id) => `${c.contents.id}:${c.generation}:${kind}:${id}`;
   const relayedHash = (wcId, taskId, kind, id) => { try { return tasks()?.shownHash?.(wcId, taskId, kind, id) ?? null; } catch { return null; } };
-  function forget(wcId) { for (const k of shown.keys()) if (k.startsWith(`${wcId}:`)) shown.delete(k); }
+  // switch AI (R4-1b, §2.5): at most one review handle per document, the one main last returned to it.
+  const reviews = new Map(); // wcId → { handle, generation, at, expiresAt }
+  // The act in flight per document: tasks-service may call a preview's `current` again at apply time,
+  // so "refused before the send" is recorded on whichever act is running now (plan-r4 §10 S1 nit).
+  const running = new Map(); // wcId → { refused }
+  function forget(wcId) { for (const k of shown.keys()) if (k.startsWith(`${wcId}:`)) shown.delete(k); reviews.delete(wcId); }
   function record(c, taskId, detail) {
     if (!detail || typeof detail !== 'object') return;
     const wcId = c.contents.id, live = new Set(), t = now();
@@ -245,9 +258,10 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     // 3. The exact shape, the bound id, field bounds: all before any await.
     const req = args[0];
     if (!plain(req) || typeof req.action !== 'string' || !Object.hasOwn(ACT_KEYS, req.action)) return fail('VALIDATION');
-    const extra = req.action !== 'stop' && Object.hasOwn(req, 'confirmed');
+    const apply = req.action === 'switchAi' && Object.hasOwn(req, 'review');
+    const extra = !['stop', 'switchAi'].includes(req.action) && Object.hasOwn(req, 'confirmed');
     const keys = Object.keys(req).filter((k) => !(extra && k === 'confirmed')).sort().join(',');
-    if (keys !== ACT_KEYS[req.action].join(',') || req.id !== before.boundId) return fail('VALIDATION');
+    if (keys !== (apply ? SWITCH_APPLY_KEYS : ACT_KEYS[req.action].join(',')) || req.id !== before.boundId) return fail('VALIDATION');
     if (extra && req.confirmed !== true) return fail('VALIDATION');
     const id = (v) => typeof v === 'string' && v.length > 0 && v.length <= ID_MAX;
     if (req.action === 'approve' && (!id(req.approvalId) || !['once', 'task'].includes(req.scope))) return fail('VALIDATION');
@@ -255,6 +269,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     if (req.action === 'answer' && (!id(req.askId) || typeof req.answer !== 'string' || !req.answer.trim() || req.answer.trim().length > ANSWER_MAX)) return fail('VALIDATION');
     if (req.action === 'choose' && (!id(req.askId) || !id(req.choiceId) || req.choiceId.length > 60)) return fail('VALIDATION');
     if (req.action === 'stop' && req.confirmed !== true) return fail('VALIDATION');
+    if (req.action === 'switchAi' && (apply ? typeof req.review !== 'string' || !/^[0-9a-f-]{36}$/.test(req.review) : !AIS.includes(req.ai))) return fail('VALIDATION');
     // 4. One act or reply in flight per document, and the per-document rate.
     const busy = `${before.contents.id}:${before.generation}`;
     if (sending.has(busy) || !rateOk(before, 'message')) return fail('BUSY');
@@ -263,7 +278,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     if (!t || t.kind !== 'task' || typeof t.taskId !== 'string') return fail('NOT_FOUND');
     const taskId = t.taskId, wcId = before.contents.id;
     // 6. The shown arm: delivered to this document, still the same, and on screen for 600 ms.
-    const kind = req.action === 'approve' || req.action === 'deny' ? 'approval' : req.action === 'stop' ? null : 'ask';
+    const kind = req.action === 'approve' || req.action === 'deny' ? 'approval' : ['stop', 'switchAi'].includes(req.action) ? null : 'ask';
     const reqId = kind === 'approval' ? req.approvalId : req.askId;
     let armed = null;
     if (kind) {
@@ -272,11 +287,19 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       if (!armed) return fail(h ? 'NOT_READY' : 'NOT_FOUND');
       if (!h || h.hash !== armed.hash || now() - armed.at < ARM_MS) return fail('NOT_READY');
     }
-    // 7. R4-1a sends nothing that needs a dialog (plan-r4 §2.1): those are R4-1b's.
-    if (req.action === 'approve' && req.scope !== 'once') return fail('CONFIRM_REQUIRED');
-    if (kind === 'approval' && armed.tool === 'StartTask') return fail('CONFIRM_REQUIRED');
+    // 7. A StartTask is accepted once, exactly as its card offers (plan-r4 §2.1); the guard would force it anyway.
+    if (req.action === 'approve' && req.scope === 'task' && armed.tool === 'StartTask') return fail('VALIDATION');
+    // A switch apply names the handle main last returned to this document, on screen for 600 ms (§2.5).
+    if (apply) {
+      const h = reviews.get(wcId);
+      if (!h || h.handle !== req.review || h.generation !== before.generation) return fail('NOT_READY', ACT_TEXT.REVIEW_GONE);
+      if (now() - h.at < ARM_MS) return fail('NOT_READY');
+      reviews.delete(wcId);
+    }
     let send;
-    if (req.action === 'approve') send = { action: 'approve', payload: { approvalId: req.approvalId, scope: 'once' } };
+    if (req.action === 'approve') send = { action: 'approve', payload: { approvalId: req.approvalId, scope: req.scope } };
+    else if (apply) send = { action: 'switchAi', payload: { phase: 'apply', review: req.review } };
+    else if (req.action === 'switchAi') send = { action: 'switchAi', payload: { ai: req.ai } };
     else if (req.action === 'deny') send = { action: 'deny', payload: { approvalId: req.approvalId } };
     else if (req.action === 'answer') send = { action: 'answer', payload: { askId: req.askId, answer: req.answer.trim() } };
     else if (req.action === 'stop') send = { action: 'stop', confirmed: true };
@@ -284,8 +307,10 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       // choose: main's own copy of the choice it delivered; the page names only its id.
       const ch = (armed.choices || []).find((c) => c && c.id === req.choiceId);
       if (!ch) return fail('VALIDATION');
-      if (ch.action !== 'resume' || !ch.payload || !['now', 'reset'].includes(ch.payload.when)) return fail('CONFIRM_REQUIRED');
-      send = { action: 'resume', payload: { when: ch.payload.when } };
+      if (ch.action === 'resume' && ch.payload && ['now', 'reset'].includes(ch.payload.when)) send = { action: 'resume', payload: { when: ch.payload.when } };
+      // A switch-AI choice is that switch's preview; what it shows is the review, not the ask (§2.4, §2.5).
+      else if (ch.action === 'switchAi' && ch.payload && AIS.includes(ch.payload.ai)) send = { action: 'switchAi', payload: { ai: ch.payload.ai } };
+      else return fail('CONFIRM_REQUIRED');
     }
     // A task's own task.confirm: the page asked twice; forwarded only when main's row asks for it (plan-r4 §2.6).
     if (extra) {
@@ -294,20 +319,31 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       if (!row || !Array.isArray(row.confirm) || !row.confirm.includes(send.action)) return fail('VALIDATION');
       send.confirmed = true;
     }
-    // 8. Checked by tasks-service immediately before client.act: the document, the task, and (for a request) the same hash.
+    // 8. Checked by tasks-service immediately before client.act (after any dialog): the document, the task,
+    // and (for a request) the same hash. A switch is the chat's only (S2): its review outlives the ask.
+    const switching = send.action === 'switchAi';
     const base = () => chatPreview === true && !stopped && still(before, true) && resolve(before.boundId)?.taskId === taskId;
-    const current = () => base() && (!kind || relayedHash(wcId, taskId, kind, reqId)?.hash === armed.hash);
-    let refusedBeforeSend = false;
-    const atSend = () => { const ok = current(); if (!ok) refusedBeforeSend = true; return ok; };
-    sending.add(busy);
+    const current = () => base() && (switching || !kind || relayedHash(wcId, taskId, kind, reqId)?.hash === armed.hash);
+    const mine = { refused: false };
+    const atSend = () => { const ok = current(); if (!ok) { const act = running.get(wcId); if (act) act.refused = true; } return ok; };
+    sending.add(busy); running.set(wcId, mine);
     let r = null;
     try {
       try { r = await tasks().act({ id: taskId, ...send }, wcId, atSend); } catch { r = null; }
-    } finally { sending.delete(busy); }
-    // 9. Nothing was sent: the request changed. Sent, or maybe sent: say so (S1).
-    if (refusedBeforeSend) return fail('NOT_READY');
+    } finally { sending.delete(busy); if (running.get(wcId) === mine) running.delete(wcId); }
+    // 9. Nothing was sent: the request changed, or the dialog was cancelled or never opened. Sent, or maybe sent: say so (S1).
+    if (mine.refused) return fail('NOT_READY');
+    if (r?.cancelled === true) return { ok: false, code: 'CONFIRM_REQUIRED', cancelled: true, text: '' };
     // After the send only the chat itself is checked: a request that was answered disappears, which is success, not a change.
-    if (!base()) return fail('CONFLICT', req.action === 'stop' ? ACT_TEXT.CONFLICT_STOP : ACT_TEXT.CONFLICT);
+    if (!base()) return fail('CONFLICT', req.action === 'stop' ? ACT_TEXT.CONFLICT_STOP : switching ? (typeof r?.text === 'string' && r.text ? r.text.slice(0, 300) : ACT_TEXT.CONFLICT_SWITCH) : ACT_TEXT.CONFLICT);
+    // A preview: keep its handle for this document, and hand the page the review to read.
+    if (switching && send.payload.phase !== 'apply') {
+      const pc = r?.ok === true ? r.providerChange : null;
+      if (!pc || pc.status !== 'review' || typeof pc.review !== 'string') return fail('CONFLICT', ACT_TEXT.REVIEW_GONE);
+      reviews.set(wcId, { handle: pc.review, generation: before.generation, at: now(), expiresAt: pc.expiresAt });
+      return { ok: true, review: { review: pc.review, from: pc.from, to: pc.to, permissionLevel: pc.permissionLevel, planFirst: pc.planFirst, budgetUsd: pc.budgetUsd, spentUsd: pc.spentUsd,
+        contextVersion: pc.contextVersion, branch: pc.branch, handover: pc.handover, messagesText: pc.messagesText, files: pc.files, patch: pc.patch, expiresAt: pc.expiresAt } };
+    }
     if (r && r.ok === true) return { ok: true };
     // 10. Engine and guard codes, as plain sentences.
     const code = typeof r?.code === 'string' ? r.code : 'INTERNAL';

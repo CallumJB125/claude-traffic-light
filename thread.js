@@ -106,6 +106,10 @@
   let stopNote = '';
   const has = (a) => Array.isArray(detail?.actions) && detail.actions.includes(a);
   const asksTwice = (a) => Array.isArray(detail?.confirm) && detail.confirm.includes(a);
+  const AIS = ['claude', 'codex'];
+  // The AIs this task may continue with: the ones it isn't using, when its actions allow a switch.
+  const switchTargets = (d) => (Array.isArray(d?.actions) && d.actions.includes('switchAi') ? AIS.filter((id) => id !== d.ai?.id) : []);
+  let review = null; // the switch's review card (R4-1b): { data, from, armedUntil, state, text }
   // What this chat can act on now, in the engine's order; at most 10 approvals (as main relays) and one ask.
   function requestsOf(d) {
     if (!d || kind !== 'task') return [];
@@ -121,6 +125,9 @@
       const answer = !all.length && Array.isArray(d.actions) && d.actions.includes('answer');
       if (choices.length || answer) out.push({ key: `ask:${k.askId}`, kind: 'ask', k, choices, answer, sig: JSON.stringify([k.text, k.options || [], all.map((c) => [c.id, c.label, c.action])]) });
     }
+    // R4-1b (plan-r4 §2.5): Continue with another AI wherever the task allows it; on the ask's card when there is one.
+    const others = switchTargets(d);
+    if (others.length && !out.some((x) => x.kind === 'ask')) out.push({ key: 'switch', kind: 'switch', sig: JSON.stringify(others) });
     return out;
   }
   // A card arms when it first appears, when what it shows changes, and when anything above it changed (it moved).
@@ -143,6 +150,7 @@
     const t = Date.now() + ARM_MS;
     for (const c of cards.values()) { c.armedUntil = Math.max(c.armedUntil, t); if (c.confirm) c.confirm.armedUntil = Math.max(c.confirm.armedUntil, t); }
     if (bound) bound.armedUntil = Math.max(bound.armedUntil, t);
+    if (review) review.armedUntil = Math.max(review.armedUntil, t);
     if (stopAsk) stopAsk.armedUntil = Math.max(stopAsk.armedUntil, t);
   }
   // Wake once when the next arm runs out, so a disabled button comes back by itself.
@@ -162,10 +170,22 @@
   }
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
   const RECEIPT = { approve: 'Allowed once', deny: 'Denied', answer: 'Answer sent', choose: 'Sent' };
+  const receiptOf = (key, req) => {
+    const start = cards.get(key)?.start === true;
+    if (req.action === 'approve') return start ? 'Accepted' : req.scope === 'task' ? 'Allowed for this task' : RECEIPT.approve;
+    return RECEIPT[req.action] || 'Sent';
+  };
+  // Plexiform's own facts about a task a StartTask would start, as the Tasks page lists them.
+  const SOURCE = { cli: 'the buddy command', mcp: 'another AI session', board: 'a teammate', phone: 'a phone', slack: 'Slack', voice: 'voice', bus: 'another AI on this Mac' };
+  function switchButtons(row, c, key) {
+    for (const id of switchTargets(detail)) row.append(cardBtn(`Continue with ${TV.AI_NAME[id]}`, '', c, () => preview(key, { action: 'switchAi', ai: id })));
+  }
   function renderCards() {
     const box = $('th-cards');
     const reqs = requestsOf(detail);
     syncCards(reqs);
+    // A review outlives nothing: not the switch being allowed, nor the card it came from.
+    if (review && review.state === 'idle' && (!switchTargets(detail).length || !reqs.some((x) => x.key === review.from))) review = null;
     const focusKey = document.activeElement?.closest?.('.th-card')?.dataset.key, focusLabel = document.activeElement?.textContent;
     box.replaceChildren();
     box.hidden = !reqs.length;
@@ -183,30 +203,46 @@
       if (r.kind === 'approval') {
         const a = r.a;
         if (a.tool === 'StartTask') {
-          card.append(el('h2', 'th-card-title', 'Waiting for you to accept this task'), el('p', 'th-card-what', a.inputSummary || ''),
-            el('p', 'th-card-sub', 'Starting a new task is accepted on the Tasks page for now.'));
+          // The Tasks page's layout (plan-r4 §4): Plexiform's facts first, then the sender's own words, marked untrusted.
+          c.start = true;
+          card.classList.add('th-card-start');
+          card.append(el('h2', 'th-card-title', 'Waiting for you to accept this task'), el('p', 'th-card-sub', 'Checked by Plexiform:'));
+          const facts = el('dl', 'th-facts');
+          for (const [k, v] of [['Runs in', detail.where || detail.repo?.name], ['AI', TV.AI_NAME[detail.ai?.id]], ['Permissions', detail.permissionLevel], ['Source', SOURCE[detail.source] || detail.source]]) if (v) facts.append(el('dt', null, k), el('dd', null, v));
+          card.append(facts, el('p', 'th-card-sub', `From ${detail.source || 'somewhere else'}: (untrusted)`), el('p', 'th-card-what', a.inputSummary || ''));
           const row = el('div', 'th-card-btns');
-          const go = el('button', 'th-btn th-primary', 'Open in Tasks'); go.type = 'button'; go.addEventListener('click', () => api.openInTasks(rowId));
-          row.append(go); card.append(row);
+          // The "…" says a dialog follows: Accept and start asks again, natively, as Tasks does.
+          if (has('approve')) row.append(cardBtn('Accept and start…', 'th-primary', c, () => choose(r.key, { action: 'approve', approvalId: a.approvalId, scope: 'once' })));
+          if (has('deny')) row.append(cardBtn('Deny', 'th-danger', c, () => choose(r.key, { action: 'deny', approvalId: a.approvalId })));
+          card.append(row);
         } else {
           card.append(el('h2', 'th-card-title', `${ai} wants to use ${a.tool || 'a tool'}`));
           if (a.inputSummary) card.append(el('p', 'th-card-what', a.inputSummary));
           if (detail.where) card.append(el('p', 'th-card-sub', `In ${detail.where}`));
           const row = el('div', 'th-card-btns');
           if (has('approve')) row.append(cardBtn('Allow once', 'th-primary', c, () => choose(r.key, { action: 'approve', approvalId: a.approvalId, scope: 'once' })));
+          if (has('approve')) row.append(cardBtn('Allow for this task', '', c, () => choose(r.key, { action: 'approve', approvalId: a.approvalId, scope: 'task' })));
           if (has('deny')) row.append(cardBtn('Deny', 'th-danger', c, () => choose(r.key, { action: 'deny', approvalId: a.approvalId })));
           card.append(row);
         }
+      } else if (r.kind === 'switch') {
+        card.append(el('h2', 'th-card-title', `Continue this chat with another AI`), el('p', 'th-card-text', `You’ll see what is handed over before anything starts.`));
+        const row = el('div', 'th-card-btns');
+        switchButtons(row, c, r.key);
+        card.append(row);
       } else {
         const k = r.k;
         card.append(el('h2', 'th-card-title', r.answer ? `${ai} has a question` : `${ai} needs you to choose`), el('p', 'th-card-text', k.text || ''));
         const row = el('div', 'th-card-btns');
         if (r.answer) for (const o of (k.options || [])) row.append(cardBtn(o, '', c, () => choose(r.key, { action: 'answer', askId: k.askId, answer: o })));
         let elsewhere = false;
+        const named = new Set();
         for (const ch of r.choices) {
           if (ch.action === 'resume') row.append(cardBtn(ch.label, '', c, () => choose(r.key, { action: 'choose', askId: k.askId, choiceId: ch.id })));
+          else if (ch.action === 'switchAi' && AIS.includes(ch.payload?.ai)) { named.add(ch.payload.ai); row.append(cardBtn(ch.label, '', c, () => preview(r.key, { action: 'choose', askId: k.askId, choiceId: ch.id }))); }
           else elsewhere = true;
         }
+        for (const id of switchTargets(detail)) if (!named.has(id)) row.append(cardBtn(`Continue with ${TV.AI_NAME[id]}`, '', c, () => preview(r.key, { action: 'switchAi', ai: id })));
         if (elsewhere) { const go = el('button', 'th-btn', 'Open in Tasks'); go.type = 'button'; go.addEventListener('click', () => api.openInTasks(rowId)); row.append(go); }
         if (row.childNodes.length) card.append(row);
         if (r.answer && approvals) card.append(el('p', 'th-card-sub', 'Or type your answer in the box below.'));
@@ -224,6 +260,7 @@
       if (c.text) card.append(el('p', 'th-card-note', c.text));
       box.append(card);
     }
+    if (review) { box.append(reviewCard()); box.hidden = false; }
     if (focusKey) { const card = [...box.children].find((n) => n.dataset.key === focusKey); const again = card && [...card.querySelectorAll('button')].find((b) => b.textContent === focusLabel && !b.disabled); if (again) again.focus(); }
   }
   // A task's own task.confirm asks twice, on the card (plan-r4 §2.6); anything else goes straight to main.
@@ -254,12 +291,65 @@
     rearmAll();
     const now = cards.get(key);
     if (now && now.sig === sig) {
-      if (r && r.ok === true) { now.state = 'sent'; now.text = RECEIPT[req.action] || 'Sent'; }
+      if (r && r.ok === true && r.review && typeof r.review === 'object') { now.state = 'idle'; now.text = ''; review = { data: r.review, from: key, armedUntil: Date.now() + ARM_MS, state: 'idle', text: '' }; }
+      else if (r && r.ok === true) { now.state = 'sent'; now.text = receiptOf(key, req); }
       else if (r && (r.code === 'ALREADY_ANSWERED' || r.code === 'NOT_FOUND')) { now.state = 'gone'; now.text = 'Already answered'; refresh(); }
       else { now.state = 'idle'; now.text = r && r.cancelled ? '' : ((r && r.text) || 'That wasn’t sent. Try again.'); now.armedUntil = Math.max(now.armedUntil, Date.now() + ARM_MS); }
     }
     renderCards(); renderReply(); renderStop();
     return r;
+  }
+
+  // ── switch AI (R4-1b, plan-r4 §2.5): preview → the review card → apply, with the Tasks page's dialog ──
+  // A preview changes nothing: it asks main for the handover to review, shown below the cards.
+  function preview(key, req) {
+    const c = cards.get(key);
+    if (!c || acting || c.state !== 'idle' || Date.now() < c.armedUntil) return;
+    review = null;
+    return runAct(key, req);
+  }
+  const money = (n) => `$${Number(n).toFixed(2).replace(/\.00$/, '')}`;
+  // Text nodes only, in the top frame: the handover, the messages and the patch are the AI's words, shown as text.
+  function reviewCard() {
+    const v = review.data, from = TV.AI_NAME[v.from] || 'This AI', to = TV.AI_NAME[v.to] || 'the other AI';
+    const card = el('section', 'th-card th-review');
+    card.dataset.key = 'review'; card.dataset.state = review.state;
+    card.append(el('h2', 'th-card-title', `${from} → ${to}`),
+      el('p', 'th-card-text', `${to} carries on in the same copy of your folder, on ${v.branch || 'this branch'}.`),
+      el('p', 'th-card-sub', `Permission: ${v.permissionLevel} · ${v.budgetUsd === null ? 'No spend cap' : `${money(v.budgetUsd)} cap, ${money(v.spentUsd)} spent`} · Task notes v${v.contextVersion}${v.planFirst ? ' · It must plan again first' : ''}`));
+    const part = (summary, text, cls) => { const d = el('details', 'th-review-part'); const pre = el('pre', cls || null, text); d.append(el('summary', null, summary), pre); return d; };
+    card.append(part('What the new AI is told', v.handover || ''));
+    if (v.messagesText) card.append(part('Messages still waiting', v.messagesText));
+    card.append(part(`${(v.files || []).length} changed file(s)`, v.patch || 'No changes since the task started.', 'th-diff'));
+    const row = el('div', 'th-card-btns');
+    const expired = !(Number(v.expiresAt) > Date.now());
+    const go = el('button', 'th-btn th-primary', `Start reviewed ${to} session…`); go.type = 'button';
+    go.disabled = !!acting || review.state !== 'idle' || expired || !ready(review.armedUntil);
+    go.addEventListener('click', () => { if (!go.disabled) applySwitch(); });
+    const close = el('button', 'th-btn', 'Close'); close.type = 'button';
+    close.disabled = review.state !== 'idle';
+    close.addEventListener('click', () => { review = null; renderCards(); });
+    row.append(go, close); card.append(row);
+    if (expired) card.append(el('p', 'th-card-note', 'This review has expired. Close it and look again.'));
+    if (review.text) card.append(el('p', 'th-card-note', review.text));
+    return card;
+  }
+  async function applySwitch() {
+    if (!review || acting || review.state !== 'idle' || Date.now() < review.armedUntil) return;
+    const mine = review;
+    acting = 'review'; mine.state = 'sending';
+    renderCards(); renderReply(); renderStop();
+    let r = null;
+    try { r = await api.act(rowId, { action: 'switchAi', review: mine.data.review }); } catch { r = null; }
+    acting = null;
+    rearmAll();
+    if (review === mine) {
+      // A review is used once, whatever came of it. Cancelled says nothing; anything else says what happened.
+      review = null;
+      const c = cards.get(mine.from);
+      if (c && !(r && r.cancelled)) c.text = r && r.ok === true ? 'Switching…' : ((r && r.text) || 'That wasn’t sent. Try again.');
+    }
+    renderCards(); renderReply(); renderStop();
   }
 
   // ── Stop, in the open chat only (R4-1a): two steps, the second armed for 600 ms ──
@@ -408,6 +498,7 @@
   }
   function showGone() {
     gone = true;
+    review = null;
     stopPoll();
     kind = null;
     $('th-tx').hidden = true;

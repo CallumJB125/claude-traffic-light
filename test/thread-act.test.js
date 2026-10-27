@@ -1,5 +1,5 @@
 'use strict';
-// Redesign R4-1a: thread:act, the chat's own choices on its own task's requests (plan-r4.md §2, §10, §11).
+// Redesign R4-1a and R4-1b: thread:act, the chat's own choices on its own task's requests (plan-r4.md §2, §10, §11).
 // The real index.js thread lifecycle and the real src/thread-main.js (test/helpers/thread-world.js), against a
 // fake Tasks service that relays per document the way tasks-service's remember()/shownHash do, and records
 // every act. The order of refusals is §2.2's; each refusal makes zero acts.
@@ -130,7 +130,12 @@ test('3. the exact shape: wrong keys, extra keys, payload, a scope outside once|
     { id: A, action: 'stop', confirmed: 'yes' },
     { id: A, action: 'discard', confirmed: true },
     { id: A, action: 'message', body: 'hi' },
-    { id: A, action: 'switchAi', ai: 'codex' },
+    { id: A, action: 'switchAi', ai: 'gpt' },
+    { id: A, action: 'switchAi' },
+    { id: A, action: 'switchAi', ai: 'codex', review: '00000000-0000-4000-8000-000000000000' },
+    { id: A, action: 'switchAi', review: 'not-a-handle' },
+    { id: A, action: 'switchAi', ai: 'codex', confirmed: true },
+    { id: A, action: 'switchAi', ai: 'codex', payload: { phase: 'apply' } },
     { ...once(), confirmed: false },
     Object.assign(Object.create({ extra: 1 }), once()),
     'ap-1',
@@ -230,17 +235,235 @@ test('6. an id armed in one document generation is refused in the next', async (
   assert.deepEqual(r.calls, []);
 });
 
-test('7. R4-1a sends nothing that needs a dialog: scope task, StartTask approve and deny, a non-resume choice → CONFIRM_REQUIRED, zero acts', async () => {
-  const r = rig({ detail: DETAIL({ openApprovals: [ap(1), ap(2, { tool: 'StartTask', inputSummary: 'Ship it' })],
-    openAsk: { askId: 'ask-1', text: 'Paused', options: null, choices: [{ id: 'switch_ai', label: 'Continue with Codex', action: 'switchAi', payload: { ai: 'codex' } }] } }) });
+test('7. a choice whose action main does not allow → CONFIRM_REQUIRED, zero acts', async () => {
+  const r = rig({ detail: DETAIL({ openAsk: { askId: 'ask-1', text: 'Paused', options: null, choices: [{ id: 'merge_it', label: 'Merge', action: 'merge', payload: {} }, { id: 'bad_ai', label: 'Use GPT', action: 'switchAi', payload: { ai: 'gpt' } }] } }) });
   const d = await r.open();
-  for (const req of [{ ...once(1), scope: 'task' }, once(2), { id: A, action: 'deny', approvalId: 'ap-2' }, { id: A, action: 'choose', askId: 'ask-1', choiceId: 'switch_ai' }]) {
-    const out = await r.call(d, req);
-    assert.deepEqual(out, { ok: false, code: 'CONFIRM_REQUIRED', text: ACT_TEXT.CONFIRM_REQUIRED }, JSON.stringify(req));
-    assert.equal('cancelled' in out, false, 'refused here, not a cancelled dialog');
+  for (const choiceId of ['merge_it', 'bad_ai']) {
+    assert.deepEqual(await r.call(d, { id: A, action: 'choose', askId: 'ask-1', choiceId }), { ok: false, code: 'CONFIRM_REQUIRED', text: ACT_TEXT.CONFIRM_REQUIRED });
     r.clock.t += 600;
   }
-  assert.deepEqual(r.calls, [], 'zero acts, so zero dialogs: tasks-service is never reached');
+  assert.deepEqual(r.calls, []);
+});
+
+// ── R4-1b: the dialog kinds (plan-r4 §2.5, §3, §5 R4-1b) ────────────────
+// The fake service does what tasks-service's act() and switchProvider() do around the dialog: the native
+// kinds (scope 'task', a StartTask approve, a switch apply) ask confirmDialog first; then current();
+// then the send. A switch apply also re-asks the preview's own `current` (r.current) first.
+const REVIEW_ID = '11111111-2222-4333-8444-555555555555';
+function native(r, { answer = async () => true } = {}) {
+  const st = { dialogs: [], previewCurrent: null, previews: 0 };
+  const act = async (req, wcId, current, calls) => {
+    if (req.action === 'switchAi') {
+      if (current() !== true) return { ok: false, code: 'ILLEGAL_TRANSITION', text: '' };
+      if (req.payload.phase !== 'apply') {
+        calls.push(['preview', req]); st.previewCurrent = current; st.previews++;
+        return { ok: true, providerChange: { status: 'review', review: st.previews === 1 ? REVIEW_ID : REVIEW_ID.replace('1111', '9999'), from: 'claude', to: req.payload.ai, permissionLevel: 'ask', planFirst: false, budgetUsd: 5, spentUsd: 1.25, contextVersion: 3, branch: 'fix/tests', handover: 'Handover <b>text</b>', messagesText: 'one queued', files: [{ path: 'a.js', status: 'M' }], patch: '+<script>x</script>', expiresAt: r.clock.t + 120000 } };
+      }
+      if (st.previewCurrent?.() !== true) return { ok: false, code: 'CONFLICT', text: '' };
+      st.dialogs.push(req);
+      if (await answer(req) !== true) return { ok: false, code: 'CONFIRM_REQUIRED', text: '', cancelled: true };
+      if (current() !== true) return { ok: false, code: 'CONFLICT', text: '' };
+      calls.push(['act', req]);
+      return { ok: true, providerChange: { status: 'queued' } };
+    }
+    const tool = req.action === 'approve' ? r.tasks.shownHash(wcId, 'task-a', 'approval', req.payload.approvalId)?.tool : null;
+    if (req.action === 'approve' && (req.payload.scope === 'task' || tool === 'StartTask')) {
+      st.dialogs.push(req);
+      if (await answer(req) !== true) return { ok: false, code: 'CONFIRM_REQUIRED', text: '', cancelled: true };
+    }
+    if (current() !== true) return { ok: false, code: 'ILLEGAL_TRANSITION', text: '' };
+    calls.push(['act', req]);
+    return { ok: true, task: null };
+  };
+  return { st, act };
+}
+function nativeRig(opts = {}, rigOpts = {}) {
+  let n = null;
+  const r = rig({ ...rigOpts, act: (...a) => n.act(...a) });
+  n = native(r, opts);
+  return { ...r, st: n.st };
+}
+const sent = (r) => r.calls.filter(([k]) => k === 'act').map(([, q]) => q);
+const startDetail = () => DETAIL({ openApprovals: [ap(1), ap(2, { tool: 'StartTask', inputSummary: 'Ship the fix' })] });
+
+test('1b scope task: Yes → one dialog, then act with scope task; Cancel → cancelled, zero acts', async () => {
+  for (const yes of [true, false]) {
+    const r = nativeRig({ answer: async () => yes });
+    const d = await r.open();
+    const out = await r.call(d, { ...once(1), scope: 'task' });
+    assert.equal(r.st.dialogs.length, 1);
+    if (yes) { assert.deepEqual(out, { ok: true }); assert.deepEqual(sent(r), [{ id: 'task-a', action: 'approve', payload: { approvalId: 'ap-1', scope: 'task' } }]); }
+    else { assert.deepEqual(out, { ok: false, code: 'CONFIRM_REQUIRED', cancelled: true, text: '' }); assert.deepEqual(sent(r), []); }
+  }
+});
+
+test('1b: a dialog refused because the chat lost focus (the ticket is null) → cancelled, never "may have been sent"', async () => {
+  let r = null;
+  r = nativeRig({ answer: async () => { r.w.win.focused = false; return false; } });
+  const d = await r.open();
+  assert.deepEqual(await r.call(d, { ...once(1), scope: 'task' }), { ok: false, code: 'CONFIRM_REQUIRED', cancelled: true, text: '' });
+  assert.deepEqual(sent(r), []);
+});
+
+test('1b: the request changed while the dialog was open → Yes is refused at the send: NOT_READY, zero acts', async () => {
+  let r = null;
+  r = nativeRig({ answer: async () => { r.refresh(DETAIL({ openApprovals: [ap(1, { inputSummary: 'rm -rf build' }), ap(2)] })); return true; } });
+  const d = await r.open();
+  assert.deepEqual(await r.call(d, { ...once(1), scope: 'task' }), { ok: false, code: 'NOT_READY', text: ACT_TEXT.NOT_READY });
+  assert.deepEqual(sent(r), []);
+});
+
+test('1b: the chat reloaded while the dialog was open → NOT_READY, zero acts', async () => {
+  let r = null, d = null;
+  r = nativeRig({ answer: async () => { d.sender.reload(); return true; } });
+  d = await r.open();
+  assert.deepEqual(await r.call(d, { ...once(1), scope: 'task' }), { ok: false, code: 'NOT_READY', text: ACT_TEXT.NOT_READY });
+  assert.deepEqual(sent(r), []);
+});
+
+test('1b StartTask: Accept → one dialog, scope once; scope task → VALIDATION before any dialog; Deny → zero dialogs', async () => {
+  const r = nativeRig({}, { detail: startDetail() });
+  const d = await r.open();
+  assert.equal((await r.call(d, { ...once(2), scope: 'task' })).code, 'VALIDATION');
+  assert.equal(r.st.dialogs.length, 0);
+  r.clock.t += 600; // past the per-document rate the refusal used
+  assert.deepEqual(await r.call(d, once(2)), { ok: true });
+  assert.equal(r.st.dialogs.length, 1, 'Accept and start asks once');
+  r.clock.t += 600;
+  r.refresh(startDetail(), { silent: false });
+  r.clock.t += 600;
+  assert.deepEqual(await r.call(d, { id: A, action: 'deny', approvalId: 'ap-2' }), { ok: true });
+  assert.equal(r.st.dialogs.length, 1, 'Deny has no dialog, the same as Tasks');
+  assert.deepEqual(sent(r), [{ id: 'task-a', action: 'approve', payload: { approvalId: 'ap-2', scope: 'once' } }, { id: 'task-a', action: 'deny', payload: { approvalId: 'ap-2' } }]);
+});
+
+test('1b: Allow once, Deny, answers, resume choices and Stop raise zero dialogs', async () => {
+  const r = nativeRig({}, { detail: DETAIL({ openAsk: { askId: 'ask-1', text: 'Paused', options: null, choices: [{ id: 'wait_reset', label: 'Wait for the reset', action: 'resume', payload: { when: 'reset' } }] } }) });
+  const d = await r.open();
+  for (const req of [once(1), { id: A, action: 'deny', approvalId: 'ap-2' }, { id: A, action: 'choose', askId: 'ask-1', choiceId: 'wait_reset' }, { id: A, action: 'stop', confirmed: true }]) {
+    assert.deepEqual(await r.call(d, req), { ok: true }, JSON.stringify(req));
+    r.clock.t += 600;
+  }
+  assert.equal(r.st.dialogs.length, 0);
+  assert.equal(sent(r).length, 4);
+});
+
+test('1b BUSY: while a dialog is open, a second act or a reply → BUSY, no second dialog', async () => {
+  const h = held();
+  const r = nativeRig({ answer: async () => { await h.gate; return true; } });
+  const d = await r.open();
+  const p = r.call(d, { ...once(1), scope: 'task' });
+  await settle();
+  r.clock.t += 1000;
+  assert.deepEqual(await r.call(d, { ...once(2), scope: 'task' }), { ok: false, code: 'BUSY', text: ACT_TEXT.BUSY });
+  assert.equal((await r.w.ipc.handlers['thread:message'](d, { id: A, body: 'hello' })).code, 'BUSY');
+  assert.equal(r.st.dialogs.length, 1);
+  h.release();
+  assert.deepEqual(await p, { ok: true });
+});
+
+const switchTo = (ai = 'codex') => ({ id: A, action: 'switchAi', ai });
+const applyIt = (review = REVIEW_ID) => ({ id: A, action: 'switchAi', review });
+
+test('1b switch AI: preview → the review for the page; apply under 600 ms → NOT_READY; at 600 ms → one dialog, then the apply', async () => {
+  const r = nativeRig();
+  const d = await r.open();
+  const pv = await r.call(d, switchTo());
+  assert.equal(pv.ok, true);
+  assert.deepEqual(Object.keys(pv.review).sort(), ['branch', 'budgetUsd', 'contextVersion', 'expiresAt', 'files', 'from', 'handover', 'messagesText', 'patch', 'permissionLevel', 'planFirst', 'review', 'spentUsd', 'to']);
+  assert.equal(pv.review.review, REVIEW_ID);
+  assert.equal(r.st.dialogs.length, 0, 'a preview has no dialog');
+  r.clock.t += 550; // past the 500 ms rate, inside the 600 ms arm
+  assert.deepEqual(await r.call(d, applyIt()), { ok: false, code: 'NOT_READY', text: ACT_TEXT.NOT_READY });
+  assert.equal(r.st.dialogs.length, 0);
+  r.clock.t += 550;
+  assert.deepEqual(await r.call(d, applyIt()), { ok: true });
+  assert.equal(r.st.dialogs.length, 1);
+  assert.deepEqual(sent(r), [{ id: 'task-a', action: 'switchAi', payload: { phase: 'apply', review: REVIEW_ID } }]);
+  r.clock.t += 600;
+  assert.deepEqual(await r.call(d, applyIt()), { ok: false, code: 'NOT_READY', text: ACT_TEXT.REVIEW_GONE }, 'a handle is used once');
+});
+
+test('1b switch AI: Cancel → cancelled, zero acts; the handle is spent, so the page reviews again', async () => {
+  const r = nativeRig({ answer: async () => false });
+  const d = await r.open();
+  await r.call(d, switchTo());
+  r.clock.t += 600;
+  assert.deepEqual(await r.call(d, applyIt()), { ok: false, code: 'CONFIRM_REQUIRED', cancelled: true, text: '' });
+  assert.deepEqual(sent(r), []);
+});
+
+test('1b switch AI: an old handle after a re-preview, or one from the previous document → NOT_READY, zero dialogs', async () => {
+  const r = nativeRig();
+  let d = await r.open();
+  await r.call(d, switchTo());
+  r.clock.t += 600;
+  const second = await r.call(d, switchTo());
+  assert.notEqual(second.review.review, REVIEW_ID);
+  r.clock.t += 600;
+  assert.deepEqual(await r.call(d, applyIt(REVIEW_ID)), { ok: false, code: 'NOT_READY', text: ACT_TEXT.REVIEW_GONE });
+  d.sender.reload();
+  d = await r.open();
+  assert.deepEqual(await r.call(d, applyIt(second.review.review)), { ok: false, code: 'NOT_READY', text: ACT_TEXT.REVIEW_GONE }, 'generation n+1');
+  assert.equal(r.st.dialogs.length, 0);
+  assert.deepEqual(sent(r), []);
+});
+
+test('1b switch AI (S2): approving something else between preview and apply leaves the review good', async () => {
+  const r = nativeRig();
+  const d = await r.open();
+  await r.call(d, switchTo());
+  r.clock.t += 600;
+  assert.deepEqual(await r.call(d, once(1)), { ok: true });
+  r.refresh(DETAIL({ openApprovals: [ap(2)] }));
+  r.clock.t += 600;
+  assert.deepEqual(await r.call(d, applyIt()), { ok: true });
+  assert.equal(r.st.dialogs.length, 1);
+});
+
+test('1b switch AI: the chat changed before the apply was sent (alive() false) → NOT_READY, never "may have started"', async () => {
+  let r = null, d = null;
+  r = nativeRig({ answer: async () => { r.w.ctx.store.ws = 'ws-2'; return true; } });
+  d = await r.open();
+  await r.call(d, switchTo());
+  r.clock.t += 600;
+  assert.deepEqual(await r.call(d, applyIt()), { ok: false, code: 'NOT_READY', text: ACT_TEXT.NOT_READY });
+  assert.deepEqual(sent(r), []);
+});
+
+test('1b switch AI: a review taken before a workspace switch fails its own check at apply → NOT_READY, never "may have started"', async () => {
+  const r = nativeRig();
+  const d = await r.open();
+  await r.call(d, switchTo());
+  r.w.ctx.store.ws = 'ws-2'; // the preview's current() is now false; the apply's own is true
+  r.clock.t += 600;
+  assert.deepEqual(await r.call(d, applyIt()), { ok: false, code: 'NOT_READY', text: ACT_TEXT.NOT_READY });
+  assert.equal(r.st.dialogs.length, 0);
+  assert.deepEqual(sent(r), []);
+});
+
+test('1b switch AI: the same document reloaded (same webContents, generation n+1) → the handle is gone, zero dialogs', async () => {
+  const r = nativeRig();
+  const d = await r.open();
+  const pv = await r.call(d, switchTo());
+  const wc = d.sender.id;
+  d.sender.reload();
+  const again = r.w.doc();
+  assert.equal(again.sender.id, wc, 'the same webContents');
+  await r.w.ipc.handlers['thread:open'](again, A);
+  r.clock.t += 600;
+  assert.deepEqual(await r.call(again, applyIt(pv.review.review)), { ok: false, code: 'NOT_READY', text: ACT_TEXT.REVIEW_GONE });
+  assert.equal(r.st.dialogs.length, 0);
+  assert.deepEqual(sent(r), []);
+});
+
+test('1b switch AI from a choice: the choice\'s own AI, as a preview, from main\'s copy', async () => {
+  const r = nativeRig({}, { detail: DETAIL({ openAsk: { askId: 'ask-1', text: 'Claude hit its usage limit.', options: null, choices: [{ id: 'switch_ai', label: 'Continue with Codex', action: 'switchAi', payload: { ai: 'codex' } }] } }) });
+  const d = await r.open();
+  const out = await r.call(d, { id: A, action: 'choose', askId: 'ask-1', choiceId: 'switch_ai' });
+  assert.equal(out.ok, true);
+  assert.equal(out.review.to, 'codex');
+  assert.deepEqual(r.calls.map(([k, q]) => [k, q.payload]), [['preview', { ai: 'codex' }]]);
 });
 
 test('choose: an unknown choiceId → VALIDATION; the payload is main\'s copy, never the page\'s', async () => {

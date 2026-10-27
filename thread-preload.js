@@ -3,7 +3,8 @@
 // names that row; main refuses any other (src/thread-main.js guard T).
 // R2b-1: a reply to the bound chat ({id, body}; main fixes the task and the
 // action). R4-1a: thread:act, a choice on a request main showed this chat
-// (approve once, deny, answer, choose, stop); main checks every key.
+// (approve once, deny, answer, choose, stop); main checks every key. R4-1b adds
+// approve for this task and switch AI (`ai` to preview, `review` to apply).
 const { contextBridge, ipcRenderer } = require('electron');
 
 const ROW_ID = /^[0-9a-f]{64}$/;
@@ -25,7 +26,7 @@ contextBridge.exposeInMainWorld('threadApi', {
   // A choice on a request in this chat. Only the keys main accepts, as strings or true; main refuses any other shape.
   act: (row, r) => {
     const o = r && typeof r === 'object' ? r : {}, out = { id: id(row) };
-    for (const k of ['action', 'approvalId', 'scope', 'askId', 'answer', 'choiceId']) if (typeof o[k] === 'string') out[k] = o[k];
+    for (const k of ['action', 'approvalId', 'scope', 'askId', 'answer', 'choiceId', 'ai', 'review']) if (typeof o[k] === 'string') out[k] = o[k];
     if (o.confirmed === true) out.confirmed = true;
     return ipcRenderer.invoke('thread:act', out);
   },
