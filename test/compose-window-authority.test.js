@@ -96,6 +96,21 @@ test('finding 2: one native dialog at a time across Home, Tasks and Setups, both
   s.ctx.show('home');
   assert.equal(await s.api.homeConfirm(async () => ({ response: 1 })), null, 'Home refuses while Setups’ is open');
   release({}); await sp;
+  // Tasks → Setups (the pair that was missing): Setups refuses while Tasks’ is open, and works again once it is answered
+  const ts = world(); ts.ctx.show('tasks');
+  const tsp = ts.api.tasksConfirm(() => new Promise((r) => { release = r; }));
+  ts.ctx.show('setups');
+  let asked = 0;
+  assert.equal(await ts.api.setupsConfirm(async () => { asked++; return { response: 1 }; }), null, 'Setups refuses while Tasks’ is open');
+  assert.equal(asked, 0, 'no second dialog was shown');
+  release({ response: 0 }); await tsp;
+  assert.deepEqual(await ts.api.setupsConfirm(async () => ({ response: 1 })), { response: 1 }, 'Setups asks again once Tasks’ is closed');
+  // Setups → Tasks: already refused, pinned
+  const st = world(); st.ctx.show('setups');
+  const stp = st.api.setupsConfirm(() => new Promise((r) => { release = r; }));
+  st.ctx.show('tasks');
+  assert.equal(await st.api.tasksConfirm(async () => ({ response: 1 })), null, 'Tasks refuses while Setups’ is open');
+  release({}); await stp;
 });
 
 test('finding 3: Home’s retire hooks bump its document and tell main which webContents retired', () => {
