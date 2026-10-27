@@ -1,7 +1,8 @@
 /* Plexiform's look for Claude Burst's dashboard, injected with insertCSS into
    the Usage optimiser view only. Values are literal (the dashboard cannot read
    tokens.css) and mirror the shared dark and light tokens.css palettes: test/burst-theme.test.js
-   keeps them in step. Everything is an override: if Burst renames a variable
+   keeps them in step. The accent is Graphite (redesign R0b); the chart's second
+   tone (--pc-c, --st-fixed) is the accent's pressed shade. Everything is an override: if Burst renames a variable
    or a selector, the rule matches nothing and the page just stays as Burst
    drew it. */
 
@@ -14,7 +15,7 @@
   --text: #f0f1f3;
   --muted: #b0b7c2;
   --faint: #9aa3b0;
-  --accent: #e49a78;
+  --accent: #e6e8eb;
   --ok: #67c4a6;
   --ok-bg: rgba(103, 196, 166, 0.14);
   --pass: #67c4a6;
@@ -28,14 +29,14 @@
   --head-bg: #292d34;
   --thead-bg: #25282f;
   --shadow: none;
-  --pc-a: #e49a78;
-  --pc-b: #e49a78;
-  --pc-c: #efb59a;
-  --pcs-saved: #e49a78;
+  --pc-a: #e6e8eb;
+  --pc-b: #e6e8eb;
+  --pc-c: #a8afb7;
+  --pcs-saved: #e6e8eb;
   --pcs-cost: #67c4a6;
   /* Compaction-threshold chart (Burst v0.20): Claude Code alone / fixed threshold / Burst as it ran. */
   --st-default: #9aa3b0;
-  --st-fixed: #efb59a;
+  --st-fixed: #a8afb7;
   --st-actual: #67c4a6;
   --grid: #343941;
 }
@@ -50,7 +51,7 @@
     --text: #20252d;
     --muted: #556171;
     --faint: #5c6879;
-    --accent: #a34425;
+    --accent: #24292f;
     --ok: #187d63;
     --ok-bg: rgba(24, 125, 99, 0.1);
     --pass: #187d63;
@@ -61,13 +62,13 @@
     --bad-bg: rgba(194, 53, 43, 0.1);
     --head-bg: #eef0f3;
     --thead-bg: #f2f4f6;
-    --pc-a: #a34425;
-    --pc-b: #a34425;
-    --pc-c: #bd6649;
-    --pcs-saved: #a34425;
+    --pc-a: #24292f;
+    --pc-b: #24292f;
+    --pc-c: #4b525b;
+    --pcs-saved: #24292f;
     --pcs-cost: #187d63;
     --st-default: #5c6879;
-    --st-fixed: #bd6649;
+    --st-fixed: #4b525b;
     --st-actual: #187d63;
     --grid: #dde1e6;
   }

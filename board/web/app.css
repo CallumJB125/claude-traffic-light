@@ -1,6 +1,7 @@
 /* Plexiform team board.
    Dark is the widget's own world (tokens.css at the repo root, copied value
-   for value so the two windows agree); light is a neutral paper.
+   for value so the two windows agree, Graphite accent since redesign R0b);
+   light is a neutral paper.
    Status colour comes only from the widget's OKLCH lamp tokens, and follows
    the widget's rhythm: a lamp that is green by both hub and browser breathes,
    amber holds, red blinks three times and holds. */
@@ -21,9 +22,9 @@
   --text: #f0f1f3;
   --muted: #b0b7c2;
   --faint: #9aa3b0;
-  --accent: #e49a78;
-  --accent-ink: #251c18;
-  --accent-soft: rgba(228, 154, 120, 0.14);
+  --accent: #e6e8eb;
+  --accent-ink: #17191d;
+  --accent-soft: rgba(230, 232, 235, 0.14);
   --danger: #b8443a;
   --danger-text: #ff8a80;
 
@@ -49,6 +50,7 @@
   --shadow: 0 1px 0 rgba(0, 0, 0, 0.25), 0 8px 24px -12px rgba(0, 0, 0, 0.55);
   --shadow-pop: 0 24px 64px -16px rgba(0, 0, 0, 0.7), 0 2px 6px rgba(0, 0, 0, 0.3);
   --backdrop: rgba(12, 10, 14, 0.62);
+  /* The pixel Claude mascot keeps Claude's own coral: an illustration, not the accent (redesign R0b). */
   --px-body: #e49a78;
   --px-eye: #251c18;
   --px-post: #726c62;
@@ -90,9 +92,9 @@
   --text: #20252d;
   --muted: #556171;
   --faint: #5c6879;
-  --accent: #a34425;
+  --accent: #24292f;
   --accent-ink: #ffffff;
-  --accent-soft: rgba(163, 68, 37, 0.08);
+  --accent-soft: rgba(36, 41, 47, 0.14);
   --danger: #b3261e;
   --danger-text: #b3261e;
   --tone-green: oklch(0.53 0.11 174);
@@ -123,9 +125,9 @@
     --text: #20252d;
     --muted: #556171;
     --faint: #5c6879;
-    --accent: #a34425;
+    --accent: #24292f;
     --accent-ink: #ffffff;
-    --accent-soft: rgba(163, 68, 37, 0.08);
+    --accent-soft: rgba(36, 41, 47, 0.14);
     --danger: #b3261e;
     --danger-text: #b3261e;
     --tone-green: oklch(0.53 0.11 174);

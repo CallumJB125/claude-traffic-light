@@ -45,7 +45,12 @@ test('token map covers every custom property Burst declares on :root (repo list 
 test('Plexiform values mirror the shared tokens.css dark and light palettes', () => {
   const tokens = fs.readFileSync(path.join(ROOT, 'tokens.css'), 'utf8');
   const lightTokens = tokens.slice(tokens.indexOf('@media (prefers-color-scheme: light)'));
-  const val = (text, name) => new RegExp(`${name}:\\s*([^;]+);`).exec(text)[1].trim();
+  // a theme value may point at the Graphite block in :root (tokens.css R0b); follow var() there
+  const val = (text, name) => {
+    const v = new RegExp(`${name}:\\s*([^;]+);`).exec(text)[1].trim();
+    const ref = /^var\((--[a-z0-9-]+)\)$/.exec(v);
+    return ref ? val(tokens, ref[1]) : v;
+  };
   const dark = blockOf(CSS, false);
   const light = blockOf(CSS, true);
   const pairs = { '--bg': '--bg', '--panel': '--panel', '--panel-2': '--panel-2', '--border': '--line', '--text': '--text', '--muted': '--muted', '--faint': '--faint', '--accent': '--accent', '--ok': '--green', '--pass': '--green', '--warn': '--amber', '--bad': '--red', '--head-bg': '--panel-2', '--grid': '--line', '--pc-a': '--accent', '--pc-b': '--accent', '--pcs-saved': '--accent' };
@@ -54,6 +59,11 @@ test('Plexiform values mirror the shared tokens.css dark and light palettes', ()
     assert.equal(light[b], val(lightTokens, p), `light ${b}`);
   }
   assert.equal(dark['--radius'], val(tokens, '--radius'));
+  // the chart's second tone is the accent's pressed shade (redesign R0b)
+  for (const b of ['--pc-c', '--st-fixed']) {
+    assert.equal(dark[b], val(tokens, '--accent-pressed'), `dark ${b}`);
+    assert.equal(light[b], val(lightTokens, '--accent-pressed'), `light ${b}`);
+  }
 });
 
 test('the stylesheet hides Burst\'s own header and menu, is one file, and carries no network reference', () => {

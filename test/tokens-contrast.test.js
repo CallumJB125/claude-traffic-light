@@ -1,10 +1,8 @@
 'use strict';
-// Redesign R0a (plan-redesign §R2.2, §R3.9, §R3.12, §R3.13.11). Checks tokens.css as resolved in each theme.
-// Active now: text and focus contrast for today's values, the R0a aliases equal today's values (that is the
-// zero-PNG guarantee), and inline links keep their underline.
-// Pending until R0b: the accent state differences and the 14 % soft tint. R0b gives those tokens their Graphite
-// values and removes the skips. The tests assert thresholds, not hexes, so a later palette passes or fails on
-// contrast alone.
+// Redesign R0a/R0b (plan-redesign §R2.2, §R3.9, §R3.12, §R3.13.11). Checks tokens.css as resolved in each theme:
+// text and focus contrast, the Graphite accent and its states, the 14 % soft tint, bucket contrast, and inline
+// links keep their underline. The contrast tests assert thresholds, not hexes, so a later palette (Callum still
+// confirms hover, pressed and soft) passes or fails on contrast alone.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -112,18 +110,19 @@ test('tokens: Paused is styled as Idle', () => {
   }
 });
 
-test('tokens: R0a aliases equal today\'s values exactly (the zero-PNG gate)', () => {
-  // Until R0b, the new names must not change a pixel: hover and pressed are today's accent, and the soft tint
-  // keeps today's alpha (0.14 dark, 0.08 light).
-  const today = {
-    dark: { '--accent': '#e49a78', '--accent-soft': 'rgba(228, 154, 120, 0.14)' },
-    light: { '--accent': '#a34425', '--accent-soft': 'rgba(163, 68, 37, 0.08)' },
-  };
+test('tokens: the accent is Graphite, every accent value comes from the one Graphite block, and the ring is the accent', () => {
+  // R0b replaces R0a's "aliases equal today's values" gate. Rest and ink are decided (§R2.2); hover, pressed and
+  // soft wait on Callum, so they are only required to come from the block, where they are changed in one place.
+  const want = { dark: { '--accent': '#e6e8eb', '--accent-ink': '#17191d', '--focus-halo': '#17191d' },
+    light: { '--accent': '#24292f', '--accent-ink': '#ffffff', '--focus-halo': '#ffffff' } };
+  const LIGHT_BLOCK = declsOf(blockAfter(blockAfter(CSS, '@media (prefers-color-scheme: light)'), ':root:not([data-theme="dark"])'));
+  const own = { dark: DARK, light: LIGHT_BLOCK };
   for (const theme of Object.keys(THEMES)) {
-    for (const [name, value] of Object.entries(today[theme])) assert.equal(resolve(THEMES[theme], name), value, `${theme} ${name}`);
-    assert.equal(resolve(THEMES[theme], '--accent-hover'), today[theme]['--accent'], `${theme} --accent-hover`);
-    assert.equal(resolve(THEMES[theme], '--accent-pressed'), today[theme]['--accent'], `${theme} --accent-pressed`);
-    assert.equal(resolve(THEMES[theme], '--focus-ring'), today[theme]['--accent'], `${theme} --focus-ring`);
+    for (const [name, value] of Object.entries(want[theme])) assert.equal(resolve(THEMES[theme], name), value, `${theme} ${name}`);
+    for (const name of ['--accent', '--accent-ink', '--accent-soft', '--accent-hover', '--accent-pressed']) {
+      assert.equal(own[theme][name], `var(--graphite-${theme}${name.slice('--accent'.length)})`, `${theme} ${name} points at the Graphite block`);
+    }
+    assert.equal(resolve(THEMES[theme], '--focus-ring'), resolve(THEMES[theme], '--accent'), `${theme} --focus-ring`);
   }
 });
 
@@ -169,10 +168,10 @@ test('tokens: the link check catches a bare link rule and spares an allowlisted 
   assert.equal(caught('.cta', 'text-decoration: none'), false);
 });
 
-// ── Pending until R0b ────────────────────────────────────────────────────────────────────────────────────────
+// ── Accent states, soft tint and buckets (enabled by R0b) ───────────────────────────────────────────────────
 // §R3.12: hover ≥ 1.30 and pressed ≥ 1.60 against rest, hover ≥ 1.20 against pressed, and the label ≥ 7.0 on
 // every state, in both themes.
-test('tokens: accent hover and pressed differ enough from rest and from each other', { skip: 'enabled by R0b' }, () => {
+test('tokens: accent hover and pressed differ enough from rest and from each other', () => {
   for (const theme of Object.keys(THEMES)) {
     const rest = color(theme, '--accent');
     const hover = color(theme, '--accent-hover');
@@ -186,7 +185,7 @@ test('tokens: accent hover and pressed differ enough from rest and from each oth
   }
 });
 
-test('tokens: the selected tint is the accent at 14 %', { skip: 'enabled by R0b' }, () => {
+test('tokens: the selected tint is the accent at 14 %', () => {
   for (const theme of Object.keys(THEMES)) {
     const soft = color(theme, '--accent-soft');
     const accent = color(theme, '--accent');
@@ -197,8 +196,8 @@ test('tokens: the selected tint is the accent at 14 %', { skip: 'enabled by R0b'
   }
 });
 
-// Today's dark `--idle` (#726c62) is 2.66:1 on `--panel-2`, so the bucket shapes check waits for R0b's §1.3 values.
-test('tokens: status buckets are at least 3:1 on every surface', { skip: 'enabled by R0b' }, () => {
+// R0b lifted dark `--idle` from #726c62 (2.66:1 on `--panel-2`) to #7c766b, same warm grey.
+test('tokens: status buckets are at least 3:1 on every surface', () => {
   for (const theme of Object.keys(THEMES)) {
     for (const st of ['--st-needs', '--st-working', '--st-check', '--st-stuck', '--st-idle']) {
       for (const bg of SURFACES) {

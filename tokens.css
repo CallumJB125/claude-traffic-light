@@ -2,6 +2,24 @@
 :root {
   color-scheme: dark;
 
+  /* ── Accent: Graphite (redesign R0b) ─────────────────────────────────────
+     Every accent value lives here, and the themes below only point at them.
+     Callum still has to confirm hover/pressed and the selected (soft) tint
+     (plan-redesign §R2.2, §R3.12): change them here and nowhere else.
+     test/tokens-contrast.test.js checks thresholds, not these hexes:
+     hover ≥ 1.30 and pressed ≥ 1.60 against rest, hover ≥ 1.20 against
+     pressed, the label ≥ 7 on every state, the soft tint at 14 %. */
+  --graphite-light: #24292f;
+  --graphite-light-hover: #3a4048;
+  --graphite-light-pressed: #4b525b;
+  --graphite-light-ink: #ffffff;
+  --graphite-light-soft: rgba(36, 41, 47, 0.14);
+  --graphite-dark: #e6e8eb;
+  --graphite-dark-hover: #c4c9cf;
+  --graphite-dark-pressed: #a8afb7;
+  --graphite-dark-ink: #17191d;
+  --graphite-dark-soft: rgba(230, 232, 235, 0.14);
+
   --bg: #17191d;
   --panel: #202329;
   --panel-2: #292d34;
@@ -11,16 +29,17 @@
   --text: #f0f1f3;
   --muted: #b0b7c2;
   --faint: #9aa3b0;
-  --accent: #e49a78;
-  --accent-ink: #251c18;
-  --accent-soft: rgba(228, 154, 120, 0.14);
+  --accent: var(--graphite-dark);
+  --accent-ink: var(--graphite-dark-ink);
+  --accent-soft: var(--graphite-dark-soft);
 
   --green: #67c4a6;
   --amber: #e4b566;
   --red: #ff9187;
   --danger: #b8443a;
   --danger-text: #ff8a80;
-  --idle: #726c62;
+  /* Idle keeps its warm grey, lifted to 3.07:1 on --panel-2 (was #726c62, 2.66:1). */
+  --idle: #7c766b;
 
   --radius-sm: 4px;
   --radius: 8px;
@@ -41,19 +60,17 @@
   --text-lg: 16px;
   --text-xl: 22px;
 
-  /* Two-tone focus ring: an outline (survives forced-colors) with a 2px halo filling the offset gap. Today's accent. */
+  /* Two-tone focus ring: an outline (survives forced-colors) with a 2px halo filling the offset gap. */
   --focus-ring: var(--accent);
   --focus-halo: var(--bg);
   --focus: 0 0 0 2px var(--focus-halo);
   --t: 160ms ease;
   --t-fast: 120ms ease;
 
-  /* ── Redesign R0a: v2 token names, aliased to today's values ──────────────
-     Nothing reads these yet, so they change no pixel. R0b gives the accent
-     states their Graphite values and the soft tint its 14 %; components still
-     use their own hover mixes until then. */
-  --accent-hover: var(--accent);
-  --accent-pressed: var(--accent);
+  /* ── Redesign v2 names (R0a), Graphite since R0b ──────────────────────────
+     Components still use their own hover mixes until they move onto these. */
+  --accent-hover: var(--graphite-dark-hover);
+  --accent-pressed: var(--graphite-dark-pressed);
 
   /* Status buckets: one meaning each (Needs you, Working on it, Finished —
      check it, Stuck or failed, Idle). Paused is styled as Idle. */
@@ -98,9 +115,13 @@
     --text: #20252d;
     --muted: #556171;
     --faint: #5c6879;
-    --accent: #a34425;
-    --accent-ink: #ffffff;
-    --accent-soft: rgba(163, 68, 37, 0.08);
+    --accent: var(--graphite-light);
+    --accent-ink: var(--graphite-light-ink);
+    --accent-soft: var(--graphite-light-soft);
+    --accent-hover: var(--graphite-light-hover);
+    --accent-pressed: var(--graphite-light-pressed);
+    --focus-halo: #ffffff;
+    --idle: #726c62;
     --green: #187d63;
     --amber: #945c12;
     --red: #c2352b;
