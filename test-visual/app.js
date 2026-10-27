@@ -275,5 +275,43 @@ async function focusMainWindow(app) {
   });
 }
 
+const FOCUS_REFUSED = /Focus the current Tasks page|Focus Home and press Run again/;
+
+// A click on a button whose effect main accepts only from the focused window (tasks:act/create, compose:run).
+// Waits until the button is armed, focuses, clicks at once, then waits for the caller's `done()` (main's answer,
+// not the button vanishing) while watching the page's alert/status elements for a refusal. Any refusal throws with
+// main's own text, so a lost-focus race can not turn into a silent timeout. Only the entry refusal (nothing happened
+// yet) is retried, once; `reopen` is needed when the click removed the button (a confirm bar). Never retry a
+// CONFLICT or STARTED_ELSEWHERE: the effect may already have happened.
+async function confirmFocused(app, button, { done, alert, reopen }) {
+  const { expect, test } = require('@playwright/test');
+  const alerts = [].concat(alert);
+  const read = async () => (await Promise.all(alerts.map((a) => (async () => ((await a.count()) ? a.first().innerText({ timeout: 1000 }) : ''))().catch(() => '')))).map((t) => t.trim()).filter(Boolean).join(' | ');
+  for (let attempt = 0; ; attempt++) {
+    await expect(button).toBeEnabled();
+    const stale = await read();
+    await focusMainWindow(app);
+    await button.click();
+    let stop = false;
+    const watch = (async () => {
+      while (!stop) { const t = await read(); if (t && t !== stale) return t; await new Promise((r) => setTimeout(r, 100)); }
+      return '';
+    })();
+    const ok = await Promise.race([done().then(() => true, () => false), watch.then((t) => (t ? false : new Promise(() => {})))]);
+    stop = true;
+    const text = ok ? '' : (await watch) || ((t) => (t === stale ? '' : t))(await read());
+    if (ok) return;
+    const focused = await app.evaluate(({ BaseWindow }) => BaseWindow.getAllWindows().map((w) => w.isFocused())).catch(() => []);
+    if (attempt === 0 && FOCUS_REFUSED.test(text) && (reopen || await button.isVisible().catch(() => false))) {
+      const note = `refused at click (windows focused: ${JSON.stringify(focused)}): ${text}`;
+      console.warn(`confirm-retry: ${note}`);
+      try { test.info().annotations.push({ type: 'confirm-retry', description: note }); } catch { /* outside a test */ }
+      if (reopen) await reopen();
+      continue;
+    }
+    throw new Error(`confirmFocused: ${text ? `main answered "${text}"` : 'no result before done() gave up'} (windows focused: ${JSON.stringify(focused)})`);
+  }
+}
+
 module.exports = {
-  HOME_POINTERS, homeEnv, isBootDeath, underTmp, withFakesFirst, installFakeProviders, fakeProviderCalls, FAKE_PROVIDER_PATHS, focusMainWindow, launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };
+  HOME_POINTERS, homeEnv, isBootDeath, underTmp, withFakesFirst, installFakeProviders, fakeProviderCalls, FAKE_PROVIDER_PATHS, focusMainWindow, confirmFocused, launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };

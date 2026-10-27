@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { test, expect } = require('@playwright/test');
-const { launchApp, embedded, focusMainWindow, snapToPixels } = require('./app');
+const { launchApp, embedded, confirmFocused, snapToPixels } = require('./app');
 const { shortTmp } = require('./tasks-mock');
 
 // No pixel allowance (the repo default, 0): rendered 3x each with a temp HOME, every shot matched its baseline
@@ -88,9 +88,10 @@ test.describe('with a supervisor', () => {
     await shots(page, 'ask-me');
     await page.locator('#compose-route .choice[data-ai="codex"]').click();
     await expect(page.locator('#compose-run')).toBeEnabled();
-    await focusMainWindow(h.app);
-    await page.locator('#compose-run').click();
-    await expect(page.locator('#compose-card')).toBeVisible({ timeout: 10000 });
+    await confirmFocused(h.app, page.locator('#compose-run'), {
+      alert: [page.locator('#compose-error'), page.locator('#compose-status')],
+      done: () => expect(page.locator('#compose-card')).toBeVisible({ timeout: 10000 }),
+    });
     expect(await tasks()).toBe(1);
     const [t] = await direct.listTasks({});
     expect(t.ai.id).toBe('codex');
@@ -111,9 +112,10 @@ test.describe('with a supervisor', () => {
     await expect(page.locator('#compose-peers')).toContainText('1 other task is working in this project.', { timeout: 10000 });
     await expect(page.locator('#compose-run')).toBeDisabled();
     await page.locator('#compose-ack').click();
-    await focusMainWindow(h.app);
-    await page.locator('#compose-run').click();
-    await expect(page.locator('.compose-approval')).toBeVisible({ timeout: 20000 });
+    await confirmFocused(h.app, page.locator('#compose-run'), {
+      alert: [page.locator('#compose-error'), page.locator('#compose-status')],
+      done: () => expect(page.locator('.compose-approval')).toBeVisible({ timeout: 20000 }),
+    });
     await expect(page.locator('#compose-review')).toBeVisible();
     await expect(page.locator('#compose-card .title')).toHaveText('Update the changelog');
     await expect(page.getByRole('button', { name: /Allow|Approve|Deny/ })).toHaveCount(0);

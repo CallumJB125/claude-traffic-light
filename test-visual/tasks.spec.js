@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { test, expect } = require('@playwright/test');
-const { launchApp, embedded, focusMainWindow } = require('./app');
+const { launchApp, embedded, focusMainWindow, confirmFocused } = require('./app');
 const { startTasksMock, shortTmp } = require('./tasks-mock');
 
 // No pixel allowance unless a shot says why (the repo default is 0): rendered with a temp HOME, thread-flagged
@@ -57,9 +57,10 @@ test.describe('with a supervisor', () => {
     await page.waitForTimeout(500);
     // One render in 8 was 31 px off (0.004%; its images were not kept, so the cause is not known yet); the rest were exact.
     await expect(page.locator('#main')).toHaveScreenshot('detail-needs-you.png', { ...SHOT, mask: [page.locator('.age'), page.locator('.d-meta')], maxDiffPixelRatio: 0.0001 });
-    await focusMainWindow(h.app);
-    await page.getByRole('button', { name: 'Allow once' }).click();
-    await expect(page.locator('#d-head .d-state')).not.toContainText('Needs you', { timeout: 15000 });
+    await confirmFocused(h.app, page.getByRole('button', { name: 'Allow once' }), {
+      alert: page.locator('#d-head .err[role=alert]'),
+      done: () => expect(page.locator('#d-head .d-state')).not.toContainText('Needs you', { timeout: 15000 }),
+    });
     await expect(page.locator('#d-head .d-state')).toContainText(/Running|Ready to review|Quiet/, { timeout: 15000 });
   });
 
@@ -72,9 +73,12 @@ test.describe('with a supervisor', () => {
     await expect(page.locator('.confirm')).toHaveCount(0);
     await expect(page.locator('#d-head .d-state')).toContainText('Stalled');
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
-    await focusMainWindow(h.app);
-    await page.getByRole('button', { name: 'Yes, stop' }).click();
-    await expect(page.locator('#d-head .d-state')).toContainText('Failed', { timeout: 15000 });
+    // Armed after 500 ms; main accepts the stop only while this window has focus, so focus and click go together.
+    await confirmFocused(h.app, page.getByRole('button', { name: 'Yes, stop' }), {
+      alert: page.locator('#d-head .err[role=alert]'),
+      done: () => expect(page.locator('#d-head .d-state')).toContainText('Failed', { timeout: 15000 }),
+      reopen: () => page.getByRole('button', { name: 'Stop', exact: true }).click(),
+    });
   });
 
   test('the paused-for-limit task offers the supervisor’s own ways forward', async () => {
@@ -100,16 +104,18 @@ test.describe('with a supervisor', () => {
     // Allowance measured, not guessed: the chosen folder is a fresh temp dir (/tmp/ptm-XXXXXX), whose random name
     // is shown unmasked, and the scrollbar thumb differed with it. In 3 renders that cost at most 0.65% of pixels.
     await expect(page.locator('#main')).toHaveScreenshot('composer.png', { ...SHOT, maxDiffPixelRatio: 0.007 });
-    await focusMainWindow(h.app);
-    await page.locator('#c-go').click();
-    await expect(page.locator('#d-head .d-title')).toContainText('Add a cache', { timeout: 15000 });
+    await confirmFocused(h.app, page.locator('#c-go'), {
+      alert: page.locator('#c-err'),
+      done: () => expect(page.locator('#d-head .d-title')).toContainText('Add a cache', { timeout: 15000 }),
+    });
     await expect(row(page, 'Add a cache')).toHaveCount(1);
     await page.locator('#tab-messages').click();
     await expect(page.locator('#send-text')).toBeEnabled({ timeout: 20000 });
     await page.fill('#send-text', 'please keep the public API unchanged');
-    await focusMainWindow(h.app);
-    await page.locator('#send-btn').click();
-    await expect(page.locator('#thread .bubble.out .body')).toHaveText('please keep the public API unchanged', { timeout: 10000 });
+    await confirmFocused(h.app, page.locator('#send-btn'), {
+      alert: page.locator('#send-err'),
+      done: () => expect(page.locator('#thread .bubble.out .body')).toHaveText('please keep the public API unchanged', { timeout: 10000 }),
+    });
     await expect(page.locator('#thread .bubble.out .who')).toHaveText('You');
     await expect(page.locator('#send-text')).toHaveValue('');
   });
