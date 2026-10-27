@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createOverviewMain } = require('../src/overview-main');
-const { sidebarRows, KEYS, UNTITLED } = require('../src/overview-sidebar-rows');
+const { sidebarRows, KEYS } = require('../src/overview-sidebar-rows');
 const { originOf } = require('../src/focus/ids');
 
 const now = () => new Date().toISOString();
@@ -61,7 +61,7 @@ test('gate on: the sidebar reads a fixed projection of the session rows', async 
   assert.ok(by('iTerm') && by('Terminal'));
   assert.equal(out.sessions.filter((r) => r.origin === null).length, 1, 'Warp is not a known origin');
   assert.equal(by('iTerm').title, 'Fix the login page');
-  assert.equal(by('Terminal').title, UNTITLED);
+  assert.match(by('Terminal').title, /^Codex session( in .+)?$/, 'no title reported → "<AI> session in <project>"');
   assert.ok(out.sessions.every((r) => /^[0-9a-f]{64}$/.test(r.id) && typeof r.bucket === 'string' && r.terminal === true), 'all three are terminal sessions');
   const json = JSON.stringify(out);
   assert.doesNotMatch(json, /\/Users\/|private\/|handle|capabilit|sessionId|s-iterm|cwd/, 'no paths, handles or native ids');
@@ -131,12 +131,16 @@ test('sidebarRows: pinned keys, clamped values, path-like labels dropped, at mos
   const rows = [
     { id: id(1), bucket: 'needs', task: { status: 'tracked', title: 'Ship it' }, project: 'alpha', age_ms: 1200.4, board: { kind: 'team' }, handle: 'x', capabilities: {}, cwd: '/Users/x' },
     { id: id(2), bucket: 'weird', task: { status: 'tracked', title: '/Users/me/secret/file.txt' }, project: '~/code/beta', age_ms: -1 },
+    { id: id(3), bucket: 'working', provider: { id: 'claude' }, task: { status: 'unknown', title: 'Task not reported' }, project: 'billing' },
+    { id: id(4), bucket: 'idle', provider: { id: 'mystery' }, project: 'Local project' },
     { id: 'not-an-id', bucket: 'needs' },
   ];
   const out = sidebarRows({ status: 'complete', rows, origins: new Map([[id(1), 'iTerm'], [id(2), '/Applications/Evil.app']]) });
   assert.deepEqual(out, { schema: 1, status: 'complete', sessions: [
     { id: id(1), bucket: 'needs', title: 'Ship it', project: 'alpha', origin: 'iTerm', age_ms: 1200, team: true, terminal: true },
-    { id: id(2), bucket: 'idle', title: UNTITLED, project: '', origin: null, age_ms: null, team: false, terminal: true },
+    { id: id(2), bucket: 'idle', title: 'AI session', project: '', origin: null, age_ms: null, team: false, terminal: true },
+    { id: id(3), bucket: 'working', title: 'Claude session in billing', project: 'billing', origin: null, age_ms: null, team: false, terminal: false },
+    { id: id(4), bucket: 'idle', title: 'AI session', project: '', origin: null, age_ms: null, team: false, terminal: false },
   ] });
   const many = Array.from({ length: 250 }, (_, i) => ({ id: id(i + 10), bucket: 'idle' }));
   assert.equal(sidebarRows({ status: 'partial', rows: many }).sessions.length, 200);

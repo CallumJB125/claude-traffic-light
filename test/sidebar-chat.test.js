@@ -21,7 +21,7 @@ const ROWS = [
   { id: id(2), bucket: 'needs', title: 'Approve the deploy', project: 'site', origin: null, age_ms: 30000, team: true, terminal: false },
   { id: id(3), bucket: 'working', title: 'Refactor the importer', project: 'billing', origin: 'Terminal', age_ms: 5000, team: false, terminal: true },
   { id: id(4), bucket: 'check', title: 'Fix flaky test', project: 'api', origin: 'iTerm', age_ms: 900000, team: false, terminal: true },
-  { id: id(5), bucket: 'idle', title: 'Untitled session', project: 'docs', origin: null, age_ms: 7200000, team: false, terminal: true },
+  { id: id(5), bucket: 'idle', title: 'Claude session in docs', project: 'docs', origin: null, age_ms: 7200000, team: false, terminal: true },
 ];
 
 const open = [];
@@ -132,7 +132,10 @@ test('empty: no sessions shows one sentence, and no group', async () => {
   const s = await boot({ rows: [] });
   assert.equal(s.qa('.sb-group').length, 0);
   assert.equal(s.q('#sb-empty').hidden, false);
-  assert.equal(s.q('#sb-empty').textContent, 'No sessions yet. Start Claude Code or Codex in a terminal and it shows up here.');
+  assert.equal(s.q('#sb-empty').textContent, 'No chats or sessions yet. Run claude or codex in any terminal and it shows up here.');
+  assert.equal(s.q('#sb-connect').hidden, false);
+  s.q('#sb-connect').click();
+  assert.deepEqual(s.calls.select, ['aitools'], 'How to connect a tool → AI tools');
 });
 
 test('tree keyboard: roving tabindex, ↑↓ Home End, ←→ collapse and expand, Enter opens, Needs you never collapses', async () => {

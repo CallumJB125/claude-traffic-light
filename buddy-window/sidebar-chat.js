@@ -19,8 +19,9 @@
   ];
   // The filter a redirect names → the filter shown (Needs you is All, with Needs you focused).
   const FILTER_OF = { all: 'all', needs: 'all', terminals: 'terminals', chats: 'chats', team: 'team' };
+  // §5. "Start one above" joins the first sentence when New chat works (R7).
   const EMPTY = {
-    all: 'No sessions yet. Start Claude Code or Codex in a terminal and it shows up here.',
+    all: 'No chats or sessions yet. Run claude or codex in any terminal and it shows up here.',
     chats: 'No chats yet.',
     terminals: 'No sessions in a terminal right now.',
     team: 'No team sessions right now.',
@@ -98,7 +99,9 @@
     tree = el('ul', { class: 'sb-tree', role: 'tree', 'aria-label': 'Sessions' });
     tree.addEventListener('keydown', onTreeKey);
     tree.addEventListener('click', onTreeClick);
-    nav.append(top, filter, el('div', { class: 'sb-scroll' }, tree, el('p', { class: 'sb-empty', id: 'sb-empty', hidden: true })));
+    const connect = el('button', { type: 'button', class: 'sb-connect', id: 'sb-connect', hidden: true }, 'How to connect a tool');
+    connect.addEventListener('click', () => window.buddy.select('aitools'));
+    nav.append(top, filter, el('div', { class: 'sb-scroll' }, tree, el('p', { class: 'sb-empty', id: 'sb-empty', hidden: true }), connect));
     const foot = document.getElementById('nav-foot');
     foot.textContent = '';
     foot.setAttribute('aria-label', 'Workspace');
@@ -145,6 +148,7 @@
     const empty = document.getElementById('sb-empty');
     empty.hidden = rows.length > 0 || !ui.loaded;
     empty.textContent = EMPTY[ui.filter];
+    document.getElementById('sb-connect').hidden = empty.hidden || ui.filter !== 'all';
     tree.hidden = rows.length === 0;
     // Roving tabindex: exactly one tree item is tabbable.
     const items = treeItems();
