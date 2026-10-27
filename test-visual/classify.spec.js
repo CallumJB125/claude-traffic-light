@@ -66,6 +66,15 @@ function sheetsAt(ref) {
 function sheetsInTree() {
   return git('ls-files', '*.css', '*.html').toString().split('\n').filter(SHEET).map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8'));
 }
+// The same, keyed by path (the literal → mix pairs match a file with itself).
+function sheetFilesAt(ref) {
+  const names = git('ls-tree', '-r', '--name-only', ref).toString().split('\n').filter(SHEET);
+  return Object.fromEntries(names.map((f) => [f, git('show', `${ref}:${f}`).toString()]));
+}
+function sheetFilesInTree() {
+  const names = git('ls-files', '*.css', '*.html').toString().split('\n').filter(SHEET);
+  return Object.fromEntries(names.map((f) => [f, fs.readFileSync(path.join(ROOT, f), 'utf8')]));
+}
 
 // App scripts (not tests, not vendored): accent color-mixes set from JS are listed as skipped, never modelled.
 function scriptsInTree() {
@@ -146,7 +155,8 @@ test('classifier: every changed baseline changed only by the accent swap', async
   }
   const oldCss = git('show', `${base}:tokens.css`).toString();
   const newCss = fs.readFileSync(process.env.CLASSIFY_TOKENS || path.join(ROOT, 'tokens.css'), 'utf8');
-  const families = lib.familiesOf(oldCss, newCss, { old: sheetsAt(base), new: sheetsInTree(), js: scriptsInTree() });
+  const files = { old: sheetFilesAt(base), new: sheetFilesInTree() };
+  const families = lib.familiesOf(oldCss, newCss, { old: Object.values(files.old), new: Object.values(files.new), js: scriptsInTree(), files });
   report.mixes = families.mixes;
   const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'classify.config.json'), 'utf8'));
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'classify-ud-'));
@@ -191,6 +201,7 @@ test('classifier: every changed baseline changed only by the accent swap', async
   const mx = report.mixes;
   console.log(`classify mixes: ${mx.parsed} modelled (base ${mx.base}, head ${mx.head}); only base ${mx.onlyBase.length}, only head ${mx.onlyHead.length}; unresolved ${mx.unresolved.length}: ${mx.unresolved.join(' | ')}`);
   console.log(`classify mixes skipped (not modelled, fail closed): ${mx.skipped.length ? mx.skipped.map((x) => `${x.why}: ${x.raw}`).join(' | ') : 'none'}`);
+  console.log(`classify literal → mix: ${mx.literal.length ? mx.literal.join(' | ') : 'none'}; refused: ${mx.literalRefused.length ? mx.literalRefused.map((x) => `${x.where} (${x.why})`).join(' | ') : 'none'}`);
   expect(verdict.failures, 'classifier failures').toEqual([]);
 });
 

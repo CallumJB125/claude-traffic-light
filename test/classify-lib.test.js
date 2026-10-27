@@ -721,3 +721,61 @@ test('classifier: the widget dark mapping — no app script writes data-theme; a
   const mixed = image(20, 20, (x) => (x < 12 ? hex('#eef0f3') : hex('#292d34')));
   assert.equal(lib.themeFor(ALL, b, mixed, mixed, config).theme, 'dark');
 });
+
+// ── literal → mix (round 8b) ──────────────────────────────────────────────────────────────────────────────────
+// R0b swapped hard-coded terracotta washes for the accent at the same alpha. Only an exact pair is modelled.
+test('classifier: a terracotta literal → accent mix pair is modelled only when file, rule, property and alpha match', () => {
+  const BASE = '.pill { padding: 2px; background: rgba(218, 119, 86, 0.18); }\n';
+  const HEAD = '.pill { padding: 2px; background: color-mix(in srgb, var(--accent) 18%, transparent); }\n';
+  const pairs = (oldText, newText, { oldFile = 'a.css', newFile = 'a.css' } = {}) =>
+    lib.literalMixPairsOf({ old: { [oldFile]: oldText }, new: { [newFile]: newText } });
+  const ok = pairs(BASE, HEAD);
+  assert.equal(ok.specs.length, 1);
+  assert.deepEqual(ok.specs[0].baseLiteral, [218, 119, 86, 0.18]);
+  // inside @media and in an HTML <style>, with the context kept in the key
+  assert.equal(pairs(`@media (x) { ${BASE} }`, `@media (x) { ${HEAD} }`).specs.length, 1);
+  assert.equal(pairs(`<style>${BASE}</style>`, `<style>${HEAD}</style>`, { oldFile: 'p.html', newFile: 'p.html' }).specs.length, 1);
+  // either argument order, #rrggbbaa with an exact alpha (0x33 / 255 = 0.2)
+  assert.equal(pairs(BASE, HEAD.replace('var(--accent) 18%, transparent', 'transparent, var(--accent) 18%')).specs.length, 1);
+  assert.equal(pairs(BASE.replace('rgba(218, 119, 86, 0.18)', '#da775633'), HEAD.replace('18%', '20%')).specs.length, 1);
+
+  const refused = (oldText, newText, why, opts) => {
+    const r = pairs(oldText, newText, opts);
+    assert.equal(r.specs.length, 0, `${why}: no member`);
+    return r.refused.map((x) => x.why).join(' | ');
+  };
+  assert.match(refused(BASE, HEAD.replace('18%', '20%'), 'alpha mismatch'), /alpha 0\.18 is not 20 %/);
+  assert.match(refused(BASE.replace('rgba(218, 119, 86, 0.18)', '#da7756'), HEAD, 'opaque hex'), /alpha 1 is not 18 %/);
+  assert.match(refused(BASE.replace('.pill', '.chip'), HEAD, 'different selector'), /no base partner/);
+  assert.match(refused(BASE.replace('background:', 'border-color:'), HEAD, 'different property'), /no base partner/);
+  assert.match(refused('', HEAD, 'head mix with no base partner'), /no base partner/);
+  assert.equal(refused(BASE, HEAD, 'a different file', { oldFile: 'a.css', newFile: 'b.css' }), 'no base partner (new selector or property)');
+  assert.match(refused(BASE.replace('rgba(218, 119, 86, 0.18)', 'var(--x, rgba(218, 119, 86, 0.18))'), HEAD, 'base literal in a var() fallback'), /literal inside a var\(\) fallback/);
+  assert.match(refused(BASE.replace('rgba(218, 119, 86, 0.18)', 'var(--x, rgba(218, 119, 86, 0.18))'),
+    HEAD.replace('color-mix(in srgb, var(--accent) 18%, transparent)', 'var(--x, color-mix(in srgb, var(--accent) 18%, transparent))'), 'both in a var() fallback'), /mix inside a var\(\) fallback/);
+  assert.match(refused(BASE, HEAD.replace('padding: 2px; background:', 'padding: 2px; background: 1px'), 'rest of value differs'), /rest of the value differs/);
+  assert.match(refused(BASE + BASE, HEAD + HEAD, 'declared twice'), /more than once/);
+  assert.match(refused(BASE, `:root { --accent: #ff0000; }\n${HEAD}`, 'sheet-local accent'), /redeclared in the sheet/);
+  // not an accent-at-alpha mix: left to the ordinary rules, never paired with a literal
+  assert.equal(refused(BASE, HEAD.replace('transparent', 'var(--panel)'), 'mix with a surface'), '');
+});
+
+test('classifier: a literal → mix member explains the swap over a surface, and only that swap', () => {
+  // 50 % (the Lights .on borders): at 18 % over --bg the pixel happens to lie on ink~rest, so it can't show the
+  // fail-closed side
+  const BASE = '.on { border-color: rgba(218, 119, 86, 0.5); }';
+  const HEAD = '.on { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }';
+  const fam = lib.familiesOf(TOKENS, GRAPHITE, { old: [BASE], new: [HEAD], files: { old: { 'a.css': BASE }, new: { 'a.css': HEAD } } });
+  assert.equal(fam.mixes.literal.length, 1);
+  const bg = hex('#17191d');
+  const was = mix([218, 119, 86], bg, 0.5); const now = mix(hex('#e6e8eb'), bg, 0.5);
+  assert.equal(lib.classifyPixel(was, now, [bg], fam.dark.members), 'pass');
+  // without the files the literal is unexplained (fail closed)
+  const none = lib.familiesOf(TOKENS, GRAPHITE, { old: [BASE], new: [HEAD] });
+  assert.equal(lib.classifyPixel(was, now, [bg], none.dark.members), 'unexpected');
+  // a different alpha on the head side does not ride on this member
+  for (const a of [0.3, 0.4, 0.65]) assert.equal(lib.classifyPixel(was, mix(hex('#e6e8eb'), bg, a), [bg], fam.dark.members), 'unexpected');
+  // and in light, over --panel
+  const panel = hex('#ffffff');
+  assert.equal(lib.classifyPixel(mix([218, 119, 86], panel, 0.5), mix(hex('#24292f'), panel, 0.5), [panel], fam.light.members), 'pass');
+});

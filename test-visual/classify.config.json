@@ -153,7 +153,7 @@
     {
       "theme": "dark",
       "source": "index.html:2; input-bubble.css:5",
-      "reason": "The widget window: index.html:2 pins <html data-theme=\"dark\"> (confirmed in the Q13 review), and the bubble panels in it (bubble-*, widget-ask-*) are dark by source: input-bubble.css:5 hard-codes .ib-item { background: rgba(20, 20, 22, 0.94) } and every accent there reads the page's dark tokens (review round 5). Every listed baseline is shot from windowByFile(…, 'index.html'); widget-compose-taken (widget-page.html) is not. The round-5 vote (flat, C* ≤ 8 pixels only) agrees: none of the 31 votes light.",
+      "reason": "The widget window: index.html:2 pins <html data-theme=\"dark\"> (confirmed in the Q13 review), and the bubble panels in it (bubble-*, widget-ask-*) are dark by source: input-bubble.css:5 hard-codes .ib-item { background: rgba(20, 20, 22, 0.94) } and every accent there reads the page's dark tokens (review round 5). Every listed baseline is shot from windowByFile(…, 'index.html'); widget-compose-taken (widget-page.html) is not. The work-scope shots (scope-counting, -personal, -watching; work-scope.spec.js:25 opens windowByFile(h.app, 'index.html')) were added in round 8b: they are the bubble with its scope pill, and their only unexpected pixels were Δα 1–2 anti-aliased edges (726 of 726 in scope-counting). The round-5 vote (flat, C* ≤ 8 pixels only) agrees: none of the 31 votes light.",
       "baselines": [
         "test-visual/__screenshots__/ask.spec.js/widget-ask-edit-darwin.png",
         "test-visual/__screenshots__/ask.spec.js/widget-ask-long-command-darwin.png",
@@ -185,7 +185,10 @@
         "test-visual/__screenshots__/widget.spec.js/widget-runaway-red-darwin.png",
         "test-visual/__screenshots__/widget.spec.js/widget-working-green-darwin.png",
         "test-visual/__screenshots__/widget.spec.js/widget-working-green-reduced-motion-darwin.png",
-        "test-visual/__screenshots__/widget.spec.js/widget-your-turn-amber-darwin.png"
+        "test-visual/__screenshots__/widget.spec.js/widget-your-turn-amber-darwin.png",
+        "test-visual/__screenshots__/work-scope.spec.js/scope-counting-darwin.png",
+        "test-visual/__screenshots__/work-scope.spec.js/scope-personal-darwin.png",
+        "test-visual/__screenshots__/work-scope.spec.js/scope-watching-darwin.png"
       ]
     }
   ]

@@ -304,6 +304,120 @@ function computeMix(spec, theme) {
   return [...dec(mixed), alpha * Math.min(1, sum / 100)];
 }
 
+// ── literal → mix (R0b round 8b) ─────────────────────────────────────────────────────────────────────────────
+// R0b replaced a few hard-coded terracotta washes with the accent at the same alpha:
+// `.ib-scope.tone-count { background: rgba(218, 119, 86, 0.18) }` → `color-mix(in srgb, var(--accent) 18%,
+// transparent)`. The base side is not the base accent, so no token mix explains it. A pair is modelled only when
+// all of these hold, otherwise it builds nothing (fail closed) and is listed with the reason:
+//   - the same file, the same rule context (at-rule and selector chain) and the same property at base and head,
+//     each declared exactly once there (a selector or property new at head has no base partner);
+//   - the head value holds one `color-mix(in srgb, var(<accent family>) N%, transparent)` (either order), and the
+//     base value is the same text with an rgba() or #rrggbbaa literal in its place;
+//   - the literal's alpha is exactly N / 100;
+//   - neither the literal nor the mix sits inside a var() (a fallback is never rendered when the var is set);
+//   - the head file does not redeclare the accent var (the mix then reads a sheet-local value).
+// The member is the literal at base and the mix with the head tokens, each over a surface, per theme.
+const isHtml = (file) => file.endsWith('.html');
+// CSS of a file: a stylesheet as is, an HTML file's <style> contents (markup comments dropped first).
+function cssOfFile(file, text) {
+  const t = String(text);
+  if (!isHtml(file)) return t;
+  return [...t.replace(/<!--[\s\S]*?-->/g, '').matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n');
+}
+// Every declaration with its rule context: [{ ctx: 'sel' or '@media … > sel', prop, value }].
+function declarationsOf(css) {
+  const src = String(css).replace(/\/\*[\s\S]*?\*\//g, '');
+  const out = []; const stack = []; let buf = '';
+  const flush = () => {
+    const d = buf.match(/^\s*([-\w]+)\s*:\s*([\s\S]*?)\s*$/);
+    if (d && stack.length) out.push({ ctx: stack.join(' > '), prop: d[1].toLowerCase(), value: d[2].replace(/\s+/g, ' ').replace(/\s*!important$/i, ' !important') });
+    buf = '';
+  };
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === '"' || ch === "'") { const e = src.indexOf(ch, i + 1); const stop = e < 0 ? src.length : e + 1; buf += src.slice(i, stop); i = stop - 1; continue; }
+    if (ch === '(') { let depth = 0; let k = i; for (; k < src.length; k += 1) { if (src[k] === '(') depth += 1; else if (src[k] === ')') { depth -= 1; if (!depth) break; } } buf += src.slice(i, k + 1); i = k; continue; }
+    if (ch === '{') { stack.push(buf.replace(/\s+/g, ' ').trim()); buf = ''; continue; }
+    if (ch === ';') { flush(); continue; }
+    if (ch === '}') { flush(); stack.pop(); continue; }
+    buf += ch;
+  }
+  return out;
+}
+// Ranges [start, end) of every var( … ) call in a value.
+function varRanges(value) {
+  const out = []; let at = 0;
+  while ((at = value.indexOf('var(', at)) >= 0) {
+    let depth = 0; let k = at + 3;
+    for (; k < value.length; k += 1) { if (value[k] === '(') depth += 1; else if (value[k] === ')') { depth -= 1; if (!depth) break; } }
+    out.push([at, k + 1]); at += 4;
+  }
+  return out;
+}
+const insideVar = (value, i) => varRanges(value).some(([a, b]) => i > a && i < b);
+// The one accent-at-alpha mix in a head value: { start, end, spec, pct } or a reason it isn't one.
+function accentAlphaMixIn(value) {
+  const at = value.indexOf('color-mix(');
+  if (at < 0) return { why: 'no color-mix' };
+  if (value.indexOf('color-mix(', at + 1) >= 0) return { why: 'more than one color-mix' };
+  let depth = 0; let k = at + 'color-mix'.length;
+  for (; k < value.length; k += 1) { if (value[k] === '(') depth += 1; else if (value[k] === ')') { depth -= 1; if (!depth) break; } }
+  const raw = value.slice(at, k + 1);
+  const spec = colourMixesOf(raw)[0];
+  if (!spec || spec.space !== 'srgb') return { why: 'not an srgb accent mix' };
+  const accent = spec.args.find((x) => /^var\((--[\w-]+)\)$/.test(x.colour) && ACCENT_VARS.has(x.colour.slice(4, -1).trim()));
+  const other = spec.args.find((x) => x !== accent);
+  if (!accent || accent.pct === null || !other || other.colour.toLowerCase() !== 'transparent' || other.pct !== null) return { why: 'not var(--accent) N% with transparent' };
+  if (insideVar(value, at)) return { why: 'mix inside a var() fallback' };
+  return { start: at, end: k + 1, spec, pct: accent.pct, token: accent.colour.slice(4, -1).trim() };
+}
+// The one rgba()/#rrggbbaa literal in a base value: { start, end, rgba } or a reason.
+function alphaLiteralIn(value) {
+  const found = [...value.matchAll(/rgba?\([^()]*\)|#[0-9a-fA-F]{8}(?![\w-])|#[0-9a-fA-F]{6}(?![\w-])|#[0-9a-fA-F]{3}(?![\w-])/g)];
+  if (found.length !== 1) return { why: found.length ? 'more than one literal' : 'no rgba()/hex literal' };
+  const m = found[0];
+  let rgba;
+  const h8 = m[0].match(/^#([0-9a-f]{8})$/i);
+  try { rgba = h8 ? [0, 2, 4, 6].map((i) => parseInt(h8[1].slice(i, i + 2), 16)).map((v, i) => (i === 3 ? v / 255 : v)) : parseColour(m[0]); } catch { return { why: 'not a colour literal' }; }
+  if (insideVar(value, m.index)) return { why: 'literal inside a var() fallback' };
+  return { start: m.index, end: m.index + m[0].length, rgba, raw: m[0] };
+}
+// files: { old: { path: text }, new: { path: text } }. Returns { specs, refused }.
+function literalMixPairsOf(files = {}) {
+  const specs = []; const refused = [];
+  const oldFiles = files.old || {}; const newFiles = files.new || {};
+  for (const [file, headText] of Object.entries(newFiles)) {
+    if (!String(headText).includes('color-mix(')) continue;
+    const headDecls = declarationsOf(cssOfFile(file, headText));
+    const baseDecls = oldFiles[file] === undefined ? [] : declarationsOf(cssOfFile(file, oldFiles[file]));
+    const key = (d) => `${d.ctx}\u0001${d.prop}`;
+    const count = (list, k) => list.filter((d) => key(d) === k).length;
+    const local = sheetTokensOf(cssOfFile(file, headText));
+    for (const d of headDecls) {
+      if (!d.value.includes('color-mix(')) continue;
+      const mix = accentAlphaMixIn(d.value);
+      const where = `${file}: ${d.ctx} { ${d.prop} }`;
+      if (mix.why === 'mix inside a var() fallback') { refused.push({ where, why: mix.why }); continue; }
+      if (mix.why) continue; // not this shape: the ordinary mix rules (or none) handle it
+      const k = key(d);
+      const refuse = (why) => refused.push({ where, why });
+      if (count(headDecls, k) !== 1) { refuse('declared more than once at head'); continue; }
+      const partners = baseDecls.filter((b) => key(b) === k);
+      if (partners.length !== 1) { refuse(partners.length ? 'declared more than once at base' : 'no base partner (new selector or property)'); continue; }
+      const base = partners[0].value;
+      if (base.includes('color-mix(')) continue; // a mix at base too: the ordinary mix pairing applies
+      const lit = alphaLiteralIn(base);
+      if (lit.why) { refuse(lit.why); continue; }
+      if (Math.abs(lit.rgba[3] - mix.pct / 100) > 1e-9) { refuse(`alpha ${lit.rgba[3]} is not ${mix.pct} %`); continue; }
+      const tmpl = (v, a, b) => `${v.slice(0, a)}\u0000${v.slice(b)}`.replace(/\s+/g, ' ').trim();
+      if (tmpl(base, lit.start, lit.end) !== tmpl(d.value, mix.start, mix.end)) { refuse('the rest of the value differs'); continue; }
+      if (local && (mix.token in (local.dark || {}) || (local.light && mix.token in local.light))) { refuse(`${mix.token} redeclared in the sheet`); continue; }
+      specs.push({ ...mix.spec, raw: `${mix.spec.raw} from ${lit.raw} [${where}]`, baseLiteral: lit.rgba });
+    }
+  }
+  return { specs, refused };
+}
+
 // Members for one theme from the parsed mixes. An opaque mix is a solid member; a translucent one is matched
 // over each surface, like the soft tint.
 function mixMembers(specs, oldTheme, newTheme, surfaces, themeName) {
@@ -312,7 +426,8 @@ function mixMembers(specs, oldTheme, newTheme, surfaces, themeName) {
     const lo = spec.baseLocal && themeName ? spec.baseLocal[themeName] : null;
     const ln = spec.local && themeName ? spec.local[themeName] : null;
     if ((spec.baseLocal && !lo) || (spec.local && !ln)) { unresolved.push(`${spec.raw} (${themeName}: no theme block in its sheet)`); continue; }
-    const o = computeMix(spec, withLocal(oldTheme, lo)); const n = computeMix(spec, withLocal(newTheme, ln));
+    // a literal → mix pair (literalMixPairsOf): the base side is the literal itself, the same in both themes
+    const o = spec.baseLiteral ? spec.baseLiteral.slice() : computeMix(spec, withLocal(oldTheme, lo)); const n = computeMix(spec, withLocal(newTheme, ln));
     if (!o || !n) { unresolved.push(spec.raw); continue; }
     if (o[3] >= 0.999 && n[3] >= 0.999) members.push({ key: `mix ${spec.raw}`, old: o.slice(0, 3), new: n.slice(0, 3) });
     else for (const s of surfaces) members.push({ key: `mix ${spec.raw}/${s.name}`, old: over(o, s.rgb), new: over(n, s.rgb) });
@@ -424,6 +539,8 @@ function familiesOf(oldCss, newCss, mixTexts = { old: [], new: [] }) {
   };
   const base = side(mixTexts.old); const head = side(mixTexts.new);
   const specs = new Map([...head].filter(([raw]) => base.has(raw)).map(([raw, spec]) => [raw, base.get(raw).local ? { ...spec, baseLocal: base.get(raw).local } : spec]));
+  const literal = literalMixPairsOf(mixTexts.files);
+  for (const spec of literal.specs) specs.set(spec.raw, spec);
   const skipped = [];
   for (const t of [...(mixTexts.old || []), ...(mixTexts.new || []), ...(mixTexts.js || []).map((x) => ({ js: x }))]) {
     for (const sk of skippedMixesOf(typeof t === 'string' ? t : t.js, { js: typeof t !== 'string', aliases: aliasesOf([...(mixTexts.old || []), ...(mixTexts.new || [])]) })) {
@@ -431,7 +548,8 @@ function familiesOf(oldCss, newCss, mixTexts = { old: [], new: [] }) {
     }
   }
   const out = { mixes: { parsed: specs.size, base: base.size, head: head.size,
-    onlyBase: [...base.keys()].filter((r) => !head.has(r)), onlyHead: [...head.keys()].filter((r) => !base.has(r)), unresolved: [], skipped } };
+    onlyBase: [...base.keys()].filter((r) => !head.has(r)), onlyHead: [...head.keys()].filter((r) => !base.has(r)), unresolved: [], skipped,
+    literal: literal.specs.map((x) => x.raw), literalRefused: literal.refused } };
   for (const theme of ['light', 'dark']) {
     const surfaces = [];
     for (const s of SURFACE_TOKENS) { try { surfaces.push(parseColour(n[theme][s]).slice(0, 3)); } catch { /* none */ } }
@@ -791,4 +909,4 @@ function verdictOf(results, config) {
   return { failures, crops };
 }
 
-module.exports = { ALPHA_EDGE_MIN, VOTE_MIN_PX, VOTE_MIN_SHARE, resolveBase, ALPHA_EDGE_MAX, VOTE_CHROMA, sheetTokensOf, aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, themeFromConfig, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, noiseCapFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
+module.exports = { literalMixPairsOf, declarationsOf, ALPHA_EDGE_MIN, VOTE_MIN_PX, VOTE_MIN_SHARE, resolveBase, ALPHA_EDGE_MAX, VOTE_CHROMA, sheetTokensOf, aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, themeFromConfig, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, noiseCapFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
