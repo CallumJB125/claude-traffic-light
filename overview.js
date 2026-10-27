@@ -753,7 +753,7 @@
   });
   if (typeof api.onReady === 'function') api.onReady(() => {
     ready = true;
-    if (!document.hidden) { void refresh(); void refreshOwned(); void dir?.refresh(); }
+    if (!document.hidden) { void refresh(); void refreshOwned(); void dir?.refresh(); dir?.reannounce?.(); }
     void dir?.takeHint?.();
   });
   $('refresh').addEventListener('click', () => { void refresh(); void dir?.refresh(); });

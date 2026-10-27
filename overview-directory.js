@@ -96,7 +96,7 @@
     // Team rows: opening any details panel tells the hub this session's card is being looked at (presence.view); closing them all clears it.
     const sync = () => { if (kind !== 'team' || !out.entry || typeof window.overviewApi?.viewing !== 'function') return; const id = [details, childDetails, history].some(d => d.open) ? out.entry.id : null; if (out.viewingId === id) return; out.viewingId = id; void window.overviewApi.viewing({ id }); };
     for (const d of [details, childDetails, history]) d.addEventListener('toggle', sync);
-    const out = { viewingId: null, li, avatar, title, owner, collections, tag, tools, presence, pulse, pulseText, receipt, meta, badges, loose, when, activity, self, children, handoffs, deliveries, actions, why, notice, capList, details, childDetails, childSummary, history, kind, composer: null, gone: false, entry: null, request: null };
+    const out = { viewingId: null, sync, li, avatar, title, owner, collections, tag, tools, presence, pulse, pulseText, receipt, meta, badges, loose, when, activity, self, children, handoffs, deliveries, actions, why, notice, capList, details, childDetails, childSummary, history, kind, composer: null, gone: false, entry: null, request: null };
     return out;
   }
   // Burst's loose ends for this session's repository (counts only, matched in main): hidden when Burst cannot report them.
@@ -822,6 +822,9 @@
     $('team-empty-reset').addEventListener('click', resetTeamFilters);
     document.addEventListener('visibilitychange', () => { if (document.hidden && selected) { selected.preview = null; selected.review.hidden = true; } });
     if (typeof api.onDirectoryChanged === 'function') api.onDirectoryChanged(soon);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) reannounce(); });
   }
-  window.OverviewDirectory = Object.freeze({ start, refresh, soon, rerender: () => { render('mine'); render('team'); }, index, openFromPalette, takeHint });
+  // Main clears presence when the window hides or Overview is left; a panel still open tells it again (ledger 31).
+  function reannounce() { for (const v of lists.team.rows.values()) { v.viewingId = null; v.sync(); } }
+  window.OverviewDirectory = Object.freeze({ start, refresh, soon, reannounce, rerender: () => { render('mine'); render('team'); }, index, openFromPalette, takeHint });
 })();

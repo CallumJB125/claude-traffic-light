@@ -127,7 +127,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, chatsOn = () => true, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, openTeamRow = () => false, onThreadRetired = () => {}, newChatBusy = () => false, onNewChatRetired = () => {}, loginEnv = () => null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, onPresenceLeave = () => {}, onOverviewLeft = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, chatsOn = () => true, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, openTeamRow = () => false, onThreadRetired = () => {}, newChatBusy = () => false, onNewChatRetired = () => {}, loginEnv = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -506,6 +506,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     // Any other view taking the content area ends the thread (labfix-review S2).
     if (threadView && content === threadView && view !== threadView) retireThread();
     if (newChatView && content === newChatView && view !== newChatView) retireNewChat();
+    // Leaving Overview ends its presence (ledger 31); only Overview's own slot, a thread keeps its own.
+    if (content && content === localViews.get('overview') && view !== content) { try { onOverviewLeft(); } catch { /* never blocks */ } }
     if (content) win.contentView.removeChildView(content);
     content = view;
     if (view) win.contentView.addChildView(view);
@@ -1481,6 +1483,9 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     win.on('blur',()=>{if(!homeModalTicket)homeGeneration++;});
     win.on('hide',()=>{tasksGeneration++;homeGeneration++;});
     win.on('minimize',()=>{tasksGeneration++;homeGeneration++;});
+    // Presence ends when the window hides or minimises, never on blur (ledger 31); the page re-announces on show.
+    win.on('hide', () => { try { onPresenceLeave(); } catch { /* never blocks */ } });
+    win.on('minimize', () => { try { onPresenceLeave(); } catch { /* never blocks */ } });
     win.on('closed', () => {
       retireThread();
       if (selected === 'thread') selected = 'board';

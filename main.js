@@ -1686,7 +1686,9 @@ function getBuddy() {
       onLocalPage: (page, wc) => {
         if ((page.id === 'settings' || page.pane) && !IS_MAC) wc.insertCSS('#busy-sources, .field:has(#busyFocusShortcut), .field:has(#roam) { display: none; }').catch(() => {});
       },
-      onClosed: () => { OverviewMain.invalidate(); hatchResults.clear(); feedbackShot = null; feedbackLast = null; SetupsLocal.invalidate(); if (IS_MAC && !lightsWin) app.dock.hide(); },
+      onPresenceLeave: () => PresenceOwner.clearAll(),
+      onOverviewLeft: () => OverviewMain.clearViewing(),
+      onClosed: () => { OverviewMain.invalidate(); PresenceOwner.clearAll(); hatchResults.clear(); feedbackShot = null; feedbackLast = null; SetupsLocal.invalidate(); if (IS_MAC && !lightsWin) app.dock.hide(); },
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
       captureEnabled: !DEMO,
       handoverWriter: () => { try { return SessionHandoverMain.writer; } catch { return null; } },
@@ -1713,8 +1715,8 @@ function getBuddy() {
       if (typeof unsubscribe === 'function') onQuit(app, unsubscribe);
     }
     buddyWin.attachBurst?.(() => BurstIpc);
-    if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => {OverviewMain.invalidate();sendToSettings('account-changed');});
-    if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>{OverviewMain.invalidate();SetupsLocal.invalidate();buddyWin.sendToPage('setups','setups:changed');});
+    if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => {OverviewMain.invalidate();PresenceOwner.clearAll();sendToSettings('account-changed');});
+    if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>{OverviewMain.invalidate();PresenceOwner.clearAll();SetupsLocal.invalidate();buddyWin.sendToPage('setups','setups:changed');});
     if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>syncInteractionHost());
     if(typeof buddyWin.onActiveChange==='function')buddyWin.onActiveChange(()=>syncInteractionHost());
   }
@@ -1844,8 +1846,9 @@ const sessionFollowups=require('./src/session-followups').createSessionFollowups
 if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{overviewTeamHub=require('./src/team-hub-fake').createFakeTeamHub(JSON.parse(fs.readFileSync(process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB,'utf8')));}catch(e){console.warn('[overview] fake team hub not loaded:',e.message);}}
 // Team depth lane C: board presence over the person's own hub sign-in (who views which card, who runs where); feeds Team sessions and beats this computer's open shared session.
 const PresenceLink=require('./src/team-presence-link').createPresenceLink({links:async()=>devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[],WebSocket:require('ws'),log:m=>console.log(m),onChange:()=>OverviewMain.directoryChanged(),onInbox:(hub,item)=>ingestTeamInbox(hub,[item])}); // privacy-flow: team-hub
+const PresenceOwner=require('./src/presence-owner').createPresenceOwner({presenceView:r=>PresenceLink.view(r)});
 const OverviewMain=require('./src/overview-main').createOverviewMain({
-  buddy:()=>buddyWin,chatPreview:CHAT_PREVIEW,sessions:()=>aggregateState().sessions||[],
+  buddy:()=>buddyWin,chatPreview:CHAT_PREVIEW,presenceOwner:PresenceOwner,sessions:()=>aggregateState().sessions||[],
   // Burst's loose ends per repository (BurstIpc is created further down; null until then and whenever Burst lacks the check).
   looseEnds:()=>{try{return BurstIpc.looseEndsView();}catch{return null;}},
   presence:team=>{void PresenceLink.refresh();return PresenceLink.latest(team);},presenceView:r=>PresenceLink.view(r),
