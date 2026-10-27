@@ -1077,7 +1077,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // One read-only thread document at a time, never kept alive: it holds a Tasks
   // slot whose subscription marks messages read, so it exists only while it is
   // the page on screen (labfix-review S2). Not a PAGES entry: reached by a row.
-  let threadView = null, threadId = null, threadWcId = null, threadDocument = 0, resumeThreadId = null;
+  let threadView = null, threadId = null, threadWcId = null, threadDocument = 0, resumeThreadId = null, threadModalTicket = null;
   const ROW_ID = /^[0-9a-f]{64}$/;
   const threadUrl = () => { const u = new URL(pathToFileURL(path.join(DIR, '..', 'thread.html')).href); u.searchParams.set('embedded', '1'); return u.href; };
   function retireThread({ resume = false } = {}) {
@@ -1441,6 +1441,23 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       if(wc.getURL()!==expected||wc.mainFrame?.url!==expected||wc.isLoading())return null;
       return {window:win,contents:wc,frame:wc.mainFrame,generation:threadDocument,boundId:threadId,account:setupSourcesGeneration,workspace:store.active()?.id,foreground:win.isFocused()};
     },
+    // The thread's native dialog (R4-1b, plan-r4 §3.1): Allow for this task, Accept and start, Continue with
+    // another AI. The homeConfirm shape: focused, no other dialog anywhere, and the same document, row,
+    // account and workspace after it. Null with the gate off.
+    async threadConfirm(show) {
+      if(chatFirst!==true)return null;
+      const before=this.threadContext();
+      if(typeof show!=='function'||!before?.foreground||threadModalTicket||tasksModalTicket||homeModalTicket||setupModalTicket||this.newChatHeld?.())return null;
+      const ticket={...before};threadModalTicket=ticket;
+      try {
+        const answer=await show(before.window),after=this.threadContext();
+        if(threadModalTicket!==ticket||!after?.foreground||after.contents.mainFrame!==ticket.frame||['window','contents','frame','generation','boundId','account','workspace'].some(key=>after[key]!==ticket[key]))return null;
+        return answer;
+      }finally{if(threadModalTicket===ticket)threadModalTicket=null;}
+    },
+    // The other confirms ask this, so a thread dialog and theirs never overlap. Always false with the gate off.
+    threadHeld(){ return chatFirst===true&&threadModalTicket!==null; },
+    threadWcId(){ return chatFirst===true?threadWcId:null; },
     openThread,
     // Chat-first preview only: the new-chat document (src/newchat-main.js), the same
     // authority as homeContext. Every one of these is null with the gate off.
@@ -1459,7 +1476,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     async newChatConfirm(show) {
       if(chatFirst!==true)return null;
       const before=this.newChatContext();
-      if(typeof show!=='function'||!before?.foreground||newChatModalTicket||tasksModalTicket||homeModalTicket||setupModalTicket)return null;
+      if(typeof show!=='function'||!before?.foreground||newChatModalTicket||tasksModalTicket||homeModalTicket||setupModalTicket||this.threadHeld?.())return null;
       const ticket={...before,frame:before.contents.mainFrame};newChatModalTicket=ticket;
       try {
         const answer=await show(before.window),after=this.newChatContext();
@@ -1506,7 +1523,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     },
     async tasksConfirm(show) {
       const before=this.tasksContext();
-      if(typeof show!=='function'||!before?.foreground||tasksModalTicket||setupModalTicket||homeModalTicket||this.newChatHeld?.())return null;
+      if(typeof show!=='function'||!before?.foreground||tasksModalTicket||setupModalTicket||homeModalTicket||this.newChatHeld?.()||this.threadHeld?.())return null;
       const ticket={...before,frame:before.contents.mainFrame};tasksModalTicket=ticket;
       try {
         const answer=await show(before.window),after=this.tasksContext();
@@ -1527,7 +1544,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     homeDocument() { const wc=localViews.get('home')?.webContents; return wc&&!wc.isDestroyed()?{wcId:wc.id,doc:homeDocument}:null; },
     async homeConfirm(show) {
       const before=this.homeContext();
-      if(typeof show!=='function'||!before?.foreground||homeModalTicket||tasksModalTicket||setupModalTicket||this.newChatHeld?.())return null;
+      if(typeof show!=='function'||!before?.foreground||homeModalTicket||tasksModalTicket||setupModalTicket||this.newChatHeld?.()||this.threadHeld?.())return null;
       const ticket={...before,frame:before.contents.mainFrame};homeModalTicket=ticket;
       try {
         const answer=await show(before.window),after=this.homeContext();
@@ -1553,7 +1570,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     },
     async setupsConfirm(show) {
       const before=this.setupsContext();
-      if(typeof show!=='function' || !before?.foreground || setupModalTicket || homeModalTicket || tasksModalTicket || this.newChatHeld?.())return null;
+      if(typeof show!=='function' || !before?.foreground || setupModalTicket || homeModalTicket || tasksModalTicket || this.newChatHeld?.() || this.threadHeld?.())return null;
       const ticket={window:before.window,contents:before.contents,generation:before.generation};setupModalTicket=ticket;
       try {
         const answer=await show(before.window);

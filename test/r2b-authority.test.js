@@ -38,6 +38,7 @@ function rig({ act } = {}) {
       if (act) return act(req, wcId, current, calls);
       const ok = current() === true;
       calls.push(['act', req, wcId, ok]);
+      if (ok && req.action === 'switchAi' && !req.payload?.phase) return { ok: true, providerChange: { status: 'review', review: '22222222-2222-4333-8444-555555555555', from: 'claude', to: req.payload.ai, expiresAt: Date.now() + 60000 } };
       return ok ? { ok: true, task: null } : { ok: false, code: 'ILLEGAL_TRANSITION', text: '' };
     },
     async create(draft, extra) { calls.push(['create', draft, extra?.wcId]); return { ok: false, code: 'VALIDATION' }; },
@@ -143,7 +144,11 @@ const COLUMNS = [
   { ch: 'thread:act', name: 'stop its own chat', args: (s) => [{ id: own(s), action: 'stop', confirmed: true }], valid: true, expect: { action: 'stop', confirmed: true } },
   { ch: 'thread:act', name: 'allow once in chat A', args: () => [{ id: A, action: 'approve', approvalId: 'ap-1', scope: 'once' }], valid: true, expect: { action: 'approve', payload: { approvalId: 'ap-1', scope: 'once' } } },
   { ch: 'thread:act', name: 'allow once in chat B', args: () => [{ id: B, action: 'approve', approvalId: 'ap-1', scope: 'once' }], valid: true, expect: { action: 'approve', payload: { approvalId: 'ap-1', scope: 'once' } } },
-  { ch: 'thread:act', name: 'allow for this task (R4-1b)', args: (s) => [{ id: own(s), action: 'approve', approvalId: 'ap-1', scope: 'task' }] },
+  // R4-1b: Allow for this task and switch AI reach tasks-service, whose native dialog goes through main's confirmDialog
+  // thread branch to the thread's own ticket (test/thread-confirm.test.js, test/thread-act-service.test.js).
+  { ch: 'thread:act', name: 'allow for this task (R4-1b)', args: (s) => [{ id: own(s), action: 'approve', approvalId: 'ap-1', scope: 'task' }], valid: true, expect: { action: 'approve', payload: { approvalId: 'ap-1', scope: 'task' } } },
+  { ch: 'thread:act', name: 'preview a switch to Codex (R4-1b)', args: (s) => [{ id: own(s), action: 'switchAi', ai: 'codex' }], valid: true, expect: { action: 'switchAi', payload: { ai: 'codex' } } },
+  { ch: 'thread:act', name: 'apply a switch never previewed (R4-1b)', args: (s) => [{ id: own(s), action: 'switchAi', review: '11111111-2222-4333-8444-555555555555' }] },
   { ch: 'thread:act', name: 'allow a request never shown', args: (s) => [{ id: own(s), action: 'approve', approvalId: 'ap-9', scope: 'once' }] },
   { ch: 'thread:act', name: 'allow once with a payload', args: (s) => [{ id: own(s), action: 'approve', approvalId: 'ap-1', scope: 'once', payload: {} }] },
   { ch: 'thread:act', name: 'allow once with confirmed', args: (s) => [{ id: own(s), action: 'approve', approvalId: 'ap-1', scope: 'once', confirmed: true }] },
@@ -193,7 +198,7 @@ for (const s of SENDERS) {
         return;
       }
       if (col.ch === 'thread:act') {
-        assert.deepEqual(out, { ok: true });
+        assert.equal(out.ok, true, JSON.stringify(out));
         assert.equal(made.length, 1);
         const [kind, req, wcId, current] = made[0];
         assert.equal(kind, 'act');
@@ -235,8 +240,9 @@ test('completeness: every registered thread:* and tasks:* channel has a column, 
   assert.ok(registered.includes('thread:act'));
   // R4-1a: the allowed thread:act cells are exactly the two focused task threads acting in their own chat.
   const acts = SENDERS.flatMap((s) => COLUMNS.filter((c) => c.ch === 'thread:act').filter((c) => allowed(s, c, c.args(s))).map((c) => `${s.name} · ${c.name}`));
-  assert.deepEqual(acts, ['thread:A focused · allow once in its own chat', 'thread:A focused · deny in its own chat', 'thread:A focused · answer in its own chat', 'thread:A focused · stop its own chat', 'thread:A focused · allow once in chat A',
-    'thread:B focused · allow once in its own chat', 'thread:B focused · deny in its own chat', 'thread:B focused · answer in its own chat', 'thread:B focused · stop its own chat', 'thread:B focused · allow once in chat B']);
+  // R4-1b adds Allow for this task and a switch preview, for the same two senders only.
+  const mine = (t, row) => [`${t} · allow once in its own chat`, `${t} · deny in its own chat`, `${t} · answer in its own chat`, `${t} · stop its own chat`, `${t} · allow once in chat ${row}`, `${t} · allow for this task (R4-1b)`, `${t} · preview a switch to Codex (R4-1b)`];
+  assert.deepEqual(acts, [...mine('thread:A focused', 'A'), ...mine('thread:B focused', 'B')]);
   assert.deepEqual([...ENGINE_ACTIONS].sort(), ['answer', 'approve', 'deny', 'discard', 'handback', 'merge', 'message', 'openPr', 'pause', 'resume', 'retry', 'stop', 'switchAi', 'takeover'].sort());
   // The allowed thread:message cells are exactly the two focused task threads sending to their own chat.
   const cells = SENDERS.flatMap((s) => COLUMNS.filter((c) => c.ch === 'thread:message').filter((c) => allowed(s, c, c.args(s))).map((c) => `${s.name} · ${c.name}`));

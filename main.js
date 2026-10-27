@@ -2298,6 +2298,10 @@ function getTasks() {
       // Chat-first preview (R2b-2): the new chat's create likewise, through its own ticket. newChatWcId() is null with the gate off.
       const newChatWcId = !wc && wcId ? buddyWin?.newChatWcId?.() ?? null : null;
       if (newChatWcId && newChatWcId === wcId) return info.action === 'create' ? (await buddyWin?.newChatConfirm?.(show))?.response === 1 : false;
+      // Chat-first preview (R4-1b): the open chat's Allow for this task, Accept and start, and Continue with another AI,
+      // through the thread's own ticket. Nothing else from it gets a dialog. threadWcId() is null with the gate off.
+      const threadWc = !wc && wcId ? buddyWin?.threadWcId?.() ?? null : null;
+      if (threadWc && threadWc === wcId) return ['approve', 'switchAi'].includes(info.action) ? (await buddyWin?.threadConfirm?.(show))?.response === 1 : false;
       // Only a Tasks page (above: Home's create) may raise a dialog; any other sender, registered or not, is refused, never an unparented one.
       if (!wc) return false;
       // Every Tasks dialog, native approve (StartTask, scope 'task') and discard included, takes the Tasks window's

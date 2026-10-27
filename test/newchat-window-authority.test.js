@@ -221,3 +221,19 @@ test('the other confirms consult newChatHeld through this, and the shipped objec
   assert.match(src, /if \(target\.kind === 'newchat' && openNewChat\(\)\) return;/);
   assert.match(src, /if \(chatFirst === true\) ipcMain\.on\('buddy:open-newchat', \(e\) => \{ if \(fromSidebar\(e\)\) openNewChat\(\); \}\);/);
 });
+
+// R4-1b (plan-r4 §3.1): a thread dialog open → Tasks, Home, Setups and the new chat each refuse theirs, and ask again once it closed.
+test('the four confirms refuse while the thread\'s dialog is held, and ask again once it is not', async () => {
+  for (const [page, confirmOf] of [['tasks', 'tasksConfirm'], ['home', 'homeConfirm'], ['setups', 'setupsConfirm'], ['newchat', 'newChatConfirm']]) {
+    const w = world();
+    if (page === 'newchat') w.api.openNewChat(); else w.ctx.show(page);
+    let held = true, asked = 0;
+    w.api.threadHeld = () => held;
+    assert.equal(await w.api[confirmOf](async () => { asked++; return { response: 1 }; }), null, `${page} refuses during a thread dialog`);
+    assert.equal(asked, 0);
+    held = false;
+    assert.deepEqual(await w.api[confirmOf](async () => ({ response: 1 })), { response: 1 }, `${page} asks again`);
+  }
+  for (const name of ['async tasksConfirm(show)', 'async homeConfirm(show)', 'async setupsConfirm(show)', 'async newChatConfirm(show)']) assert.match(between(src, `    ${name} {`, '}finally{'), /this\.threadHeld\?\.\(\)/, name);
+  assert.match(src, /    threadHeld\(\)\{ return chatFirst===true&&threadModalTicket!==null; \},/, 'always false with the gate off');
+});
