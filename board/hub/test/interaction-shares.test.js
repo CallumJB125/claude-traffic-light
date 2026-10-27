@@ -1207,3 +1207,30 @@ test('T0: Allow sending (a replacing interact share) leaves exactly one interact
     assert.equal(refused.status, 403); assert.equal(refused.body.error.reason, 'SCOPE');
   } finally { await r.close(); }
 });
+
+test('T0: a create that never answers is cut off at its 15 s deadline, and the lock then lets the next create through', async () => {
+  const realFetch = globalThis.fetch, realTimeout = AbortSignal.timeout;
+  const deadlines = []; // AbortSignal.timeout is faked: advancing the "clock" means aborting the signal handed out
+  AbortSignal.timeout = (ms) => { const c = new AbortController(); deadlines.push({ ms, abort: () => c.abort(new DOMException('timed out', 'TimeoutError')) }); return c.signal; };
+  let hung = true;
+  globalThis.fetch = (url, init) => (hung && init?.method === 'POST' && String(url).endsWith('/api/interaction/v1/shares')
+    ? new Promise((_, reject) => { hung = false; init.signal.addEventListener('abort', () => reject(init.signal.reason)); })
+    : realFetch(url, init));
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    deadlines.length = 0; hung = true;
+    const first = r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' });
+    const second = r.mac.shareSessionAutomatic({ session: s.session, team: r.org, scope: 'watch' });
+    const third = r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact', expiresInS: 3600 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(deadlines.map((d) => d.ms), [15_000], 'one create is in flight; the others wait behind the lock');
+    assert.equal(live(r, s.session).length, 0);
+    deadlines[0].abort(); // 15 s pass
+    assert.equal((await first).ok, false);
+    assert.equal((await second).ok, true, 'the next create proceeds');
+    assert.equal((await third).ok, true);
+    assert.deepEqual(live(r, s.session).map((x) => x.scope), ['interact']);
+    assert.deepEqual(deadlines.map((d) => d.ms), [15_000, 15_000, 15_000]);
+  } finally { AbortSignal.timeout = realTimeout; globalThis.fetch = realFetch; await r.close(); }
+});
