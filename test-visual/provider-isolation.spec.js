@@ -77,3 +77,15 @@ test('a launch with a caller-supplied env keeps the app HOME and its fakes; a ca
     for (const [id, p] of Object.entries(finders)) expect(under(h.userHome, p), `${id} resolves to ${p}`).toBe(true);
   } finally { await h.cleanup(); }
 });
+
+test('home-pointer variables outside the temp dir are refused; a caller PATH keeps the fakes first', async () => {
+  for (const k of HOME_POINTERS) await expect(launchApp({ env: { [k]: require('node:os').userInfo().homedir } }), k).rejects.toThrow(/must point under the temp dir/);
+  const tmpPointer = require('node:fs').mkdtempSync(path.join(require('node:os').tmpdir(), 'pointer-'));
+  const h = await launchApp({ env: { CODEX_HOME: tmpPointer, PATH: `/usr/bin:${process.env.PATH}` } });
+  try {
+    const env = await h.app.evaluate(() => ({ PATH: process.env.PATH, CODEX_HOME: process.env.CODEX_HOME }));
+    expect(env.CODEX_HOME).toBe(tmpPointer);
+    expect(env.PATH.split(path.delimiter)[0]).toBe(path.join(h.userHome, '.local', 'bin'));
+    for (const name of Object.keys(FAKE_PROVIDER_PATHS)) expect(under(h.userHome, onPath(name, env.PATH)), `PATH ${name}`).toBe(true);
+  } finally { await h.cleanup(); require('node:fs').rmSync(tmpPointer, { recursive: true, force: true }); }
+});
