@@ -2,7 +2,7 @@
 // data dir, signal port and Electron userData, so it can neither read nor
 // write ~/.claude-traffic-light and cannot collide with a running install's
 // single-instance lock.
-const { _electron: electron } = require('@playwright/test');
+const { _electron: electron, test } = require('@playwright/test');
 const fs = require('fs');
 const net = require('net');
 const os = require('os');
@@ -151,8 +151,18 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = 
       }
     }, 50);
   });
-  try { app = await launch(); await pinWindow(); } catch (e) {
+  let stderrTail = '';
+  try {
+    app = await launch();
+    app.process().stderr?.on('data', (c) => { stderrTail = (stderrTail + c).slice(-1500); });
+    await pinWindow();
+  } catch (e) {
     if (!/closed|crash/i.test(String(e && e.message))) throw e;
+    // Never silent: the warning and a test annotation say the first start died, with its exit code and stderr.
+    await new Promise((r) => setTimeout(r, 300));
+    const detail = { error: String(e.message).split('\n')[0], exitCode: app?.process().exitCode ?? null, signal: app?.process().signalCode ?? null, stderrTail: stderrTail.trim().slice(-600) };
+    console.warn(`[launch-retry] Electron died on its first start; starting it once more. ${JSON.stringify(detail)}`);
+    try { test.info().annotations.push({ type: 'launch-retry', description: JSON.stringify(detail) }); } catch { /* not inside a test */ }
     try { await app?.close(); } catch { /* already gone */ }
     app = await launch();
     await pinWindow();
