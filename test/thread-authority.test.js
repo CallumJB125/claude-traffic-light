@@ -367,3 +367,21 @@ test('tasks:* authority is unchanged: the thread webContents is never a Tasks pa
   const channels = [...preload.matchAll(/ipcRenderer\.(?:invoke|send|on)\('([^']+)'/g)].map((m) => m[1]).sort();
   assert.deepEqual(channels, [...CHANNELS, 'thread:board', 'thread:event', 'thread:ready'].sort(), 'the bridge is exactly the read-only thread set: no tasks:*, nothing that acts');
 });
+
+
+test('a terminal session\'s thread never reaches the Tasks service, even when it closes', async () => {
+  const w = world();
+  let reached = 0;
+  const real = w.tasks;
+  w.thread.stop();
+  const ipc = { handlers: {}, handle(n, f) { this.handlers[n] = f; } };
+  const t = createThreadMain({ buddy: () => w.ctx.api, chatPreview: true, target: (id) => ({ [SESSION]: { kind: 'session', source: 'claude', sessionId: 's-1', origin: 'iTerm' } })[id] ?? null, tasks: () => { reached++; return real; }, activity: async () => ({ view: { events: [] } }), openInTasks: async () => false, goToTerminal: async () => ({ ok: true }) });
+  t.register(ipc);
+  w.ctx.openThread(SESSION);
+  const d = w.doc();
+  await ipc.handlers['thread:open'](d, SESSION);
+  await ipc.handlers['thread:close'](d, SESSION);
+  t.retire(d.sender.id);
+  await settle();
+  assert.equal(reached, 0);
+});

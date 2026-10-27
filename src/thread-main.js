@@ -20,6 +20,9 @@ const LINK = (id) => `plexiform://thread/${id}`;
 
 function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, copy = () => {}, header = () => null, now = Date.now }) {
   let slot = null; // { wcId, generation, taskId }
+  // Documents that asked the Tasks service for a slot: only these are closed, so a terminal
+  // session's thread (or a document that never read) never reaches, or starts, the service.
+  const asked = new Set();
   let stopped = false;
   const effects = new Map(); // `${wcId}:${generation}:${channel}` → last time
 
@@ -54,6 +57,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
 
   async function closeSlot(wcId) {
     if (slot && slot.wcId === wcId) slot = null;
+    if (!asked.delete(wcId)) return;
     try { await tasks()?.closeTask?.(wcId); } catch { /* already closed */ }
   }
 
@@ -65,6 +69,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     const head = headerOf(t, c.boundId);
     if (t.kind === 'task') {
       const wcId = c.contents.id;
+      asked.add(wcId);
       let r = null;
       try { r = await tasks().openTask(t.taskId, wcId); } catch { r = null; }
       if (!still(c)) { await closeSlot(wcId); return null; }
