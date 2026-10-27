@@ -191,6 +191,14 @@ test('finding 2: confirmDialog sends Home’s create to homeConfirm and refuses 
   ctx.answer = 1;
   assert.equal(await ctx.confirm({ action: 'create', label: 'Start anyway', title: 't' }, 42), true, 'Tasks keeps its own ticket');
   assert.equal(tasksAsks.length, 1);
+  // Ledger 11 (R2b-1): every native Tasks dialog, approve (StartTask / scope 'task') and discard included, goes
+  // through the Tasks window's modal ticket, never a bare dialog.
+  for (const info of [{ action: 'discard' }, { action: 'approve', payload: { scope: 'task' } }, { action: 'takeover' }, { action: 'openPr' }, { action: 'merge' }, { action: 'switchAi' }, { action: 'openTerminal' }]) {
+    const asks = tasksAsks.length;
+    assert.equal(await ctx.confirm({ ...info, label: 'x', title: 't' }, 42), true, info.action);
+    assert.equal(tasksAsks.length, asks + 1, `${info.action} takes the Tasks ticket`);
+    assert.equal(shown.at(-1)[0], 'tasks-window', `${info.action} is parented by the ticket's window`);
+  }
   // Only a Tasks page (and Home's create) may raise a dialog: an unknown, absent, destroyed or other-document sender is
   // refused with no dialog and no ticket, never an unparented one. 43 is a live webContents that is neither Tasks nor Home.
   const before = { shown: shown.length, home: homeAsks.length, tasks: tasksAsks.length };
