@@ -2,7 +2,8 @@
 // chat (a Plexiform task) or one terminal session's activity. R2b-1: a chat can be replied to
 // (thread:message: the row and the text only; main picks the task and the action). R4-1a: every pending
 // approval and the one open question render stacked, each with its own 600 ms arm, its own state and its
-// own result; Allow once, Deny, an answer, a resume choice and Stop go through thread:act. Main checks
+// own result; Allow once, Deny, an answer, a resume choice and Stop go through thread:act. R4-2: a terminal
+// session's waiting hook requests stack the same way and go through thread:answer-input. Main checks
 // everything again (src/thread-main.js). Everything reaches the DOM
 // through textContent; the transcript is built into the script-less srcdoc
 // frame by TranscriptDom.
@@ -152,12 +153,13 @@
     if (bound) bound.armedUntil = Math.max(bound.armedUntil, t);
     if (review) review.armedUntil = Math.max(review.armedUntil, t);
     if (stopAsk) stopAsk.armedUntil = Math.max(stopAsk.armedUntil, t);
+    for (const c of hookCards.values()) { c.armedUntil = Math.max(c.armedUntil, t); if (c.anyway) c.anyway.armedUntil = Math.max(c.anyway.armedUntil, t); }
   }
   // Wake once when the next arm runs out, so a disabled button comes back by itself.
   function wakeAt(until) {
     const wait = until - Date.now();
     if (wait <= 0 || armTimer) return;
-    armTimer = setTimeout(() => { armTimer = null; renderCards(); renderReply(); renderStop(); }, wait);
+    armTimer = setTimeout(() => { armTimer = null; renderCards(); renderHooks(); renderReply(); renderStop(); }, wait);
   }
   const ready = (until) => { if (Date.now() >= until) return true; wakeAt(until); return false; };
   function cardBtn(label, cls, c, on) {
@@ -518,7 +520,188 @@
     showEmpty('This chat has ended or moved', `It is no longer listed on this ${MACHINE}. Your Board still has everything that was saved.`, true);
   }
 
-  function renderAll() { renderHead(); renderBanner(); renderCards(); renderWaiting(); renderReply(); renderStop(); renderTranscript(); $('th').setAttribute('aria-busy', 'false'); }
+  // ── a terminal session's hook requests (R4-2, plan-r4-2.md §4) ──────────────
+  // Read from main only (thread:inputs: this session's, nothing else), stacked, each with its own 600 ms arm.
+  // Labels, tones and the question and form helpers are the bubble's (src/input-view.js). A flagged allow's
+  // second click is offered only after main says FLAGGED, and main checks that it said so.
+  const IV = window.InputView;
+  let hookInputs = [], hookAnswering = false, hookReading = false, hookAgain = false;
+  const hookCards = new Map(); // input id → { sig, armedUntil, state: idle|sending|sent, text, anyway: {optionId, armedUntil}|null }
+  const hookSig = (i) => JSON.stringify([i.title, i.text, i.headline, i.danger ?? null, (i.options || []).map((o) => o && o.id), i.answerable === true]);
+  async function readInputs() {
+    if (kind !== 'session' || gone || !api.inputs) return;
+    if (hookReading) { hookAgain = true; return; }
+    hookReading = true;
+    try {
+      const r = await api.inputs(rowId);
+      if (r && Array.isArray(r.inputs)) { hookInputs = r.inputs; hookAnswering = r.answering === true; }
+    } catch { /* main is closing */ } finally { hookReading = false; }
+    renderHooks();
+    if (hookAgain) { hookAgain = false; readInputs(); }
+  }
+  const canHook = (i) => hookAnswering && i.source === 'hook' && i.answerable === true && (!IV || IV.canAnswer({ ...i, answering: true }));
+  function syncHooks() {
+    const t = Date.now(), live = new Set();
+    for (const i of hookInputs) {
+      if (!i || typeof i.id !== 'string') continue;
+      live.add(i.id);
+      const c = hookCards.get(i.id), sig = hookSig(i);
+      if (!c || (c.sig !== sig && c.state !== 'sent')) hookCards.set(i.id, { sig, armedUntil: t + ARM_MS, state: 'idle', text: '', anyway: null, draft: c ? c.draft : {} });
+    }
+    for (const k of [...hookCards.keys()]) if (!live.has(k)) hookCards.delete(k);
+  }
+  const toneClass = (i, o) => { const t = IV ? IV.optionTone(i, o) : ''; return t === 'no' ? 'th-danger' : t === 'yes' ? 'th-primary' : ''; };
+  // A field on a card keeps what was typed across re-renders (a new read, the arm running out).
+  function hookField(tag, cls, c, key) {
+    const f = el(tag, cls);
+    f.dataset.field = key;
+    if (Object.hasOwn(c.draft, key)) { if (f.type === 'checkbox') f.checked = c.draft[key] === true; else f.value = c.draft[key]; }
+    const keep = () => { c.draft[key] = f.type === 'checkbox' ? f.checked : f.value; };
+    f.addEventListener('input', keep); f.addEventListener('change', keep);
+    return f;
+  }
+  function hookBtn(label, cls, c, on) {
+    const b = el('button', `th-btn${cls ? ` ${cls}` : ''}`, label);
+    b.type = 'button';
+    b.disabled = !!acting || c.state !== 'idle' || !ready(c.armedUntil);
+    b.addEventListener('click', () => { if (!b.disabled) on(); });
+    return b;
+  }
+  function renderHooks() {
+    const box = $('th-hooks');
+    if (kind !== 'session') { box.hidden = true; return; }
+    syncHooks();
+    const act = document.activeElement, focusId = act?.closest?.('.th-card')?.dataset.input, focusLabel = act?.textContent, focusField = act?.dataset?.field;
+    const caret = focusField && typeof act.selectionStart === 'number' ? [act.selectionStart, act.selectionEnd] : null;
+    box.replaceChildren();
+    const list = hookInputs.filter((i) => i && hookCards.has(i.id));
+    box.hidden = !list.length;
+    const ai = headView().ai;
+    for (const i of list) {
+      const c = hookCards.get(i.id), card = el('section', 'th-card');
+      card.dataset.input = i.id; card.dataset.state = c.state;
+      if (c.state === 'sent') { card.classList.add('th-card-done'); card.append(el('p', 'th-card-receipt', c.text)); box.append(card); continue; }
+      card.append(el('h2', 'th-card-title', i.title || `${ai} needs you`));
+      if (i.kind === 'permission' && i.headline) card.append(el('p', 'th-card-what', i.headline));
+      if (i.text && !(i.kind === 'permission' && i.text === i.headline)) card.append(el('p', i.kind === 'permission' ? 'th-card-what' : 'th-card-text', i.text));
+      if (i.danger) card.append(el('p', 'th-card-warn', `Needs a careful look: ${i.danger}.`));
+      if (!canHook(i)) {
+        // Where to answer instead; the header's Go to it is the one way there (no second copy on the card).
+        const where = origin ? ' Use Go to it to answer in the terminal.' : ' Answer in the terminal.';
+        card.append(el('p', 'th-card-sub', `${hookAnswering ? 'This one can’t be answered from Plexiform.' : 'Answering from Plexiform is off.'}${where}`));
+        box.append(card);
+        continue;
+      }
+      const opts = Array.isArray(i.options) ? i.options : [];
+      const row = el('div', 'th-card-btns');
+      let more = null;
+      if (i.kind === 'question') {
+        const qs = Array.isArray(i.questions) ? i.questions : [];
+        const one = qs.length === 1 && !qs[0].multiSelect;
+        for (const o of opts) if (o.id !== 'deny' && one) row.append(hookBtn(o.label, '', c, () => answerHook(i, o.id)));
+        const typed = {};
+        let sendBtn = null;
+        const typedReady = () => !acting && c.state === 'idle' && Date.now() >= c.armedUntil && Object.values(typed).every((b) => b.value.trim());
+        for (const q of qs) {
+          const lab = el('label', 'th-card-sub', qs.length > 1 || !one ? q.question : 'Or type an answer');
+          const box2 = hookField('textarea', 'th-hook-text', c, `q:${q.id}`); box2.rows = 2; box2.maxLength = 2000;
+          box2.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); sendTyped(); } });
+          box2.addEventListener('input', () => { if (sendBtn) sendBtn.disabled = !typedReady(); });
+          typed[q.id] = box2; lab.append(box2); card.append(lab);
+        }
+        const sendTyped = () => {
+          if (!typedReady()) return;
+          const a = IV.questionAnswer(i, {}, Object.fromEntries(Object.entries(typed).map(([k, v]) => [k, v.value])));
+          if (a.error) { c.text = a.error; renderHooks(); return; }
+          answerHook(i, a.optionId, a.answers ? { answers: a.answers } : undefined);
+        };
+        if (qs.length) { sendBtn = hookBtn('Send answer', 'th-primary', c, sendTyped); sendBtn.disabled = sendBtn.disabled || !typedReady(); row.append(sendBtn); }
+        const no = opts.find((o) => o.id === 'deny');
+        if (no) row.append(hookBtn(no.label, 'th-danger', c, () => answerHook(i, 'deny')));
+      } else if (i.kind === 'elicitation') {
+        const fields = opts.some((o) => o.id === 'accept' && o.needsContent) && IV ? IV.formFields(i.schema) : [];
+        const vals = {};
+        for (const f of fields) {
+          const lab = el('label', 'th-card-sub', `${f.label}${f.required ? '' : ' (optional)'}`);
+          let input;
+          if (f.type === 'enum') {
+            input = el('select', 'th-hook-field'); input.append(el('option', null, ''));
+            for (const v of f.values) { const o = el('option', null, v); o.value = v; input.append(o); }
+            input.dataset.field = `f:${f.name}`;
+            if (Object.hasOwn(c.draft, `f:${f.name}`)) input.value = c.draft[`f:${f.name}`];
+            input.addEventListener('change', () => { c.draft[`f:${f.name}`] = input.value; });
+          } else {
+            input = el('input', 'th-hook-field'); input.type = f.type === 'boolean' ? 'checkbox' : 'text';
+            input.dataset.field = `f:${f.name}`;
+            if (Object.hasOwn(c.draft, `f:${f.name}`)) { if (input.type === 'checkbox') input.checked = c.draft[`f:${f.name}`] === true; else input.value = c.draft[`f:${f.name}`]; }
+            const keep = () => { c.draft[`f:${f.name}`] = input.type === 'checkbox' ? input.checked : input.value; };
+            input.addEventListener('input', keep); input.addEventListener('change', keep);
+          }
+          vals[f.name] = input; lab.append(input); card.append(lab);
+        }
+        for (const o of opts) {
+          if (o.id === 'accept' && fields.length) row.append(hookBtn(o.label, 'th-primary', c, () => {
+            const r = IV.formContent(fields, Object.fromEntries(Object.entries(vals).map(([k, v]) => [k, v.type === 'checkbox' ? v.checked : v.value])));
+            if (r.error) { c.text = r.error; renderHooks(); return; }
+            answerHook(i, 'accept', { content: r.content });
+          }));
+          else row.append(hookBtn(o.label, toneClass(i, o), c, () => answerHook(i, o.id)));
+        }
+      } else {
+        // A permission or a plan: its own options, in the bubble's words. Deny can say why.
+        for (const o of opts) {
+          const second = c.anyway && c.anyway.optionId === o.id;
+          const b = hookBtn(second ? 'Allow anyway' : o.label, second ? 'th-anyway' : toneClass(i, o), second ? { ...c, armedUntil: c.anyway.armedUntil } : c, () => {
+            if (o.id === 'deny' && more && more.value.trim()) answerHook(i, 'deny', { message: more.value.trim().slice(0, 1000) });
+            else answerHook(i, o.id, second ? { anyway: true } : undefined);
+          });
+          if (o.description) b.title = o.description;
+          row.append(b);
+        }
+      }
+      card.append(row);
+      // Secondary to the choice, so under it: a reason sent with Deny only.
+      if (i.kind === 'permission' && opts.some((o) => o.id === 'deny')) {
+        const lab = el('label', 'th-card-sub', `If you deny, tell ${ai} why (optional)`);
+        more = el('input', 'th-hook-field'); more.type = 'text'; more.maxLength = 1000; more.dataset.field = 'why';
+        if (typeof c.draft.why === 'string') more.value = c.draft.why;
+        more.addEventListener('input', () => { c.draft.why = more.value; });
+        lab.append(more); card.append(lab);
+      }
+      if (c.text) card.append(el('p', 'th-card-note', c.text));
+      box.append(card);
+    }
+    if (focusId) {
+      const card = [...box.children].find((n) => n.dataset.input === focusId);
+      const field = card && focusField && [...card.querySelectorAll('[data-field]')].find((n) => n.dataset.field === focusField);
+      if (field) { field.focus(); if (caret) try { field.setSelectionRange(caret[0], caret[1]); } catch { /* not a text field */ } }
+      else { const again = card && [...card.querySelectorAll('button')].find((b) => b.textContent === focusLabel && !b.disabled); if (again) again.focus(); }
+    }
+  }
+  const SENT = { deny: 'Denied', 'allow-accept-edits': 'Approved', allow: 'Allowed once', accept: 'Sent', decline: 'Declined', cancel: 'Cancelled' };
+  async function answerHook(i, optionId, more) {
+    const c = hookCards.get(i.id);
+    if (!c || acting || c.state !== 'idle') return;
+    acting = `hook:${i.id}`; c.state = 'sending'; c.text = '';
+    renderHooks();
+    let r = null;
+    try { r = await api.answerInput(rowId, i.id, optionId, more); } catch { r = null; }
+    acting = null;
+    const now = hookCards.get(i.id);
+    if (now) {
+      if (r && r.ok === true) { now.state = 'sent'; now.text = SENT[optionId] || (i.kind === 'plan' && optionId === 'allow' ? 'Approved' : 'Answer sent'); }
+      else if (r && r.code === 'FLAGGED') { now.state = 'idle'; now.text = ''; now.anyway = { optionId, armedUntil: Date.now() + ARM_MS }; }
+      else { now.state = 'idle'; now.anyway = null; now.text = (r && r.text) || 'That wasn’t sent. Try again.'; now.armedUntil = Math.max(now.armedUntil, Date.now() + ARM_MS); }
+    }
+    renderHooks();
+    readInputs();
+  }
+  async function goTerminal() {
+    const r = await api.goToTerminal(rowId);
+    $('th-status').textContent = r && r.ok === false && r.note ? r.note : '';
+  }
+
+  function renderAll() { renderHead(); renderBanner(); renderCards(); renderHooks(); renderWaiting(); renderReply(); renderStop(); renderTranscript(); $('th').setAttribute('aria-busy', 'false'); }
 
   // ── reads ────────────────────────────────────────────────────────────────
   function apply(r) {
@@ -540,7 +723,7 @@
     // The document may still be finishing; main answers null until it is on screen and settled.
     for (let i = 0; i < 4; i++) {
       const r = await api.open(rowId);
-      if (apply(r)) { if (!gone) { renderAll(); startPoll(); } return; }
+      if (apply(r)) { if (!gone) { renderAll(); startPoll(); readInputs(); } return; }
       await new Promise((res) => setTimeout(res, 250));
     }
   }
@@ -552,6 +735,7 @@
     if (r.header !== undefined) header = r.header;
     if (r.kind === 'session') { origin = r.origin || null; activity = r.activity && !r.activity.empty ? r.activity : activity; }
     renderAll();
+    readInputs();
   }
   function startPoll() { stopPoll(); poll = setInterval(refresh, POLL_MS); }
   function stopPoll() { if (poll) clearInterval(poll); poll = null; }
@@ -568,14 +752,11 @@
     if ((e.type === 'message' || e.type === 'message-state') && detail) { if (TV.mergeMessage(detail.messages || (detail.messages = []), e)) renderSoon(); }
   });
 
+  // Main's ping (no data): this session's requests changed, so read them again.
+  if (api.onInputsChanged) api.onInputsChanged((id) => { if (id && id === rowId && kind === 'session') readInputs(); });
+
   // ── actions (navigation only) ────────────────────────────────────────────
-  $('th-primary').addEventListener('click', async () => {
-    const act = $('th-primary').dataset.act;
-    if (act === 'terminal') {
-      const r = await api.goToTerminal(rowId);
-      $('th-status').textContent = r && r.ok === false && r.note ? r.note : '';
-    }
-  });
+  $('th-primary').addEventListener('click', () => { if ($('th-primary').dataset.act === 'terminal') goTerminal(); });
   // A request this chat can't act on (R2a's card): "Open to answer" hands it to the Tasks page.
   $('th-answer').addEventListener('click', () => api.openInTasks(rowId));
   $('th-board').addEventListener('click', () => api.board());
@@ -609,7 +790,7 @@
   });
 
   // Coming back into view re-arms every choice (R3.4), then refreshes.
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { rearmAll(); renderCards(); renderReply(); renderStop(); refresh(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { rearmAll(); renderCards(); renderHooks(); renderReply(); renderStop(); refresh(); } });
   window.addEventListener('pagehide', () => { stopPoll(); if (rowId) api.close(rowId); });
 
   $('th-tx').addEventListener('load', () => { wireFrame(); renderTranscript(); });

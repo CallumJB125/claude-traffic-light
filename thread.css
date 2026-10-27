@@ -65,6 +65,14 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .th-card-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-1); }
 .th-card-ask { margin: 0; font-size: var(--text-sm); font-weight: 600; }
 .th-card-note { margin: 0; font-size: var(--text-sm); color: var(--danger-text); overflow-wrap: anywhere; }
+/* R4-2: a hook request's warning, free-text answer, form fields and C-F's "Allow anyway". */
+.th-card-warn { margin: 0; font-size: var(--text-sm); font-weight: 600; color: var(--danger-text); overflow-wrap: anywhere; }
+.th-card label.th-card-sub { display: grid; gap: var(--space-1); width: 100%; }
+.th-hook-text, .th-hook-field { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: var(--space-1) var(--space-2); box-sizing: border-box; min-width: 0; }
+.th-hook-text { width: 100%; resize: vertical; }
+.th-hook-field[type="text"], select.th-hook-field { width: min(100%, 360px); }
+/* The second click is the bubble's: filled with the danger colour, so it never reads as the default choice. */
+.th-btn.th-anyway, .th-btn.th-anyway:hover, .th-btn.th-anyway:disabled:hover { background: var(--danger); border-color: var(--danger); color: #fff; }
 .th-card-done { padding: var(--space-2) var(--space-4); }
 .th-card-receipt { margin: 0; font-size: var(--text-sm); color: var(--muted); }
 .th-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-4); margin: 0; font-size: var(--text-sm); }

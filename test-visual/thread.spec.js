@@ -399,3 +399,106 @@ test('switch review: Continue with Codex shows what is handed over, as text, bef
     expect(Object.keys(sent[0][0]).sort()).toEqual(['action', 'ai', 'id']);
   } finally { await h.cleanup(); }
 });
+
+// ── R4-2: a terminal session's hook requests, stacked (plan-r4-2.md §4) ──
+const soon = () => new Date(Date.now() + 10 * 60 * 1000).toISOString();
+const PERMISSION = () => ({ id: 'req-perm', session: 'thread-fixture', host: 'synthetic', kind: 'permission', source: 'hook', tool: 'Bash', answerable: true, actions: ['answer', 'open'],
+  title: 'Allow Bash?', headline: 'npm run migrate -- --env staging', text: 'npm run migrate -- --env staging', created_at: new Date().toISOString(), expires_at: soon(),
+  options: [{ id: 'allow', label: 'Allow once' }, { id: 'allow-session-0', label: 'Allow npm run migrate for this session' }, { id: 'deny', label: 'Deny' }] });
+const FLAGGED_INPUT = () => ({ ...PERMISSION(), id: 'req-flag', headline: 'rm -rf build/ && git push --force', text: 'rm -rf build/ && git push --force', danger: 'it force-pushes' });
+const QUESTION_INPUT = () => ({ id: 'req-q', session: 'thread-fixture', host: 'synthetic', kind: 'question', source: 'hook', tool: 'AskUserQuestion', answerable: true, actions: ['answer', 'open'],
+  title: 'Retry scope', text: 'Should the retry also cover the S3 upload, or only local files?', created_at: new Date().toISOString(), expires_at: soon(), freeText: true,
+  questions: [{ id: 'q0', question: 'Should the retry also cover the S3 upload, or only local files?', header: 'Retry scope', multiSelect: false, options: [{ id: 'o0', label: 'Both' }, { id: 'o1', label: 'Only local files' }] }],
+  options: [{ id: 'o0', label: 'Both' }, { id: 'o1', label: 'Only local files' }, { id: 'deny', label: 'Decline to answer' }] });
+// Main's thread:inputs and thread:answer-input are replaced with a fixture and a recorder, for the thread document only.
+// `flagged` answers FLAGGED until an answer carries more.anyway, as main's token does.
+const hookFixture = (h, inputs, { answering = true, flagged = false } = {}) => h.app.evaluate(({ ipcMain }, { inputs, answering, flagged }) => {
+  globalThis.__answers = [];
+  const mine = (e) => new URL(e.sender.getURL()).pathname.endsWith('/thread.html');
+  for (const ch of ['thread:inputs', 'thread:answer-input']) ipcMain.removeHandler(ch);
+  ipcMain.handle('thread:inputs', (e) => (mine(e) ? { inputs, answering } : null));
+  ipcMain.handle('thread:answer-input', (e, ...a) => {
+    if (!mine(e)) return null;
+    globalThis.__answers.push(a);
+    if (flagged && !(a[0].more && a[0].more.anyway === true)) return { ok: false, code: 'FLAGGED', text: 'Needs a careful look. Press Allow anyway if you mean it.' };
+    return { ok: true };
+  });
+}, { inputs, answering, flagged });
+
+for (const theme of ['light', 'dark']) {
+  test(`hook request (${theme}): a terminal session's permission, answered in its thread`, async () => {
+    const { h, side } = await open({ fixture: NATIVE, theme });
+    try {
+      await hookFixture(h, [PERMISSION()]);
+      const page = await openThread(h, side, theme);
+      const card = page.locator('#th-hooks .th-card');
+      await expect(card).toHaveCount(1);
+      await expect(card.locator('.th-card-title')).toHaveText('Allow Bash?');
+      await expect(card.getByRole('button', { name: 'Allow once' })).toBeEnabled({ timeout: 3000 });
+      await shot(page, `thread-hook-permission-${theme}.png`);
+      if (theme === 'light') {
+        await card.getByRole('button', { name: 'Allow once' }).click();
+        await expect(card.locator('.th-card-receipt')).toHaveText('Allowed once');
+        const sent = await h.app.evaluate(() => globalThis.__answers);
+        expect(sent.length).toBe(1);
+        expect(sent[0].length).toBe(1);
+        expect(Object.keys(sent[0][0]).sort()).toEqual(['id', 'inputId', 'optionId']);
+        expect(sent[0][0]).toMatchObject({ inputId: 'req-perm', optionId: 'allow' });
+        expect(sent[0][0].id).toMatch(/^[0-9a-f]{64}$/);
+      }
+    } finally { await h.cleanup(); }
+  });
+}
+
+test('hook request flagged: main says FLAGGED, the button becomes Allow anyway, and the second click carries anyway', async () => {
+  const { h, side } = await open({ fixture: NATIVE });
+  try {
+    await hookFixture(h, [FLAGGED_INPUT()], { flagged: true });
+    const page = await openThread(h, side);
+    const card = page.locator('#th-hooks .th-card');
+    await expect(card.locator('.th-card-warn')).toHaveText('Needs a careful look: it force-pushes.');
+    await card.getByRole('button', { name: 'Allow once' }).click({ timeout: 3000 });
+    const again = card.getByRole('button', { name: 'Allow anyway' });
+    await expect(again).toBeVisible();
+    await expect(again).toBeEnabled({ timeout: 3000 });
+    await shot(page, 'thread-hook-flagged.png');
+    await again.click();
+    await expect(card.locator('.th-card-receipt')).toHaveText('Allowed once');
+    const sent = await h.app.evaluate(() => globalThis.__answers);
+    expect(sent.map((a) => a[0].more ?? null)).toEqual([null, { anyway: true }]);
+  } finally { await h.cleanup(); }
+});
+
+test('hook request question: its options, and a typed answer sent with ⌘↩', async () => {
+  const { h, side } = await open({ fixture: NATIVE });
+  try {
+    await hookFixture(h, [QUESTION_INPUT()]);
+    const page = await openThread(h, side);
+    const card = page.locator('#th-hooks .th-card');
+    await expect(card.getByRole('button', { name: 'Both' })).toBeEnabled({ timeout: 3000 });
+    await shot(page, 'thread-hook-question.png');
+    const box = card.locator('textarea');
+    await expect(card.getByRole('button', { name: 'Send answer' })).toBeDisabled();
+    await box.fill('Only local files for now');
+    await expect(card.getByRole('button', { name: 'Send answer' })).toBeEnabled();
+    await box.press('Enter');
+    expect(await h.app.evaluate(() => globalThis.__answers.length)).toBe(0);
+    await box.press('Meta+Enter');
+    await expect(card.locator('.th-card-receipt')).toHaveText('Answer sent');
+    const sent = await h.app.evaluate(() => globalThis.__answers);
+    expect(sent[0][0]).toMatchObject({ inputId: 'req-q', optionId: 'answers', more: { answers: { 'Should the retry also cover the S3 upload, or only local files?': 'Only local files for now' } } });
+  } finally { await h.cleanup(); }
+});
+
+test('hook request read-only: answering off shows where to answer, and Go to it', async () => {
+  const { h, side } = await open({ fixture: NATIVE });
+  try {
+    await hookFixture(h, [PERMISSION()], { answering: false });
+    const page = await openThread(h, side);
+    const card = page.locator('#th-hooks .th-card');
+    await expect(card.locator('.th-card-sub')).toHaveText('Answering from Plexiform is off. Use Go to it to answer in the terminal.');
+    await expect(card.getByRole('button')).toHaveCount(0);
+    await expect(page.locator('#th-primary')).toHaveText('Go to it');
+    await shot(page, 'thread-hook-readonly.png');
+  } finally { await h.cleanup(); }
+});
