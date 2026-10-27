@@ -5,6 +5,8 @@
 // task only (plan-r2b-auth.md §2.1), through tasksService.act and
 // guard.validateAct unchanged. Approve, deny, answer, stop and every other
 // Tasks act stay on tasks-main.js owner() (the Tasks page) until R6a.
+// Provisional, awaiting Callum (plan-r2b-auth §7 item 1): no Stop from the chat
+// before R6a (the alternative is a thread:stop shaped like compose:stop).
 //
 // Guard T, for every channel: the exact thread webContents and its main frame,
 // the document generation, the request's row id === the row the document was
