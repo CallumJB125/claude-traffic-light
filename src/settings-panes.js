@@ -98,7 +98,7 @@
     remoteInteractionResetPending: 'none', persona: 'none',
   });
 
-  const TITLE = Object.freeze({ 'widget-rules': 'Widget rules', 'widget-look': 'Widget look', character: 'Character', 'phone-pairing': 'Phone pairing', 'aitools-setup': 'AI tools setup', 'account-team': 'Account & team', 'this-mac': 'This Mac', team: 'Team', 'account-plan': 'Plan & billing', 'account-sync': 'Sync', general: 'General', notifications: 'Notifications', aitools: 'AI tools', projects: 'Projects', terminal: 'Terminal', 'agent-messages': 'Agent messages', widget: 'Widget', spend: 'Spend and limits', privacy: 'Privacy and data', phone: 'Phone', advanced: 'Advanced' });
+  const TITLE = Object.freeze({ 'widget-rules': 'Widget rules', 'widget-look': 'Widget look', character: 'Character', 'phone-pairing': 'Phone pairing', 'aitools-setup': 'AI tools setup', 'account-team': 'Account & team', 'this-mac': 'This computer', team: 'Team', 'account-plan': 'Plan & billing', 'account-sync': 'Sync', general: 'General', notifications: 'Notifications', aitools: 'AI tools', projects: 'Projects', terminal: 'Terminal', 'agent-messages': 'Agent messages', widget: 'Widget', spend: 'Spend and limits', privacy: 'Privacy and data', phone: 'Phone', advanced: 'Advanced' });
 
   // Keys every pane may READ (never write): simpleMode decides which developer sections the page shows at all.
   const SHARED_READS = Object.freeze(['simpleMode']);

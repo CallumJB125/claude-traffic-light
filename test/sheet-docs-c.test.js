@@ -217,15 +217,14 @@ test('the two sheet documents are refused on every buddy:acct:* channel (fromAcc
   const winSrc = read('buddy-window/index.js');
   const line = winSrc.split('\n').find((l) => l.includes('const fromAccount = '));
   assert.ok(line, 'fromAccount exists');
-  assert.match(line, /accountView && e\.sender === accountView\.webContents && isLocalPage\(e\.senderFrame\?\.url \?\? ''\)/);
-  const accountWc = { id: 'account' };
+  assert.match(line, /accountView && e\.sender === accountView\.webContents && e\.senderFrame === accountView\.webContents\.mainFrame && isLocalPage\(e\.senderFrame\?\.url \?\? ''\)/);
+  const accountWc = { id: 'account', mainFrame: { url: 'file:///x.html' } };
   const ctx = { accountView: { webContents: accountWc }, isLocalPage: () => true };
   vm.runInNewContext(`${line}\nglobalThis.fromAccount = fromAccount;`, ctx);
   const sheetWc = (id) => ({ id });
   for (const id of ['upgrade-sheet', 'sync-sheet', 'phone-sheet']) assert.equal(!!ctx.fromAccount({ sender: sheetWc(id), senderFrame: { url: 'file:///x.html' } }), false, id);
-  assert.equal(!!ctx.fromAccount({ sender: accountWc, senderFrame: { url: 'file:///x.html' } }), true, 'only the account view');
-  // every buddy:acct:* handler goes through fromAccount
-  assert.ok(!/ipcMain\.handle\(`buddy:acct:\$\{op\}`/.test(winSrc) || /if \(!fromAccount\(e\)\) return \{ ok: false, error: 'Not allowed\.' \};/.test(winSrc));
+  assert.equal(!!ctx.fromAccount({ sender: accountWc, senderFrame: accountWc.mainFrame }), true, 'only the account view');
+  // (the per-handler guard check is ledger 27, in sheet-docs-d.test.js)
   for (const f of ['upgrade-preload.js', 'sync-preload.js']) {
     const src = read(f);
     assert.doesNotMatch(src, /buddy:acct|buddyAccount|token|burst|keepawake/i, f);
