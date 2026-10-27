@@ -35,7 +35,7 @@ const provider=(source,model)=>{const known=typeof source==='string'&&Object.has
 // Mac's live session shares; hubTeams() → {origin, teams} the signed-in
 // user's teams on the sharing hub; teamHub() → the team directory adapter
 // (src/session-directory.js interface) or null.
-function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,actionCurrent=current,navigationCurrent=()=>false,owned=()=>[],shares=()=>null,hubTeams=async()=>null,teamHub=()=>null,followups=null,followupScope=()=>null,followupLocal=null,looseEnds=()=>null}){
+function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwner=null,sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,actionCurrent=current,navigationCurrent=()=>false,owned=()=>[],shares=()=>null,hubTeams=async()=>null,teamHub=()=>null,followups=null,followupScope=()=>null,followupLocal=null,looseEnds=()=>null}){
  // Burst's loose ends (src/burst-loose-ends-view.js) matched to a session's working directory here in main: the page gets counts, never a path.
  const looseBadge=cwd=>{let v=null;try{v=looseEnds();}catch{v=null;}const m=v?LooseEnds.forPath(v,cwd):null;return m?{uncommitted:m.uncommitted,unpushed:m.unpushed,stashes:m.stashes,stale:m.stale===true,text:LooseEnds.badgeText(m)}:null;};
  let epoch=0,directoryEpoch=0,routeEpoch=0,teamView=null,handles=new Map(),teamRefs=new Map();const secret=crypto.randomBytes(32);
@@ -319,17 +319,21 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
  }
  // My sessions / Team sessions. Team privacy is filtered here, never in the page.
  // Team depth lane C: team entry id → the hub card id of its session (for presence.view), and the team they belong to.
- const viewCards=new Map();let viewTeam=null,viewingSent=null;
+ const viewCards=new Map();let viewTeam=null;
+ // Presence goes through one owner (ledger 31); a private one around presenceView keeps callers that inject only presenceView working.
+ const holder=presenceOwner??require('./presence-owner').createPresenceOwner({presenceView});
+ const clearViewing=()=>{try{holder.set('overview',null);}catch{}};
  // The person opened (id) or closed (null) a shared session's details: the team's boards hear which card is being looked at.
  function viewing(request){if(!closed(request,['id'])||!(request.id===null||typeof request.id==='string'&&/^[0-9a-f]{40}$/.test(request.id)))return{ok:false,status:'invalid'};
   if(!permitted()||!viewTeam)return{ok:false,status:'unavailable'};
-  const card=request.id?viewCards.get(request.id)??null:null;const sig=card?`${viewTeam}|${card}`:null;if(sig===viewingSent)return{ok:true,status:'unchanged'};viewingSent=sig;
-  try{presenceView({team:viewTeam,card_id:card});}catch{}return{ok:true,status:card?'viewing':'cleared'};}
+  const card=request.id?viewCards.get(request.id)??null:null;let changed=false;
+  try{changed=holder.set('overview',card?{team:viewTeam,card}:null);}catch{}
+  return{ok:true,status:changed?(card?'viewing':'cleared'):'unchanged'};}
  async function directory(request){
   const time=now(),view=request?.view;
   if(!(closed(request,['view'])&&view==='mine'||closed(request,['view','team'])&&view==='team'&&(request.team===null||typeof request.team==='string'&&/^[0-9a-f]{32}$/.test(request.team))))return unavailableDirectory('mine',time);
   const readGeneration=++directoryEpoch,reading=()=>readGeneration===directoryEpoch&&permitted();
-  if(view==='mine'&&teamView!==null||view==='team'&&request.team!==null&&teamView!==request.team){routeEpoch++;teamView=view==='mine'?null:request.team;teamRefs.clear();controls.invalidate();coordinator?.invalidate();}
+  if(view==='mine'&&teamView!==null||view==='team'&&request.team!==null&&teamView!==request.team){routeEpoch++;teamView=view==='mine'?null:request.team;clearViewing();teamRefs.clear();controls.invalidate();coordinator?.invalidate();}
   if(!permitted())return unavailableDirectory(view,time);
   const built=await build(time,reading);
   if(!built||!reading())return unavailableDirectory(view,time);
@@ -352,7 +356,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   let status=built.partial||built.omitted?'partial':'complete';
   if(view==='mine')return{schema:1,view,status,observed_at:time,teams:teamList,team:null,notice:'',entries:personal,counts:directoryModel.counts(personal)};
   const selected=teams.get(request.team)??teams.values().next().value??null;
-  if(teamView!==(selected?.key??null)){routeEpoch++;teamView=selected?.key??null;teamRefs.clear();controls.invalidate();coordinator?.invalidate();}
+  if(teamView!==(selected?.key??null)){routeEpoch++;teamView=selected?.key??null;clearViewing();teamRefs.clear();controls.invalidate();coordinator?.invalidate();}
   if(!selected)return{schema:1,view,status,observed_at:time,teams:teamList,team:null,notice:'You are not in a team yet, or no team is connected.',entries:[],counts:directoryModel.counts([])};
   const adapterTeam=fakeTeams.find(t=>teamKey(adapterOrigin,t.id)===selected.key)??null;
   let hubEntries=[];
@@ -419,7 +423,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   if(!alive())return{ok:false,status:'unconfirmed',error:'The view changed. Inspect the receipt before sending again.'};
   return out?.ok===true?out:{ok:false,status:['forbidden','stale','busy','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
- return{snapshot,passiveRows,passiveTeamRows,viewerScope,threadTarget,threadForTask,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
+ return{snapshot,passiveRows,clearViewing,passiveTeamRows,viewerScope,threadTarget,threadForTask,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
   followupReview,followupEnqueue,
   coordinatorRequestOwner:coordinator.requestOwner,coordinatorRemoteList:coordinator.remoteList,coordinatorRemoteSend:coordinator.remoteSend,coordinatorRemoteCancel:coordinator.remoteCancel,coordinatorRemoteReplace:coordinator.remoteReplace,
   coordinatorInventory:coordinator.inventory,coordinatorPropose:coordinator.propose,coordinatorConfirm:coordinator.confirm,coordinatorResults:coordinator.results,coordinatorCancel:coordinator.cancel,
@@ -427,6 +431,6 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   followupCancel:r=>{const owner=followupScope(),epoch=routeEpoch;return actionPermitted()&&closed(r,['id'])&&followups?followups.cancel(r.id,()=>actionPermitted()&&owner===followupScope()&&epoch===routeEpoch):followupUnavailable();},
   followupDiscard:r=>{const owner=followupScope(),epoch=routeEpoch;return actionPermitted()&&closed(r,['id'])&&followups?followups.discard(r.id,()=>actionPermitted()&&owner===followupScope()&&epoch===routeEpoch):followupUnavailable();},
   pumpFollowups:()=>actionPermitted()&&followups?followups.advance(resolveFollowup):Promise.resolve(),
-  open:r=>action(r),message:r=>action(r,true),invalidate(){epoch++;directoryEpoch++;routeEpoch++;teamView=null;handles.clear();teamRefs.clear();personalRefs.clear();followupSelections.clear();controls.invalidate();coordinator?.invalidate();}};
+  open:r=>action(r),message:r=>action(r,true),invalidate(){clearViewing();epoch++;directoryEpoch++;routeEpoch++;teamView=null;handles.clear();teamRefs.clear();personalRefs.clear();followupSelections.clear();controls.invalidate();coordinator?.invalidate();}};
 }
 module.exports={createOverviewService,PROVIDERS,provider,response};
