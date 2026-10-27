@@ -70,7 +70,7 @@ const ENDED = {
   replay: CHAT.replay.slice(0, 12),
 };
 
-async function open({ fixture = null, theme = 'light', env = GATE } = {}) {
+async function open({ fixture = null, theme = 'light', env = GATE, shared = null } = {}) {
   const h = await launchApp({ env, files: { 'sessions/thread-fixture.json': session() } });
   if (fixture) {
     // Answers the thread document only, as main does.
@@ -78,6 +78,13 @@ async function open({ fixture = null, theme = 'light', env = GATE } = {}) {
       const mine = (e) => { try { return new URL(e.sender.getURL()).pathname.endsWith('/thread.html'); } catch { return false; } };
       for (const ch of ['thread:open', 'thread:state']) { ipcMain.removeHandler(ch); ipcMain.handle(ch, (e) => (mine(e) ? fixture : null)); }
     }, fixture);
+  }
+  if (shared) {
+    // T2: a teammate's share. The projection is the shape src/shared-thread-view.js returns; main's own bind and read are test/shared-thread.test.js.
+    await h.app.evaluate(({ ipcMain }, shared) => {
+      const mine = (e) => { try { return new URL(e.sender.getURL()).pathname.endsWith('/thread.html'); } catch { return false; } };
+      ipcMain.removeHandler('thread:shared-state'); ipcMain.handle('thread:shared-state', (e) => (mine(e) ? shared : null));
+    }, shared);
   }
   const widget = await windowByFile(h.app, 'index.html');
   await widget.evaluate(() => window.trafficLight.openHelp());
@@ -500,5 +507,47 @@ test('hook request read-only: answering off shows where to answer, and Go to it'
     await expect(card.getByRole('button')).toHaveCount(0);
     await expect(page.locator('#th-primary')).toHaveText('Go to it');
     await shot(page, 'thread-hook-readonly.png');
+  } finally { await h.cleanup(); }
+});
+
+// T2: a teammate's shared session as a read-only thread.
+const SHARED_BASE = {
+  header: { title: 'Fix login redirect', owner: 'Bob', initials: 'B', provider: 'Claude Code', scope: 'watch', expiresAt: null, fake: false },
+  banner: true, activity: { category: 'Editing files', ageMs: 4000, stale: false }, status: 'working', generation: 3, canSendLater: false,
+  deliveries: [
+    { id: 'a', by: 'Alice', text: 'Can you also cover the logout path?', state: 'replied', response: 'Yes. I will add the logout case to the same test and run it again.', at: 1 },
+    { id: 'b', by: 'Alice', text: 'Thanks. Ping me when it passes.', state: 'acknowledged', response: '', at: 2 },
+  ],
+};
+const sharedOpen = (theme, shared) => open({ fixture: { kind: 'shared', header: null }, theme, shared });
+for (const theme of ['light', 'dark']) {
+  test(`shared thread, watch (${theme}): header line, the privacy banner first, activity, messages with receipts, a watch-only footer`, async () => {
+    const { h, side } = await sharedOpen(theme, SHARED_BASE);
+    try {
+      const page = await openThread(h, side, theme);
+      await expect(page.locator('#th-banner')).toHaveText('You see messages sent since it was shared, and its current activity. Earlier history stays private.');
+      await expect(page.locator('#th-meta')).toHaveText("Bob's Claude Code session · Shared with you to watch");
+      await expect(page.locator('#th-reply')).toBeHidden();
+      await expect(page.locator('.th-shared-foot')).toContainText('Ask Bob to allow sending.');
+      await shot(page, `thread-shared-watch-${theme}.png`);
+    } finally { await h.cleanup(); }
+  });
+}
+test('shared thread, interact (dark): the watch layout plus Open in Team sessions', async () => {
+  const { h, side } = await sharedOpen('dark', { ...SHARED_BASE, header: { ...SHARED_BASE.header, scope: 'interact' }, canSendLater: true });
+  try {
+    const page = await openThread(h, side, 'dark');
+    await expect(page.locator('#th-reply')).toBeHidden();
+    await expect(page.getByRole('button', { name: 'Open in Team sessions' })).toBeVisible();
+    await shot(page, 'thread-shared-interact-dark.png');
+  } finally { await h.cleanup(); }
+});
+test('shared thread, gone (dark): the body is dropped and the way back is offered', async () => {
+  const { h, side } = await sharedOpen('dark', { gone: true, reason: 'removed' });
+  try {
+    const page = await openThread(h, side, 'dark');
+    await expect(page.locator('#th-title')).toHaveText('This session is no longer shared with you.');
+    await expect(page.locator('.th-msg')).toHaveCount(0);
+    await shot(page, 'thread-shared-gone-dark.png');
   } finally { await h.cleanup(); }
 });
