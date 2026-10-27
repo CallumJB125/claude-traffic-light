@@ -48,6 +48,19 @@ test.afterAll(async () => { await h?.cleanup(); });
 
 const readConfig = () => JSON.parse(fs.readFileSync(path.join(h.home, 'config.json'), 'utf8'));
 
+// Brings #backups to the top, then rounds every scroll offset on the way up (html and body both scroll here), so
+// the panel never sits at a fractional offset that anti-aliases each horizontal edge differently.
+async function scrollToBackups() {
+  await settings.evaluate(() => {
+    const el = document.getElementById('backups');
+    el.scrollIntoView({ block: 'start' });
+    for (let n = el.parentElement; n; n = n.parentElement) if (n.scrollTop % 1) n.scrollTop = Math.round(n.scrollTop);
+    const s = document.scrollingElement;
+    if (s && s.scrollTop % 1) s.scrollTop = Math.round(s.scrollTop);
+  });
+  await settings.waitForTimeout(300);
+}
+
 test('Backups: lists snapshots in plain words, damaged ones flagged and not restorable', async () => {
   const items = settings.locator('#backups-list .bk-item');
   await expect(items).toHaveCount(3);
@@ -58,11 +71,8 @@ test('Backups: lists snapshots in plain words, damaged ones flagged and not rest
   await expect(bad.locator('.bk-title')).toHaveText('Damaged backup from 29 Sep, 10:00');
   await expect(bad.locator('button')).toHaveCount(0);
   await expect(settings.locator('#backups-summary')).toHaveText('2 backups, 1 damaged. Latest: 30 Sep, 18:40.');
-  await settings.evaluate(() => document.getElementById('backups').scrollIntoView({ block: 'start' }));
-  await settings.waitForTimeout(300);
-  // Same content alone and in a full run, but glyph anti-aliasing differs between the two (~1.3% of pixels).
-  // Unproven: lone runs are exact (3 renders, 0 px off the baseline); the full-suite glyph-AA drift is claimed, not measured.
-  await expect(await snapToPixels(settings.locator('#backups'))).toHaveScreenshot('backups-list.png', { maxDiffPixelRatio: 0.015 });
+  await scrollToBackups();
+  await expect(await snapToPixels(settings.locator('#backups'))).toHaveScreenshot('backups-list.png');
 });
 
 test('Backups: the diff names what differs, and a subset restores with a before-restore copy', async () => {
@@ -70,14 +80,10 @@ test('Backups: the diff names what differs, and a subset restores with a before-
   await item.getByRole('button', { name: "See what's different" }).click();
   const picks = item.locator('.bk-pick');
   await expect(picks).toHaveText(['Spend pace in the widget tooltip: gone now, the backup has it', 'Sound when a session needs you: different from the backup', 'Rule template: gone now, the backup has it']);
-  await settings.evaluate(() => document.getElementById('backups').scrollIntoView({ block: 'start' }));
-  await settings.waitForTimeout(300);
-  // the open diff is taller than the window, so shoot the window, not the element
-  // Lone renders differ from the baseline by ≤1.29% by a strict count without the AA exemption, and pass
-  // Playwright's comparison at 0.008 (7/7 lone runs). Cause: without snapToPixels the page sits at a fractional
-  // scroll offset, so every horizontal edge anti-aliases half a pixel differently. Tracked in the follow-up
-  // (snap the scroll offset, re-baseline, then set to 0).
-  await expect(settings).toHaveScreenshot('backups-diff.png', { maxDiffPixelRatio: 0.008 });
+  await scrollToBackups();
+  // the open diff is taller than the window, so shoot the window, not the element (scrollToBackups snaps the offset;
+  // the overlay scrollbar it wakes fades on its own timer, so it is hidden while shooting)
+  await expect(settings).toHaveScreenshot('backups-diff.png', { stylePath: path.join(__dirname, 'no-scrollbar.css') });
   await picks.nth(0).locator('input').uncheck();
   await picks.nth(2).locator('input').uncheck();
   await item.getByRole('button', { name: 'Restore selected' }).click();

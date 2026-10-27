@@ -1,0 +1,4 @@
+/* Applied only while a screenshot is taken (toHaveScreenshot stylePath). macOS overlay scrollbars appear when a page
+   scrolls and fade out on their own timer, so a shot right after a scroll caught the thumb solid, fading or gone. */
+* { scrollbar-width: none !important; }
+::-webkit-scrollbar { display: none !important; }
