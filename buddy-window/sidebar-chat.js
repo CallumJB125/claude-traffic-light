@@ -19,7 +19,7 @@
   ];
   // The filter a redirect names → the filter shown (Needs you is All, with Needs you focused).
   const FILTER_OF = { all: 'all', needs: 'all', terminals: 'terminals', chats: 'chats', team: 'team' };
-  // §5. "Start one above" joins the first sentence when New chat works (R7).
+  // §5. New chat works since R2b-2; "Start one above" joins the first sentence with R7's copy pass.
   const EMPTY = {
     all: 'No chats or sessions yet. Run claude or codex in any terminal and it shows up here.',
     chats: 'No chats yet.',
@@ -85,10 +85,12 @@
     const nav = document.getElementById('nav');
     nav.textContent = '';
     const top = el('div', { class: 'sb-top' },
-      el('button', { type: 'button', class: 'sb-new', 'aria-disabled': 'true', title: 'New chats are coming soon' },
+      el('button', { type: 'button', class: 'sb-new', id: 'sb-new' },
         svg('M8 3.25v9.5M3.25 8h9.5', 'sb-icon'), el('span', {}, 'New chat')),
       el('button', { type: 'button', class: 'sb-search', 'aria-disabled': 'true', 'aria-label': 'Search', title: 'Search is coming soon' },
         svg('M7 2.75a4.25 4.25 0 1 1 0 8.5 4.25 4.25 0 0 1 0-8.5zM10.1 10.1l3.15 3.15', 'sb-icon')));
+    // R2b-2: navigation only; main opens the new-chat screen.
+    top.querySelector('.sb-new').addEventListener('click', () => window.buddy.openNewChat?.());
     const filter = el('div', { class: 'sb-filter', role: 'radiogroup', 'aria-label': 'Show' });
     for (const f of FILTERS) {
       const b = el('button', { type: 'button', role: 'radio', class: 'sb-filter-opt', 'data-filter': f.id }, f.label);

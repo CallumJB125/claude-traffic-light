@@ -3,6 +3,8 @@
 // Navigation only:
 //   plexiform://open/<pageId>   a page in PAGES, shown through route()
 //   plexiform://thread/<rowId>  a row's thread, if main resolves the row
+//   plexiform://open/newchat    the new-chat screen (R2b-2): not a PAGES entry,
+//                               and it never carries text, a folder or an AI
 // Never an account flow: sign-in, join and create-team (FLOW_IDS) are not
 // pages and are refused here, so a web page can't start one with a link.
 // The link form is provisional, awaiting Callum (§7 item 3), and is read only
@@ -21,6 +23,7 @@ function parse(url) {
   if (!m || !SCHEMES.includes(m[1].toLowerCase())) return null;
   const action = m[2].toLowerCase(), id = m[3];
   if (action === 'thread') return ROW_ID.test(id) ? { kind: 'thread', id } : null;
+  if (id === 'newchat') return { kind: 'newchat', id };
   if (Pages.FLOW_IDS.includes(id) || !Pages.pageById(id)) return null;
   return { kind: 'page', id };
 }

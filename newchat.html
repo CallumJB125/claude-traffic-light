@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+<title>New chat</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="newchat.css">
+</head>
+<body>
+  <main class="nc" id="nc" aria-busy="true">
+    <div class="nc-col">
+      <header class="nc-head">
+        <h1 class="nc-title" id="nc-title">New chat</h1>
+        <p class="nc-hint" id="nc-hint">Say what you want done. Nothing starts until you press Send.</p>
+      </header>
+      <form class="nc-box" id="nc-box" aria-labelledby="nc-title">
+        <label class="nc-sr" for="nc-text">What should it do?</label>
+        <textarea class="nc-text" id="nc-text" rows="5" placeholder="What should it do?" aria-describedby="nc-note"></textarea>
+        <div class="nc-chips">
+          <select class="nc-chip" id="nc-folder" aria-label="Folder"></select>
+          <select class="nc-chip" id="nc-who" aria-label="Who"></select>
+          <select class="nc-chip" id="nc-perm" aria-label="How much it may do"></select>
+        </div>
+        <div class="nc-route" id="nc-route" aria-live="polite"></div>
+        <div class="nc-peers" id="nc-peers"></div>
+        <div class="nc-held" id="nc-held"></div>
+        <div class="nc-row">
+          <p class="nc-note" id="nc-note" aria-live="polite"></p>
+          <span class="nc-keys" aria-hidden="true">⌘↩</span>
+          <button type="submit" class="nc-btn nc-primary" id="nc-send">Send</button>
+        </div>
+      </form>
+      <section class="nc-started" id="nc-started" hidden aria-labelledby="nc-started-title">
+        <h2 class="nc-started-title" id="nc-started-title">Started.</h2>
+        <p class="nc-started-text" id="nc-started-text"></p>
+        <div class="nc-started-actions">
+          <button type="button" class="nc-btn nc-primary" id="nc-open">Open in Tasks</button>
+          <button type="button" class="nc-btn" id="nc-again">New chat</button>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script src="src/compose-view.js"></script>
+  <script src="newchat.js"></script>
+</body>
+</html>

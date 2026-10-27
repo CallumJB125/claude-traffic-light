@@ -24,32 +24,70 @@ function cardRow(t, activityMs = null) {
   return { state: t.state, label: String(t.label || '').slice(0, 60), reason: String(t.reason || '').slice(0, 300), ai: { id: t.ai?.id ?? null }, actions: Array.isArray(t.actions) ? t.actions.slice(0, 20) : [], stateSinceMs: t.stateSinceMs, lastActivityMs: [t.lastActivityMs, activityMs].filter(Number.isFinite).reduce((a, b) => Math.max(a, b), null) };
 }
 
+// Home's instance, as register(deps) has always wired it (plan-r2b-auth §2.2: these are the factory's defaults).
+const HOME_COPY = Object.freeze({
+  moved: 'Home changed while that was being checked. Nothing was started. Look again, then press Run.',
+  focus: 'Focus Home and press Run again.',
+  stopMoved: 'Home changed while stopping. Check the task in Tasks.',
+});
+const HOME_CHANNELS = Object.freeze({ info: 'compose:info', pickFolder: 'compose:pick-folder', route: 'compose:route', preflight: 'compose:preflight',
+  run: 'compose:run', stop: 'compose:stop', openInTasks: 'compose:open-in-tasks' });
+const HOME_PUSH = Object.freeze({ changed: 'compose:changed', event: 'compose:event', task: 'compose:task' });
+
 /**
  * deps: { ipcMain, buddy() (buddyWin), service() (the Tasks service, started on use), config() (loadConfig),
  *         sessions() (local sessions), homeDir, isDir(p), muted(cwd), pickFolder(e) → path|null, openInTasks(id),
  *         shortcut() → the compose shortcut view, now?, log? }
  */
 function register(deps) {
+  return createCompose(deps);
+}
+
+/**
+ * One task box bound to one page's document (redesign R2b-2: Home's and the new chat's). Every parameter defaults to
+ * Home's; the new chat (main.js, chat-first preview only) passes its own:
+ *   channels, push    the ipcMain names it registers and the pushes it sends (no `stop` → none registered; a missing
+ *                     push name → that push is never sent)
+ *   pageWc()          the page's webContents; docNow() {wcId, doc}; context() the buddy-window owner context
+ *   copy              {moved, focus, stopMoved}; hidden() whether the box is switched off
+ *   openCard          after a create, open the task for this document's card (Home) or not (the new chat: no card,
+ *                     so no Tasks slot while it waits; review S1)
+ *   oneAtATime        refuse a second run while one is in flight (BUSY), in main
+ *   keepAlive         'live' (Home: while a task it started is live) or 'create' (the new chat: only until create returns)
+ *   afterCreate       async ({id, wcId, current}) → true once main has moved to the new task's own page (S3 handoff);
+ *                     the instance then retires, so the page left behind holds nothing
+ *   settled(wcId)     after every run returns, so a document kept only for that run can go
+ */
+function createCompose(deps, params = {}) {
   const { ipcMain } = deps;
   const now = deps.now || Date.now;
   const svc = () => { const s = deps.service(); s.start?.(); return s; };
-  const hidden = () => deps.config()?.homeComposer === false;
-  let started = null; // {wcId, doc, ids: Set, last, title}: the tasks this Home document started
+  const channels = params.channels || HOME_CHANNELS;
+  const push = params.push || HOME_PUSH;
+  const copy = params.copy || HOME_COPY;
+  const openCard = params.openCard !== false;
+  const keepAlive = params.keepAlive === 'create' ? 'create' : 'live';
+  const hidden = params.hidden || (() => deps.config()?.homeComposer === false);
+  let started = null; // {wcId, doc, ids: Set, last, title}: the tasks this document started
+  let creating = 0; // runs in flight (keepAlive 'create', oneAtATime)
 
-  const homeWc = () => { const wc = deps.buddy()?.pageWebContents?.('home'); return wc && !wc.isDestroyed() ? wc : null; };
+  const homeWc = params.pageWc ? () => { const wc = params.pageWc(); return wc && !wc.isDestroyed() ? wc : null; }
+    : () => { const wc = deps.buddy()?.pageWebContents?.('home'); return wc && !wc.isDestroyed() ? wc : null; };
   const fromHome = (e) => { const wc = homeWc(); return !!wc && e?.sender === wc && e.senderFrame === wc.mainFrame; };
-  // The Home document right now, selected or not: {wcId, doc} or null.
-  const docNow = () => deps.buddy()?.homeDocument?.() ?? null;
+  // The page's document right now, selected or not: {wcId, doc} or null.
+  const docNow = params.docNow || (() => deps.buddy()?.homeDocument?.() ?? null);
+  const context = params.context || (() => deps.buddy()?.homeContext?.());
+  const send = (wc, name, msg) => { if (!name || !wc) return; if (msg === undefined) wc.send(name); else wc.send(name, msg); };
   const mine = (wcId) => { const d = docNow(); return !!started && !!d && started.wcId === wcId && d.wcId === wcId && started.doc === d.doc; };
   function owner() {
-    const c = deps.buddy()?.homeContext?.();
+    const c = context();
     if (!c?.foreground || !c.window || !c.contents || c.window.isDestroyed() || c.contents.isDestroyed() || !c.contents.mainFrame
       || !Number.isSafeInteger(c.generation) || !Number.isSafeInteger(c.document)) return null;
     return { window: c.window, contents: c.contents, frame: c.contents.mainFrame, generation: c.generation, document: c.document, account: c.account, workspace: c.workspace };
   }
   const same = (before) => { const after = owner(); return !!before && !!after && Object.keys(before).every((k) => before[k] === after[k]); };
   const refused = (code, text) => ({ ok: false, code, text: text ?? TV.errorText(code) });
-  const MOVED = 'Home changed while that was being checked. Nothing was started. Look again, then press Run.';
+  const MOVED = copy.moved;
 
   /** Finding 9: the most recent local session's project, never a task's worktree, ~ itself or a muted project. */
   async function defaultFolder() {
@@ -63,7 +101,7 @@ function register(deps) {
 
   function usable(a) { return !TV.aiOption(a).disabled; }
 
-  ipcMain.handle('compose:info', async (e, ...args) => {
+  ipcMain.handle(channels.info, async (e, ...args) => {
     if (!fromHome(e) || args.length) return null;
     if (hidden()) return { hidden: true };
     const s = svc();
@@ -83,30 +121,39 @@ function register(deps) {
       task: own ? { id: own.last, title: own.title, row: cardRow(row, own.activityAt) } : null };
   });
 
-  ipcMain.handle('compose:pick-folder', async (e, ...args) => {
+  ipcMain.handle(channels.pickFolder, async (e, ...args) => {
     if (!fromHome(e) || args.length || hidden()) return null;
     const dir = await deps.pickFolder(e);
     try { if (!dir || !path.isAbsolute(dir) || !(await deps.isDir(dir))) return null; } catch { return null; }
     return svc().registerFolder(dir);
   });
 
-  ipcMain.handle('compose:route', async (e, ...args) => {
+  ipcMain.handle(channels.route, async (e, ...args) => {
     if (!fromHome(e) || args.length !== 1 || hidden()) return refused('ILLEGAL_TRANSITION', '');
     return svc().route(args[0]);
   });
 
-  ipcMain.handle('compose:preflight', async (e, ...args) => {
+  ipcMain.handle(channels.preflight, async (e, ...args) => {
     if (!fromHome(e) || args.length !== 1 || hidden()) return refused('ILLEGAL_TRANSITION', '');
     const r = await svc().preflight(args[0]);
     return r?.ok ? { ok: true, preflight: { ...r.preflight, key: peersKeyOf(r.preflight) } } : r;
   });
 
   // The only channel that starts anything.
-  ipcMain.handle('compose:run', async (e, ...args) => {
+  ipcMain.handle(channels.run, async (e, ...args) => {
     const before = owner();
-    if (!before || e.sender !== before.contents || e.senderFrame !== before.frame || args.length !== 1 || hidden()) return refused('ILLEGAL_TRANSITION', 'Focus Home and press Run again.');
+    if (!before || e.sender !== before.contents || e.senderFrame !== before.frame || args.length !== 1 || hidden()) return refused('ILLEGAL_TRANSITION', copy.focus);
     const req = args[0];
     if (!req || typeof req !== 'object' || Object.keys(req).some((k) => !RUN_KEYS.includes(k))) return refused('VALIDATION');
+    if (params.oneAtATime === true && creating > 0) return refused('BUSY', 'Still starting the last one.');
+    creating++;
+    try { return await run(e, req, before); } finally {
+      creating--;
+      try { params.settled?.(e.sender.id); } catch { /* never blocks the answer */ }
+    }
+  });
+
+  async function run(e, req, before) {
     const s = svc();
     // Finding 10 and R4: main checks the project's other work itself, right before create. A failed check refuses.
     let check;
@@ -123,12 +170,19 @@ function register(deps) {
     if (!r?.ok) return r;
     if (!started || started.wcId !== e.sender.id || started.doc !== before.document) started = { wcId: e.sender.id, doc: before.document, ids: new Set(), last: null, title: '' };
     started.ids.add(r.id); started.last = r.id; started.activityAt = now(); started.title = String(req.text).trim().slice(0, 200);
-    try { await s.openTask(r.id, e.sender.id); } catch { /* the card still follows the list snapshot */ }
+    if (params.afterCreate) {
+      let moved = false;
+      try { moved = (await params.afterCreate({ id: r.id, wcId: e.sender.id, current: () => same(before) })) === true; } catch { moved = false; }
+      // S3 handoff: the task's own page has it now. Nothing stays behind for this document (review S1).
+      if (moved) { retire(e.sender.id); return { ok: true, id: r.id, opened: true }; }
+      if (!same(before)) return { ok: false, code: 'STARTED_ELSEWHERE', id: r.id, text: "Started. It's in Tasks." };
+    }
+    if (openCard) { try { await s.openTask(r.id, e.sender.id); } catch { /* the card still follows the list snapshot */ } }
     return { ok: true, id: r.id };
-  });
+  }
 
   // Stop only: exactly {id, confirmed}, for a task this Home document started (review R6). Never another action.
-  ipcMain.handle('compose:stop', async (e, ...args) => {
+  if (channels.stop) ipcMain.handle(channels.stop, async (e, ...args) => {
     const before = owner();
     if (!before || e.sender !== before.contents || e.senderFrame !== before.frame || args.length !== 1) return refused('ILLEGAL_TRANSITION', '');
     const req = args[0];
@@ -136,24 +190,32 @@ function register(deps) {
     const ours = () => same(before) && mine(e.sender.id) && before.document === started.doc && started.ids.has(req.id);
     if (!ours()) return refused('NOT_FOUND');
     const r = await svc().act({ id: req.id, action: 'stop', confirmed: req.confirmed }, e.sender.id, ours);
-    if (!ours()) return refused('CONFLICT', 'Home changed while stopping. Check the task in Tasks.');
+    if (!ours()) return refused('CONFLICT', copy.stopMoved);
     return r;
   });
 
-  ipcMain.handle('compose:open-in-tasks', (e, ...args) => {
+  ipcMain.handle(channels.openInTasks, (e, ...args) => {
     if (!fromHome(e) || args.length !== 1 || typeof args[0] !== 'string' || !mine(e.sender.id) || !started.ids.has(args[0])) return false;
     return !!deps.openInTasks(args[0]);
   });
 
-  /** Home's document retired (navigation, crash, destroyed): its slot and its started set go with it (finding 3). */
+  /** The document retired (navigation, crash, destroyed, or the S3 handoff): its slot and its started set go with it (finding 3). */
   function retire(wcId) {
+    if (keepAlive === 'create') {
+      // The new chat: closeTask always, even with nothing started or with `started` left by an earlier document
+      // (one that died mid-create), so no slot of this document's outlives it. Only this document's record is cleared.
+      if (started && started.wcId === wcId) started = null;
+      try { deps.service().closeTask(wcId); } catch { /* nothing open */ }
+      return;
+    }
     if (!started || started.wcId !== wcId) return;
     started = null;
     try { deps.service().closeTask(wcId); } catch { /* nothing open */ }
   }
 
-  /** R1: Home stays alive only while a task it started is known and live. */
+  /** R1: Home stays alive only while a task it started is known and live. The new chat: only while a create is in flight. */
   function busy() {
+    if (keepAlive === 'create') return creating > 0;
     if (!started) return false;
     const d = docNow();
     if (!d || d.wcId !== started.wcId || d.doc !== started.doc) return false;
@@ -170,7 +232,7 @@ function register(deps) {
     if (id === started.last) started.activityAt = now();
     const line = CV.eventLine(event);
     const wc = homeWc();
-    if (line && wc && wc.id === wcId) wc.send('compose:event', { id, line, at: started.activityAt });
+    if (line && wc && wc.id === wcId) send(wc, push.event, { id, line, at: started.activityAt });
     return true;
   }
 
@@ -178,8 +240,8 @@ function register(deps) {
   function onChange(snap) {
     // The helper connecting or going away: Home asks for its info again (the box was offline, or is now).
     const conn = snap?.conn?.status ?? null;
-    if (conn !== lastConn) { lastConn = conn; const wc = homeWc(); if (wc && !hidden()) { try { wc.send('compose:changed'); } catch { /* closed */ } } }
-    if (!started) return;
+    if (conn !== lastConn) { lastConn = conn; const wc = homeWc(); if (wc && !hidden()) { try { send(wc, push.changed); } catch { /* closed */ } } }
+    if (!started || !push.task) return;
     const wc = homeWc();
     if (!wc || !mine(wc.id)) return;
     const found = (snap?.tasks || []).find((t) => t && t.id === started.last);
@@ -188,7 +250,7 @@ function register(deps) {
     const json = JSON.stringify(msg);
     if (json === lastRow) return;
     lastRow = json;
-    wc.send('compose:task', msg);
+    send(wc, push.task, msg);
   }
 
   return { retire, busy, onEvent, onChange, isHomeWc: (wcId) => homeWc()?.id === wcId, defaultFolder, _started: () => started, _now: now };
@@ -205,4 +267,4 @@ function openCompose(deps) {
   return deps.buddy()?.focusComposer?.() ?? false;
 }
 
-module.exports = { register, openCompose, peersKeyOf, cardRow, RUN_KEYS };
+module.exports = { register, createCompose, openCompose, peersKeyOf, cardRow, RUN_KEYS, HOME_CHANNELS, HOME_PUSH, HOME_COPY };

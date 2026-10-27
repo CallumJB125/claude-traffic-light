@@ -139,3 +139,17 @@ test('the thread header comes from the vm: fixed keys, chatState and openInTermi
   assert.equal(headerOf(svc.threadTarget(task.id), local.id), null, 'a vm for another row is never used');
   assert.ok(!/task-h|local-1|\//.test(JSON.stringify([h, s])), 'no ref id or path in a header');
 });
+
+test('R2b-2: threadForTask names the thread row of a task this Mac lists, before any build; nothing else resolves', async () => {
+  const { svc, state } = fixture();
+  const row = svc.threadForTask('task-1');
+  assert.match(row, /^[0-9a-f]{64}$/);
+  assert.equal(svc.threadTarget(row).taskId, 'task-1', 'the same row threadTarget resolves');
+  assert.equal(row, (await rowsOf(svc)).find((r) => r.label === 'Managed task').id, 'the id the sidebar shows');
+  assert.equal(svc.threadForTask('task-9'), null, 'not listed yet');
+  for (const bad of [null, '', 'x'.repeat(500), {}]) assert.equal(svc.threadForTask(bad), null);
+  state.tasks = [{ ...state.tasks[0], hub: true }];
+  assert.equal(svc.threadForTask('task-1'), null, 'a hub task is not this Mac\'s');
+  state.tasks = [];
+  assert.equal(svc.threadForTask('task-1'), null);
+});

@@ -19,7 +19,15 @@ test('page links: every PAGES id, on either scheme; nothing else', () => {
     assert.deepEqual(ChatLinks.parse(`plexiform://open/${p.id}`), { kind: 'page', id: p.id }, p.id);
     assert.deepEqual(ChatLinks.parse(`claudebuddy://open/${p.id}/`), { kind: 'page', id: p.id });
   }
-  for (const id of [...Pages.FUTURE_IDS, 'nope', 'section:sessions', '..', '__proto__', 'constructor']) assert.equal(ChatLinks.parse(`plexiform://open/${id}`), null, id);
+  // R2b-2: newchat is the one FUTURE_IDS entry with a link of its own (below); it is still not a page.
+  for (const id of [...Pages.FUTURE_IDS.filter((x) => x !== 'newchat'), 'nope', 'section:sessions', '..', '__proto__', 'constructor']) assert.equal(ChatLinks.parse(`plexiform://open/${id}`), null, id);
+});
+
+test('R2b-2 (outline Rev 1 S2): open/newchat is its own kind, never a page; it carries nothing else', () => {
+  for (const url of ['plexiform://open/newchat', 'plexiform://open/newchat/', 'claudebuddy://open/newchat']) assert.deepEqual(ChatLinks.parse(url), { kind: 'newchat', id: 'newchat' }, url);
+  assert.equal(Pages.pageById('newchat'), null, 'not in PAGES');
+  assert.ok(Pages.FUTURE_IDS.includes('newchat'));
+  for (const url of ['plexiform://open/newchat?text=rm', 'plexiform://open/newchat/folder', 'plexiform://thread/newchat', 'plexiform://open/NEWCHAT', 'plexiform://open/newchat%20x']) assert.equal(ChatLinks.parse(url), null, url);
 });
 
 test('S4a: no link reaches an account flow (sign-in, join, create-team)', () => {

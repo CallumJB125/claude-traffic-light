@@ -125,7 +125,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, onThreadRetired = () => {}, loginEnv = () => null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, onThreadRetired = () => {}, newChatBusy = () => false, onNewChatRetired = () => {}, loginEnv = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -458,6 +458,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     if (!win || content === view) return;
     // Any other view taking the content area ends the thread (labfix-review S2).
     if (threadView && content === threadView && view !== threadView) retireThread();
+    if (newChatView && content === newChatView && view !== newChatView) retireNewChat();
     if (content) win.contentView.removeChildView(content);
     content = view;
     if (view) win.contentView.addChildView(view);
@@ -469,6 +470,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   function pushState() {
     // The selection left the thread before its next view is attached (a hub page loads first).
     if (threadView && selected !== 'thread') retireThread();
+    if (newChatView && selected !== 'newchat') retireNewChat();
     if(activeMarker!==store.active().id){tasksGeneration++;homeGeneration++;activeMarker=store.active().id;for(const listener of activeListeners)listener();}
     const markers=store.hubs().map(origin=>[origin,vault(origin).load()]);
     if(markers.length!==setupIdentityMarkers.length || markers.some((value,index)=>value[0]!==setupIdentityMarkers[index]?.[0]||value[1]!==setupIdentityMarkers[index]?.[1])) {
@@ -1119,6 +1121,64 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     if (!openThread(id)) select('board');
   }
 
+  // ── new chat (chat-first preview, redesign R2b-2) ──────────────────────
+  // One new-chat document at a time, main-created like the thread; not a PAGES
+  // entry (outline Rev 1 S2). It holds no Tasks slot (src/newchat-main.js), and
+  // is kept only while a create it sent is in flight (newChatBusy, review S1):
+  // leaving then detaches it, and it is disposed when that create returns.
+  let newChatView = null, newChatWcId = null, newChatDocument = 0, newChatGeneration = 0, newChatModalTicket = null, resumeNewChat = false, newChatHeldView = null;
+  const newChatUrl = () => { const u = new URL(pathToFileURL(path.join(DIR, '..', 'newchat.html')).href); u.searchParams.set('embedded', '1'); return u.href; };
+  const newChatInFlight = () => { try { return newChatBusy() === true; } catch { return false; } };
+  function disposeNewChat(v, wcId) {
+    dispose(v, win);
+    try { onNewChatRetired(wcId); } catch { /* never blocks retirement */ }
+  }
+  function retireNewChat({ resume = false } = {}) {
+    const v = newChatView;
+    if (!v) return;
+    const wcId = newChatWcId;
+    newChatView = null; newChatWcId = null; newChatDocument++; newChatGeneration++;
+    resumeNewChat = resume;
+    if (content === v) { try { win?.contentView.removeChildView(v); } catch { /* not attached */ } content = null; }
+    // A create in flight keeps the document until it returns; it is off screen, so that create can no longer navigate.
+    if (newChatInFlight()) { if (newChatHeldView) disposeNewChat(newChatHeldView.v, newChatHeldView.wcId); newChatHeldView = { v, wcId }; return; }
+    disposeNewChat(v, wcId);
+  }
+  // From src/newchat-main.js when a create returns.
+  function newChatSettled(wcId) {
+    const held = newChatHeldView;
+    if (!held || held.wcId !== wcId || newChatInFlight()) return;
+    newChatHeldView = null;
+    disposeNewChat(held.v, held.wcId);
+  }
+  function openNewChat() {
+    if (chatFirst !== true || !win || win.isDestroyed()) return false;
+    if (newChatView && content === newChatView && selected === 'newchat') { try { newChatView.webContents.focus(); } catch { /* closed */ } return true; }
+    retireThread();
+    retireNewChat();
+    setupLocalGeneration++; tasksGeneration++; homeGeneration++;
+    flow.leftAccountPages();
+    const v = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, preload: path.join(DIR, '..', 'newchat-preload.js') } });
+    v.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
+    lockLocal(v);
+    const wc = v.webContents, wcId = wc.id;
+    wc.on('did-start-navigation', (d) => { if (d.isMainFrame && !d.isSameDocument) { if (newChatView === v) { newChatDocument++; newChatGeneration++; } try { onNewChatRetired(wcId); } catch { /* never blocks */ } } });
+    wc.on('render-process-gone', () => { if (newChatView === v) retireNewChat(); else try { onNewChatRetired(wcId); } catch { /* never blocks */ } });
+    wc.once('destroyed', () => { try { onNewChatRetired(wcId); } catch { /* never blocks */ } });
+    newChatView = v; newChatWcId = wcId; newChatDocument++; newChatGeneration++; resumeNewChat = false;
+    selected = 'newchat';
+    attach(v);
+    pushState();
+    wc.loadFile(path.join(DIR, '..', 'newchat.html'), { query: { embedded: '1' } }).catch(() => {});
+    return true;
+  }
+  // A hidden or minimised window shows no new chat; it comes back as a new document (the draft is the page's, in sessionStorage).
+  function resumeNewChatView() {
+    if (selected !== 'newchat' || newChatView || !resumeNewChat) return;
+    resumeNewChat = false;
+    if (!openNewChat()) select('board');
+  }
+
   // ── workspaces ──────────────────────────────────────────────────────────
 
   function switchWorkspace(id, { show = true } = {}) {
@@ -1178,6 +1238,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // The thread page's "Back to Board" (navigation only, from that document's main frame).
   const fromThread = (e) => !!threadView && e.sender === threadView.webContents && e.senderFrame === threadView.webContents.mainFrame && e.sender.getURL() === threadUrl();
   if (chatFirst === true) ipcMain.on('thread:board', (e) => { if (fromThread(e)) select('board'); });
+  // The sidebar's New chat (navigation only; nothing is sent or started).
+  if (chatFirst === true) ipcMain.on('buddy:open-newchat', (e) => { if (fromSidebar(e)) openNewChat(); });
   // A sidebar row opens its thread (navigation only; main resolves the row).
   if (chatFirst === true) ipcMain.on('buddy:open-thread', (e, id) => {
     if (!fromSidebar(e) || typeof id !== 'string' || !ROW_ID.test(id)) return;
@@ -1299,6 +1361,12 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       win.on('minimize', () => retireThread({ resume: true }));
       win.on('show', resumeThread);
       win.on('restore', resumeThread);
+      // R2b-2: the new chat likewise, and its dialog's own blur doesn't void it.
+      win.on('hide', () => retireNewChat({ resume: true }));
+      win.on('minimize', () => retireNewChat({ resume: true }));
+      win.on('show', resumeNewChatView);
+      win.on('restore', resumeNewChatView);
+      win.on('blur', () => { if (!newChatModalTicket) newChatGeneration++; });
     }
     win.on('blur',()=>{if(!setupModalTicket)setupLocalGeneration++;});
     win.on('blur',()=>{if(!tasksModalTicket)tasksGeneration++;});
@@ -1309,6 +1377,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       retireThread();
       if (selected === 'thread') selected = 'board';
       resumeThreadId = null;
+      retireNewChat();
+      if (newChatHeldView) { const held = newChatHeldView; newChatHeldView = null; disposeNewChat(held.v, held.wcId); }
+      if (selected === 'newchat') selected = 'board';
+      resumeNewChat = false;
       setupLocalGeneration++;
       tasksGeneration++;
       homeGeneration++;
@@ -1360,6 +1432,35 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       return {window:win,contents:wc,frame:wc.mainFrame,generation:threadDocument,boundId:threadId,account:setupSourcesGeneration,workspace:store.active()?.id,foreground:win.isFocused()};
     },
     openThread,
+    // Chat-first preview only: the new-chat document (src/newchat-main.js), the same
+    // authority as homeContext. Every one of these is null with the gate off.
+    newChatContext(){
+      if(chatFirst!==true)return null;
+      const v=newChatView,wc=v?.webContents;
+      if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='newchat'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized())return null;
+      const expected=newChatUrl();
+      if(wc.getURL()!==expected||wc.mainFrame?.url!==expected||wc.isLoading())return null;
+      return {window:win,contents:wc,generation:newChatGeneration,document:newChatDocument,account:setupSourcesGeneration,workspace:store.active()?.id,foreground:win.isFocused()};
+    },
+    newChatDocument(){ if(chatFirst!==true)return null; const wc=newChatView?.webContents; return wc&&!wc.isDestroyed()?{wcId:wc.id,doc:newChatDocument}:null; },
+    newChatWebContents(){ if(chatFirst!==true)return null; const wc=newChatView?.webContents; return wc&&!wc.isDestroyed()?wc:null; },
+    newChatWcId(){ return chatFirst===true?newChatWcId:null; },
+    // Its over-cap "Start anyway" dialog (plan-r2b-auth §3): the homeConfirm shape, and no other dialog at the same time.
+    async newChatConfirm(show) {
+      if(chatFirst!==true)return null;
+      const before=this.newChatContext();
+      if(typeof show!=='function'||!before?.foreground||newChatModalTicket||tasksModalTicket||homeModalTicket||setupModalTicket)return null;
+      const ticket={...before,frame:before.contents.mainFrame};newChatModalTicket=ticket;
+      try {
+        const answer=await show(before.window),after=this.newChatContext();
+        if(newChatModalTicket!==ticket||!after?.foreground||after.contents.mainFrame!==ticket.frame||['window','contents','generation','document','account','workspace'].some(key=>after[key]!==ticket[key]))return null;
+        return answer;
+      }finally{if(newChatModalTicket===ticket)newChatModalTicket=null;}
+    },
+    // The other confirms ask this, so a new-chat dialog and theirs never overlap. Always false with the gate off.
+    newChatHeld(){ return newChatModalTicket!==null; },
+    newChatSettled,
+    openNewChat,
     // Chat-first preview: a deep link main parsed (src/chat-links.js); navigation only.
     // A page goes through route(), never goTo(), so no link starts an account flow.
     openLink(target) {
@@ -1367,6 +1468,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       open();
       if (target.kind === 'page' && pageById(target.id)) { route(target.id); return; }
       if (target.kind === 'thread' && openThread(target.id)) return;
+      if (target.kind === 'newchat' && openNewChat()) return;
       // A row this Mac can't show (ended, moved, or a paired device's): Board, the sidebar on All.
       select('board');
       focusSidebar('all');
@@ -1394,7 +1496,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     },
     async tasksConfirm(show) {
       const before=this.tasksContext();
-      if(typeof show!=='function'||!before?.foreground||tasksModalTicket||setupModalTicket||homeModalTicket)return null;
+      if(typeof show!=='function'||!before?.foreground||tasksModalTicket||setupModalTicket||homeModalTicket||this.newChatHeld?.())return null;
       const ticket={...before,frame:before.contents.mainFrame};tasksModalTicket=ticket;
       try {
         const answer=await show(before.window),after=this.tasksContext();
@@ -1415,7 +1517,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     homeDocument() { const wc=localViews.get('home')?.webContents; return wc&&!wc.isDestroyed()?{wcId:wc.id,doc:homeDocument}:null; },
     async homeConfirm(show) {
       const before=this.homeContext();
-      if(typeof show!=='function'||!before?.foreground||homeModalTicket||tasksModalTicket||setupModalTicket)return null;
+      if(typeof show!=='function'||!before?.foreground||homeModalTicket||tasksModalTicket||setupModalTicket||this.newChatHeld?.())return null;
       const ticket={...before,frame:before.contents.mainFrame};homeModalTicket=ticket;
       try {
         const answer=await show(before.window),after=this.homeContext();
@@ -1441,7 +1543,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     },
     async setupsConfirm(show) {
       const before=this.setupsContext();
-      if(typeof show!=='function' || !before?.foreground || setupModalTicket || homeModalTicket || tasksModalTicket)return null;
+      if(typeof show!=='function' || !before?.foreground || setupModalTicket || homeModalTicket || tasksModalTicket || this.newChatHeld?.())return null;
       const ticket={window:before.window,contents:before.contents,generation:before.generation};setupModalTicket=ticket;
       try {
         const answer=await show(before.window);
