@@ -223,8 +223,16 @@ test('tokens: text on the Lights selection wash, and the primary label on hover,
   const a = washPct('lights.html', /::selection \{ background: color-mix\(in srgb, var\(--accent\) (\d+)%, transparent\)/);
   for (const theme of Object.keys(THEMES)) {
     for (const bg of ['--bg', '--panel']) {
-      const r = ratio(color(theme, '--text'), over(wash(theme, a), color(theme, bg)));
-      assert.ok(r >= 4.5, `${theme} selected text over ${bg} is ${r.toFixed(2)}:1`);
+      const surface = color(theme, bg);
+      for (const fg of ['--text', '--muted']) {
+        const r = ratio(color(theme, fg), over(wash(theme, a), surface));
+        assert.ok(r >= 4.5, `${theme} selected ${fg} over ${bg} is ${r.toFixed(2)}:1`);
+      }
+      // --faint misses 4.5 on any accent wash above ~6 %. It is held to "no worse than the terracotta selection it
+      // replaced" (rgba(218, 119, 86, 0.35) at base: 3.57-3.93:1); at 12 % it is 4.14-5.05:1.
+      const faint = ratio(color(theme, '--faint'), over(wash(theme, a), surface));
+      const old = ratio(color(theme, '--faint'), over({ r: 218, g: 119, b: 86, a: 0.35 }, surface));
+      assert.ok(faint >= old, `${theme} selected --faint over ${bg} is ${faint.toFixed(2)}:1, below terracotta's ${old.toFixed(2)}:1`);
     }
     const hover = ratio(color(theme, '--accent-ink'), color(theme, '--accent-hover'));
     assert.ok(hover >= 4.5, `${theme} --accent-ink on --accent-hover is ${hover.toFixed(2)}:1`);

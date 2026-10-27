@@ -21,7 +21,8 @@
     overflow: hidden;
     caret-color: var(--accent);
   }
-  ::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+  /* 12 % is set by contrast, not by the old 35 % alpha: the wash sits under text, and --muted stays >= 4.5:1 here. */
+  ::selection { background: color-mix(in srgb, var(--accent) 12%, transparent); }
   ::-webkit-scrollbar { width: 10px; }
   ::-webkit-scrollbar-thumb { background: var(--line-strong); border: 3px solid var(--panel); border-radius: 8px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--faint); }
