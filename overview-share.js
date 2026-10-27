@@ -55,6 +55,11 @@
           li.append(el('strong', s.team.name), el('span', ` · ${SCOPE[s.scope]} · ${s.expiresAt === null ? 'until you stop it' : until(s.expiresAt)}`), el('p', who(s), 'reason'));
           const stop = button('Stop sharing', () => void stopShare(s.id)); stop.disabled = busy;
           li.append(stop);
+          if (s.scope === 'watch') {
+            const allow = button('Allow sending', () => void allowSending(s)); allow.disabled = busy;
+            allow.title = 'Members who aren\'t team viewers can then send, steer and interrupt, using your provider account and quota.';
+            li.append(allow);
+          }
           if (s.scope === 'interact' && typeof ix.proposalList === 'function') {
             const check = button('Review team proposals', () => void proposalAction(s.id)); check.disabled = busy; li.append(check);
             for (const p of proposals.get(s.id) ?? []) {
@@ -114,6 +119,19 @@
       busy = false;
       note = r && r.ok === true ? '' : `Not shared. ${r && str(r.error, 300) ? r.error : 'Try again.'}`;
       await refresh(); render();
+    }
+    // Replaces the watch share with a send-capable one for the same team, keeping the time it had left.
+    async function allowSending(s) {
+      if (busy) return;
+      const left = s.expiresAt === null ? null : Math.floor((s.expiresAt - Date.now()) / 1000);
+      if (left !== null && left < 60) { note = 'This share is about to end. Share again to choose a new time.'; render(); return; }
+      busy = true; note = ''; render();
+      let r; try { r = await ix.shareCreate({ session, team: s.team.id, scope: 'interact', expiresInS: left }); } catch { r = null; }
+      busy = false;
+      const ok = r && r.ok === true;
+      await refresh();
+      note = ok ? `Sending allowed ${s.expiresAt === null ? 'until you stop it' : until(s.expiresAt)}.` : `Not changed. ${r && str(r.error, 300) ? r.error : 'Try again.'}`;
+      render();
     }
     async function stopShare(id) {
       if (busy) return;

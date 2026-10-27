@@ -93,7 +93,7 @@ const SCOPE_OPS = { watch: ['state', 'watch'], interact: ['state', 'watch', 'sen
 const ACTING_ROLES = ['owner', 'admin', 'member'];
 const RESUME_HEADER = 'x-plexiform-resume';
 const RETRY = { baseMs: 1000, maxMs: 60_000, idleReapMs: 15 * 60_000, heldProbeMs: 6000 };
-const ROLE_RESET_MS = 5000;
+const ROLE_RESET_MS = 5000, SHARE_CREATE_MS = 15_000;
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const closed = (v, keys) => object(v) && Object.keys(v).every((k) => keys.includes(k));
 const refuse = (status, error) => ({ ok: false, status, error });
@@ -340,13 +340,13 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     if (tellHub) hubCall('DELETE', `/api/interaction/v1/shares/${encodeURIComponent(id)}`, {}).catch(() => {});
   }
 
-  function hubCall(method, path, body) { // privacy-flow: remote-interaction
+  function hubCall(method, path, body, signal) { // privacy-flow: remote-interaction
     const r = running;
     if (!r?.baseUrl) return Promise.resolve({ status: 0, body: null });
     const tok = typeof r.token === 'function' ? r.token() : r.token;
     const headers = { authorization: `Bearer ${tok}`, accept: 'application/json' };
     if (body !== undefined) headers['content-type'] = 'application/json';
-    return r.fetch(`${r.baseUrl}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }) // privacy-flow: remote-interaction
+    return r.fetch(`${r.baseUrl}${path}`, { method, headers, signal, body: body === undefined ? undefined : JSON.stringify(body) }) // privacy-flow: remote-interaction
       .then(async (res) => { let json = null; try { json = await res.json(); } catch { json = null; } return { status: res.status, body: json }; });
   }
 
@@ -367,8 +367,30 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     members: [...sh.users].map(([id, u]) => ({ id, name: u.name, canSend: sh.scope === 'interact' && u.act })) });
   const hubError = (r, fallback) => refuse('unavailable', (typeof r?.body?.error?.message === 'string' ? r.body.error.message : '') || fallback);
 
+  // Creating a share replaces the live one for the same session and team at the hub, so two creates for one
+  // key must not overlap: whichever runs second would silently replace the first (and its expiry).
+  const shareLocks = new Map();
+  function serialised(key, fn) {
+    const run = (shareLocks.get(key) ?? Promise.resolve()).then(fn);
+    const tail = run.catch(() => {});
+    shareLocks.set(key, tail);
+    tail.then(() => { if (shareLocks.get(key) === tail) shareLocks.delete(key); });
+    return run;
+  }
+  const liveFor = (session, team) => [...shares.values()].some((x) => x.session === session && x.team === team && liveShare(x));
+
   /** Owner: share one of this Mac's sessions with one team. */
-  async function shareSession({ session, team, scope, expiresInS = null } = {}) {
+  function shareSession(args = {}) {
+    return typeof args?.session === 'string' && typeof args.team === 'string' ? serialised(`${args.session}\n${args.team}`, () => createShare(args)) : createShare(args);
+  }
+
+  /** Main only (never reachable from a renderer): automatic sharing. Yields to any share that exists, so it can never replace a manual one. */
+  function shareSessionAutomatic({ session, team, scope } = {}) {
+    if (typeof session !== 'string' || typeof team !== 'string') return Promise.resolve(REFUSED.invalid);
+    return serialised(`${session}\n${team}`, () => liveFor(session, team) ? refuse('exists', 'This session is already shared with that team.') : createShare({ session, team, scope }));
+  }
+
+  async function createShare({ session, team, scope, expiresInS = null } = {}) {
     if (typeof session !== 'string' || !UUID.test(session) || typeof team !== 'string' || !team || team.length > 100 || !Object.hasOwn(SCOPE_OPS, scope)
       || (expiresInS !== null && (!Number.isSafeInteger(expiresInS) || expiresInS < 60 || expiresInS > 30 * 86_400))) return REFUSED.invalid;
     const t = targetFor(session);
@@ -378,7 +400,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     // Taken before the hub creates its row, so this Mac never shows a teammate anything older than the hub would.
     const createdAt = clock();
     let r;
-    try { r = await hubCall('POST', '/api/interaction/v1/shares', { session, team, scope, ...(expiresInS === null ? {} : { expires_in_s: expiresInS }) }); } catch { r = null; }
+    try { r = await hubCall('POST', '/api/interaction/v1/shares', { session, team, scope, ...(expiresInS === null ? {} : { expires_in_s: expiresInS }) }, AbortSignal.timeout(SHARE_CREATE_MS)); } catch { r = null; }
     const s = r?.body?.share;
     if (r?.status !== 200 || !object(s) || typeof s.id !== 'string' || s.session !== session || s.scope !== scope || s.team?.id !== team) return hubError(r, 'The hub did not accept the share.');
     // The session may have ended while the hub answered.
@@ -668,7 +690,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   // `hub` is a main-only seam (tests and proof logs), never exposed remotely.
   const onState = (fn) => { stateListeners.add(fn); return () => stateListeners.delete(fn); };
   // forgetDevice(dev): drop a revoked device's end-to-end sessions now (its peer() should already return null).
-  return { handle, connect, enable, disable, status, disconnect, close, onState, hub, actor, connected: () => socket?.readyState === 1, shareSession, listShares, stopSharing, proposalList, proposalApprove, proposalRevoke, shared: () => [...shares.values()].map(shareView), forgetDevice: (dev) => channel?.forget(dev) };
+  return { handle, connect, enable, disable, status, disconnect, close, onState, hub, actor, connected: () => socket?.readyState === 1, shareSession, shareSessionAutomatic, listShares, stopSharing, proposalList, proposalApprove, proposalRevoke, shared: () => [...shares.values()].map(shareView), forgetDevice: (dev) => channel?.forget(dev) };
 }
 
 /** PUT role=client with this token, bounded. → true once the hub has no host role for it. */

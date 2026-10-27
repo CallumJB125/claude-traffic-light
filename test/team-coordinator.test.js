@@ -7,9 +7,10 @@ const tick = () => new Promise(r => setImmediate(r));
 function fixture() {
   let time = 1_000_000, visible = true, focused = true, revoked = false, scope = 'interact', held = null, resolveHeld = null, inspectHeld = null;
   const states = ids.map(() => ({ generation: 1, activeTurn: null, status: 'ready', capabilities: { newTurn: true, steer: true }, deliveries: [] }));
-  const calls = [];
+  const calls = [], requested = [];
   const entries = ids.map((id, i) => ({ id, kind: 'shared', scope: 'team', teams: [{ key: TEAM }], owner: { name: ['Bob', 'Cara'][i] }, provider: { id: ['codex', 'claude'][i], label: ['Codex', 'Claude Code'][i] }, device: { label: 'Other device' }, task: { title: `Task ${i + 1}` }, state: 'Idle', freshness: 'recent', observedAt: time, interact: { kind: 'team', ref: id }, capabilities: { receive: { available: true, reason: '' } }, messageContract: 'live' }));
   const hub = {
+    async proposals(_v, _t, ref, op, input) { requested.push({ ref, op }); return { ok: true, proposal: { ...input, status: 'pending' } }; },
     async inspect(_v, _t, ref) { if (inspectHeld) await inspectHeld(); if (revoked) return { ok: false, status: 'forbidden' }; return { ok: true, state: structuredClone(states[ids.indexOf(ref)]) }; },
     async act(_v, _t, ref, command, _request, fresh) {
       if (held) await held();
@@ -24,9 +25,10 @@ function fixture() {
   const directory = { schema: 1, view: 'team', status: 'complete', observed_at: time, team: { key: TEAM, name: 'Dev' }, entries };
   let inventoryHook = null;
   const coordinator = createTeamCoordinator({ now: () => time, current: () => visible, actionCurrent: () => focused, inspect: controls.inspect, action: controls.action,
+    resolve: async entry => revoked ? null : { hub, viewer: { id: 'operator' }, team: 'private-team', ref: entry.id, scope, isCurrent: () => !revoked },
     inventory: async () => { if (inventoryHook) await inventoryHook(); return structuredClone({ ...directory, entries: revoked ? [] : entries }); } });
   const request = { team: TEAM, title: 'Review and compare', assignments: ids.map((id, i) => ({ id, name: ['Implementation review', 'Test review'][i], text: [`Review parser behavior`, 'Review test coverage'][i] })) };
-  return { coordinator, controls, states, entries, directory, calls, request,
+  return { coordinator, controls, states, entries, directory, calls, requested, request,
     propose: () => coordinator.propose(structuredClone(request)),
     confirm: p => coordinator.confirm({ proposal: p.proposal, grants: p.assignments.filter(a => a.status === 'review').map(a => ({ assignment: a.assignment, operation: 'send' })) }),
     advance: ms => time += ms, blur: () => focused = false, hide: () => visible = false, revoke: () => revoked = true,
@@ -137,4 +139,16 @@ test('ordinary reviewed controls retain their documented 45-second lifetime with
   const x = fixture(), inspected = await x.controls.inspect({ id: ids[0] }); x.advance(31_000);
   const r = await x.controls.action({ selection: inspected.selection, operation: 'send', text: 'Ordinary explicit send' });
   assert.equal(r.ok, true); assert.equal(x.calls.length, 1);
+});
+
+test('asking an owner to approve a message is refused with the watch-only reason when the share became watch-only, and sent to the hub when it is interact', async () => {
+  const ok = fixture(), p = await ok.propose();
+  const sent = await ok.coordinator.requestOwner({ proposal: p.proposal });
+  assert.equal(sent.assignments[0].status, 'awaiting-owner', sent.assignments[0].reason); assert.deepEqual(ok.requested.map(r => r.op), ['request', 'request']);
+  const x = fixture(), q = await x.propose();
+  x.watch();
+  const r = await x.coordinator.requestOwner({ proposal: q.proposal });
+  assert.equal(r.assignments[0].status, 'refused');
+  assert.equal(r.assignments[0].reason, 'Shared with you to watch only. The owner can choose Allow sending.');
+  assert.deepEqual(x.requested, [], 'nothing was asked of a watch-only session');
 });

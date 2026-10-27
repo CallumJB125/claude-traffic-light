@@ -5,14 +5,15 @@ function rig(){
  let enabled=true,associated=true,allowed=true,rows=[],calls=[],clock=1,sessionRows=null;
  const state={session:'one',ownership:'plexiform-owned',board:'bound-team-workspace',status:'ready'};
  const host={connected:()=>true,listShares:async()=>({ok:true,teams:allowed?[{id:'team'}]:[]}),shared:()=>rows,
-  shareSession:async d=>{calls.push(d);const share={...d,id:'share-'+calls.length,team:{id:d.team}};rows.push(share);return {ok:true,share};},stopSharing:id=>{rows=rows.filter(x=>x.id!==id);}};
+  shareSession:async d=>{calls.push(d);const share={...d,id:'share-'+calls.length,team:{id:d.team}};rows.push(share);return {ok:true,share};},stopSharing:id=>{rows=rows.filter(x=>x.id!==id);},
+  shareSessionAutomatic:async d=>rows.some(s=>s.session===d.session&&s.team.id===d.team)?{ok:false,status:'exists'}:host.shareSession(d)};
  const x=createTeamSessionSharing({host:()=>enabled?host:null,origin:()=> 'https://hub.example',sessions:()=>sessionRows??[{state}],association:b=>associated&&b==='bound-team-workspace'?{origin:'https://hub.example',team:'team'}:null,now:()=>clock});
  return {x,state,host,calls,get rows(){return rows;},off:()=>enabled=false,unassign:()=>associated=false,revoke:()=>rows=[],removeMember:()=>allowed=false,setSessions:x=>sessionRows=x,advance:()=>clock+=100000};
 }
 test('team workspace sessions auto-share once; personal and unrelated-provider sessions stay private',async()=>{
- const r=rig();await Promise.all([r.x.sync(),r.x.sync()]);assert.deepEqual(r.calls,[{session:'one',team:'team',scope:'interact'}]);await r.x.sync();assert.equal(r.calls.length,1);
+ const r=rig();await Promise.all([r.x.sync(),r.x.sync()]);assert.deepEqual(r.calls,[{session:'one',team:'team',scope:'watch'}],'new automatic shares watch');await r.x.sync();assert.equal(r.calls.length,1);
  for(const mutate of [r=>r.state.board='personal',r=>r.state.ownership='existing-unmanaged']){const r=rig();mutate(r);await r.x.sync();assert.equal(r.calls.length,0);}
- const c=rig();c.state.ownership='existing-unmanaged';c.state.provider={id:'claude-channel'};await c.x.sync();assert.equal(c.calls.length,1);
+ const c=rig();c.state.ownership='existing-unmanaged';c.state.provider={id:'claude-channel'};await c.x.sync();assert.deepEqual(c.calls,[{session:'one',team:'team',scope:'interact'}],'an attached terminal channel keeps send access');
 });
 test('association/account membership removal and disabling stop automatic shares',async()=>{
  for(const mutate of [r=>r.unassign(),r=>r.removeMember(),r=>r.off(),r=>r.state.status='ended']){const r=rig();await r.x.sync();mutate(r);await r.x.sync();assert.equal(r.rows.length,0);}
@@ -35,4 +36,19 @@ test('revoked active shares stay blocked across more than 256 historical session
  const r=rig();await r.x.sync();r.revoke();await r.x.sync();
  for(let i=0;i<300;i++){const extra={...r.state,session:'history-'+i};r.setSessions([{state:r.state},{state:extra}]);r.advance();await r.x.sync();}
  assert.equal(r.calls.filter(c=>c.session==='one').length,1);assert.equal(r.rows.some(s=>s.session==='one'),false);
+});
+
+test('a share that already exists is left alone, whatever its scope, and an exists answer does not block the next pass',async()=>{
+ const r=rig();r.host.shareSession({session:'one',team:'team',scope:'interact'});await r.x.sync();await r.x.sync();assert.equal(r.calls.length,1,'no second create');assert.equal(r.rows.length,1);assert.equal(r.rows[0].scope,'interact','a pre-existing interact share is never downgraded');
+ const q=rig();let raced=true;const auto=q.host.shareSessionAutomatic;q.host.shareSessionAutomatic=async d=>{if(raced){raced=false;return {ok:false,status:'exists'};}return auto(d);};
+ await q.x.sync();assert.equal(q.rows.length,0);await q.x.sync();assert.equal(q.rows.length,1,'exists is not a 60 s block');
+});
+test('automatic share creation exists only in the host and the reconciler: no IPC channel, preload or renderer can reach it',()=>{
+ const fs=require('node:fs'),path=require('node:path'),root=path.join(__dirname,'..');
+ const hits=[];(function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){
+  if(e.name==='node_modules'||e.name==='test'||e.name==='test-visual'||e.name==='work'||e.name.startsWith('.')||e.name==='dist')continue;
+  const f=path.join(d,e.name);if(e.isDirectory())walk(f);else if(/\.(js|mjs|html)$/.test(e.name)&&fs.readFileSync(f,'utf8').includes('shareSessionAutomatic'))hits.push(path.relative(root,f));}})(root);
+ assert.deepEqual(hits.sort(),['src/remote-interaction.js','src/team-session-sharing.js']);
+ const im=fs.readFileSync(path.join(root,'src/interaction-main.js'),'utf8');
+ assert.match(im,/return host\.shareSession\(\{ session: req\.session, team: req\.team, scope: req\.scope, expiresInS: req\.expiresInS \?\? null \}\);/,'the renderer request is rebuilt from four named fields');
 });

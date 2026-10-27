@@ -1054,3 +1054,138 @@ test('PROPOSALS: a different owned share cannot revoke another session grant by 
   const sent=await x.send(p);assert.equal(sent.proposal.status,'sent');
  }finally{await r.close();}
 });
+
+// ── T0: automatic shares watch; one share per session and team; no manual share is ever replaced by an automatic one ──
+
+// Holds the next share-create POST (before it reaches the hub) so a test can run another create meanwhile.
+function gateShareCreates() {
+  const real = globalThis.fetch, gate = { posts: 0, signals: [], hold: null, entered: null };
+  globalThis.fetch = async (url, init) => {
+    if (init?.method === 'POST' && String(url).endsWith('/api/interaction/v1/shares')) {
+      gate.posts++; gate.signals.push(init.signal);
+      const hold = gate.hold; gate.hold = null;
+      if (hold) { gate.entered?.(); await hold.promise; if (hold.fail) throw new Error('connection lost'); }
+    }
+    return real(url, init);
+  };
+  gate.restore = () => { globalThis.fetch = real; };
+  gate.holdNext = (fail = false) => { let resolve; const promise = new Promise((r) => { resolve = r; }); const entered = new Promise((r) => { gate.entered = r; }); gate.hold = { promise, fail }; return { release: resolve, entered }; };
+  return gate;
+}
+const live = (r, session) => r.h.db.all('SELECT * FROM interaction_shares WHERE session_id = ? AND revoked_at IS NULL', session);
+// An acting teammate's relayed ops against a share: send, steer (send with expectedTurn) and interrupt are refused; state and watch still work.
+async function assertWatchOnly(r, s, share) {
+  for (const [op, args] of [['send', { text: 'x' }], ['send', { text: 'x', expectedTurn: 'turn-1' }], ['interrupt', { turn: 'turn-1' }]]) {
+    const res = await r.mac.handle(r.frame(op, { session: s.session, generation: s.generation, ...args }, share, r.bob));
+    assert.deepEqual([res.ok, res.status, res.error], [false, 'forbidden', 'This session is not shared with you.'], `${op} ${JSON.stringify(args)}`);
+    const hub = await r.call(r.bob, share.id, op, { session: s.session, generation: s.generation, ...args });
+    assert.equal(hub.status, 403, op); assert.equal(hub.body.error.reason, 'SCOPE');
+  }
+  assert.equal((await r.mac.handle(r.frame('state', { session: s.session }, share, r.bob))).ok, true);
+}
+
+test('T0: an automatic watch share replaced by a manual watch share leaves exactly one watch share; send, steer and interrupt stay refused', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    const auto = await r.mac.shareSessionAutomatic({ session: s.session, team: r.org, scope: 'watch' });
+    assert.equal(auto.ok, true); assert.equal(auto.share.scope, 'watch');
+    const manual = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch', expiresInS: 3600 });
+    assert.equal(manual.ok, true);
+    assert.deepEqual(r.mac.shared().map((x) => [x.id, x.scope]), [[manual.share.id, 'watch']]);
+    assert.deepEqual(live(r, s.session).map((x) => [x.id, x.scope]), [[manual.share.id, 'watch']]);
+    assert.equal((await r.call(r.bob, auto.share.id, 'state', { session: s.session })).status, 404, 'the automatic share is dead');
+    await assertWatchOnly(r, s, manual.share);
+  } finally { await r.close(); }
+});
+
+test('T0: a send-capable share from before the change, replaced by a manual watch share, leaves exactly one watch share', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    const old = (await r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact' })).share;
+    const manual = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' });
+    assert.equal(manual.ok, true);
+    assert.deepEqual(live(r, s.session).map((x) => [x.id, x.scope]), [[manual.share.id, 'watch']]);
+    const refused = await r.mac.handle(r.frame('send', { session: s.session, generation: s.generation, text: 'x' }, old, r.bob));
+    assert.equal(refused.status, 'forbidden', 'the old interact share id no longer works');
+    await assertWatchOnly(r, s, manual.share);
+  } finally { await r.close(); }
+});
+
+test('T0 race: a manual share made while an automatic create is in flight ends as the only live share, with its expiry', async () => {
+  const gate = gateShareCreates(), r = await rig();
+  try {
+    const s = await r.launch(), held = gate.holdNext();
+    const auto = r.mac.shareSessionAutomatic({ session: s.session, team: r.org, scope: 'watch' });
+    await held.entered;
+    const manual = r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch', expiresInS: 3600 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(gate.posts, 1, 'the manual create waits for the automatic one');
+    held.release();
+    const [a, m] = await Promise.all([auto, manual]);
+    assert.equal(a.ok, true); assert.equal(m.ok, true);
+    const rows = live(r, s.session);
+    assert.deepEqual(rows.map((x) => x.id), [m.share.id]);
+    assert.notEqual(rows[0].expires_at, null, 'the manual expiry survives');
+    assert.deepEqual(r.mac.shared().map((x) => x.id), [m.share.id]);
+  } finally { gate.restore(); await r.close(); }
+});
+
+test('T0 race: an automatic create yields to a manual one in flight, with no hub call', async () => {
+  const gate = gateShareCreates(), r = await rig();
+  try {
+    const s = await r.launch(), held = gate.holdNext();
+    const manual = r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch', expiresInS: 3600 });
+    await held.entered;
+    const auto = r.mac.shareSessionAutomatic({ session: s.session, team: r.org, scope: 'interact' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    held.release();
+    const [m, a] = await Promise.all([manual, auto]);
+    assert.equal(m.ok, true);
+    assert.deepEqual([a.ok, a.status], [false, 'exists']);
+    assert.equal(gate.posts, 1, 'only the manual create reached the hub');
+    assert.deepEqual(live(r, s.session).map((x) => [x.id, x.scope]), [[m.share.id, 'watch']]);
+  } finally { gate.restore(); await r.close(); }
+});
+
+test('T0: the create has a deadline, and a failed create releases the lock for the next one', async () => {
+  const gate = gateShareCreates(), r = await rig();
+  try {
+    const s = await r.launch(), held = gate.holdNext(true);
+    const first = r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' });
+    await held.entered;
+    const second = r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact' });
+    held.release();
+    assert.equal((await first).ok, false);
+    assert.equal((await second).ok, true);
+    assert.ok(gate.signals.every((x) => x instanceof AbortSignal), 'every create is bounded by an abort signal');
+    assert.equal(live(r, s.session).length, 1);
+  } finally { gate.restore(); await r.close(); }
+});
+
+test('T0: automatic creation validates its scope and is not part of the manual path', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    for (const scope of [undefined, 'admin', 'WATCH']) assert.equal((await r.mac.shareSessionAutomatic({ session: s.session, team: r.org, scope })).ok, false, String(scope));
+    assert.equal((await r.mac.shareSessionAutomatic({ team: r.org, scope: 'watch' })).ok, false);
+    assert.equal(live(r, s.session).length, 0);
+  } finally { await r.close(); }
+});
+
+test('T0: after a restart, the hub ends a send-capable share the new host does not know', async () => {
+  const r = await rig();
+  let again;
+  try {
+    const s = await r.launch();
+    const old = (await r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact' })).share;
+    r.mac.close();
+    again = createRemoteInteractionHost({ userId: r.macA.user, adapters: {}, boardCurrent: (b) => b === null, now: () => r.h.clock.wall() });
+    assert.equal((await again.enable({ baseUrl: r.h.base, token: r.macA.token, WebSocket })).state, 'connected');
+    assert.equal((await again.listShares()).ok, true);
+    await until(() => live(r, s.session).length === 0);
+    assert.deepEqual(again.shared(), []);
+    assert.equal((await r.call(r.bob, old.id, 'state', { session: s.session })).status, 404);
+  } finally { again?.close(); await r.close(); }
+});

@@ -33,7 +33,7 @@ function fakeHost() {
   return {
     calls, shares,
     async listShares() { calls.push(['list']); return { ok: true, teams: [{ id: 'team-1', name: 'Dev team' }], shares: [...shares.values()] }; },
-    async shareSession(req) { calls.push(['share', req]); const s = { id: `share-${shares.size + 1}`, session: req.session, team: { id: req.team, name: 'Dev team' }, scope: req.scope, expiresAt: req.expiresInS ? Date.now() + req.expiresInS * 1000 : null, members: [{ id: 'u-bob', name: 'Bob', canSend: req.scope === 'interact' }, { id: 'u-vic', name: 'Vic', canSend: false }] }; shares.set(s.id, s); return { ok: true, share: s }; },
+    async shareSession(req) { calls.push(['share', req]); for (const [id, old] of shares) if (old.session === req.session && old.team.id === req.team) shares.delete(id); /* like the host: one share per session and team */ const s = { id: `share-${calls.length}`, session: req.session, team: { id: req.team, name: 'Dev team' }, scope: req.scope, expiresAt: req.expiresInS ? Date.now() + req.expiresInS * 1000 : null, members: [{ id: 'u-bob', name: 'Bob', canSend: req.scope === 'interact' }, { id: 'u-vic', name: 'Vic', canSend: false }] }; shares.set(s.id, s); return { ok: true, share: s }; },
     stopSharing(id) { calls.push(['stop', id]); shares.delete(id); return { ok: true }; },
     shared: () => [...shares.values()],
   };
@@ -169,4 +169,41 @@ test('owned-session Share panel displays exact remote decision and grants/revoke
   s.btn('Revoke grant').click();await tick();assert.equal(host.calls.filter(c=>c[0]==='revoke').length,1);assert.match(s.card().textContent,/revoked/);
   s.ctx.foreground=false;assert.equal((await s.api.interaction.proposalApprove({share:p.share,id:p.id,version:2,digest:p.digest,expiresInS:600})).ok,false);
  }finally{s.close();}
+});
+
+test('Overview Share…: Allow sending upgrades a watch share in one click, keeps the time it had left, and appears only on watch shares', async () => {
+  const s = stack();
+  try {
+    await s.ready(); await s.start();
+    s.btn('Share…').click(); await tick();
+    const shareAs = async (scope, expiry) => { const sel = [...s.card().querySelectorAll('.share-panel select')]; sel[1].value = scope; sel[2].value = expiry; s.btn('Share').click(); await tick(8); };
+    const creates = () => s.host.calls.filter(([k]) => k === 'share').map(([, req]) => req);
+    await shareAs('watch', '3600');
+    assert.ok(s.btn('Allow sending'), 'offered on a watch share');
+    assert.match(s.btn('Allow sending').title, /send, steer and interrupt, using your provider account and quota/);
+    s.btn('Allow sending').click(); await tick(8);
+    const up = creates().at(-1);
+    assert.deepEqual([up.scope, up.team, up.session], ['interact', 'team-1', s.card().dataset.session]);
+    assert.ok(up.expiresInS >= 3590 && up.expiresInS <= 3600, `remaining time, not the original: ${up.expiresInS}`);
+    assert.match(s.card().textContent, /Sending allowed until /);
+    assert.equal(s.btn('Allow sending'), undefined, 'not offered once it can send');
+    assert.equal(s.host.shares.size, 1);
+
+    // No expiry stays no expiry.
+    s.btn('Stop sharing').click(); await tick(8);
+    await shareAs('watch', '');
+    s.btn('Allow sending').click(); await tick(8);
+    assert.equal(creates().at(-1).expiresInS, null);
+    assert.match(s.card().textContent, /Sending allowed until you stop it\./);
+
+    // A share about to end is not extended by upgrading it.
+    s.btn('Stop sharing').click(); await tick(8);
+    await shareAs('watch', '3600');
+    for (const sh of s.host.shares.values()) sh.expiresAt = Date.now() + 30_000;
+    s.btn('Sharing…').click(); s.btn('Sharing…').click(); await tick(8);
+    const before = creates().length;
+    s.btn('Allow sending').click(); await tick(8);
+    assert.equal(creates().length, before, 'nothing created');
+    assert.match(s.card().textContent, /about to end\. Share again to choose a new time\./);
+  } finally { s.close(); }
 });
