@@ -4829,20 +4829,26 @@ ipcMain.on('set-bubble-height', (e, px) => {
 // counts as seen and it can't be answered.
 let bubbleAsked = 0;
 let bubbleAcked = null;
+// The bubble height that fits on the widget's display (WidgetStrip.bubbleRoom); a bubble asking more is clamped
+// and scrolls, so it is not vouched for.
+let bubbleCap = BUBBLE_MAX_PX;
 function ackStrip() {
-  if (!WidgetStrip.shouldAck(strip, bubbleAsked, bubbleAcked, BUBBLE_MAX_PX) || !win || win.isDestroyed()) return;
+  if (!WidgetStrip.shouldAck(strip, bubbleAsked, bubbleAcked, bubbleCap) || !win || win.isDestroyed()) return;
   bubbleAcked = bubbleAsked;
   win.webContents.send('strip-applied', bubbleAsked);
 }
 function applyStrip(asking, away = false, update = false, budget = false) {
   if (!win) return;
-  const next = asking ? { kind: 'bubble', px: Math.min(BUBBLE_MAX_PX, asking), minWidth: BUBBLE_MIN_W } : budget ? { kind: 'budget', px: BUDGET_PX, minWidth: BUBBLE_MIN_W } : away ? { kind: 'away', px: AWAY_PX } : update ? { kind: 'update', px: UPDATE_PX } : { kind: null };
+  const cur = win.getBounds();
+  const base = WidgetStrip.baseOf(cur, strip);
+  const workArea = screen.getDisplayMatching(base).workArea;
+  bubbleCap = WidgetStrip.bubbleRoom(base.height, workArea, BUBBLE_MAX_PX);
+  const next = asking ? { kind: 'bubble', px: Math.min(bubbleCap, asking), minWidth: BUBBLE_MIN_W } : budget ? { kind: 'budget', px: BUDGET_PX, minWidth: BUBBLE_MIN_W } : away ? { kind: 'away', px: AWAY_PX } : update ? { kind: 'update', px: UPDATE_PX } : { kind: null };
   if (WidgetStrip.sameStrip(strip, next)) { ackStrip(); return; }
   // The garden or a roam is moving the widget's own rect: grow once it's home
   // (the next broadcast tries again).
   if (gardenRun || roamState.busy) return;
-  const cur = win.getBounds();
-  const r = WidgetStrip.stripBounds(cur, strip, next, screen.getDisplayMatching(WidgetStrip.baseOf(cur, strip)).workArea);
+  const r = WidgetStrip.stripBounds(cur, strip, next, workArea);
   const maxH = Math.round(MAX_WIDTH / WIDGET_ASPECT);
   applyingStrip = true;
   strip = r.strip;

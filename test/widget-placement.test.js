@@ -16,8 +16,35 @@ const fakeScreen = (displays) => ({
 });
 const size = { width: 100, height: 128 };
 
-test('no main window: top-right of the primary display, 16 px in', () => {
-  assert.deepEqual(P.defaultBounds(fakeScreen([D1, D2]), size), { x: 1440 - 100 - 16, y: 25 + 16, ...size });
+test('no main window on a large display: top-right of the primary display, 16 px in, clear of where it will open', () => {
+  const big = { id: 3, workArea: { x: 0, y: 25, width: 2560, height: 1415 } };
+  assert.deepEqual(P.defaultBounds(fakeScreen([big, D2]), size), { x: 2560 - 100 - 16, y: 25 + 16, ...size });
+});
+
+test('M1: first run with no main window on a 1440×900 display: below where the main window will open its header', () => {
+  const screen = fakeScreen([D1]);
+  const main = P.predictedMain(screen);
+  assert.deepEqual(main, { x: 60, y: 33, width: 1320, height: 860 }, '1320×860 centred on the work area');
+  const r = P.defaultBounds(screen, size);
+  assert.deepEqual(r, P.defaultBounds(screen, size, main), 'the same spot as with that window open');
+  assert.equal(r.x, 1440 - 100 - 16);
+  assert.equal(r.y, main.y + P.HEADER_H + P.MARGIN);
+  const band = { x: main.x, y: main.y, width: main.width, height: P.HEADER_H };
+  assert.ok(!(r.x < band.x + band.width && r.x + r.width > band.x && r.y < band.y + band.height && r.y + r.height > band.y), 'clear of the header band');
+});
+
+test('M1: the predicted main window is clamped to a work area smaller than its default size', () => {
+  const small = { id: 4, workArea: { x: 0, y: 25, width: 1280, height: 775 } };
+  assert.deepEqual(P.predictedMain(fakeScreen([small])), { x: 0, y: 25, width: 1280, height: 775 });
+  const r = P.defaultBounds(fakeScreen([small]), size);
+  assert.ok(r.y >= 25 + P.HEADER_H && r.y + r.height <= 25 + 775, 'below the header, on screen');
+});
+
+test('M1: the main window opens at the size the placement predicts (one constant)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  assert.match(src, /require\('\.\.\/src\/widget-placement\.js'\)/);
+  assert.match(src, /new BaseWindow\(\{\s*width: MAIN_WINDOW\.width, height: MAIN_WINDOW\.height,/);
+  assert.doesNotMatch(src, /width: 1320, height: 860/);
 });
 
 test('a main window under the top-right corner: the widget slides below its title bar and controls', () => {

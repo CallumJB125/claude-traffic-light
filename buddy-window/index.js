@@ -19,6 +19,7 @@ const { pathToFileURL } = require('node:url');
 const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage, dialog, clipboard } = require('electron'); // privacy-flow: team-hub-account
 const { PAGES, GROUPS, SECTIONS, FOOTER, sectionsFor, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
+const { MAIN_WINDOW } = require('../src/widget-placement.js');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
 const { createAccountClient, pinnedTransport, bearerScope, bearerHeaders } = require('./accounts');
 const { createDeviceController, defaultDeviceName } = require('./device');
@@ -1170,7 +1171,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       return;
     }
     win = new BaseWindow({
-      width: 1320, height: 860, minWidth: 760, minHeight: 520,
+      width: MAIN_WINDOW.width, height: MAIN_WINDOW.height, minWidth: 760, minHeight: 520,
       title: BRAND.WINDOW_TITLE,
       titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
       trafficLightPosition: { x: 16, y: 18 },

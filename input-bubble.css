@@ -22,8 +22,9 @@
 .ib-body { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 6px; }
 .ib-title { font-weight: 700; }
 .ib-textwrap { display: flex; flex-direction: column; gap: 1px; }
-.ib-text { margin: 0; padding: 4px 6px; max-height: 84px; overflow: auto; border-radius: var(--radius-sm); background: rgba(0, 0, 0, 0.35); font: 12px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; user-select: text; -webkit-user-select: text; cursor: text; }
-.ib-text.full { max-height: 150px; }
+/* Whole lines (12px/1.35 plus the 8px padding), so a long text never shows half a line before it scrolls. */
+.ib-text { margin: 0; padding: 4px 6px; max-height: calc(5 * 1.35em + 8px); overflow: auto; border-radius: var(--radius-sm); background: rgba(0, 0, 0, 0.35); font: 12px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; user-select: text; -webkit-user-select: text; cursor: text; }
+.ib-text.full { max-height: calc(9 * 1.35em + 8px); }
 .ib-link { align-self: flex-start; border: none; background: none; padding: 0; color: var(--accent); font: inherit; font-size: 12px; min-height: 28px; cursor: pointer; }
 .ib-opts { display: flex; flex-wrap: wrap; gap: 6px; }
 .ib-opt { flex: 1 1 auto; min-height: 28px; padding: 4px 10px; border: 1px solid transparent; border-radius: var(--radius); font: 600 12px var(--font); cursor: pointer; color: #fff; background: var(--panel-2); border-color: var(--line-strong); }

@@ -33,6 +33,10 @@ function stripBounds(current, strip = NONE, next = {}, workArea = null) {
 // Whether `next` asks for something other than what is applied.
 const sameStrip = (strip, next) => (strip.kind || null) === (next.kind || null) && strip.px === (next.kind ? Math.round(next.px || 0) : 0) && (strip.minWidth || 0) === (next.minWidth || 0);
 
+// The bubble's height that still fits on the display under the widget's own
+// rect: the cap, or less on a short display (the bubble then scrolls).
+const bubbleRoom = (baseHeight, workArea, maxPx) => Math.max(0, Math.min(maxPx, Math.floor(workArea.height - baseHeight)));
+
 // Whether the widget may be told its bubble has its room. Past the cap the
 // window was clamped, so the bubble may be clipped: don't vouch for it.
 const shouldAck = (strip, asked, acked, maxPx) => !!strip && strip.kind === 'bubble' && asked <= maxPx && acked !== asked;
@@ -94,4 +98,4 @@ function sessionRows(sessions = [], { pinnedId = null, teammates = [], collapseA
   return { rows, team, pinnedId: pinned.length ? pinnedId : null, collapsed };
 }
 
-module.exports = { NONE, baseOf, stripBounds, sameStrip, blocksTravel, resizeBase, shouldAck, sessionRows, COLLAPSE_AFTER };
+module.exports = { NONE, baseOf, stripBounds, sameStrip, blocksTravel, resizeBase, shouldAck, bubbleRoom, sessionRows, COLLAPSE_AFTER };

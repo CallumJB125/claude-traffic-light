@@ -1,6 +1,8 @@
 // Widget sizing while the bubble or the recap shows (src/widget-strip.js).
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const W = require('../src/widget-strip.js');
 
 const base = { x: 1000, y: 200, width: 100, height: 128 };
@@ -80,6 +82,32 @@ test('the widget is only told its bubble has room when the window was not clampe
   assert.equal(W.shouldAck(bubble, 120, 120, 300), false, 'already acked');
   assert.equal(W.shouldAck({ kind: 'away', px: 64 }, 120, null, 300), false);
   assert.equal(W.shouldAck(W.NONE, 120, null, 300), false);
+});
+
+test('S1: on a short display the bubble is clamped to fit under a large widget, stays on screen, and is not vouched for', () => {
+  const wa = { x: 0, y: 25, width: 1280, height: 775 }; // 1280×800 with the menu bar
+  const widget = { x: 940, y: 300, width: 320, height: 410 }; // the largest widget (320 at 64:82)
+  const asked = 408; // CSS max-height 400 + 8
+  const cap = W.bubbleRoom(widget.height, wa, 420);
+  assert.equal(cap, 365);
+  const r = W.stripBounds(widget, W.NONE, { kind: 'bubble', px: Math.min(cap, asked), minWidth: 288 }, wa);
+  assert.ok(r.bounds.y >= wa.y && r.bounds.y + r.bounds.height <= wa.y + wa.height, 'the whole window stays in the work area');
+  assert.equal(r.bounds.height, widget.height + cap);
+  assert.equal(W.shouldAck(r.strip, asked, null, cap), false, 'clamped: the bubble scrolls, nothing in it counts as seen');
+  // The same widget on a tall display has room: vouched for as before.
+  const tall = { x: 0, y: 25, width: 1440, height: 875 };
+  const room = W.bubbleRoom(widget.height, tall, 420);
+  assert.equal(room, 420);
+  assert.equal(W.shouldAck({ kind: 'bubble', px: asked }, asked, null, room), true);
+  assert.equal(W.bubbleRoom(900, wa, 420), 0, 'never negative');
+});
+
+test('S1: main clamps the bubble to bubbleRoom and acks against that cap', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const apply = main.slice(main.indexOf('function applyStrip('), main.indexOf('function applyStrip(') + 1200);
+  assert.match(apply, /bubbleCap = WidgetStrip\.bubbleRoom\(base\.height, workArea, BUBBLE_MAX_PX\)/);
+  assert.match(apply, /kind: 'bubble', px: Math\.min\(bubbleCap, asking\)/);
+  assert.match(main, /WidgetStrip\.shouldAck\(strip, bubbleAsked, bubbleAcked, bubbleCap\)/);
 });
 
 // ── Session rows (wave 1, lane A) ───────────────────────────────────────────
