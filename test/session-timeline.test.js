@@ -234,3 +234,31 @@ test('wiring: Sessions and the board card open the timeline page, which is regis
   assert.match(fs.readFileSync(path.join(root, 'main.js'), 'utf8'), /pageAllowed: \(e\) => fromUtilityPage\(e, 'timeline'\)/);
   assert.doesNotMatch(fs.readFileSync(path.join(root, 'timeline.html'), 'utf8'), /https?:\/\//);
 });
+
+// Redesign R2a: the chat-first thread reads one main-resolved local session's
+// activity through the Timeline page's own display sanitising.
+test('main: threadActivity is sanitised like timeline:load and leaves the page selection alone', async (t) => {
+  const home = tmp();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const proj = path.join(home, '.claude', 'projects', '-work-app');
+  fs.mkdirSync(proj, { recursive: true });
+  fs.writeFileSync(path.join(proj, `${SID}.jsonl`), lines(claudeRows).join('\n') + '\n');
+  const { ipcMain, call } = fakeIpc();
+  const timelinePage = { id: 'timeline' };
+  const api = Main.register({
+    ipcMain, rootDir: home, home: HOME, user: 'janedoe', hostname: 'janes-macbook',
+    sessions: () => ({ live: [{ sessionId: SID, cwd: CWD, updatedAt: '2026-10-07T08:01:00.000Z', signal: 'stop' }] }),
+    sessionsAllowed: () => false, pageAllowed: (e) => e.sender === timelinePage,
+    openPage: () => {}, transitions: () => transitions, checkpointTurns: async () => checkpoints,
+    dialog: {}, BrowserWindow: { fromWebContents: () => null }, downloads: () => home,
+    locator: { find: (a, id) => (a === 'claude-code' && id === SID ? path.join(proj, `${SID}.jsonl`) : null) },
+  });
+  const r = await api.threadActivity({ source: 'claude', sessionId: SID });
+  assert.equal(api.current(), null, "a thread read doesn't pick the Timeline page's session");
+  const page = await call('timeline:load', { sender: timelinePage }, `claude-code-${SID}`);
+  assert.deepEqual(r.view, page.view, 'exactly the Timeline page display');
+  assert.doesNotMatch(JSON.stringify(r), /sk-ant-api03-abcdef|\/Users\/janedoe/);
+  assert.deepEqual(await api.threadActivity({ source: 'claude', sessionId: 'not-listed' }), { empty: 'Nothing to show for this session yet.' });
+  assert.equal(await api.threadActivity({ source: 'claude', sessionId: '../x' }), null);
+  assert.equal(await api.threadActivity(null), null);
+});
