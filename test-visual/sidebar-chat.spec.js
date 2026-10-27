@@ -35,8 +35,10 @@ async function open({ rows = ROWS, theme = 'dark', env = { CLAUDE_TRAFFIC_LIGHT_
   await side.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
   await side.waitForFunction(() => !!window.buddy);
   await side.evaluate(() => document.fonts.ready);
-  // The content area starts on Board (slow to load on a busy machine): wait for that, so the footer's current row is settled before any shot.
-  if (env.CLAUDE_TRAFFIC_LIGHT_CHAT_PREVIEW) await expect(side.locator('#nav-foot [data-page="board"]')).toHaveAttribute('aria-current', 'page', { timeout: 20_000 });
+  // openHelp() leaves Help in the content area, which no footer row stands for: wait until the
+  // footer says so (the sidebar starts from 'board' until it learns the page) before any shot.
+  // Board isn't selected on purpose: its hub status line changes as the hub starts.
+  if (env.CLAUDE_TRAFFIC_LIGHT_CHAT_PREVIEW) await expect(side.locator('#nav-foot [aria-current]')).toHaveCount(0);
   return { h, side };
 }
 const shot = async (locator, name) => expect(await snapToPixels(locator)).toHaveScreenshot(name);

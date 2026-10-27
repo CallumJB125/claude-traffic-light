@@ -27,7 +27,7 @@ const ROWS = [
 const open = [];
 test.afterEach(() => { while (open.length) open.pop().close(); });
 
-async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus = { filter: 'all', seq: 0 } } = {}) {
+async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus = { filter: 'all', seq: 0 }, early = null } = {}) {
   const dom = new JSDOM(HTML, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'file:///app/buddy-window/sidebar.html' });
   const w = dom.window;
   open.push(w);
@@ -55,6 +55,8 @@ async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus
     }
   };
   w.eval(SIDEBAR);
+  // A state push that lands before the chat scripts load (only sidebar.js is listening yet).
+  if (early) for (const fn of onState) fn(early);
   for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
   const doc = w.document;
   const push = async (s) => { for (const fn of onState) fn(s); for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 0)); };
@@ -208,6 +210,13 @@ test('a refresh while the tree has focus keeps it on the same item', async () =>
   await s.push({ selected: 'board' }); // every state push re-reads the rows and re-renders
   assert.equal(s.doc.activeElement.dataset.key, `r:${id(2)}`);
   assert.ok(s.calls.sessions >= 2);
+});
+
+test('a page selected before the chat scripts loaded still sets the footer', async () => {
+  const help = await boot({ early: { selected: 'help' } });
+  assert.deepEqual(help.qa('#nav-foot [aria-current]').map((b) => b.dataset.page), [], 'Help open: no footer row is current');
+  const usage = await boot({ early: { selected: 'usage' } });
+  assert.deepEqual(usage.qa('#nav-foot [aria-current]').map((b) => b.dataset.page), ['usage']);
 });
 
 test('a refresh with unchanged rows leaves the tree nodes alone', async () => {

@@ -284,6 +284,7 @@
   window.SidebarChat = {
     start(r) {
       ui.sections = Array.isArray(r.sections) ? r.sections : [];
+      if (typeof r.selected === 'string') ui.selectedPage = r.selected;
       const saved = r.chat?.collapsed;
       if (Array.isArray(saved)) ui.collapsed = new Set(saved);
       build();
