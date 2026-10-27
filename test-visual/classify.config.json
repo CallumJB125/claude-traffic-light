@@ -141,6 +141,12 @@
       "baseline": "test-visual/__screenshots__/home-compose.spec.js/routed-light-darwin.png",
       "maxRatio": 0.0075,
       "reason": "R0b light --focus-halo #f4f5f7 → #ffffff: the halo's anti-aliased edge overlaps the focused compose textarea's 1 px --line-input border, moving its top and bottom hairlines (y 59, 122, x 31–882) by one sRGB step. 1,706 px = 0.693 %; allowance 0.75 %."
+    },
+    {
+      "baseline": "test-visual/__screenshots__/home-compose.spec.js/ask-me-light-darwin.png",
+      "maxRatio": 0.0075,
+      "reason": "R0b light --focus-halo #f4f5f7 → #ffffff: the halo's anti-aliased edge overlaps the focused compose textarea's 1 px --line-input border, moving its top and bottom hairlines (y 59, 122, x 31–882) by one sRGB step. 1,706 px = 0.693 %; allowance 0.75 %.",
+      "//": "Same cause and the same pixel pairs as routed-light (the same compose textarea in its ask-me state): #a6acb6→#a7adb7 852 px, #9ca3ae/#9ca3af→#9ca4af 777 px on rows 59 and 122; 1,699 px = 0.601 % (full re-render, base 47ad8ac1)."
     }
   ],
   "themes": [
