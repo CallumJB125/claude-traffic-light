@@ -8,7 +8,7 @@
 // one local neutral N such that
 //   1. the old pixel lies within ΔE00 ≤ 3 of segment(old k, N), at blend position t_old,
 //   2. the head pixel lies within ΔE00 ≤ 3 of segment(new k, N), at t_new,
-//   3. |t_old − t_new| ≤ 0.35 (room for text-gamma differences), and
+//   3. |t_old − t_new| ≤ T_AGREE (0.15 since R0b review S5; 0.35 in R0a), and
 //   4. N is the same on both sides.
 // N is the nearest pixel unchanged between old and new within 5 px and also each surface token (R0b, i). Pixels where
 // one accent member is drawn over another (a label on a filled button, a ring over its halo) are matched against
@@ -28,12 +28,18 @@
 // R0b extensions and tightening (lead conditions; §R4.4): (i) surfaces as neutrals as well as the local N;
 // (ii) text over the soft tint; (iii) accent color-mix() rules parsed from the stylesheets; members that don't
 // change are dropped; an old pixel that IS a neutral is never a pass; near-N verdicts and weak passes need a
-// strong pass within 5 px (the evidence rule, see classifyImage). Negative controls: classify-controls.js.
+// strong pass within 2 px (the evidence rule, see classifyImage). Review fixes: M1 (a pass whose old pixel already
+// fits the new segment is weak), S1 (evidence radius 2), S3 (zero-length segments explain nothing), S5 (T_AGREE
+// 0.15), M2 (noise caps, see noiseCheck). Negative controls: classify-controls.js.
 
 const DE_MAX = 3;
-const T_AGREE = 0.35;
+// S5 (review): 0.35 → 0.15. Every audited correct pass had Δt ≤ 0.06; 0.35 let a bolder accent glyph through.
+const T_AGREE = 0.15;
 const T_NONE = 0.05;
 const RADIUS = 5;
+// S1 (review): near-N and weak verdicts need strong evidence within 2 px (anti-aliasing and a ring's halo spread
+// 1–2 px); RADIUS 5 is only for finding the local N.
+const EVIDENCE_RADIUS = 2;
 const DE_NOISE = 1;
 
 // ── Colour ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -91,7 +97,10 @@ function deltaE00(a, b) {
 function onSegment(p, k, n) {
   const d = [k[0] - n[0], k[1] - n[1], k[2] - n[2]];
   const len = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-  let t = len === 0 ? 1 : ((p[0] - n[0]) * d[0] + (p[1] - n[1]) * d[1] + (p[2] - n[2]) * d[2]) / len;
+  // S3 (review): a zero-length segment (a member equal to its N, e.g. dark ink's new #17191d = --bg) is a point,
+  // not "fully on the member": it explains nothing.
+  if (len === 0) return { t: 0, de: Infinity };
+  let t = ((p[0] - n[0]) * d[0] + (p[1] - n[1]) * d[1] + (p[2] - n[2]) * d[2]) / len;
   t = Math.min(1, Math.max(0, t));
   const q = [n[0] + d[0] * t, n[1] + d[1] * t, n[2] + d[2] * t];
   return { t, de: deltaE00(lab(p), lab(q)) };
@@ -242,8 +251,8 @@ function mixMembers(specs, oldTheme, newTheme, surfaces) {
 const TEXT_TOKENS = ['--text', '--muted', '--faint'];
 // The tint is only a few ΔE from the surface, so text-over-tint is nearly text-over-surface: any anti-aliased
 // grey would slide along it. Two limits keep it honest: the same glyph has the same coverage on both sides, so
-// the blend positions must agree within 0.05 (not 0.35); and these members are weak (they need strong evidence,
-// the tint itself, within 5 px).
+// the blend positions must agree within 0.05 (not T_AGREE); and these members are weak (they need strong evidence,
+// the tint itself, within EVIDENCE_RADIUS).
 const TEXT_ON_TINT = { tAgree: 0.05, forceWeak: true };
 // A member whose own old→new change is under ΔE00 4 (only the light halo, #f4f5f7 → #ffffff, today) carries no
 // hue evidence of the swap: grey→grey. Its passes are "weak" and need strong evidence nearby (see classifyImage).
@@ -384,7 +393,11 @@ function judge(oldPx, newPx, m, n) {
     if (h.t < T_NONE) return { v: 'unchanged', ...at };
     return h.t <= T_NONE + T_AGREE ? { v: 'skipped', ...at } : null;
   }
-  return Math.abs(o.t - h.t) <= (m.tAgree ?? T_AGREE) ? { v: 'pass', ...at } : null;
+  if (Math.abs(o.t - h.t) > (m.tAgree ?? T_AGREE)) return null;
+  // M1 (review): if the OLD pixel already lies on the NEW member's segment, the fit shows nothing of the old
+  // accent (a grey that sits on a Graphite segment either way), so the pass is weak: it needs evidence nearby.
+  const blind = onSegment(oldPx, m.new, nEnd).de <= DE_MAX;
+  return { v: 'pass', blind, ...at };
 }
 
 // A pixel that sits at N on any segment carries no colour information, so "unchanged" and "skipped" outrank a
@@ -409,8 +422,9 @@ function explainPixel(oldPx, newPx, neutrals, members) {
     for (const m of members) {
       const r = judge(oldPx, newPx, m, n);
       if (!r) continue;
-      const rank = r.v === 'pass' && m.weak ? RANK.weak : RANK[r.v];
-      if (rank > bestRank) { best = { verdict: r.v, weak: r.v === 'pass' && !!m.weak, key: m.key, n: m.n || n, tOld: r.tOld, tNew: r.tNew }; bestRank = rank; }
+      const wk = r.v === 'pass' && (!!m.weak || !!r.blind);
+      const rank = wk ? RANK.weak : RANK[r.v];
+      if (rank > bestRank) { best = { verdict: r.v, weak: wk, key: m.key, n: m.n || n, tOld: r.tOld, tNew: r.tNew }; bestRank = rank; }
       if (rank === RANK.unchanged) return best;
     }
   }
@@ -428,7 +442,7 @@ const classifyPixel = (oldPx, newPx, neutrals, members) => explainPixel(oldPx, n
 //   3. Best explanation over every member × neutral (explainPixel).
 //   4. Evidence rule: "unchanged", "skipped" and passes through a weak member carry no hue evidence of the swap
 //      (Graphite is itself a grey, so a grey surface that shifts sits on the near-N end of every accent segment).
-//      They are accepted only within 5 px of a strong pass or a named exception; otherwise they are unexpected.
+//      They are accepted only within 2 px (EVIDENCE_RADIUS) of a strong pass or a named exception; otherwise they are unexpected.
 // `onPixel(x, y, oldHex, newHex, explanation)` (optional) sees every non-noise changed pixel's final explanation.
 function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, onPixel = null } = {}) {
   const total = oldImg.width * oldImg.height;
@@ -484,7 +498,8 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
   }
   const near = (i) => {
     const x = i % w; const y = (i - x) / w;
-    for (const [dx, dy] of offsets) {
+    for (const [dx, dy, d2] of offsets) {
+      if (d2 > EVIDENCE_RADIUS * EVIDENCE_RADIUS) break;
       const xx = x + dx; const yy = y + dy;
       if (xx >= 0 && yy >= 0 && xx < w && yy < h && strong[yy * w + xx]) return true;
     }
@@ -496,7 +511,7 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
     if (!changed[i]) continue;
     let e = expl[i];
     const needsEvidence = e.verdict === 'unchanged' || e.verdict === 'skipped' || (e.verdict === 'pass' && e.weak);
-    if (needsEvidence && !near(i)) e = { ...e, verdict: 'unexpected', reason: 'no strong evidence within 5 px' };
+    if (needsEvidence && !near(i)) e = { ...e, verdict: 'unexpected', reason: 'no strong evidence within 2 px' };
     out[e.verdict] += 1;
     if (e.verdict === 'noise') continue;
     const j = i * 4; const x = i % w; const y = (i - x) / w;
@@ -537,4 +552,4 @@ function verdictOf(results) {
   return { failures, crops };
 }
 
-module.exports = { parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, surfaceCoverage, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
+module.exports = { EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, surfaceCoverage, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };

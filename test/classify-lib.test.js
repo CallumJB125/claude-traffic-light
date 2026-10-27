@@ -34,7 +34,9 @@ test('classifier: the families are read from tokens.css at the base and the head
 test('classifier: solid and anti-aliased accent pixels pass, at matching blend positions', () => {
   assert.equal(lib.classifyPixel(hex('#e49a78'), hex('#e6e8eb'), [PANEL_D], FAM.members), 'pass');
   const t = 0.6;
-  assert.equal(lib.classifyPixel(mix(hex('#e49a78'), PANEL_D, t), mix(hex('#e6e8eb'), PANEL_D, t + 0.2), [PANEL_D], FAM.members), 'pass');
+  assert.equal(lib.classifyPixel(mix(hex('#e49a78'), PANEL_D, t), mix(hex('#e6e8eb'), PANEL_D, t + 0.1), [PANEL_D], FAM.members), 'pass');
+  // S5: positions further apart than T_AGREE (0.15) are not the same blend
+  assert.equal(lib.classifyPixel(mix(hex('#e49a78'), PANEL_D, t), mix(hex('#e6e8eb'), PANEL_D, t + 0.25), [PANEL_D], FAM.members), 'unexpected');
   assert.equal(lib.classifyPixel(mix(hex('#a34425'), PANEL_L, 0.5), mix(hex('#24292f'), PANEL_L, 0.5), [PANEL_L], FAM.members), 'pass');
 });
 
@@ -44,7 +46,7 @@ test('classifier: a label anti-aliased over a filled button passes as a member p
   assert.equal(lib.classifyPixel(old, head, [hex('#a34425')], FAM.members), 'pass');
 });
 
-test('classifier: blend positions that disagree by more than 0.35 are unexpected', () => {
+test('classifier: blend positions that disagree by more than T_AGREE are unexpected', () => {
   const old = mix(hex('#e49a78'), PANEL_D, 0.9);
   const head = mix(hex('#e6e8eb'), PANEL_D, 0.3);
   assert.equal(lib.classifyPixel(old, head, [PANEL_D], FAM.members), 'unexpected');
@@ -66,7 +68,9 @@ test('classifier: the neutral must be the same on both sides', () => {
 
 test('classifier: near-neutral blends are counted as unchanged or skipped, not passed', () => {
   assert.equal(lib.classifyPixel(mix(hex('#e49a78'), PANEL_D, 0.02), mix(hex('#e6e8eb'), PANEL_D, 0.03), [PANEL_D], FAM.members), 'unchanged');
-  assert.equal(lib.classifyPixel(mix(hex('#e49a78'), PANEL_D, 0.02), mix(hex('#e6e8eb'), PANEL_D, 0.25), [PANEL_D], FAM.members), 'skipped');
+  assert.equal(lib.classifyPixel(mix(hex('#e49a78'), PANEL_D, 0.02), mix(hex('#e6e8eb'), PANEL_D, 0.15), [PANEL_D], FAM.members), 'skipped');
+  // skipped reaches t_new ≤ T_NONE + T_AGREE = 0.20, no further
+  assert.equal(lib.classifyPixel(mix(hex('#e49a78'), PANEL_D, 0.02), mix(hex('#e6e8eb'), PANEL_D, 0.3), [PANEL_D], FAM.members), 'unexpected');
 });
 
 test('classifier: the soft tint is checked against its per-surface value', () => {
@@ -244,13 +248,19 @@ test('classifier: an old pixel that is a neutral is never a pass, and near-N ver
   const S = hex('#292d34'); const darker = hex('#1f232a');
   assert.notEqual(lib.explainPixel(S, darker, ALL.dark.surfaces, ALL.dark.members).verdict, 'pass');
   // a lone near-N change is unexpected; beside a strong accent pass it is accepted
-  const lone = lib.classifyImage(image(20, 20, () => PANEL_D), image(20, 20, (x, y) => (x === 10 && y === 10 ? mix(hex('#e6e8eb'), PANEL_D, 0.2) : PANEL_D)), FAM);
+  const lone = lib.classifyImage(image(20, 20, () => PANEL_D), image(20, 20, (x, y) => (x === 10 && y === 10 ? mix(hex('#e6e8eb'), PANEL_D, 0.15) : PANEL_D)), FAM);
   assert.equal(lone.unexpected, 1);
   const beside = lib.classifyImage(
     image(20, 20, (x, y) => (x < 8 ? hex('#e49a78') : PANEL_D)),
-    image(20, 20, (x, y) => (x < 8 ? hex('#e6e8eb') : x === 10 && y === 10 ? mix(hex('#e6e8eb'), PANEL_D, 0.2) : PANEL_D)), FAM);
+    image(20, 20, (x, y) => (x < 8 ? hex('#e6e8eb') : x === 9 && y === 10 ? mix(hex('#e6e8eb'), PANEL_D, 0.15) : PANEL_D)), FAM);
   assert.equal(beside.unexpected, 0);
   assert.equal(beside.skipped, 1);
+  // S1: evidence counts within 2 px only; 3 px away the same pixel is unexpected
+  const far = lib.classifyImage(
+    image(20, 20, (x, y) => (x < 8 ? hex('#e49a78') : PANEL_D)),
+    image(20, 20, (x, y) => (x < 8 ? hex('#e6e8eb') : x === 10 && y === 10 ? mix(hex('#e6e8eb'), PANEL_D, 0.15) : PANEL_D)), FAM);
+  assert.equal(lib.EVIDENCE_RADIUS, 2);
+  assert.equal(far.unexpected, 1);
 });
 
 test('classifier controls: every negative control fails the gate and every positive one passes, in both themes', () => {
@@ -299,4 +309,26 @@ test('classifier (c′): an unthemed baseline takes its theme from the base imag
   // fail closed: with `none`, an otherwise perfect accent swap is all unexpected
   const r = lib.classifyImage(image(4, 4, () => hex('#e49a78')), image(4, 4, () => hex('#e6e8eb')), ALL.none);
   assert.equal(r.unexpected, 16);
+});
+
+test('classifier M1: a pass whose old pixel already fits the new segment is weak, so a non-token grey shift fails', () => {
+  // review attack 1: greys that aren't surface tokens, no accent anywhere
+  const light = lib.explainPixel([215, 214, 213], [193, 192, 191], ALL.light.surfaces, MIXED.light.members);
+  const dark = lib.explainPixel([33, 34, 36], [21, 22, 24], ALL.dark.surfaces, MIXED.dark.members);
+  for (const r of [light, dark]) assert.ok(r.verdict !== 'pass' || r.weak, `strong ${r.key}`);
+  const shift = (o, n, fam) => lib.classifyImage(image(30, 30, (x, y) => (x > 4 && x < 26 && y > 4 && y < 26 ? o : hex('#ffffff'))),
+    image(30, 30, (x, y) => (x > 4 && x < 26 && y > 4 && y < 26 ? n : hex('#ffffff'))), fam);
+  assert.equal(shift([215, 214, 213], [193, 192, 191], MIXED.light).unexpected, 441);
+  // the real swap is still strong: terracotta is far from the Graphite segment
+  const swap = lib.explainPixel(hex('#a34425'), hex('#24292f'), ALL.light.surfaces, MIXED.light.members);
+  assert.equal(swap.verdict, 'pass');
+  assert.equal(swap.weak, false);
+});
+
+test('classifier S3: a zero-length segment explains nothing', () => {
+  assert.deepEqual(lib.onSegment([10, 20, 30], [5, 5, 5], [5, 5, 5]), { t: 0, de: Infinity });
+  // dark ink's new value equals --bg: an old ink-brown pixel that vanished into the background is not an ink pass
+  const bg = hex('#17191d');
+  const r = lib.explainPixel(mix(hex('#251c18'), bg, 0.8), bg, [bg], ALL.dark.members);
+  assert.ok(!(r.verdict === 'pass' && r.key === 'ink'), `explained as ${r.verdict} ${r.key}`);
 });
