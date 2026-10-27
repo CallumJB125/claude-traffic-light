@@ -47,6 +47,36 @@
   --focus: 0 0 0 2px var(--focus-halo);
   --t: 160ms ease;
   --t-fast: 120ms ease;
+
+  /* ── Redesign R0a: v2 token names, aliased to today's values ──────────────
+     Nothing reads these yet, so they change no pixel. R0b gives the accent
+     states their Graphite values and the soft tint its 14 %; components still
+     use their own hover mixes until then. */
+  --accent-hover: var(--accent);
+  --accent-pressed: var(--accent);
+
+  /* Status buckets: one meaning each (Needs you, Working on it, Finished —
+     check it, Stuck or failed, Idle). Paused is styled as Idle. */
+  --st-needs: var(--amber);
+  --st-working: var(--green);
+  --st-check: var(--faint);
+  --st-stuck: var(--red);
+  --st-idle: var(--idle);
+  --st-paused: var(--st-idle);
+
+  /* Type: `font: var(--t-body)`. 12px is the minimum anywhere. */
+  --t-caption: 400 12px/16px var(--font);
+  --t-small: 400 13px/18px var(--font);
+  --t-body: 400 14px/20px var(--font);
+  --t-body-strong: 600 14px/20px var(--font);
+  --t-title: 600 16px/22px var(--font);
+  --t-display: 600 22px/28px var(--font);
+
+  --space-8: 32px;
+  --space-10: 40px;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.18);
+  --t-slow: 240ms ease-out;
 }
 
 :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; box-shadow: var(--focus); }
