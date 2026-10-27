@@ -282,6 +282,17 @@ test('R2a: the thread on screen is the selected row; any other page selects none
   assert.equal(s.qa('.sidebar-row[aria-selected="true"]').length, 0);
 });
 
+test('R2a: a row with no thread opens Overview and stays selected through its state push', async () => {
+  const s = await boot({ rows: THREAD_ROWS });
+  s.q(`[data-key="r:${id(2)}"]`).focus();
+  s.key('Enter');
+  assert.deepEqual(s.calls.select, ['overview']);
+  await s.push({ selected: 'overview', chat: { focus: { filter: 'all', seq: 0 }, thread: null } });
+  assert.deepEqual(s.qa('.sidebar-row[aria-selected="true"]').map((n) => n.dataset.key), [`r:${id(2)}`]);
+  await s.push({ selected: 'board', chat: { focus: { filter: 'all', seq: 0 }, thread: null } });
+  assert.equal(s.qa('.sidebar-row[aria-selected="true"]').length, 0);
+});
+
 test('R1 follow-up 8c: a read that changes only ages keeps every node and updates the age in place', async () => {
   let n = 0;
   const s = await boot({ rows: () => THREAD_ROWS.map((r) => ({ ...r, age_ms: r.age_ms + n * 60000 })) });

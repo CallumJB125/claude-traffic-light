@@ -284,9 +284,11 @@
 
   function onState(s) {
     if (typeof s?.selected === 'string') ui.selectedPage = s.selected;
-    // The thread on screen is the selected row; any other page selects none.
+    // The thread on screen is the selected row. Overview is the view a row
+    // with no thread opens (R1), so it keeps the row; any other page selects none.
     if (s?.chat && 'thread' in s.chat) {
-      const next = s.selected === 'thread' && typeof s.chat.thread === 'string' ? s.chat.thread : null;
+      const next = s.selected === 'thread' && typeof s.chat.thread === 'string' ? s.chat.thread
+        : s.selected === 'overview' ? ui.selectedRow : null;
       if (next !== ui.selectedRow) { ui.selectedRow = next; render(); }
     }
     const f = s?.chat?.focus;
