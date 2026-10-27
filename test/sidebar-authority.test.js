@@ -16,7 +16,7 @@ const SESSIONS = [
   { sessionId: 's-warp', source: 'claude', signal: 'tool-use', updatedAt: now(), hostApp: 'Warp', cwd: '/Users/someone/private/gamma' },
 ];
 
-function fixture({ chatPreview = true, now } = {}) {
+function fixture({ chatPreview = true, now, sessions = SESSIONS } = {}) {
   let overviewVisible = true, sidebarGen = 1, sidebarOn = true, release = null, delayed = false;
   const win = { isDestroyed: () => false, isVisible: () => true, isFocused: () => true, isMinimized: () => false };
   const overviewWc = { mainFrame: {}, isDestroyed: () => false };
@@ -27,7 +27,7 @@ function fixture({ chatPreview = true, now } = {}) {
     sidebarReadContext: () => (sidebarOn ? { window: win, contents: sidebarWc, generation: sidebarGen, document: 0, foreground: false } : null),
   };
   let workCalls = 0;
-  const main = createOverviewMain({ buddy: () => buddy, chatPreview, ...(now ? { now } : {}), sessions: () => SESSIONS,
+  const main = createOverviewMain({ buddy: () => buddy, chatPreview, ...(now ? { now } : {}), sessions: () => sessions,
     work: () => { workCalls++; return delayed ? new Promise((r) => { release = r; }) : Promise.resolve({ sources: [], capture: [] }); } });
   const ipc = { handlers: {}, handle(name, fn) { this.handlers[name] = fn; }, on(name, fn) { this.handlers[name] = fn; } };
   main.register(ipc);
@@ -65,6 +65,17 @@ test('gate on: the sidebar reads a fixed projection of the session rows', async 
   assert.ok(out.sessions.every((r) => /^[0-9a-f]{64}$/.test(r.id) && typeof r.bucket === 'string' && r.terminal === true), 'all three are terminal sessions');
   const json = JSON.stringify(out);
   assert.doesNotMatch(json, /\/Users\/|private\/|handle|capabilit|sessionId|s-iterm|cwd/, 'no paths, handles or native ids');
+});
+
+test('a paired-device session is listed, but not as in a terminal on this computer', async () => {
+  const remote = { sessionId: 's-remote', source: 'claude', signal: 'tool-use', updatedAt: now(), hostApp: 'iTerm2', remote: true, device: 'dev-1', deviceName: 'Studio Mac', taskTitle: 'Remote work' };
+  const f = fixture({ sessions: [...SESSIONS, remote] });
+  const out = await f.call('overview:state', f.sidebar);
+  const row = out.sessions.find((r) => r.title === 'Remote work');
+  assert.ok(row, 'All lists it');
+  assert.equal(row.terminal, false, 'In terminals does not');
+  assert.equal(row.origin, null, 'and it gets no origin label');
+  assert.equal(out.sessions.filter((r) => r.terminal).length, 3);
 });
 
 test('gate on: the sidebar reads while the Overview page is not showing, and the overview still reads its own state', async () => {
