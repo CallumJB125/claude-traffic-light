@@ -543,6 +543,21 @@ test('task.confirm: the card asks again, armed for 600 ms, then sends confirmed'
   assert.deepEqual(acts(p)[1], { action: 'deny', approvalId: 'ap-2' }, 'deny is not in this task\'s confirm');
 });
 
+test('task.confirm on a resume choice: the card asks again (the task names resume), then sends the choice confirmed', async () => {
+  const p = await stacked({ confirm: ['resume'], openApprovals: [],
+    openAsk: { askId: 'ask-1', text: 'Claude hit its usage limit.', options: null, choices: [{ id: 'wait_reset', label: 'Wait for the reset', action: 'resume', payload: { when: 'reset' } }] } });
+  p.advance(600);
+  p.btn(p.cards()[0], 'Wait for the reset').click();
+  await tick();
+  assert.deepEqual(acts(p), []);
+  assert.equal(p.cards()[0].querySelector('.th-card-ask').textContent, 'Send this choice?');
+  assert.equal(p.btn(p.cards()[0], 'Send').disabled, true);
+  p.advance(600);
+  p.btn(p.cards()[0], 'Send').click();
+  await tick(); await tick();
+  assert.deepEqual(acts(p), [{ action: 'choose', askId: 'ask-1', choiceId: 'wait_reset', confirmed: true }]);
+});
+
 test('choices: a resume choice is one click by its id; a choice this chat can\'t make yet, and StartTask, go to Tasks', async () => {
   const p = await stacked({ openApprovals: [ap(1, { tool: 'StartTask', inputSummary: 'Ship the fix' })], actions: [...ACTS, 'switchAi'],
     openAsk: { askId: 'ask-1', text: 'Claude hit its usage limit.', options: null, choices: [{ id: 'wait_reset', label: 'Wait for the reset', action: 'resume', payload: { when: 'reset' } }, { id: 'switch_ai', label: 'Continue with Codex', action: 'switchAi', payload: { ai: 'codex' } }] } });

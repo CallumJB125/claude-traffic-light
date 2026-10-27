@@ -227,11 +227,13 @@
     if (focusKey) { const card = [...box.children].find((n) => n.dataset.key === focusKey); const again = card && [...card.querySelectorAll('button')].find((b) => b.textContent === focusLabel && !b.disabled); if (again) again.focus(); }
   }
   // A task's own task.confirm asks twice, on the card (plan-r4 §2.6); anything else goes straight to main.
-  const TWICE = { approve: ['Allow this request?', 'Allow', 'Keep it waiting'], deny: ['Deny this request?', 'Deny', 'Keep it waiting'], answer: ['Send this answer?', 'Send', 'Not yet'] };
+  const TWICE = { approve: ['Allow this request?', 'Allow', 'Keep it waiting'], deny: ['Deny this request?', 'Deny', 'Keep it waiting'], answer: ['Send this answer?', 'Send', 'Not yet'], choose: ['Send this choice?', 'Send', 'Not yet'] };
+  // The task's confirm list names engine actions; a choice reaches the engine as resume.
+  const engineAction = (a) => (a === 'choose' ? 'resume' : a);
   function choose(key, req) {
     const c = cards.get(key);
     if (!c || acting || c.state !== 'idle' || Date.now() < c.armedUntil) return;
-    if (TWICE[req.action] && asksTwice(req.action)) {
+    if (TWICE[req.action] && asksTwice(engineAction(req.action))) {
       const [question, yes, no] = TWICE[req.action];
       c.confirm = { req, question, yes, no, armedUntil: Date.now() + ARM_MS };
       renderCards();
