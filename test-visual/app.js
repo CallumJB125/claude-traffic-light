@@ -116,8 +116,10 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = 
   // `--demo visual` is an unrecognised demo name: it flags the run as a dev
   // run (no hook installs, no login item, no background pollers) without
   // overriding CLAUDE_TRAFFIC_LIGHT_HOME/PORT.
+  // -ApplePersistenceIgnoreState YES: a native boot crash makes macOS offer to reopen windows on the NEXT launch, a modal that
+  // hangs it with no window ("no window for index.html"). Ignoring saved state keeps a crash a crash (labfix-pr7's boot diagnosis).
   const launch = () => electron.launch({
-    args: [ROOT, `--user-data-dir=${userData}`, '--demo', 'visual', ...extraArgs],
+    args: [ROOT, '-ApplePersistenceIgnoreState', 'YES', `--user-data-dir=${userData}`, '--demo', 'visual', ...extraArgs],
     env: {
       ...homeEnv(userHome),
       CLAUDE_TRAFFIC_LIGHT_HOME: home,

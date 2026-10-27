@@ -4,7 +4,7 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 
 test('native selected-session scheduling reviews, encrypts, cancels and sends once only when due', async () => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'plexiform-followup-native-'));
-  const app = await _electron.launch({ args: [path.join(__dirname, 'followup-flow-main.js')], env: { ...process.env, PLEXIFORM_FOLLOWUP_FIXTURE: fixture } });
+  const app = await _electron.launch({ args: [path.join(__dirname, 'followup-flow-main.js'), '-ApplePersistenceIgnoreState', 'YES'], env: { ...process.env, PLEXIFORM_FOLLOWUP_FIXTURE: fixture } });
   try {
     const page = await app.firstWindow(), errors = [];
     page.on('pageerror', e => errors.push(e.message));

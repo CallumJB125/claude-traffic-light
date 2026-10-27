@@ -19,7 +19,7 @@ let page;
 const errors = [];
 
 test.beforeAll(async () => {
-  app = await electron.launch({ args: [path.join(__dirname, 'matrix', 'main.js')] });
+  app = await electron.launch({ args: [path.join(__dirname, 'matrix', 'main.js'), '-ApplePersistenceIgnoreState', 'YES'] });
   page = await app.firstWindow();
   page.on('pageerror', (e) => errors.push(e.message));
   await page.emulateMedia({ reducedMotion: 'no-preference' });

@@ -15,7 +15,7 @@ test('reported Codex work creates a team card, unmatched work creates a personal
     const repo=path.join(temp,'repo'),home=path.join(temp,'hook-home');fs.mkdirSync(repo);fs.mkdirSync(home);
     execFileSync('git',['init','-q',repo]);execFileSync('git',['-C',repo,'remote','add','origin','https://github.com/shared/app.git']);
     const user=x.users.amember;
-    app=await electron.launch({args:[path.join(__dirname,'clients-fixture-main.js'),`--user-data-dir=${path.join(temp,'profile')}`],env:{...process.env,
+    app=await electron.launch({args:[path.join(__dirname,'clients-fixture-main.js'), '-ApplePersistenceIgnoreState', 'YES',`--user-data-dir=${path.join(temp,'profile')}`],env:{...process.env,
       PLEXIFORM_CLIENT_TEST_HUB:x.h.base,PLEXIFORM_CLIENT_TEST_ACCOUNT:JSON.stringify({hub:x.h.base,token:user.token,device_id:user.device_id,user:{id:user.id,email:user.email}})}});
     await expect.poll(()=>app.evaluate(()=>global.__clientTestInit),{timeout:15000}).toMatchObject({stage:'connected',result:{ok:true}});
     // Automatic cards are off until the person turns them on.

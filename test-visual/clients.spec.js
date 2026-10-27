@@ -35,7 +35,7 @@ test('OAuth client without a mailer accepts and reads status in the scoped authe
     const guest = await oauth('client@gmail.com', 'fake-client-guest');
     expect((await hub.call('GET', '/api/auth/methods')).body.email).toBe(false);
     const savedArtifact = path.join(temp, 'saved-deliverable.txt');
-    app = await electron.launch({ args: [path.join(__dirname, 'clients-fixture-main.js'), `--user-data-dir=${temp}`], env: { ...process.env, PLEXIFORM_CLIENT_TEST_HUB: hub.base, PLEXIFORM_CLIENT_TEST_DOWNLOAD: savedArtifact, PLEXIFORM_CLIENT_TEST_ACCOUNT: JSON.stringify({ hub: hub.base, token: guest.device_token, device_id: guest.device_id, user: guest.user }) } });
+    app = await electron.launch({ args: [path.join(__dirname, 'clients-fixture-main.js'), '-ApplePersistenceIgnoreState', 'YES', `--user-data-dir=${temp}`], env: { ...process.env, PLEXIFORM_CLIENT_TEST_HUB: hub.base, PLEXIFORM_CLIENT_TEST_DOWNLOAD: savedArtifact, PLEXIFORM_CLIENT_TEST_ACCOUNT: JSON.stringify({ hub: hub.base, token: guest.device_token, device_id: guest.device_id, user: guest.user }) } });
     await expect.poll(() => app.evaluate(() => global.__clientTestInit), { timeout: 15000 }).toMatchObject({ stage: 'connected', result: { ok: true }, status: { screen: 'clients' } });
     // BaseWindow's WebContentsViews are not Electron BrowserWindows. Follow
     // the actual production view rather than adding a window just for tests.

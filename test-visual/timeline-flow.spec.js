@@ -13,7 +13,7 @@ test('timeline native renderer reads, filters and exports the exact synthetic pa
     { type: 'assistant', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Review complete. <script>window.bad=true</script>\n' + 'Detailed result. '.repeat(100) }] } },
   ];
   fs.writeFileSync(path.join(fixture, 'transcript.jsonl'), rows.map((r, i) => JSON.stringify({ timestamp: `2026-10-16T12:00:0${i}Z`, ...r })).join('\n'));
-  const app = await _electron.launch({ args: [path.join(__dirname, 'timeline-flow-main.js')], env: { ...process.env, PLEXIFORM_TIMELINE_FIXTURE: fixture } });
+  const app = await _electron.launch({ args: [path.join(__dirname, 'timeline-flow-main.js'), '-ApplePersistenceIgnoreState', 'YES'], env: { ...process.env, PLEXIFORM_TIMELINE_FIXTURE: fixture } });
   try {
     const page = await app.firstWindow(), errors = [];
     page.on('pageerror', e => errors.push(e.message));

@@ -60,7 +60,7 @@ test('captured session tabs show useful context and save only a reviewed explici
     await app.evaluate((_, reports) => global.__sessionTabsPublish(reports), sessions);
   };
   try {
-    app = await electron.launch({ args: [fixture, `--user-data-dir=${profile}`], env: { ...process.env, PLEXIFORM_SESSION_TABS_HOME: home } });
+    app = await electron.launch({ args: [fixture, '-ApplePersistenceIgnoreState', 'YES', `--user-data-dir=${profile}`], env: { ...process.env, PLEXIFORM_SESSION_TABS_HOME: home } });
     await expect.poll(() => app.evaluate(() => ({ ready: global.__sessionTabsReady, error: global.__sessionTabsError })), { timeout: 15000 }).toEqual({ ready: true, error: undefined });
     await emit();
     await expect.poll(() => query('SELECT COUNT(*) n FROM work_capture_cards')?.n, { timeout: 15000 }).toBe(1);

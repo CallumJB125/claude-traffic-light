@@ -120,7 +120,7 @@ test('classifier: every changed baseline changed only by the accent swap', async
   const families = lib.familiesOf(oldCss, newCss);
   const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'classify.config.json'), 'utf8'));
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'classify-ud-'));
-  const browser = await electron.launch({ args: [path.join(__dirname, 'classify-main.js'), `--user-data-dir=${userData}`] });
+  const browser = await electron.launch({ args: [path.join(__dirname, 'classify-main.js'), '-ApplePersistenceIgnoreState', 'YES', `--user-data-dir=${userData}`] });
   try {
     const page = await browser.firstWindow();
     await page.waitForLoadState('domcontentloaded');

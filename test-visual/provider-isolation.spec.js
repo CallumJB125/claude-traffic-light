@@ -30,6 +30,8 @@ test('the run itself uses an empty HOME with the fake providers first', () => {
 });
 
 test('an app launched by launchApp finds only the fakes in its own HOME', async () => {
+  // Starts a whole app: allow a second start (launchApp's one retry) and slow boots under load, so the guard itself is not the flaky part.
+  test.setTimeout(120000);
   const h = await launchApp();
   try {
     const found = resolve(homeEnv(h.userHome));

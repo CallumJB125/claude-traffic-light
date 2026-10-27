@@ -23,7 +23,7 @@ async function launch(f, u, temp, { config = {}, env = {} } = {}) {
   fs.writeFileSync(path.join(home, '.help-shown'), '2000-01-01T00:00:00.000Z');
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ lowPower: 'off', roam: false, randomEvents: false, seasonal: false, hints: { teamSeen: true }, ...config }));
   const signalPort = await port();
-  const app = await electron.launch({ args: [path.join(__dirname, 'planner-fixture-main.js'), '--demo', 'visual', '--buddy-mock-accounts', '--buddy', 'account'], env: { ...process.env,
+  const app = await electron.launch({ args: [path.join(__dirname, 'planner-fixture-main.js'), '-ApplePersistenceIgnoreState', 'YES', '--demo', 'visual', '--buddy-mock-accounts', '--buddy', 'account'], env: { ...process.env,
     CLAUDE_TRAFFIC_LIGHT_HOME: home, CLAUDE_TRAFFIC_LIGHT_BACKUPS: backups, CLAUDE_TRAFFIC_LIGHT_PROJECTS: projects,
     CLAUDE_TRAFFIC_LIGHT_PORT: String(signalPort), CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT: String(await port()),
     PLEXIFORM_PLANNER_TEST_HUB: f.h.base, PLEXIFORM_PLANNER_TEST_ACCOUNT: JSON.stringify({ hub: f.h.base, token: u.token, device_id: u.device_id, user: { id: u.id, email: u.email } }), ...env } });
