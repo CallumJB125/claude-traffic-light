@@ -107,7 +107,8 @@ function createCompose(deps, params = {}) {
     const d = pending; pending = null;
     const c = context();
     if (!d || now() - d.at > DRAFT_TTL_MS || !c || c.account !== d.account || c.workspace !== d.workspace || !(await deps.isDir(d.dir).catch(() => false))) return null;
-    return { text: d.text, folder: s.registerFolder(d.dir), ai: ais.some((a) => a.id === d.ai && a.usable) ? d.ai : 'auto' };
+    const ai = ais.some((a) => a.id === d.ai && a.usable) ? d.ai : 'auto';
+    return { text: d.text, folder: s.registerFolder(d.dir), ai, ...(ai !== d.ai ? { wanted: d.ai } : {}) };
   }
 
   /**

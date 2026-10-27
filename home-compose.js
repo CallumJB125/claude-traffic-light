@@ -225,12 +225,14 @@
     const incoming = info.draft && typeof info.draft.text === 'string' && info.draft.folder?.handle ? info.draft : null;
     let note = '';
     if (incoming) {
-      if (s.task || s.text.trim()) note = 'Sessions sent a prompt, but this box already has one. It was not replaced.';
+      if (s.task) note = 'Sessions sent a prompt, but Home is showing a task. Start a new task here, then send it again from Sessions.';
+      else if (s.text.trim()) note = 'Sessions sent a prompt, but this box already has one, so it was not replaced. Clear the box, then send it again from Sessions.';
       else {
         s.text = incoming.text; s.folder = incoming.folder; s.ai = typeof incoming.ai === 'string' ? incoming.ai : 'auto';
         if (!folders.some((f) => f.handle === incoming.folder.handle)) folders.unshift(incoming.folder);
         keepDraft();
-        note = 'Your prompt from Sessions is ready. Press Run to start it.';
+        const name = CV.AI_NAME?.[incoming.wanted];
+        note = `Your prompt from Sessions is ready. Press Run to start it.${typeof incoming.wanted === 'string' ? ` ${name || 'That AI'} isn’t available here, so it is set to Choose for me.` : ''}`;
       }
     }
     $('compose-hint').textContent = info.shortcut?.state === 'on' && info.shortcut.accelerator ? `${info.shortcut.accelerator} from anywhere` : '';

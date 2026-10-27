@@ -297,7 +297,7 @@ test('draft: a stale, cross-workspace, missing-folder or unusable-AI draft is dr
   const m = harness({ missing: ['/Users/demo/app'] }); offer(m);
   assert.equal((await m.call('compose:info')).draft, null, 'folder gone');
   const u = harness(); offer(u, { ai: 'codex' });
-  assert.equal((await u.call('compose:info')).draft.ai, 'auto', 'codex is not usable here');
+  const ud = (await u.call('compose:info')).draft; assert.equal(ud.ai, 'auto', 'codex is not usable here'); assert.equal(ud.wanted, 'codex', 'and the page is told which AI it wanted');
 });
 test('draft: refused when the box is off, Home is showing a task, or this is the new chat; a newer offer replaces an unread one', async () => {
   const off = harness(); off.st.hidden = true; assert.deepEqual(offer(off), { ok: false, why: 'off' });
