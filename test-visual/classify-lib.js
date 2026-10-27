@@ -457,16 +457,36 @@ function themeOf(baseline) {
 // The head image uses the same theme.
 const THEME_DOMINANCE = 0.7;
 const L_LIGHT = 60; const L_DARK = 40;
+const VOTE_CHROMA = 8;
 function lightnessVotes(baseImg, headImg) {
   const votes = { light: 0, dark: 0 };
   const cache = new Map();
   const A = baseImg.data; const B = headImg && headImg.data.length === A.length ? headImg.data : null;
+  const w = baseImg.width; const h = A.length / 4 / w;
+  // Only flat surface votes: the pixel and its 8 neighbours are identical at base. Glyph strokes (the dark
+  // theme's --text #f0f1f3 is near-neutral and light) are never 3×3 flat at UI text sizes.
+  const flat = (p) => {
+    const x = p % w; const y = (p - x) / w;
+    if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) return false;
+    for (let dy = -1; dy <= 1; dy += 1) for (let dx = -1; dx <= 1; dx += 1) {
+      const q = (p + dy * w + dx) * 4; const j = p * 4;
+      if (A[q] !== A[j] || A[q + 1] !== A[j + 1] || A[q + 2] !== A[j + 2] || A[q + 3] !== A[j + 3]) return false;
+    }
+    return true;
+  };
   for (let j = 0; j < A.length; j += 4) {
     if (A[j + 3] !== 255) continue;
+    if (!flat(j / 4)) continue;
     if (B && (A[j] !== B[j] || A[j + 1] !== B[j + 1] || A[j + 2] !== B[j + 2] || B[j + 3] !== 255)) continue;
     const key = (A[j] << 16) | (A[j + 1] << 8) | A[j + 2];
     let v = cache.get(key);
-    if (v === undefined) { const L = lab([A[j], A[j + 1], A[j + 2]])[0]; v = L >= L_LIGHT ? 'light' : L <= L_DARK ? 'dark' : ''; cache.set(key, v); }
+    if (v === undefined) {
+      // Review round 5: only near-neutral pixels vote (C* ≤ 8). Saturated art (the mascot's #cd7c5d, #7fc2a8,
+      // #f0978b, #ddb772) says nothing about the surface the page is drawn on.
+      const [L, a2, b2] = lab([A[j], A[j + 1], A[j + 2]]);
+      v = Math.hypot(a2, b2) > VOTE_CHROMA ? '' : L >= L_LIGHT ? 'light' : L <= L_DARK ? 'dark' : '';
+      cache.set(key, v);
+    }
     if (v) votes[v] += 1;
   }
   return votes;
@@ -573,7 +593,13 @@ const classifyPixel = (oldPx, newPx, neutrals, members) => explainPixel(oldPx, n
 //      (Graphite is itself a grey, so a grey surface that shifts sits on the near-N end of every accent segment).
 //      They are accepted only within 2 px (EVIDENCE_RADIUS) of a strong pass or a named exception; otherwise they are unexpected.
 // `onPixel(x, y, oldHex, newHex, explanation)` (optional) sees every non-noise changed pixel's final explanation.
-function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, onPixel = null } = {}) {
+// Round 5 (team-lead decision): `alphaEdge` is set only for windows that are transparent by construction (the
+// index.html widget list in classify.config.json `themes`). There, an anti-aliased edge pixel (0 < α < 255 on
+// both sides) whose alpha moved by 1 or 2 is classified on its colour (the decode is straight, not premultiplied)
+// but is never strong and never evidence: it must be a member pass or an exception, and a weak one still needs a
+// strong pixel within 2 px. Any other alpha change, and any alpha change in an opaque shot, is unexpected.
+const ALPHA_EDGE_MAX = 2;
+function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, onPixel = null, alphaEdge = false } = {}) {
   const total = oldImg.width * oldImg.height;
   if (oldImg.width !== newImg.width || oldImg.height !== newImg.height) {
     return { total, changed: total, noise: 0, pass: 0, unchanged: 0, skipped: 0, exception: 0, unexpected: total, sizeChanged: true, tiles: [], samples: [], noiseTiles: 0, maxNoiseTileShare: 0 };
@@ -600,7 +626,12 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
     if (!changed[i]) continue;
     const j = i * 4;
     const x = i % w; const y = (i - x) / w;
-    if (A[j + 3] !== B[j + 3]) { expl[i] = { verdict: 'unexpected' }; continue; }
+    let alphaMoved = false;
+    if (A[j + 3] !== B[j + 3]) {
+      const ok = alphaEdge && A[j + 3] > 0 && A[j + 3] < 255 && B[j + 3] > 0 && B[j + 3] < 255 && Math.abs(A[j + 3] - B[j + 3]) <= ALPHA_EDGE_MAX;
+      if (!ok) { expl[i] = { verdict: 'unexpected', reason: 'alpha changed' }; continue; }
+      alphaMoved = true;
+    }
     const oldPx = [A[j], A[j + 1], A[j + 2]]; const newPx = [B[j], B[j + 1], B[j + 2]];
     let local = null;
     for (const [dx, dy] of offsets) {
@@ -609,7 +640,7 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
       const k = yy * w + xx;
       if (!changed[k] && A[k * 4 + 3] === 255) { local = [A[k * 4], A[k * 4 + 1], A[k * 4 + 2]]; break; }
     }
-    const key = `${oldPx}|${newPx}|${local || 's'}`;
+    const key = `${oldPx}|${newPx}|${local || 's'}|${alphaMoved ? 'a' : ''}`;
     let e = cache.get(key);
     if (!e) {
       if (deltaE00(lab(oldPx), lab(newPx)) <= DE_NOISE) e = { verdict: 'noise' };
@@ -634,6 +665,13 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
           }
         }
       }
+      if (alphaMoved) {
+        // never strong, never evidence: a pass becomes weak, an exception core a non-core exception; anything
+        // that isn't a pass or an exception (noise, unchanged, skipped, unexpected) fails
+        if (e.verdict === 'pass') e = { ...e, weak: true, alphaEdge: true };
+        else if (e.verdict === 'exception') e = { ...e, core: false, alphaEdge: true };
+        else e = { verdict: 'unexpected', reason: 'alpha moved and the colour is not a member or exception' };
+      }
       cache.set(key, e);
     }
     expl[i] = e;
@@ -656,7 +694,7 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
     if (!changed[i]) continue;
     let e = expl[i];
     const needsEvidence = e.verdict === 'unchanged' || e.verdict === 'skipped' || (e.verdict === 'pass' && e.weak);
-    if (needsEvidence && !near(i)) e = { ...e, verdict: 'unexpected', reason: 'no strong evidence within 2 px' };
+    if (needsEvidence && !near(i)) e = { ...e, verdict: 'unexpected', reason: e.alphaEdge ? 'alpha edge with no strong evidence within 2 px' : 'no strong evidence within 2 px' };
     else if (e.verdict === 'exception' && !e.core && !near(i, exCore)) e = { ...e, verdict: 'unexpected', reason: 'exception blend with no exception core within 2 px' };
     out[e.verdict] += 1;
     if (e.verdict === 'noise') {
@@ -727,4 +765,4 @@ function verdictOf(results, config) {
   return { failures, crops };
 }
 
-module.exports = { sheetTokensOf, aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, themeFromConfig, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, noiseCapFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
+module.exports = { ALPHA_EDGE_MAX, VOTE_CHROMA, sheetTokensOf, aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, themeFromConfig, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, noiseCapFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };

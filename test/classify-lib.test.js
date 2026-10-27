@@ -320,6 +320,41 @@ test('classifier (c′): the theme comes from the unchanged pixels\' lightness; 
   assert.equal(r.unexpected, 16);
 });
 
+test('classifier (c′) round 5: only flat near-neutral pixels vote, so mascot colours and text do not flip a dark shot', () => {
+  const t = (name, img) => { const r = lib.themeFor(ALL, name, img, img); return [r.theme, r.source]; };
+  // a dark widget: a dark surface (25 %), and the rest saturated mascot art plus 1 px light text strokes
+  const MASCOT = [hex('#cd7c5d'), hex('#7fc2a8'), hex('#f0978b'), hex('#ddb772')];
+  const colourfulDark = image(40, 40, (x, y) => (y < 10 ? hex('#202329') : x % 4 === 0 ? hex('#f0f1f3') : MASCOT[Math.floor(x / 10) % 4]));
+  assert.deepEqual(t('x/widget-darwin.png', colourfulDark), ['dark', 'image']);
+  // the pre-round-5 vote would have called it light: most opaque pixels are L* ≥ 60
+  const lightish = [...Array(1600).keys()].filter((i) => lib.lab([...colourfulDark.data.subarray(i * 4, i * 4 + 3)])[0] >= 60).length;
+  assert.ok(lightish / 1600 > 0.7);
+  // a light neutral page with dark text still votes light
+  const lightNeutral = image(40, 40, (x, y) => (y % 8 === 0 && x % 3 === 0 ? hex('#20252d') : hex('#f4f5f7')));
+  assert.deepEqual(t('x/page-darwin.png', lightNeutral), ['light', 'image']);
+  assert.equal(lib.VOTE_CHROMA, 8);
+});
+
+test('classifier round 5: Δα ≤ 2 on a transparent edge is classified on colour, never strong; else it fails', () => {
+  // an 8×8 solid accent swap (strong) with one edge pixel at x = 8 that is a half-coverage blend over --bg
+  const bg = hex('#17191d'); const O = hex('#e49a78'); const N = hex('#e6e8eb');
+  const rgba = (w, h, fill) => { const data = Buffer.alloc(w * h * 4); for (let i = 0; i < w * h; i += 1) data.set(fill(i % w, Math.floor(i / w)), i * 4); return { width: w, height: h, data }; };
+  const pic = (solid, edge, aEdge, aSolid = 255) => rgba(12, 8, (x) => (x < 8 ? [...solid, aSolid] : x === 8 ? [...edge, aEdge] : [...bg, 255]));
+  const run = (aOld, aNew, opts, oldSolidA = 255, newSolidA = 255) => lib.classifyImage(pic(O, mix(O, bg, 0.5), aOld, oldSolidA), pic(N, mix(N, bg, 0.5), aNew, newSolidA), ALL.dark, opts);
+  assert.equal(run(200, 200, {}).unexpected, 0, 'same alpha: a normal pass');
+  assert.equal(run(200, 202, { alphaEdge: true }).unexpected, 0, 'Δα 2 on an edge in a transparent window: classified on colour');
+  assert.equal(run(200, 203, { alphaEdge: true }).unexpected, 8, 'Δα 3 fails');
+  assert.equal(run(200, 201, {}).unexpected, 8, 'not a transparent-by-construction window: fails');
+  assert.equal(run(255, 254, { alphaEdge: true }).unexpected, 8, 'an opaque pixel whose alpha moves by 1 fails');
+  // never strong: with no strong pixel within 2 px the edge fails (the solid block is moved out of reach)
+  const far = (a) => rgba(12, 8, (x) => (x === 8 ? [...mix(a, bg, 0.5), a === O ? 200 : 201] : x < 4 ? [...a, 255] : [...bg, 255]));
+  assert.equal(lib.classifyImage(far(O), far(N), ALL.dark, { alphaEdge: true }).unexpected, 8);
+  // the colour must be a member pass: a grey edge whose alpha moved fails even in a transparent window
+  const grey = (c, a) => rgba(12, 8, (x) => (x < 8 ? [...O, 255] : x === 8 ? [...c, a] : [...bg, 255]));
+  assert.equal(lib.classifyImage(grey([90, 90, 90], 200), grey([70, 70, 70], 201), ALL.dark, { alphaEdge: true }).unexpected >= 8, true);
+  assert.equal(lib.ALPHA_EDGE_MAX, 2);
+});
+
 test('classifier M1: a pass whose old pixel already fits the new segment is weak, so a non-token grey shift fails', () => {
   // review attack 1: greys that aren't surface tokens, no accent anywhere
   const light = lib.explainPixel([215, 214, 213], [193, 192, 191], ALL.light.surfaces, MIXED.light.members);
@@ -386,7 +421,7 @@ test('classifier config: scrim-tile pairs are the alias tile under the drawer sc
   assert.match(css, /\.af-tile \{[^}]*background: color-mix\(in oklab, var\(--tint\) 16%, var\(--panel\)\)/);
   assert.match(css, /\.cat-engineering[^{]*\{ --tint: var\(--accent\); \}/);
   assert.match(css, /\.af-backdrop \{[^}]*background: color-mix\(in oklab, var\(--bg\) 55%, transparent\)/);
-  const base = lib.tokensOf(execFileSync('git', ['show', '47ad8ac1:tokens.css'], { cwd: root }).toString());
+  const base = lib.tokensOf(TOKENS); // the terracotta fixture, never a git ref (it must survive R0b merging)
   const head = lib.tokensOf(fs.readFileSync(path.join(root, 'tokens.css'), 'utf8'));
   const tile = { space: 'oklab', args: [{ colour: 'var(--accent)', pct: 16 }, { colour: 'var(--panel)', pct: null }] };
   const scrim = (tokens) => { const t = lib.computeMix(tile, tokens).slice(0, 3).map(Math.round); const bg = lib.parseColour(tokens['--bg']); return t.map((x, i) => Math.round(x * 0.45 + bg[i] * 0.55)); };
@@ -528,9 +563,11 @@ test('classifier: widget baselines take dark from index.html, which must still p
   const config = JSON.parse(fs.readFileSync(path.join(root, 'test-visual', 'classify.config.json'), 'utf8'));
   const [entry] = config.themes;
   assert.equal(entry.theme, 'dark');
-  assert.equal(entry.source, 'index.html:2');
-  // the cited source line: if index.html stops pinning dark, this mapping is stale and must be revisited
+  assert.equal(entry.source, 'index.html:2; input-bubble.css:5');
+  // the cited source lines: if index.html stops pinning dark, or the bubble panel stops being hard-coded dark,
+  // this mapping is stale and must be revisited
   assert.match(fs.readFileSync(path.join(root, 'index.html'), 'utf8').split('\n')[1], /^<html\b[^>]*\bdata-theme="dark"/);
+  assert.match(fs.readFileSync(path.join(root, 'input-bubble.css'), 'utf8').split('\n')[4], /^\.ib-item \{[^}]*background: rgba\(20, 20, 22, 0\.94\)/);
   // every listed baseline is shot from the index.html window
   for (const b of entry.baselines) {
     const spec = b.split('/')[2];
@@ -543,7 +580,7 @@ test('classifier: widget baselines take dark from index.html, which must still p
   const L = hex('#eef0f3'); const D = hex('#292d34');
   const mixed = image(20, 20, (x) => (x < 12 ? L : D));
   const listed = lib.themeFor(ALL, entry.baselines[0], mixed, mixed, config);
-  assert.deepEqual([listed.theme, listed.source], ['dark', 'config (index.html:2)']);
+  assert.deepEqual([listed.theme, listed.source], ['dark', 'config (index.html:2; input-bubble.css:5)']);
   assert.equal(lib.themeFor(ALL, 'x/other-darwin.png', mixed, mixed, config).theme, 'none');
 });
 
@@ -581,9 +618,8 @@ test('classifier: exception guards — no old colour near a surface or text toke
     for (const [o] of pairs) for (const k of NEUTRAL) assert.ok(de(o, head[e.theme][k]) > 2, `${e.name}: old ${o} is within ΔE 2 of ${e.theme} ${k} (an exception must not explain a neutral)`);
   }
   // soft-tint pairs: old = base --accent-soft over `over`, new = head --accent-soft over `over` (ΔE ≤ 1)
-  let base;
-  try { base = lib.tokensOf(execFileSync('git', ['show', 'origin/main:tokens.css'], { cwd: root, encoding: 'utf8' })); }
-  catch { base = lib.tokensOf(fs.readFileSync(path.join(__dirname, 'fixtures', 'tokens-terracotta-r0a.css'), 'utf8')); }
+  // Always the terracotta fixture, never origin/main: once R0b merges, main's soft is Graphite (review round 5).
+  const base = lib.tokensOf(TOKENS);
   const over = (soft, g) => { const s = lib.parseColour(soft); const G = lib.parseColour(g); return s.slice(0, 3).map((v, i) => v * s[3] + G[i] * (1 - s[3])); };
   const tints = config.exceptions.filter((e) => e.name.startsWith('tint-'));
   assert.equal(tints.length, 4);

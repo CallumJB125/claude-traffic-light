@@ -146,8 +146,8 @@
   "themes": [
     {
       "theme": "dark",
-      "source": "index.html:2",
-      "reason": "The widget window: index.html:2 pins <html data-theme=\"dark\"> (confirmed in the Q13 review). Its transparent window composites light and dark mascot pixels, so the lightness vote is always ambiguous. Every listed baseline is shot from windowByFile(…, 'index.html'); widget-compose-taken (widget-page.html) is not.",
+      "source": "index.html:2; input-bubble.css:5",
+      "reason": "The widget window: index.html:2 pins <html data-theme=\"dark\"> (confirmed in the Q13 review), and the bubble panels in it (bubble-*, widget-ask-*) are dark by source: input-bubble.css:5 hard-codes .ib-item { background: rgba(20, 20, 22, 0.94) } and every accent there reads the page's dark tokens (review round 5). Every listed baseline is shot from windowByFile(…, 'index.html'); widget-compose-taken (widget-page.html) is not. The round-5 vote (flat, C* ≤ 8 pixels only) agrees: none of the 31 votes light.",
       "baselines": [
         "test-visual/__screenshots__/ask.spec.js/widget-ask-edit-darwin.png",
         "test-visual/__screenshots__/ask.spec.js/widget-ask-long-command-darwin.png",
