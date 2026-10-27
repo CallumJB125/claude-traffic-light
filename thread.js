@@ -48,9 +48,8 @@
     $('th-bucket').dataset.bucket = v.bucket;
     $('th-bucket').textContent = BUCKET[v.bucket] || BUCKET.idle;
     const primary = $('th-primary');
-    // Provisional, awaiting Callum (plan-r2.md §7 item 1): "Open to answer" hands a decision to the Tasks page.
-    if (kind === 'task' && waitingOf(detail)) { primary.hidden = false; primary.textContent = 'Open to answer'; primary.dataset.act = 'tasks'; }
-    else if (kind === 'session' && origin) { primary.hidden = false; primary.textContent = 'Go to it'; primary.dataset.act = 'terminal'; }
+    // A chat's decision has one button, on its waiting card (no second copy up here).
+    if (kind === 'session' && origin) { primary.hidden = false; primary.textContent = 'Go to it'; primary.dataset.act = 'terminal'; }
     else { primary.hidden = true; delete primary.dataset.act; }
   }
 
@@ -79,8 +78,8 @@
     b.hidden = false;
     const text = document.createElement('span');
     text.textContent = origin ? `Running in ${origin}` : `Running in a terminal on this ${MACHINE}`;
+    // The state is the header's bucket; the Timeline's own wording could disagree with it.
     b.append(text);
-    if (activity?.view?.status) { const s = document.createElement('span'); s.className = 'th-banner-status'; s.textContent = activity.view.status; b.append(s); }
   }
 
   // ── transcript (inside the frame) ────────────────────────────────────────
@@ -195,12 +194,12 @@
   // ── actions (navigation only) ────────────────────────────────────────────
   $('th-primary').addEventListener('click', async () => {
     const act = $('th-primary').dataset.act;
-    if (act === 'tasks') await api.openInTasks(rowId);
-    else if (act === 'terminal') {
+    if (act === 'terminal') {
       const r = await api.goToTerminal(rowId);
       $('th-status').textContent = r && r.ok === false && r.note ? r.note : '';
     }
   });
+  // Provisional, awaiting Callum (plan-r2.md §7 item 1): "Open to answer" hands a decision to the Tasks page.
   $('th-answer').addEventListener('click', () => api.openInTasks(rowId));
   $('th-board').addEventListener('click', () => api.board());
 

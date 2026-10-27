@@ -42,7 +42,6 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .th-body { flex: 1; min-height: 0; display: flex; }
 .th-body-in { display: flex; flex-direction: column; min-height: 0; padding-top: var(--space-4); padding-bottom: var(--space-4); gap: var(--space-3); }
 .th-banner { flex: none; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); align-items: baseline; font-size: var(--text-sm); color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-2) var(--space-3); }
-.th-banner-status { color: var(--muted); }
 .th-status { margin: 0; font-size: var(--text-sm); color: var(--muted); }
 .th-status:empty { display: none; }
 .th-tx { flex: 1; min-height: 120px; width: 100%; border: 0; background: transparent; color-scheme: light dark; }

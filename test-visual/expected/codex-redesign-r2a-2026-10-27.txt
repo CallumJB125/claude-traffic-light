@@ -1,0 +1,11 @@
+# R2a: five new baselines, all from the new test-visual/thread.spec.js (chat-first preview gate on). No existing baseline changes; no accent flip, so no classifier run.
+test-visual/__screenshots__/thread.spec.js/thread-chat-light-darwin.png
+# reason: new. A Plexiform chat's thread in light: title, bucket pill and shape dot, project · branch · AI, the 760 px column, the prompt as a user bubble, markdown (list, inline code, a fenced block), two step groups each on one line with durations, and a link shown as text plus address (no live link).
+test-visual/__screenshots__/thread.spec.js/thread-chat-dark-darwin.png
+# reason: new. The same chat in dark; the transcript frame takes the dark tokens through its linked stylesheet only.
+test-visual/__screenshots__/thread.spec.js/thread-native-light-darwin.png
+# reason: new. A terminal session's thread in light: "Running in iTerm", Go to it, its Timeline activity as user turns, one step line (summaries only, no output) and the AI's turn text.
+test-visual/__screenshots__/thread.spec.js/thread-native-dark-darwin.png
+# reason: new. The same terminal session in dark.
+test-visual/__screenshots__/thread.spec.js/thread-waiting-darwin.png
+# reason: new. An open approval: Needs you in the header, and the read-only card "Claude is waiting for you" with the command, the folder and the only Open to answer button (no Allow or Deny in the thread).

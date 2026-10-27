@@ -63,11 +63,10 @@ test('an open approval: the read-only waiting card and "Open to answer" (to the 
   assert.equal(p.$('th-waiting-what').textContent, 'Bash: rm -rf build');
   assert.equal(p.$('th-waiting-where').textContent, 'In ~/work/billing');
   assert.equal(p.$('th-bucket').textContent, 'Needs you', 'an open approval wins over a stale list bucket');
-  assert.equal(p.$('th-primary').textContent, 'Open to answer');
+  assert.equal(p.$('th-primary').hidden, true, 'one button for one decision: the card\'s');
   p.$('th-answer').click();
-  p.$('th-primary').click();
   await tick();
-  assert.deepEqual(p.calls.filter(([k]) => k === 'tasks'), [['tasks', ID], ['tasks', ID]]);
+  assert.deepEqual(p.calls.filter(([k]) => k === 'tasks'), [['tasks', ID]]);
   assert.equal(p.w.document.querySelectorAll('#th-waiting button').length, 1, 'no Allow or Deny here');
 });
 
@@ -87,7 +86,7 @@ test('a terminal session: the banner names its terminal and [Go to it] asks main
   p.ready();
   await tick(); await tick();
   assert.equal(p.$('th-banner').hidden, false);
-  assert.match(p.$('th-banner').textContent, /^Running in iTerm/);
+  assert.equal(p.$('th-banner').textContent, 'Running in iTerm');
   assert.equal(p.$('th-primary').textContent, 'Go to it');
   p.$('th-primary').click();
   await tick(); await tick();

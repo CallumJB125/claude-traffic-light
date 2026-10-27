@@ -49,3 +49,13 @@ test('it parses the four call shapes only, with literal arguments', () => {
   for (const s of ['openBuddy', 'navigate', 'select', 'data-page']) assert.match(src, new RegExp(`\\['${s}', /`));
   assert.equal((src.match(/^  \['[a-zA-Z-]+', \//gm) || []).length, 4);
 });
+
+// Redesign R2a (plan-r2 Q1): the thread is not a page. It has no PAGES or
+// SECTIONS entry, so the sidebar, route(), goTo() and deep links can never
+// show it as one; only a row (openThread, gate-on) opens it.
+test('the thread is reached only by a row: absent from PAGES and SECTIONS, a future id until R6a', () => {
+  assert.equal(P.pageById('thread'), null);
+  assert.ok(!P.SECTIONS.some((s) => s.id === 'thread' || s.pages.includes('thread')));
+  assert.ok(P.FUTURE_IDS.includes('thread'));
+  assert.ok(!inventory().some((l) => l.split('\t')[0] === 'thread'), 'no page-shaped reference to "thread" anywhere in scope');
+});

@@ -1,0 +1,187 @@
+'use strict';
+// Redesign R2a: the read-only thread behind the dev-only preview gate
+// (CLAUDE_TRAFFIC_LIGHT_CHAT_PREVIEW=1; launchApp's --demo visual makes it a dev
+// run). One local session is seeded as a hook file, so a thread opens through
+// the real path: the sidebar row → buddy:open-thread → main's threadTarget →
+// the thread view → guard T. For the pixel shots only, main's thread:open and
+// thread:state answers are replaced with fixed content (the shape
+// src/thread-main.js returns), so nothing depends on a transcript, a clock or
+// the Tasks engine. The authority itself is test/thread-authority.test.js.
+const { test, expect } = require('@playwright/test');
+const { launchApp, windowByFile, snapToPixels } = require('./app');
+
+const GATE = { CLAUDE_TRAFFIC_LIGHT_CHAT_PREVIEW: '1' };
+const session = () => JSON.stringify({ sessionId: 'thread-fixture', source: 'claude', host: 'synthetic', cwd: '/synthetic/billing', signal: 'tool-use', updatedAt: new Date().toISOString(), hostApp: 'iTerm2' });
+
+const at = (n) => ({ seq: n });
+const CHAT = {
+  kind: 'task',
+  header: { title: 'Fix the flaky upload test', project: 'api', bucket: 'working', origin: null, ai: 'Claude', terminal: false },
+  detail: {
+    id: 'fixture', title: 'Fix the flaky upload test', state: 'running', ai: { id: 'claude' }, repo: { name: 'api' }, branch: 'fix/flaky-upload', where: '~/work/api',
+    text: 'The upload test fails about one run in five. Find out why and fix it.', openApprovals: [], openAsk: null, messages: [], actions: [],
+  },
+  replay: [
+    { type: 'transcript', role: 'assistant', turn: 1, text: "I'll start by reading the test and the upload handler.", ...at(1) },
+    { type: 'tool', phase: 'start', toolUseId: 'r1', name: 'Read', summary: 'test/upload.test.js', ...at(2) },
+    { type: 'tool', phase: 'end', toolUseId: 'r1', name: 'Read', ok: true, durationMs: 400, ...at(3) },
+    { type: 'tool', phase: 'start', toolUseId: 'r2', name: 'Read', summary: 'src/upload.js', ...at(4) },
+    { type: 'tool', phase: 'end', toolUseId: 'r2', name: 'Read', ok: true, durationMs: 300, ...at(5) },
+    { type: 'tool', phase: 'start', toolUseId: 'r3', name: 'Read', summary: 'src/storage.js', ...at(6) },
+    { type: 'tool', phase: 'end', toolUseId: 'r3', name: 'Read', ok: true, durationMs: 300, ...at(7) },
+    { type: 'transcript', role: 'assistant', turn: 1, text: "Found it. The test doesn't wait for the file to finish writing:\n\n- `saveUpload()` returns before the stream closes\n- the assertion reads the file straight away\n\nThe fix is to await the stream's `finish` event:\n\n```js\nawait once(stream, 'finish');\n```", ...at(8) },
+    { type: 'tool', phase: 'start', toolUseId: 'e1', name: 'Edit', summary: 'src/upload.js', ...at(9) },
+    { type: 'tool', phase: 'end', toolUseId: 'e1', name: 'Edit', ok: true, durationMs: 1200, ...at(10) },
+    { type: 'tool', phase: 'start', toolUseId: 'b1', name: 'Bash', summary: 'npm test', ...at(11) },
+    { type: 'tool', phase: 'end', toolUseId: 'b1', name: 'Bash', ok: true, durationMs: 9000, ...at(12) },
+    { type: 'transcript', role: 'assistant', turn: 1, text: 'The test passed 50 runs in a row. Next I\'ll check the [stream docs](https://nodejs.org/api/stream.html) for the same pattern elsewhere.', partial: true, ...at(13) },
+  ],
+};
+const WAITING = {
+  ...CHAT,
+  header: { ...CHAT.header, bucket: 'needs' },
+  detail: { ...CHAT.detail, openApprovals: [{ approvalId: 'a1', tool: 'Bash', inputSummary: 'npm run migrate -- --env staging' }] },
+  replay: CHAT.replay.slice(0, 8),
+};
+const NATIVE = {
+  kind: 'session', origin: 'iTerm',
+  header: { title: 'Claude session in billing', project: 'billing', bucket: 'working', origin: 'iTerm', ai: 'Claude', terminal: true },
+  activity: { title: 'Claude Code · billing', view: { status: 'Working', events: [
+    { at: 1, kind: 'start', label: 'Started', text: null },
+    { at: 2, kind: 'prompt', label: 'Asked', text: 'Add a retry to the invoice export' },
+    { at: 3, kind: 'read', label: 'Read', text: 'src/export.js, src/http.js' },
+    { at: 4, kind: 'edit', label: 'Edited', text: 'src/export.js' },
+    { at: 5, kind: 'command', label: 'Ran', text: 'npm test -- export' },
+    { at: 6, kind: 'turn-end', label: 'Turn finished', text: 'Added three retries with backoff to `exportInvoices()`. The export tests pass.' },
+    { at: 7, kind: 'prompt', label: 'Asked', text: 'Now log each retry' },
+  ] } },
+};
+
+async function open({ fixture = null, theme = 'light', env = GATE } = {}) {
+  const h = await launchApp({ env, files: { 'sessions/thread-fixture.json': session() } });
+  if (fixture) {
+    // Answers the thread document only, as main does.
+    await h.app.evaluate(({ ipcMain }, fixture) => {
+      const mine = (e) => { try { return new URL(e.sender.getURL()).pathname.endsWith('/thread.html'); } catch { return false; } };
+      for (const ch of ['thread:open', 'thread:state']) { ipcMain.removeHandler(ch); ipcMain.handle(ch, (e) => (mine(e) ? fixture : null)); }
+    }, fixture);
+  }
+  const widget = await windowByFile(h.app, 'index.html');
+  await widget.evaluate(() => window.trafficLight.openHelp());
+  const side = await windowByFile(h.app, 'sidebar.html');
+  await side.waitForFunction(() => !!window.buddy);
+  return { h, side };
+}
+
+async function openThread(h, side, theme = 'light') {
+  const row = side.locator('.sidebar-row').first();
+  await expect(row).toBeVisible({ timeout: 15000 });
+  await row.click();
+  const page = await windowByFile(h.app, 'thread.html');
+  await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+  await page.waitForLoadState('load');
+  await expect(page.locator('#th')).toHaveAttribute('aria-busy', 'false', { timeout: 15000 });
+  await page.evaluate(() => document.fonts.ready);
+  return page;
+}
+const frame = (page) => page.frameLocator('#th-tx');
+const shot = async (page, name) => expect(await snapToPixels(page.locator('#th'))).toHaveScreenshot(name);
+
+test('flag off: no thread, and the sidebar bridge has no thread channel', async () => {
+  const { h, side } = await open({ env: {} });
+  try {
+    expect(await side.evaluate(() => [typeof window.buddy.openThread, typeof window.buddy.sessions])).toEqual(['undefined', 'undefined']);
+    expect(h.app.windows().some((p) => p.url().split('?')[0].endsWith('/thread.html'))).toBe(false);
+  } finally { await h.cleanup(); }
+});
+
+test('the real path: a local session row opens its thread, the row is selected, and leaving it destroys the view (S2)', async () => {
+  const { h, side } = await open();
+  try {
+    const page = await openThread(h, side);
+    await expect(page.locator('#th-banner')).toContainText('Running in iTerm');
+    await expect(page.locator('#th-primary')).toHaveText('Go to it');
+    await expect(side.locator('.sidebar-row[aria-selected="true"]')).toHaveCount(1);
+    // Board from the footer: the thread document is gone, not kept alive in the background.
+    await side.locator('.sb-foot[data-page="board"]').click();
+    await expect.poll(() => h.app.windows().some((p) => p.url().split('?')[0].endsWith('/thread.html'))).toBe(false);
+    await expect(side.locator('.sidebar-row[aria-selected="true"]')).toHaveCount(0);
+  } finally { await h.cleanup(); }
+});
+
+test('the transcript frame in Electron: same-origin srcdoc, no script runs, linked styles only (S4b repeat)', async () => {
+  const { h, side } = await open({ fixture: CHAT });
+  try {
+    const page = await openThread(h, side);
+    const r = await page.evaluate(() => new Promise((resolve) => {
+      const f = document.getElementById('th-tx'), d = f.contentDocument;
+      const s = d.createElement('script'); s.textContent = 'window.parent.__ran = 1'; d.body.append(s);
+      const img = d.createElement('img'); img.setAttribute('onerror', 'window.parent.__img = 1'); img.src = 'x:y'; d.body.append(img);
+      const st = d.createElement('style'); st.textContent = '.tx { outline: 3px solid rgb(1, 2, 3); }'; d.head.append(st);
+      setTimeout(() => resolve({
+        origin: f.contentWindow.location.href, ran: window.__ran === 1, img: window.__img === 1,
+        inline: getComputedStyle(d.querySelector('.tx')).outlineColor,
+        linked: getComputedStyle(d.querySelector('.tx')).display,
+        anchors: d.querySelectorAll('a').length, sandbox: f.getAttribute('sandbox'),
+      }), 300);
+    }));
+    expect(r).toEqual({ origin: 'about:srcdoc', ran: false, img: false, inline: expect.not.stringContaining('1, 2, 3'), linked: 'flex', anchors: 0, sandbox: 'allow-same-origin' });
+  } finally { await h.cleanup(); }
+});
+
+for (const theme of ['light', 'dark']) {
+  test(`chat (${theme}): header, the 760 px column, markdown, one line per group of steps`, async () => {
+    const { h, side } = await open({ fixture: CHAT, theme });
+    try {
+      const page = await openThread(h, side, theme);
+      await expect(page.locator('#th-title')).toHaveText('Fix the flaky upload test');
+      await expect(page.locator('#th-meta')).toHaveText('api · fix/flaky-upload · Claude');
+      await expect(page.locator('#th-bucket')).toHaveText('Working on it');
+      await expect(page.locator('#th-primary')).toBeHidden();
+      const tx = frame(page);
+      await expect(tx.locator('.tx-steps-text')).toHaveText(['Read 3 files', 'Edited src/upload.js · Ran npm test']);
+      await expect(tx.locator('.tx-link')).toHaveText('stream docs (https://nodejs.org/api/stream.html)');
+      expect(await page.locator('.th-body-in').evaluate((n) => n.getBoundingClientRect().width)).toBeLessThanOrEqual(760);
+      await shot(page, `thread-chat-${theme}.png`);
+    } finally { await h.cleanup(); }
+  });
+
+  test(`terminal session (${theme}): Running in iTerm, Go to it, its activity`, async () => {
+    const { h, side } = await open({ fixture: NATIVE, theme });
+    try {
+      const page = await openThread(h, side, theme);
+      await expect(page.locator('#th-banner')).toHaveText('Running in iTerm');
+      await expect(page.locator('#th-primary')).toHaveText('Go to it');
+      await expect(frame(page).locator('.tx-user')).toHaveText(['Add a retry to the invoice export', 'Now log each retry']);
+      await shot(page, `thread-native-${theme}.png`);
+    } finally { await h.cleanup(); }
+  });
+}
+
+test('waiting: the read-only card and one Open to answer button', async () => {
+  const { h, side } = await open({ fixture: WAITING });
+  try {
+    const page = await openThread(h, side);
+    await expect(page.locator('#th-waiting-title')).toHaveText('Claude is waiting for you');
+    await expect(page.locator('#th-waiting-what')).toHaveText('Bash: npm run migrate -- --env staging');
+    await expect(page.locator('button:visible', { hasText: 'Open to answer' })).toHaveCount(1);
+    await expect(page.locator('#th-waiting button')).toHaveText(['Open to answer']);
+    await expect(page.locator('#th-bucket')).toHaveText('Needs you');
+    await shot(page, 'thread-waiting.png');
+  } finally { await h.cleanup(); }
+});
+
+test('200% zoom: nothing scrolls sideways, header or transcript', async () => {
+  const { h, side } = await open({ fixture: CHAT });
+  try {
+    const page = await openThread(h, side);
+    await h.app.evaluate(({ webContents }) => { const wc = webContents.getAllWebContents().find((w) => w.getURL().includes('/thread.html')); wc.setZoomFactor(2); });
+    await expect.poll(() => page.evaluate(() => window.devicePixelRatio)).toBeGreaterThanOrEqual(2);
+    const overflow = await page.evaluate(() => {
+      const d = document.getElementById('th-tx').contentDocument;
+      return [document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth, d.scrollingElement.scrollWidth - d.scrollingElement.clientWidth];
+    });
+    expect(overflow[0]).toBeLessThanOrEqual(0);
+    expect(overflow[1]).toBeLessThanOrEqual(0);
+  } finally { await h.cleanup(); }
+});
