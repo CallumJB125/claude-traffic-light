@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { htmlParts } = require('../test-visual/classify-lib');
 
 const ROOT = path.join(__dirname, '..');
 const CSS = fs.readFileSync(path.join(ROOT, 'tokens.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -138,11 +139,8 @@ test('tokens: every type token is at least 12px', () => {
 const LINK_ALLOW = ['.nav-link', '.sidebar-row', '.tab', '.chip'];
 const A_SELECTOR = /(^|[\s>+~(])a(?=$|[\s.:#[>+~)])/;
 
-function stylesOf(file) {
-  const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
-  const css = file.endsWith('.html') ? [...src.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join('\n') : src;
-  return css.replace(/\/\*[\s\S]*?\*\//g, '');
-}
+const cssOf = (file, src) => (file.endsWith('.html') ? htmlParts(src).styles.join('\n') : src).replace(/\/\*[\s\S]*?\*\//g, '');
+const stylesOf = (file) => cssOf(file, fs.readFileSync(path.join(ROOT, file), 'utf8'));
 
 test('tokens: inline links keep their underline outside nav, sidebar, tab and chip links', () => {
   const files = execFileSync('git', ['ls-files', '*.css', '*.html'], { cwd: ROOT, encoding: 'utf8' })
@@ -158,6 +156,18 @@ test('tokens: inline links keep their underline outside nav, sidebar, tab and ch
     }
   }
   assert.deepEqual(bad, [], 'links that drop their underline');
+});
+
+// The style text of an HTML file comes from htmlParts, not a regex: a commented-out or quoted `<style>` is not CSS, and a
+// real block after a script's "<!--" / "-->" strings is found. (index.html and lights.html mention "<style>" in a comment.)
+test('tokens: inline-style extraction ignores comments and strings and finds the real block', () => {
+  const bare = 'a { text-decoration: none; }';
+  assert.equal(cssOf('p.html', `<!-- an inline <style> note -->\n<style>${bare}</style>`).trim(), bare);
+  assert.equal(cssOf('p.html', `<!-- <style>${bare}</style> -->`), '');
+  assert.equal(cssOf('p.html', `<script>const s = "<style>${bare}</style>";</script>`), '');
+  assert.equal(cssOf('p.html', `<p title="<style>${bare}</style>">x</p>`), '');
+  assert.equal(cssOf('p.html', `<script>const o = "<!--";</script><style>${bare}</style><script>const c = "-->";</script>`), bare);
+  assert.equal(cssOf('p.css', bare), bare);
 });
 
 test('tokens: the link check catches a bare link rule and spares an allowlisted one', () => {

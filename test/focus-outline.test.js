@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { htmlParts } = require('../test-visual/classify-lib');
 
 const ROOT = path.join(__dirname, '..');
 const FORCED = /^@media(?![^{]*\bnot\b)[^{]*\(\s*forced-colors\s*:\s*active\s*\)/;
@@ -77,7 +78,7 @@ const sources = () => {
     let text;
     try { text = fs.readFileSync(path.join(ROOT, f), 'utf8'); } catch { continue; }
     if (f.endsWith('.css')) out.push({ file: f, css: text });
-    else for (const m of text.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)) out.push({ file: f, css: m[1] });
+    else for (const css of htmlParts(text).styles) out.push({ file: f, css });
   }
   return out;
 };
@@ -125,6 +126,16 @@ test('Q13: an element whose base rule resets the outline (all: unset etc.) sets 
   // The card's ring is drawn on its parent (`.card:has(.card-open:focus-visible)`, `tr:has(...)`), with a forced-colors Highlight restore.
   const RING_ON_PARENT = ['board/web/app.css: .card-open:focus-visible'];
   assert.deepEqual(failures.filter((f) => !RING_ON_PARENT.includes(f)), []);
+  // An allowlist entry that no longer shows up as a failure is stale: the exemption would then hide the next real one.
+  assert.deepEqual(staleEntries(RING_ON_PARENT, failures), [], 'allowlist entries that are no longer failures');
+});
+
+const staleEntries = (allow, failures) => allow.filter((e) => !failures.includes(e));
+
+test('Q13 checker: a stale allowlist entry is reported, a live one is not', () => {
+  assert.deepEqual(staleEntries(['a.css: .x:focus-visible'], ['a.css: .x:focus-visible', 'b.css: .y:focus']), []);
+  assert.deepEqual(staleEntries(['a.css: .x:focus-visible', 'c.css: .z:focus'], ['a.css: .x:focus-visible']), ['c.css: .z:focus']);
+  assert.deepEqual(staleEntries(['a.css: .x:focus-visible'], []), ['a.css: .x:focus-visible']);
 });
 
 test('Q13: the shared focus ring is an outline with a halo, and forced-colors keeps the outline in Highlight', () => {
@@ -181,4 +192,15 @@ test('Q13 checker negatives: base resets, longhands, transparent, nesting, @cont
   // `not all and (forced-colors: active)` is not a restore
   assert.deepEqual(flagged('.a:focus-visible { outline: none; }\n@media not all and (forced-colors: active) { .a:focus-visible { outline: 2px solid red; } }'), ['.a:focus-visible']);
   assert.deepEqual(flagged('.a:focus-visible { outline: none; }\n@media (forced-colors: active) { .a:focus-visible { outline: 2px solid Highlight; } }'), []);
+});
+
+// The inline <style> of an HTML file comes from htmlParts: a commented-out or quoted block is not CSS, a real block
+// after a script's "<!--" / "-->" strings is.
+test('Q13 inline-style extraction: comments and strings are not CSS, a real block is', () => {
+  const bad = '.a:focus-visible { outline: none; }';
+  const flaggedIn = (html) => htmlParts(html).styles.flatMap((css) => flagged(css));
+  assert.deepEqual(flaggedIn(`<!-- inline <style> -->\n<style>${bad}</style>`), ['.a:focus-visible']);
+  assert.deepEqual(flaggedIn(`<!-- <style>${bad}</style> -->`), []);
+  assert.deepEqual(flaggedIn(`<script>const s = "<style>${bad}</style>";</script>`), []);
+  assert.deepEqual(flaggedIn(`<script>const o = "<!--";</script><style>${bad}</style><script>const c = "-->";</script>`), ['.a:focus-visible']);
 });

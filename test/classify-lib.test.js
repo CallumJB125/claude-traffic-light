@@ -792,3 +792,30 @@ test('classifier: a literal → mix member explains the swap over a surface, and
   const panel = hex('#ffffff');
   assert.equal(lib.classifyPixel(mix([218, 119, 86], panel, 0.5), mix(hex('#24292f'), panel, 0.5), [panel], fam.light.members), 'pass');
 });
+
+// htmlParts: RCDATA (textarea, title) and RAWTEXT (noscript with scripting on, xmp, iframe, noembed, noframes) hold
+// text up to their end tag, so a "<!--" or a <style> inside them is text; a <template>'s content is ordinary markup.
+test('htmlParts: RCDATA and RAWTEXT elements hold text; template content is markup; plaintext runs to the end', () => {
+  const real = '<style>.a { padding: 4px; }</style>';
+  for (const tag of ['textarea', 'title', 'noscript', 'xmp', 'iframe', 'noembed', 'noframes']) {
+    // a "<!--" in the element must not swallow the real <style> after it
+    assert.deepEqual(lib.htmlParts(`<${tag}><!--</${tag}>\n${real}\n<p>x --></p>`).styles, ['.a { padding: 4px; }'], `${tag}: an unclosed comment opener is text`);
+    // a <style> in the element is text, not CSS
+    assert.deepEqual(lib.htmlParts(`<${tag}><style>.b{}</style></${tag}>`).styles, [], `${tag}: a <style> inside is text`);
+    assert.ok(lib.htmlParts(`<${tag}><style>.b{}</style></${tag}>`).outside.includes('.b{}'), `${tag}: its text stays in the rest of the file`);
+    // case-insensitive end tag; the content after it is markup again
+    assert.deepEqual(lib.htmlParts(`<${tag.toUpperCase()}><style>.b{}</style></${tag.toUpperCase()}>${real}`).styles, ['.a { padding: 4px; }'], `${tag}: upper case`);
+  }
+  // a <script> start tag inside a textarea is text: it does not open a script that swallows what follows
+  assert.deepEqual(lib.htmlParts(`<textarea><script></textarea>${real}`).styles, ['.a { padding: 4px; }']);
+  // <template>: a <style> in it is a real (inert) block, a comment in it is a comment
+  assert.deepEqual(lib.htmlParts(`<template><style>.t { color: red; }</style></template>`).styles, ['.t { color: red; }']);
+  assert.ok(lib.htmlParts('<template><!-- <style>.t{}</style> --></template>').styles.length === 0);
+  // <plaintext> is text to the end of the file
+  assert.deepEqual(lib.htmlParts(`<plaintext>${real}`).styles, []);
+  assert.deepEqual(lib.htmlParts(`${real}<plaintext><style>.z{}</style>`).styles, ['.a { padding: 4px; }']);
+  // an inline <svg>'s <style> is foreign content; it is still read as a raw-text block (no tracked file has one)
+  assert.deepEqual(lib.htmlParts('<svg><style>.s { fill: red; }</style></svg>').styles, ['.s { fill: red; }']);
+  // a quote inside an unquoted attribute value opens a "quote" for the scanner (known, harmless for tracked files)
+  assert.equal(lib.htmlParts(`<p data-x=a'b>x</p>${real}`).styles.length, 0);
+});
