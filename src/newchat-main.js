@@ -33,9 +33,9 @@ function createNewChat(deps, glue) {
     if (!row) {
       // The row model lags the create: one refresh, and that await is another point where the document can move.
       try { await glue.refreshTasks(); } catch { /* resolve against what's there */ }
-      if (!current()) return false;
       try { row = glue.rowForTask(id); } catch { row = null; }
     }
+    // Note 2: after every await, immediately before navigating. The document must still be the one that pressed Send.
     if (!row || !current()) return false;
     return buddy()?.openThread?.(row) === true;
   }

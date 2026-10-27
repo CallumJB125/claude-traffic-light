@@ -156,7 +156,8 @@ test('S3: a second newchat:create while one is in flight is refused in main, and
   h.st.createGate = new Promise((r) => { release = r; });
   const first = h.call('newchat:create', draft());
   await new Promise((r) => setImmediate(r));
-  const second = await h.call('newchat:create', draft({ requestId: 'req-87654321' }));
+  // Raced against a tick: without main's refusal the second create would wait on the first, so it must answer at once.
+  const second = await Promise.race([h.call('newchat:create', draft({ requestId: 'req-87654321' })), new Promise((r) => setTimeout(() => r({ code: 'STILL_WAITING' }), 50))]);
   assert.equal(second.code, 'BUSY');
   release();
   await first;
