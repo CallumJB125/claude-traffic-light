@@ -1,10 +1,10 @@
 # Ordinary re-baselines (no `# classify`): the Lights #stage radial wash, terracotta 8 % -> accent (Graphite) 6 %.
-# #stage element box in the shot: x 292-800, y 44-220. Measured against main f88187a0 (CIE ΔE2000 un-blend fit,
-# old = #da7756 at alpha 0-8 % over --bg #f4f5f7, new = --accent at 0.75 x alpha):
-#   lights-window:            24,832 px changed, 23,590 (95.0 %) within ΔE 1 of the model, 23,686 (95.4 %) within ΔE 2; 0 px changed outside the #stage box.
-#   lights-template-minimal:  24,884 px changed, 23,655 (95.1 %) within ΔE 1 of the model, 23,751 (95.4 %) within ΔE 2; 0 px changed outside the #stage box.
-# 4x contact sheets (main | branch | difference x32): outputs/terracotta-rest-wash-<shot>-4x.png
-# windows.spec.js/lights-window: #stage radial wash terracotta 8 % -> accent 6 %, gradient; un-blend fit 23,590 px (95.0 %) within ΔE 1, outside the wash 0 px changed
+# Method (both shots, against main f88187a0, strict RGBA compare of the 800x620 PNGs, not pixelmatch):
+#   #stage box from the DOM (getBoundingClientRect): x 292, y 44, 508 x 176 CSS px (devicePixelRatio 2 = 584, 88, 1016 x 352 device px); the shots are 800x620 CSS px.
+#   every pixel whose RGBA differs is counted; alpha differs on 0 pixels; pixels changed outside the #stage box: 0.
+#   un-blend per changed pixel, old = bg #f4f5f7 + terracotta #da7756 at a, new = bg + accent at 0.75 a, one a <= 0.08, residual <= 1 step per channel.
+# windows.spec.js/lights-window: #stage radial wash terracotta 8 % -> accent 6 %, gradient; 24,832 px changed, 0 outside the #stage box, alpha unchanged; un-blend 21,816 exact (1 step) + 2,714 shadow/edge px that fit the same wash change attenuated by coverage; 302 fit neither, all within x 342-517, y 194-218, max channel change 10 (the wash's own maximum is 10.4), i.e. the soft shadow under the mascot and its leg edges
 test-visual/__screenshots__/windows.spec.js/lights-window-darwin.png
-# templates.spec.js/lights-template-minimal: #stage radial wash terracotta 8 % -> accent 6 %, gradient; un-blend fit 23,655 px (95.1 %) within ΔE 1, outside the wash 0 px changed
+# templates.spec.js/lights-template-minimal: #stage radial wash terracotta 8 % -> accent 6 %, gradient; 24,884 px changed, 0 outside the #stage box, alpha unchanged; un-blend 21,883 exact (1 step) + 2,699 attenuated; 302 fit neither (same region, max channel change 10)
 test-visual/__screenshots__/templates.spec.js/lights-template-minimal-darwin.png
+# 4x contact sheets (main | branch | difference x32): outputs/terracotta-rest-wash-<shot>-4x.png
