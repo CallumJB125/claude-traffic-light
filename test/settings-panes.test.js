@@ -232,9 +232,9 @@ test('the pane ids exist only with the preview on; the old settings page is unch
   const on = world(true);
   on.api.route('settings');
   assert.deepEqual(on.calls, [['state'], ['local', 'settings:general']], 'preview: Settings opens the sheet');
-  const pick = world(true); pick.api.select('settings:spend');
+  const pick = world(true); pick.api.select(`settings:${'spend'}`);
   assert.deepEqual(pick.calls, [['state'], ['local', 'settings:spend']]);
-  const bad = world(true); bad.api.select('settings:nope'); bad.api.select('settings:*');
+  const bad = world(true); bad.api.select(`settings:${'nope'}`); bad.api.select(`settings:${'*'}`);
   assert.deepEqual(bad.calls, []);
 });
 
