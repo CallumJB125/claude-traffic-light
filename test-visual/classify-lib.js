@@ -169,6 +169,37 @@ function mixArg(part) {
   if (m) return { colour: m[1].trim(), pct: +m[2] };
   return { colour: part.trim(), pct: null };
 }
+// Custom properties declared as an alias of an accent var (--x: var(--accent)), in any of the given texts.
+function aliasesOf(texts) {
+  const out = new Set();
+  for (const t of texts) for (const m of String(t).matchAll(/(--[\w-]+)\s*:\s*var\((--[\w-]+)\)\s*[;}]/g)) if (ACCENT_VARS.has(m[2]) && !ACCENT_VARS.has(m[1])) out.add(m[1]);
+  return out;
+}
+// The accent color-mixes the classifier does NOT model, so the report can list them (review): a var() with a
+// fallback, an alias token, a nested color-mix, and any mix in JS (styles set from script). They build no member,
+// so their pixels fail closed; this only makes them visible.
+function skippedMixesOf(text, { js = false, aliases = new Set() } = {}) {
+  const out = [];
+  const src = String(text).replace(/\/\*[\s\S]*?\*\//g, '');
+  const accentish = (x) => /var\(\s*--(accent|focus-ring)/.test(x) || [...aliases].some((a) => x.includes(`var(${a})`));
+  let at = 0;
+  while ((at = src.indexOf('color-mix(', at)) >= 0) {
+    let depth = 0; let i = at + 'color-mix'.length;
+    for (; i < src.length; i += 1) { if (src[i] === '(') depth += 1; else if (src[i] === ')') { depth -= 1; if (!depth) break; } }
+    const raw = src.slice(at, i + 1).replace(/\s+/g, ' ');
+    const inner = src.slice(at + 'color-mix('.length, i);
+    at += 1; // visit nested mixes too
+    if (!accentish(inner)) continue;
+    let why = null;
+    if (js) why = 'js';
+    else if (inner.includes('color-mix(')) why = 'nested';
+    else if (/var\(\s*--(accent|focus-ring)[\w-]*\s*,/.test(inner)) why = 'fallback';
+    else if ([...aliases].some((a) => inner.includes(`var(${a})`))) why = 'alias';
+    if (why) out.push({ raw, why });
+  }
+  return out;
+}
+
 // Every color-mix() in a stylesheet (or HTML/JS text) that mixes an accent-family var. Returns normalised specs.
 function colourMixesOf(text) {
   const out = [];
@@ -314,9 +345,19 @@ function membersOf(oldTheme, newTheme, mixSpecs = []) {
 // tokens for its old colour and the new tokens for its new one.
 function familiesOf(oldCss, newCss, mixTexts = { old: [], new: [] }) {
   const o = tokensOf(oldCss); const n = tokensOf(newCss);
-  const specs = new Map();
-  for (const t of [...(mixTexts.old || []), ...(mixTexts.new || [])]) for (const spec of colourMixesOf(t)) specs.set(spec.raw, spec);
-  const out = { mixes: { parsed: specs.size, unresolved: [] } };
+  // Review: base mixes come from the base CSS and head mixes from the head CSS, never pooled. A mix that exists
+  // on only one side was never rendered on the other, so it builds no member (fail closed) and is listed.
+  const side = (texts) => { const m = new Map(); for (const t of texts || []) for (const spec of colourMixesOf(t)) m.set(spec.raw, spec); return m; };
+  const base = side(mixTexts.old); const head = side(mixTexts.new);
+  const specs = new Map([...head].filter(([raw]) => base.has(raw)));
+  const skipped = [];
+  for (const t of [...(mixTexts.old || []), ...(mixTexts.new || []), ...(mixTexts.js || []).map((x) => ({ js: x }))]) {
+    for (const sk of skippedMixesOf(typeof t === 'string' ? t : t.js, { js: typeof t !== 'string', aliases: aliasesOf([...(mixTexts.old || []), ...(mixTexts.new || [])]) })) {
+      if (!skipped.some((x) => x.raw === sk.raw && x.why === sk.why)) skipped.push(sk);
+    }
+  }
+  const out = { mixes: { parsed: specs.size, base: base.size, head: head.size,
+    onlyBase: [...base.keys()].filter((r) => !head.has(r)), onlyHead: [...head.keys()].filter((r) => !base.has(r)), unresolved: [], skipped } };
   for (const theme of ['light', 'dark']) {
     const surfaces = [];
     for (const s of SURFACE_TOKENS) { try { surfaces.push(parseColour(n[theme][s]).slice(0, 3)); } catch { /* none */ } }
@@ -569,4 +610,4 @@ function verdictOf(results) {
   return { failures, crops };
 }
 
-module.exports = { NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
+module.exports = { aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };

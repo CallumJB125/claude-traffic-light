@@ -208,7 +208,8 @@ test('classifier (iii): computeMix follows CSS Color 5 (srgb, oklab, transparent
 test('classifier (iii): a pixel drawn in an accent mix passes, mixed with the old and the new tokens', () => {
   const tokens = lib.tokensOf(GRAPHITE).dark; const oldTokens = lib.tokensOf(TOKENS).dark;
   const spec = lib.colourMixesOf('x{c:color-mix(in oklab, var(--accent) 30%, var(--panel))}')[0];
-  const fam = lib.familiesOf(TOKENS, GRAPHITE, { old: ['x{c:color-mix(in oklab, var(--accent) 30%, var(--panel))}'], new: [] }).dark;
+  const sheet = 'x{c:color-mix(in oklab, var(--accent) 30%, var(--panel))}';
+  const fam = lib.familiesOf(TOKENS, GRAPHITE, { old: [sheet], new: [sheet] }).dark;
   const o = lib.computeMix(spec, oldTokens).slice(0, 3).map(Math.round); const n = lib.computeMix(spec, tokens).slice(0, 3).map(Math.round);
   const r = lib.explainPixel(o, n, [hex('#17191d'), ...fam.surfaces], fam.members);
   assert.equal(r.verdict, 'pass');
@@ -357,4 +358,20 @@ test('classifier M2: a dense shift under ΔE 1 fails (noise tiles and the 1 % ca
   assert.deepEqual(lib.verdictOf([{ baseline: 'x/a-light-darwin.png', ...sparse }]).failures, []);
   assert.equal(lib.CAPS.noiseRatio, 0.01);
   assert.equal(lib.NOISE_TILE_SHARE, 0.5);
+});
+
+test('classifier mixes: base and head are never pooled, and the unmodelled cases are listed', () => {
+  const both = 'a{c:color-mix(in oklab, var(--accent) 30%, var(--panel))}';
+  const onlyHead = 'b{c:color-mix(in oklab, var(--accent) 12%, var(--bg))}';
+  const fam = lib.familiesOf(TOKENS, GRAPHITE, { old: [both], new: [both, onlyHead] });
+  assert.equal(fam.mixes.parsed, 1);
+  assert.deepEqual(fam.mixes.onlyHead, ['color-mix(in oklab, var(--accent) 12%, var(--bg))']);
+  assert.ok(!fam.dark.members.some((m) => m.key.includes('12%')), 'a head-only mix gets no made-up old colour');
+  const sheet = `:root{--sel: var(--accent);}
+    .f{c:color-mix(in srgb, var(--accent, #c00) 40%, white)}
+    .a{c:color-mix(in srgb, var(--sel) 40%, white)}
+    .n{c:color-mix(in srgb, color-mix(in srgb, var(--accent) 50%, white) 40%, black)}`;
+  const js = "el.style.background = 'color-mix(in srgb, var(--accent) 20%, transparent)';";
+  const listed = lib.familiesOf(TOKENS, GRAPHITE, { old: [sheet], new: [sheet], js: [js] }).mixes.skipped.map((x) => x.why).sort();
+  assert.deepEqual(listed, ['alias', 'fallback', 'js', 'nested']);
 });

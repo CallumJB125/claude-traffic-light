@@ -68,6 +68,13 @@ function sheetsInTree() {
   return git('ls-files', '*.css', '*.html').toString().split('\n').filter(SHEET).map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8'));
 }
 
+// App scripts (not tests, not vendored): accent color-mixes set from JS are listed as skipped, never modelled.
+function scriptsInTree() {
+  return git('ls-files', '*.js', '*.mjs').toString().split('\n')
+    .filter((f) => f && !f.startsWith('test') && !f.includes('node_modules/') && !f.startsWith('site/') && !f.startsWith('scripts/'))
+    .map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8'));
+}
+
 function oldBytes(base, rel) {
   try { return git('show', `${base}:${rel}`); } catch { return null; }
 }
@@ -140,7 +147,7 @@ test('classifier: every changed baseline changed only by the accent swap', async
   }
   const oldCss = git('show', `${base}:tokens.css`).toString();
   const newCss = fs.readFileSync(process.env.CLASSIFY_TOKENS || path.join(ROOT, 'tokens.css'), 'utf8');
-  const families = lib.familiesOf(oldCss, newCss, { old: sheetsAt(base), new: sheetsInTree() });
+  const families = lib.familiesOf(oldCss, newCss, { old: sheetsAt(base), new: sheetsInTree(), js: scriptsInTree() });
   report.mixes = families.mixes;
   const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'classify.config.json'), 'utf8'));
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'classify-ud-'));
@@ -181,7 +188,9 @@ test('classifier: every changed baseline changed only by the accent swap', async
     else console.log(`classify ${b.baseline} [${b.theme} by ${b.themeSource}, ${b.themeShare}]: changed ${b.changed}, noise ${b.noise} (dense tiles ${b.noiseTiles}, max tile ${b.maxNoiseTileShare}), pass ${b.pass}, unchanged ${b.unchanged}, skipped ${b.skipped}, exception ${b.exception}, unexpected ${b.unexpected} (${b.unexpectedPct} %)`);
   }
   console.log(`classify totals: ${JSON.stringify(report.totals)}, crops ${report.crops}`);
-  console.log(`classify mixes: ${report.mixes.parsed} accent color-mix rules parsed, ${report.mixes.unresolved.length} unresolved: ${report.mixes.unresolved.join(' | ')}`);
+  const mx = report.mixes;
+  console.log(`classify mixes: ${mx.parsed} modelled (base ${mx.base}, head ${mx.head}); only base ${mx.onlyBase.length}, only head ${mx.onlyHead.length}; unresolved ${mx.unresolved.length}: ${mx.unresolved.join(' | ')}`);
+  console.log(`classify mixes skipped (not modelled, fail closed): ${mx.skipped.length ? mx.skipped.map((x) => `${x.why}: ${x.raw}`).join(' | ') : 'none'}`);
   expect(verdict.failures, 'classifier failures').toEqual([]);
 });
 
