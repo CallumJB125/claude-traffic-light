@@ -24,7 +24,7 @@ const MESSAGE_BYTES = 8192;
 const REPLY_TEXT = Object.freeze({
   FOCUS: 'Focus this chat and send again.',
   BUSY: 'Still sending your last message.',
-  CONFLICT: 'This chat changed while sending. Check it before sending again.',
+  CONFLICT: 'Your message may have been sent. Check the chat before sending again.',
   NOT_FOUND: 'This chat has ended or moved.',
   VALIDATION: 'That message could not be sent. Check it and try again.',
   CONFIRM_REQUIRED: 'This needs the Tasks page. Use Open in Tasks.',

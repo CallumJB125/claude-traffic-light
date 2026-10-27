@@ -169,7 +169,7 @@ test('reply: a chat that takes messages shows the box; ⌘↩ sends the row and 
 });
 
 test('reply: the Send button sends; a refusal keeps the text and says why', async () => {
-  const p = page({ open: task({ actions: ['message'] }), message: { ok: false, code: 'CONFLICT', text: 'This chat changed while sending. Check it before sending again.' } });
+  const p = page({ open: task({ actions: ['message'] }), message: { ok: false, code: 'CONFLICT', text: 'Your message may have been sent. Check the chat before sending again.' } });
   p.ready();
   await tick(); await tick();
   type(p, 'hello');
@@ -177,7 +177,7 @@ test('reply: the Send button sends; a refusal keeps the text and says why', asyn
   await tick(); await tick();
   assert.deepEqual(p.calls.filter(([k]) => k === 'message'), [['message', ID, 'hello']]);
   assert.equal(p.$('th-reply-text').value, 'hello');
-  assert.equal(p.$('th-reply-note').textContent, 'This chat changed while sending. Check it before sending again.');
+  assert.equal(p.$('th-reply-note').textContent, 'Your message may have been sent. Check the chat before sending again.');
   assert.equal(p.$('th-reply-note').dataset.tone, 'error');
 });
 

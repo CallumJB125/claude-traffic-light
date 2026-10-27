@@ -156,5 +156,5 @@ test('new copy is held to the glossary now: the thread page and its reply box (R
     assert.ok(strings.length > 10, f);
     assert.deepEqual(scan(strings.map((s) => [f, s])), [], f);
   }
-  assert.ok(literals(fs.readFileSync(path.join(ROOT, 'src/thread-main.js'), 'utf8')).includes('This chat changed while sending. Check it before sending again.'));
+  assert.ok(literals(fs.readFileSync(path.join(ROOT, 'src/thread-main.js'), 'utf8')).includes('Your message may have been sent. Check the chat before sending again.'));
 });
