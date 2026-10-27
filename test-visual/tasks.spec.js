@@ -23,6 +23,14 @@ test.describe('with a supervisor', () => {
     // newest-first would order them by chance. 1 s apart, in creation order, the list order is fixed.
     const demo = [...mock.srv.tasks.values()];
     demo.forEach((t, i) => { t.createdAt -= (demo.length - 1 - i) * 1000; });
+    // A finished tool call prints its run time (" · 0.0s"), which the mock measures in real ms (toolEnd: now() − at,
+    // after it clears task.tool). Under load one ran past 50 ms and read 0.1s (detail-needs-you, 59 px). Once a call
+    // has ended its start reads as "now", so it always ends at 0.0s; a call still in flight ages normally.
+    const endsAtOnce = (t, v) => { if (v) { const at = v.at; Object.defineProperty(v, 'at', { get: () => (t.tool === v ? at : performance.now()) }); } return v; };
+    for (const t of demo) {
+      let cur = endsAtOnce(t, t.tool);
+      Object.defineProperty(t, 'tool', { configurable: true, enumerable: true, get: () => cur, set: (v) => { cur = endsAtOnce(t, v); } });
+    }
     // Two rows print a clock the mock reads whenever it builds a face (liveOf/listTasks), and the page keeps the text
     // of its last fetch: the stalled task's heartbeat age and the paused task's limit reset. Held still from the
     // start until the list is shot, so every fetch says "last seen 0s ago" and "resets in 2h 4m".
@@ -69,8 +77,8 @@ test.describe('with a supervisor', () => {
     await expect(page.locator('#d-banners .ask')).toContainText('Wants to use Bash');
     expect(await page.evaluate(() => document.body.innerHTML.includes('btk_'))).toBe(false);
     await page.waitForTimeout(500);
-    // Exact. One render in 8 was once 31 px off (images not kept); none since in 16 lone renders (byte-identical) and
-    // 10 exact compare runs, so a recurrence fails here with its actual and diff kept instead of passing an allowance.
+    // Exact. The 31 px seen once in 8 renders was a tool's run time reading 0.1s instead of 0.0s under load (caught
+    // again with its images: 59 px at the "· 0.0s" of the first tool line); finished tools now end at 0.0s (beforeAll).
     await expect(page.locator('#main')).toHaveScreenshot('detail-needs-you.png', { ...SHOT, mask: [page.locator('.age'), page.locator('.d-meta')] });
     await confirmFocused(h.app, page.getByRole('button', { name: 'Allow once' }), {
       alert: page.locator('#d-head .err[role=alert]'),
@@ -112,23 +120,24 @@ test.describe('with a supervisor', () => {
       if (add) { const s = new CSSStyleSheet(); s.replaceSync(css); window.__noScrollbar = s; document.adoptedStyleSheets = [...document.adoptedStyleSheets, s]; } else document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== window.__noScrollbar);
     }, [fs.readFileSync(path.join(__dirname, 'no-scrollbar.css'), 'utf8'), on]);
     await scrollbars(true);
-    await focusMainWindow(h.app);
-    await page.keyboard.press('Alt+Meta+T');
-    await expect(page.locator('.composer h2')).toHaveText('New task');
-    await page.locator('#c-go').click();
-    await expect(page.locator('#c-err')).toHaveText('Say what you want done first.');
-    await page.fill('#c-text', 'Add a cache to the sync job');
-    await page.locator('#c-go').click();
-    await expect(page.locator('#c-err')).toHaveText('Choose the folder it should work in.');
-    // main reads the picker variable at pick time; a folder in the app's own HOME is labelled ~/acme-sync every run,
-    // where the per-run temp folder printed a random /tmp/ptm-XXXXXX.
-    await h.app.evaluate((_, dir) => { process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_PICK = dir; }, path.join(h.userHome, 'acme-sync'));
-    await page.locator('#c-folder-btn').click();
-    await expect(page.locator('#c-folder')).toHaveText('~/acme-sync');
-    await expect(page.locator('#c-ai option')).not.toHaveCount(1, { timeout: 10000 });
-    await page.mouse.move(0, 0);
-    await expect(page.locator('#main')).toHaveScreenshot('composer.png', SHOT);
-    await scrollbars(false);
+    try {
+      await focusMainWindow(h.app);
+      await page.keyboard.press('Alt+Meta+T');
+      await expect(page.locator('.composer h2')).toHaveText('New task');
+      await page.locator('#c-go').click();
+      await expect(page.locator('#c-err')).toHaveText('Say what you want done first.');
+      await page.fill('#c-text', 'Add a cache to the sync job');
+      await page.locator('#c-go').click();
+      await expect(page.locator('#c-err')).toHaveText('Choose the folder it should work in.');
+      // main reads the picker variable at pick time; a folder in the app's own HOME is labelled ~/acme-sync every run,
+      // where the per-run temp folder printed a random /tmp/ptm-XXXXXX.
+      await h.app.evaluate((_, dir) => { process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_PICK = dir; }, path.join(h.userHome, 'acme-sync'));
+      await page.locator('#c-folder-btn').click();
+      await expect(page.locator('#c-folder')).toHaveText('~/acme-sync');
+      await expect(page.locator('#c-ai option')).not.toHaveCount(1, { timeout: 10000 });
+      await page.mouse.move(0, 0);
+      await expect(page.locator('#main')).toHaveScreenshot('composer.png', SHOT);
+    } finally { await scrollbars(false); }
     await confirmFocused(h.app, page.locator('#c-go'), {
       alert: page.locator('#c-err'),
       done: () => expect(page.locator('#d-head .d-title')).toContainText('Add a cache', { timeout: 15000 }),
