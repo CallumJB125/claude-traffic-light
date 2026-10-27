@@ -30,7 +30,12 @@ function freePort() {
   });
 }
 
-async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } = {}) {
+// Variables that point back into the real home whatever HOME is set to.
+const HOME_POINTERS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'ZDOTDIR'];
+const homeEnv = (userHome, base = process.env) => ({ ...Object.fromEntries(Object.entries(base).filter(([k]) => !HOME_POINTERS.includes(k))), HOME: userHome, USERPROFILE: userHome });
+
+// homeFiles seeds files below the app's own HOME (.claude.json, .claude/settings.json), as files does for the data dir.
+async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = {}, env = {} } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-home-'));
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-ud-'));
   fs.mkdirSync(path.join(home, 'sessions'), { recursive: true });
@@ -40,6 +45,13 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
   // a real runaway on this machine can't leak into a baseline.
   const projects = path.join(home, 'projects');
   fs.mkdirSync(projects);
+  // The app's own HOME: hook state (~/.claude, ~/.codex), the setup checklist and the Help window read it, so
+  // a baseline must not depend on which AI tools this machine has. An empty one, per launch.
+  const userHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-user-'));
+  for (const [name, content] of Object.entries(homeFiles)) {
+    fs.mkdirSync(path.dirname(path.join(userHome, name)), { recursive: true });
+    fs.writeFileSync(path.join(userHome, name), content);
+  }
   // Pre-mark the first-run help so it never pops up unasked.
   fs.writeFileSync(path.join(home, '.help-shown'), '2000-01-01T00:00:00.000Z');
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ ...FIXED_CONFIG, ...config }));
@@ -57,7 +69,7 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
   const app = await electron.launch({
     args: [ROOT, `--user-data-dir=${userData}`, '--demo', 'visual', ...extraArgs],
     env: {
-      ...process.env,
+      ...homeEnv(userHome),
       CLAUDE_TRAFFIC_LIGHT_HOME: home,
       CLAUDE_TRAFFIC_LIGHT_PORT: String(port),
       CLAUDE_TRAFFIC_LIGHT_REMOTE_PORT: String(remotePort),
@@ -91,8 +103,9 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, env = {} } =
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(userData, { recursive: true, force: true });
     fs.rmSync(backups, { recursive: true, force: true });
+    fs.rmSync(userHome, { recursive: true, force: true });
   };
-  return { app, home, port, remotePort, projects, backups, cleanup };
+  return { app, home, userHome, port, remotePort, projects, backups, cleanup };
 }
 
 // POST /signal needs the per-install token the app writes beside its port file.
@@ -165,4 +178,5 @@ async function focusMainWindow(app) {
   });
 }
 
-module.exports = { focusMainWindow, launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };
+module.exports = {
+  HOME_POINTERS, homeEnv, focusMainWindow, launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };

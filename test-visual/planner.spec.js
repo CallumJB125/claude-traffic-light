@@ -96,6 +96,8 @@ test('actual main My day opens own work and Calendar/Timeline persist real plans
     expect(boardPage).toBeTruthy();
     // A real mouse drag in steps: dragTo's single jump does not start Chromium's
     // HTML5 drag session inside the embedded board view (no dragstart fires).
+    // The real clock puts day(6) on the month's last row late in the month, below the fold: scroll it into view first.
+    await boardPage.locator(`[data-planning-day="${day(6)}"]`).scrollIntoViewIfNeeded();
     { const a = await boardPage.locator(`[data-planning-card="${id}"]`).boundingBox(); const b = await boardPage.locator(`[data-planning-day="${day(6)}"]`).boundingBox();
       await boardPage.mouse.move(a.x + a.width / 2, a.y + a.height / 2); await boardPage.mouse.down();
       await boardPage.mouse.move(a.x + a.width / 2 + 10, a.y + a.height / 2, { steps: 5 }); await boardPage.mouse.move(b.x + b.width / 2, b.y + 30, { steps: 20 }); await boardPage.mouse.up(); }

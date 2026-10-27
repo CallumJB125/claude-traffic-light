@@ -53,6 +53,14 @@ test('a busy spell ends in a recap of what happened, and the widget shows it', a
   expect(recap.heldPings).toEqual([]);
   // The same record is on disk for other readers (the phone, later).
   expect(JSON.parse(fs.readFileSync(path.join(h.home, 'away.json'), 'utf8')).headline).toBe(recap.headline);
+  // A wait with no request behind it is a Needs-you row (lab fixes PR 6), and the bubble wins over the recap
+  // while anything waits. Check that, then end the waits: the stored recap card shows once nothing is asked.
+  await expect(widget.locator('body')).toHaveClass(/asking/);
+  await expect(widget.locator('#bubble')).toContainText('Needs your permission');
+  await expect(widget.locator('#away')).toBeHidden();
+  await send('api', 'stop');
+  await send('docs', 'stop');
+  await expect(widget.locator('body')).not.toHaveClass(/asking/, { timeout: 10000 });
   // The window grows by the strip's 64 px (main.js AWAY_PX) to make room for
   // the card; shoot only once it has, not the squashed frame before.
   await expect.poll(() => widget.evaluate(() => innerHeight)).toBe(200 + 64);
@@ -62,7 +70,7 @@ test('a busy spell ends in a recap of what happened, and the widget shows it', a
   await expect(lane).toHaveCount(3, { timeout: 5000 });
   await expect(lane).toHaveCount(0, { timeout: 15000 });
   await widget.waitForTimeout(600);
-  await expect(widget).toHaveScreenshot('widget-away-recap.png', { threshold: 0.05 });
+  await expect(widget).toHaveScreenshot('widget-away-recap.png', { threshold: 0.05, mask: [widget.locator('#app')] }); // the recap card is under test; the character above it moves with the signals
   await widget.evaluate(() => window.trafficLight.awayDismiss());
   await expect.poll(async () => (await aggregate()).away).toBeNull();
 });
