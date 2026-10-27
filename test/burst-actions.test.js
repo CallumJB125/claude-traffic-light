@@ -160,7 +160,7 @@ test('non-mac: static text, no polling interval, burst-client never loaded', asy
 
 test('main.js wiring is a require+register line and one tray spread', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  assert.match(src, /require\('\.\/src\/burst-ipc\.js'\)\.register\(\{ utilityHandle, settingsOnly, chipAllowed/);
+  assert.match(src, /require\('\.\/src\/burst-ipc\.js'\)\.register\(\{ utilityHandle, settingsOnly: settingsPane\('none'\), chipAllowed/);
   assert.match(src, /\.\.\.BurstIpc\.trayItems\(\),/);
 });
 

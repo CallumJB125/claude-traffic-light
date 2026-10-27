@@ -53,7 +53,7 @@ function fixture(t, { restored = false, ensureGate = null, gateLoads = false, re
     hubInfo: null, hubBinding: null, hubView: null, hubLoading: null, hubLoadingBinding: null,
     content: null, gen: 0, connectEpoch: 0, viewError: null, hubStatus: { state: 'ready' },
     win: {}, accountView: null, stopping: false, resumeRequested: false, resumedHubs: new Set(),
-    pageById, hubPageUrl, pageForHubUrl, orgOfUrl, teamPartition,
+    pageById, pageOf: pageById, hubPageUrl, pageForHubUrl, orgOfUrl, teamPartition, // pageOf: the Settings panes (R8-1) exist only in the preview, off here
     partitionFor: () => 'persist:fixture-local',
     vault: () => ({ load: () => marker }), signedIn: () => !!marker, norm: origin => origin,
     getTeamHub: () => { const w = store.active(); return w.kind === 'local' ? null : w; },

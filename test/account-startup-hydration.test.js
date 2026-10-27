@@ -85,7 +85,7 @@ function fixture(t, { origins = [FIRST], selected = 'home', ready = true, refres
     selected, setupLocalGeneration: 0, tasksGeneration: 0, homeGeneration: 0, win: {}, hubInfo: null, hubBinding: null,
     hubLoading: null, hubLoadingBinding: null, viewError: null,
     accountView: { webContents: { isDestroyed: () => false, send: (...args) => accountMessages.push(args) } },
-    pageById, isHubPage: id => pageById(id)?.kind === 'hub',
+    pageById, pageOf: pageById, isHubPage: id => pageById(id)?.kind === 'hub', // pageOf: the Settings panes (R8-1) exist only in the preview, off here
     pushState: () => pushes.push({ selected: context.selected, workspace: api.store.activeId() }),
     forgetHub: () => navigations.push({ kind: 'forget', workspace: api.store.activeId() }),
     showHubPage: async page => navigations.push({ kind: 'hub', page: page.id, workspace: api.store.activeId() }),

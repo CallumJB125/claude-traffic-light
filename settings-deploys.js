@@ -4,6 +4,7 @@
 (function () {
   const api = window.settingsApi;
   const box = document.getElementById('deploys');
+  if (window.SettingsPanes && !window.SettingsPanes.inPane('advanced')) return; // R8-1: another pane owns this block
   if (!box || !api || !api.deploySettings) return;
   const toggle = document.getElementById('deploySignals');
   const say = (text) => { document.getElementById('deploy-status').textContent = text; };

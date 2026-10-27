@@ -110,7 +110,7 @@ test('register: both channels go through the sender check; install only via the 
 test('main.js and the Settings page wire the button, and nothing installs it at start-up', () => {
   const root = path.join(__dirname, '..');
   const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
-  assert.match(main, /require\('\.\/src\/cli-install\.js'\)\.register\(\{ utilityHandle, allowed: settingsOnly,/);
+  assert.match(main, /require\('\.\/src\/cli-install\.js'\)\.register\(\{ utilityHandle, allowed: settingsPane\('advanced'\),/);
   assert.doesNotMatch(main, /CliInstall\.install\(|cli-install\.js'\)\.install/);
   assert.match(fs.readFileSync(path.join(root, 'settings.html'), 'utf8'), /id="cli-install">Install command line tool</);
   assert.match(fs.readFileSync(path.join(root, 'settings-preload.js'), 'utf8'), /cliInstall: \(\) => ipcRenderer\.invoke\('cli-install'\)/);

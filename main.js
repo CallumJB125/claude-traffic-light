@@ -589,6 +589,22 @@ if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_TRAFFIC_LIGHT_WORK_SCOPE
 const WorkScopeView = require('./src/work-scope-view.js');
 // Redesign preview (plan-redesign §R3.8): dev runs of an unpackaged app only; read once, here.
 const CHAT_PREVIEW = require('./src/chat-preview.js').chatPreviewOn({ isDevRun: IS_DEV_RUN, isPackaged: app.isPackaged, env: process.env });
+// Redesign R8-1: the Settings sheet's panes (src/settings-panes.js). settingsPane(pane) is the guard for one channel's
+// owner: the old Settings page (the control arm, unchanged) or, with the dev chat preview on, that ONE pane's document.
+// 'none' = the old page only. The pane a sender is comes from the page main created for it, never from anything it sends.
+const SettingsPanes = require('./src/settings-panes.js');
+/** A push to the old Settings page and, in the preview, every open pane document (each listens only for what it uses). */
+function sendToSettings(channel, ...args) {
+  buddyWin?.sendToPage('settings', channel, ...args);
+  if (CHAT_PREVIEW === true) for (const p of SettingsPanes.PANES) buddyWin?.sendToPage(`settings:${p}`, channel, ...args);
+}
+function settingsPane(pane) {
+  if (pane !== 'none' && !SettingsPanes.isPane(pane)) throw new Error(`unknown settings pane ${pane}`);
+  return (e) => fromUtilityPage(e, 'settings') || (pane !== 'none' && CHAT_PREVIEW === true && fromUtilityPage(e, `settings:${pane}`));
+}
+/** The pane document a sender is (preview only), or null for the old page and everyone else. */
+const settingsPaneOf = (e) => (CHAT_PREVIEW === true ? SettingsPanes.PANES.find((p) => fromUtilityPage(e, `settings:${p}`)) ?? null : null);
+const settingsAnyPane = (e) => fromUtilityPage(e, 'settings') || settingsPaneOf(e) !== null;
 // O3: the Tasks helper's wrapped tasks that did real work, as session-shaped records with the scope a session in
 // that folder gets, handed to Buddy's automatic cards only.
 let wrappedWorkRows = [];
@@ -1178,10 +1194,10 @@ ipcMain.handle('budget-notice', (e, msg) => {
   return { ok: false };
 });
 if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_BUDDY_BUDGET_HOOK === '1') global.__budgetInject = handleBudgetEvent;
-utilityHandle('busy-status', e => settingsOnly(e), () => BusyWatch.status());
+utilityHandle('busy-status', settingsPane('notifications'), () => BusyWatch.status());
 // Settings' "Reconnect calendar": macOS forgot an earlier grant, so ask again.
-utilityHandle('busy-reconnect-calendar', e => settingsOnly(e), async () => { await BusyWatch.enableCalendar(); return BusyWatch.status(); });
-utilityHandle('busy-open-privacy', e => settingsOnly(e), () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars'));
+utilityHandle('busy-reconnect-calendar', settingsPane('notifications'), async () => { await BusyWatch.enableCalendar(); return BusyWatch.status(); });
+utilityHandle('busy-open-privacy', settingsPane('notifications'), () => shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars'));
 
 // ── Motion gate ────────────────────────────────────────────────────────────
 // backgroundThrottling is off, so Chromium never tells a page nobody can see
@@ -1413,7 +1429,7 @@ function feedbackDraft(d) {
   });
 }
 
-ipcMain.handle('open-feedback', (e) => { if (settingsOnly(e)) createFeedbackWindow(); });
+ipcMain.handle('open-feedback', (e) => { if (settingsPane('privacy')(e)) createFeedbackWindow(); });
 ipcMain.handle('feedback-info', (e) => {
   if (!feedbackSenderOk(e)) return null;
   const t = feedbackTargets();
@@ -1587,7 +1603,7 @@ const { fromPage } = require('./src/utility-pages.js');
 const fromUtilityPage = (e, id) => fromPage(e, buddyWin?.pageWebContents(id));
 const widgetConfigSender = (e) => fromPage(e, lightsWin?.webContents);
 const analyticsSender = (e) => fromUtilityPage(e, 'usage') || fromUtilityPage(e, 'stats');
-const configReader = (e) => widgetOnly(e) || widgetConfigSender(e) || settingsOnly(e) || analyticsSender(e);
+const configReader = (e) => widgetOnly(e) || widgetConfigSender(e) || settingsAnyPane(e) || analyticsSender(e);
 function utilityHandle(channel, allowed, handler) {
   ipcMain.handle(channel, (e, ...args) => allowed(e) ? handler(e, ...args) : null);
 }
@@ -1628,7 +1644,7 @@ function getBuddy() {
         else if (which === 'mix') openLightsMix();
       },
       onLocalPage: (page, wc) => {
-        if (page.id === 'settings' && !IS_MAC) wc.insertCSS('#busy-sources, .field:has(#busyFocusShortcut), .field:has(#roam) { display: none; }').catch(() => {});
+        if ((page.id === 'settings' || page.pane) && !IS_MAC) wc.insertCSS('#busy-sources, .field:has(#busyFocusShortcut), .field:has(#roam) { display: none; }').catch(() => {});
       },
       onClosed: () => { OverviewMain.invalidate(); hatchResults.clear(); feedbackShot = null; feedbackLast = null; SetupsLocal.invalidate(); if (IS_MAC && !lightsWin) app.dock.hide(); },
       devAccountsHub: app.isPackaged ? null : devAccountsHub,
@@ -1657,7 +1673,7 @@ function getBuddy() {
       if (typeof unsubscribe === 'function') onQuit(app, unsubscribe);
     }
     buddyWin.attachBurst?.(() => BurstIpc);
-    if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => {OverviewMain.invalidate();buddyWin.sendToPage('settings', 'account-changed');});
+    if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => {OverviewMain.invalidate();sendToSettings('account-changed');});
     if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>{OverviewMain.invalidate();SetupsLocal.invalidate();buddyWin.sendToPage('setups','setups:changed');});
     if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>syncInteractionHost());
     if(typeof buddyWin.onActiveChange==='function')buddyWin.onActiveChange(()=>syncInteractionHost());
@@ -1885,7 +1901,7 @@ InteractionMain.register(ipcMain);
 app.whenReady().then(()=>InteractionMain.detectLocalModels()).catch(()=>{});
 onQuit(app,()=>InteractionMain.close());
 onQuit(app,retireClaudeChannels);
-ipcMain.handle('compaction-stats',async e=>settingsOnly(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction,burstNote:BurstIpc.compactionNote(),burstLearned:BurstSpend.learnedThresholds(await BurstIpc.read('intelligentCompaction'))}:null);
+ipcMain.handle('compaction-stats',async e=>settingsPane('advanced')(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction,burstNote:BurstIpc.compactionNote(),burstLearned:BurstSpend.learnedThresholds(await BurstIpc.read('intelligentCompaction'))}:null);
 // Remote interaction host (src/remote-interaction.js): OFF unless the
 // "Let my other devices use sessions Plexiform started on this Mac"
 // preference is ticked. Uses the active team hub's own device sign-in (via
@@ -2029,7 +2045,7 @@ setInterval(()=>{InteractionMain.reportHooks(aggregateState().sessions||[]);if(l
 onQuit(app,()=>TeamSessionSharing.stop());
 const INTERACTION_HOST_LINES={connecting:'Connecting…',connected:'On: your other signed-in devices can use sessions started from them on this Mac.',retrying:'Can\'t reach your team hub; retrying.','signed-out':'Stopped: this Mac is signed out or was removed from your account.',replaced:'Stopped: another connection took over this Mac\'s sign-in. If that wasn\'t you, remove this device in Account and sign in again.',refused:'Stopped: the hub named a different account.',held:'Stopped: another connection is using this Mac\'s sign-in, so your devices can\'t reach it. If that wasn\'t you, remove this Mac from your account (Account → Devices) and sign in again.'};
 ipcMain.handle('interaction-host-status',e=>{
-  if(!settingsOnly(e))return null;
+  if(!settingsPane('privacy')(e))return null;
   if(loadConfig().remoteInteractionHost!==true&&loadConfig().teamSessionSharing===false)return 'Off.';
   const host=hostSync.host();
   if(!host)return 'Sign in to a team hub to turn this on.';
@@ -2088,12 +2104,11 @@ let startupUp;
 const startupDone = new Promise((resolve) => { startupUp = resolve; });
 const afterStartup = (fn) => { startupDone.then(fn).catch((err) => console.warn('[startup] deferred work failed:', err?.message ?? err)); };
 // Paid-tier packages (src/paid-wiring.js): each registers itself if present; nothing here may block startup.
-try { require('./src/paid-wiring.js').registerAll({ afterStartup, setCostGuardReport: (fn) => { costGuardReport = fn; }, setCostGuardResume: (fn) => { costGuardResume = fn; }, setTaskStartGuard: (fn) => { taskStartGuard = fn; }, app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; }, teamMemory: (req) => TeamActivity.memoryPage(req), gallery: { takePending: () => galleryService?.takePending() ?? null }, openTimeline: (s) => SessionTimelineMain.openSession(s) }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); } // privacy-flow: team-memory
+try { require('./src/paid-wiring.js').registerAll({ afterStartup, setCostGuardReport: (fn) => { costGuardReport = fn; }, setCostGuardResume: (fn) => { costGuardResume = fn; }, setTaskStartGuard: (fn) => { taskStartGuard = fn; }, app, ipcMain, rootDir: ROOT_DIR, buddy: () => buddyWin, fromPage: fromUtilityPage, settingsAllowed: settingsPane('privacy'), setups: SetupsNative, onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m), spend: () => spendSnapshot(loadConfig()), runawayStoppers: () => runawayStoppers, usageTurns: () => getUsageTurns(), ownedSessions: { list: () => InteractionMain.listOwned(), target: (s) => InteractionMain.sharedTarget(s) }, keyFor, requestsDir: REQUESTS_DIR, interactionHost: () => hostSync.host(), setInteractionHostExtras: (fn) => { interactionHostExtras = fn; }, teamMemory: (req) => TeamActivity.memoryPage(req), gallery: { takePending: () => galleryService?.takePending() ?? null }, openTimeline: (s) => SessionTimelineMain.openSession(s) }); } catch (e) { console.warn('[paid] wiring failed:', e?.message ?? e); } // privacy-flow: team-memory
 
 // Settings → Account & team, and the widget's one-time Team hint. Each
 // handler checks its sender; the page to open is never taken from the renderer.
 const TeamEntry = require('./src/team-entry.js');
-const settingsOnly = (e) => fromUtilityPage(e, 'settings');
 const BurstEventsLib = require('./src/burst-events.js');
 const BurstSpend = require('./src/burst-spend.js');
 const BurstEvents = BurstEventsLib.createBurstEvents();
@@ -2121,7 +2136,7 @@ function closeBurstNote(key) {
 // Burst's own event file (notices.json); while it is watched the poll-diff events below stay quiet.
 const BurstNotices = require('./src/burst-notices.js').createBurstNotices({ isMac: IS_MAC, onEvents: (events) => notifyBurstEvents(events), onResolve: closeBurstNote, config: () => loadConfig(), burst: () => BurstIpc, isGhostty: (sid) => (aggregateState().sessions || []).some((x) => x.sessionId === sid && /ghostty/i.test(x.hostApp || '')), log: console.log });
 // The visual harness points Burst at an empty home (CLAUDE_TRAFFIC_LIGHT_BURST_HOME) so this machine's own Burst can't leak into baselines.
-const BurstIpc = require('./src/burst-ipc.js').register({ utilityHandle, settingsOnly, chipAllowed: (e) => widgetOnly(e) || fromUtilityPage(e, 'usage'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessionsAllowed: sessionsSender, stateFile: path.join(ROOT_DIR, 'burst-handover.json'), runner: { live: () => !!buddyWin?.runnerLive?.(), send: (m) => buddyWin?.burstFacts?.(m) }, accountAllowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, dialog, shell, scriptDir: path.join(ROOT_DIR, 'burst-scripts'), optimiserAllowed: (e) => fromUtilityPage(e, 'optimiser'), aitoolsAllowed: (e) => fromUtilityPage(e, 'aitools'), snapshotFile: require('./src/burst-snapshot.js').snapshotPath(ROOT_DIR), transcriptFor: (id) => transcriptIndex().get(id) || null, onView: (view) => { const events = BurstEvents.observe(view, Date.now()); if (!BurstNotices.active()) notifyBurstEvents(events); }, log: console.log, home: process.env.CLAUDE_TRAFFIC_LIGHT_BURST_HOME || undefined });
+const BurstIpc = require('./src/burst-ipc.js').register({ utilityHandle, settingsOnly: settingsPane('none'), chipAllowed: (e) => widgetOnly(e) || fromUtilityPage(e, 'usage'), usageAllowed: (e) => fromUtilityPage(e, 'usage'), sessionsAllowed: sessionsSender, stateFile: path.join(ROOT_DIR, 'burst-handover.json'), runner: { live: () => !!buddyWin?.runnerLive?.(), send: (m) => buddyWin?.burstFacts?.(m) }, accountAllowed: (e) => fromPage(e, buddyWin?.accountWebContents?.()), isMac: IS_MAC, dialog, shell, scriptDir: path.join(ROOT_DIR, 'burst-scripts'), optimiserAllowed: (e) => fromUtilityPage(e, 'optimiser'), aitoolsAllowed: (e) => fromUtilityPage(e, 'aitools'), snapshotFile: require('./src/burst-snapshot.js').snapshotPath(ROOT_DIR), transcriptFor: (id) => transcriptIndex().get(id) || null, onView: (view) => { const events = BurstEvents.observe(view, Date.now()); if (!BurstNotices.active()) notifyBurstEvents(events); }, log: console.log, home: process.env.CLAUDE_TRAFFIC_LIGHT_BURST_HOME || undefined });
 BurstIpc.setOpener(() => openBuddy('optimiser'));
 if (IS_MAC) BurstNotices.start();
 onQuit(app, () => BurstNotices.stop());
@@ -2141,16 +2156,16 @@ const continueToSessions = (ev) => buddyWin?.sendToPage('sessions', 'continue:ev
 ContinueIn.register({ ipcMain, allowed: fromUtilityPage, continueIn, writer: () => SessionHandoverMain.writer, sendToSessions: continueToSessions });
 onQuit(app, () => continueIn.stop());
 ipcMain.handle('account-view', (e) => {
-  if (!settingsOnly(e)) return null;
+  if (!settingsPane('none')(e)) return null;
   return TeamEntry.settingsView(accountSummary(), new URL(BRAND.DEFAULT_HUB).host);
 });
 ipcMain.handle('account-open', (e, which) => {
-  if (!settingsOnly(e)) return false;
+  if (!settingsPane('none')(e)) return false;
   openBuddy(['team', 'signin'].includes(which) ? which : 'account');
   return true;
 });
 const widgetOnly = (e) => fromPage(e, win?.webContents);
-require('./src/sprite-pack-main.js').register({ ipcMain, allowed: (e) => widgetOnly(e) || widgetConfigSender(e) || settingsOnly(e), home: os.homedir(), loadConfig, saveConfig, notify: () => { if (win && !win.isDestroyed()) win.webContents.send('sprite-pack:changed'); } });
+require('./src/sprite-pack-main.js').register({ ipcMain, allowed: (e) => widgetOnly(e) || widgetConfigSender(e) || settingsPane('none')(e), home: os.homedir(), loadConfig, saveConfig, notify: () => { if (win && !win.isDestroyed()) win.webContents.send('sprite-pack:changed'); } });
 const teamHint = () => TeamEntry.hintFor(accountSummary(), loadConfig().hints?.teamSeen === true);
 ipcMain.handle('team-hint', (e) => widgetOnly(e) ? teamHint() : null);
 require('./src/widget-cards-main.js').install({ ipcMain, allowed: widgetOnly, getSessions: () => ({ sessions: aggregateState().sessions || [] }), getSpend: async (id) => WorkCost.sessionSpend(await getUsageTurns(), { provider: 'claude', session_id: id }), config: { load: loadConfig, save: saveConfig },
@@ -3960,9 +3975,18 @@ ipcMain.handle('go-to-needing-session', async () => {
   };
 });
 
-utilityHandle('get-config', configReader, () => loadConfig());
+// A Settings pane sees only the keys its controls read, and may write only the keys it owns (src/settings-panes.js
+// KEY_OWNER). A write with ANY key outside the pane is refused whole: nothing is applied, nothing is half-saved.
+// The old Settings page and the widget-rules window keep the full config.
+utilityHandle('get-config', configReader, (e) => { const pane = settingsPaneOf(e); return pane ? SettingsPanes.readView(pane, loadConfig()) : loadConfig(); });
 
-utilityHandle('save-config', e => settingsOnly(e) || widgetConfigSender(e), (e, partial) => {
+utilityHandle('save-config', e => settingsAnyPane(e) || widgetConfigSender(e), (e, partial) => {
+  const pane = settingsPaneOf(e);
+  if (pane && !SettingsPanes.writesAllowed(pane, partial)) {
+    const bad = partial && typeof partial === 'object' ? Object.keys(partial).filter((k) => SettingsPanes.KEY_OWNER[k] !== pane) : [];
+    console.warn(`[settings] pane ${pane} refused a write outside its keys: ${bad.slice(0, 8).join(', ') || '(not an object)'}`);
+    return { error: 'Could not save: that setting is not on this page.' };
+  }
   try { return commitConfig(partial); } catch (err) {
     console.warn('[save-config]', err.message);
     return { error: `Could not save: ${err.message}` };
@@ -4005,10 +4029,10 @@ function commitConfig(partial) {
   return next;
 }
 
-utilityHandle('get-privacy', settingsOnly, () => { try { return fs.readFileSync(path.join(__dirname, 'PRIVACY.md'), 'utf8'); } catch { return null; } });
-utilityHandle('crash-reports:state', settingsOnly, () => ({ optedIn: CrashReports.isOptedIn(), count: CrashReports.list().length, latest: CrashReports.latest() ? JSON.stringify(require('./board/shared/crash-report.cjs').wireReport(CrashReports.latest()), null, 2) : '' }));
-utilityHandle('crash-reports:set-opt-in', settingsOnly, (_e, on) => ({ optedIn: CrashReports.setOptIn(on === true) }));
-utilityHandle('crash-reports:export', settingsOnly, async (e) => {
+utilityHandle('get-privacy', settingsPane('privacy'), () => { try { return fs.readFileSync(path.join(__dirname, 'PRIVACY.md'), 'utf8'); } catch { return null; } });
+utilityHandle('crash-reports:state', settingsPane('privacy'), () => ({ optedIn: CrashReports.isOptedIn(), count: CrashReports.list().length, latest: CrashReports.latest() ? JSON.stringify(require('./board/shared/crash-report.cjs').wireReport(CrashReports.latest()), null, 2) : '' }));
+utilityHandle('crash-reports:set-opt-in', settingsPane('privacy'), (_e, on) => ({ optedIn: CrashReports.setOptIn(on === true) }));
+utilityHandle('crash-reports:export', settingsPane('privacy'), async (e) => {
   const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, {
     title: 'Export diagnostics',
     defaultPath: path.join(app.getPath('documents'), `plexiform-diagnostics-${new Date().toISOString().slice(0, 10)}.json`),
@@ -4018,9 +4042,9 @@ utilityHandle('crash-reports:export', settingsOnly, async (e) => {
   fs.writeFileSync(r.filePath, CrashReports.bundle(), { mode: 0o600 });
   return { ok: true, path: r.filePath };
 });
-require('./src/data-rights-main.js').register({ utilityHandle, allowed: settingsOnly, dialog, BrowserWindow, app, roots: () => dataRoots(app.getPath('userData')), isDevRun: IS_DEV_RUN, log: (m) => console.log(m) });
-utilityHandle('show-data-folder', settingsOnly, () => { fs.mkdirSync(ROOT_DIR, { recursive: true }); return shell.openPath(ROOT_DIR); });
-utilityHandle('get-stats', e => analyticsSender(e) || settingsOnly(e), (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
+require('./src/data-rights-main.js').register({ utilityHandle, allowed: settingsPane('privacy'), dialog, BrowserWindow, app, roots: () => dataRoots(app.getPath('userData')), isDevRun: IS_DEV_RUN, log: (m) => console.log(m) });
+utilityHandle('show-data-folder', settingsPane('privacy'), () => { fs.mkdirSync(ROOT_DIR, { recursive: true }); return shell.openPath(ROOT_DIR); });
+utilityHandle('get-stats', e => analyticsSender(e) || settingsPane('none')(e), (_e, days) => Stats.summary(stats, Date.now(), Math.min(60, Math.max(1, Number(days) || 7))));
 
 // Usage & cost sets the same budget keys as Preferences → Spend, and links to AI tools.
 utilityHandle('save-spend-limits', analyticsSender, (_e, v) => {
@@ -4036,7 +4060,7 @@ utilityHandle('usage:open-optimiser', analyticsSender, () => { openBuddy('optimi
 utilityHandle('usage:open-auto-answer', analyticsSender, () => { if (process.env.PLEXIFORM_SHOW_AUTOANSWER === '0') return false; showLightsView('auto'); return true; });
 
 // Export the whole visible range as JSON or CSV, wherever the user points.
-utilityHandle('export-stats', e => settingsOnly(e) || analyticsSender(e), async (e, format, days) => {
+utilityHandle('export-stats', e => settingsPane('privacy')(e) || analyticsSender(e), async (e, format, days) => {
   const n = Math.min(60, Math.max(1, Number(days) || 7));
   const sum = Stats.summary(stats, Date.now(), n);
   const csv = format === 'csv';
@@ -4172,7 +4196,7 @@ async function computeCosts() {
   costCache = { at: Date.now(), data };
   return data;
 }
-utilityHandle('get-costs', e => analyticsSender(e) || settingsOnly(e), () => getCosts());
+utilityHandle('get-costs', e => analyticsSender(e) || settingsPane('none')(e), () => getCosts());
 
 // ── Usage: per-turn tokens read from the transcripts themselves ───────────
 const USAGE_TTL_MS = 60 * 1000;
@@ -4419,7 +4443,7 @@ function spendNote(rules, fired, sessions, spend) {
 // interrupt. Interactive sessions never register, so they only ever get the
 // notification and the jump to their terminal.
 const runawayStoppers = new Map();
-utilityHandle('get-spend', settingsOnly, () => {
+utilityHandle('get-spend', settingsPane('spend'), () => {
   const snap = spendSnapshot(loadConfig());
   return snap ? { ...snap, latch: undefined } : null;
 });
@@ -4672,7 +4696,7 @@ ipcMain.handle('tasks:voice-draft', (e) => {
   voiceTaskDraft = null;
   return t;
 });
-utilityHandle('voice-status', settingsOnly, () => ({
+utilityHandle('voice-status', settingsPane('general'), () => ({
   available: listener.available(),
   reason: listener.available() ? null : listener.unavailableReason(),
   hotkeys: Voice.HOTKEYS.map(({ accelerator, label }) => ({ accelerator, label })),
@@ -4771,7 +4795,7 @@ ipcMain.handle('get-inputs', (e) => {
 // (its own window or the Plexiform window's view) or Settings.
 const SCOPE_MODES = new Set(['personal', 'auto']);
 function scopeSenderOk(e) {
-  return inputSenderOk(e) || settingsOnly(e);
+  return inputSenderOk(e) || settingsPane('none')(e);
 }
 function scopeChanged() { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); refreshTrayMenu(); }
 if (typeof WorkScope?.setSessionScope === 'function' && typeof WorkScope?.setRepoScope === 'function') {
@@ -4875,7 +4899,7 @@ const WidgetStrip = require('./src/widget-strip.js');
 let strip = WidgetStrip.NONE;
 let applyingStrip = false;
 require('./src/widget-page.js').register({ utilityHandle, allowed: (e) => fromUtilityPage(e, 'widget'), loadConfig, commitConfig, widget: () => win, strip: () => strip, ensureWidget: () => { if (!win) createWindow(); applyWidgetVisibility(); }, resizeBy, busy: () => roamState.busy || !!gardenRun, stopGlide, saveBounds, screen, limits: { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }, openPage: (id) => { openBuddy(id); if (id === 'settings') buddyWin?.sendToPage('settings', 'show-section', 'widget'); }, platform: process.platform, composeShortcut: () => ComposeShortcut.view() });
-spendSafety = require('./src/spend-safety-main.js').install({ Notification, handle: utilityHandle, allowed: (e) => analyticsSender(e) || settingsOnly(e), rootDir: ROOT_DIR, projectsDir: PROJECTS_DIR, home: os.homedir(), env: process.env, provider: () => require('./src/claude-carry.js').carryFor(process.env)?.resolve() ?? null, config: loadConfig, turns: () => getUsageTurns(), spend: () => spendSnapshot(loadConfig()), silent: IS_DEV_RUN, log: console.log });
+spendSafety = require('./src/spend-safety-main.js').install({ Notification, handle: utilityHandle, allowed: (e) => analyticsSender(e) || settingsPane('spend')(e), rootDir: ROOT_DIR, projectsDir: PROJECTS_DIR, home: os.homedir(), env: process.env, provider: () => require('./src/claude-carry.js').carryFor(process.env)?.resolve() ?? null, config: loadConfig, turns: () => getUsageTurns(), spend: () => spendSnapshot(loadConfig()), silent: IS_DEV_RUN, log: console.log });
 require('./src/rule-notify-main.js').install({ Notification, busy: () => BusyWatch.holding(), paused: (id) => spendSafety?.nudgesPaused(id), handle: utilityHandle, allowed: widgetConfigSender, config: loadConfig, sessions: () => aggregateState({ ignoreTravel: true }).sessions || [], env: () => { const c = loadConfig(); return { offline: !online, ...BusyWatch.env(), git: gitEvents(c), spend: spendSnapshot(c) }; }, log: console.log });
 const WidgetPolish = require('./src/widget-polish-main.js').install({ ipcMain, globalShortcut, utilityHandle, config: loadConfig, commitConfig, widgetWindow: () => win, quiet: Quiet, widgetAllowed: (e) => widgetOnly(e), pageAllowed: (e) => fromUtilityPage(e, 'widget'), sessions: () => localSessions(aggregateState().sessions || []), strip: () => strip, saveBounds, stopGlide, screen, sizing: { aspect: WIDGET_ASPECT, minWidth: MIN_WIDTH }, log: console.log });
 const FirstRunTour = require('./src/first-run-tour-main.js').install({ ipcMain, config: loadConfig, saveConfig, setupOpen: () => !!onboardingWin, demo: Demo, hasConnectedTool: () => AiTools.quick().some((t) => t.connected), windows: { widget: () => win, widgetShown: () => !!win && !win.isDestroyed() && win.isVisible(), lights: () => lightsWin, openLights: () => createLightsWindow(), openPage: (id) => openBuddy(id), sendToPage: (id, ch, p) => !!buddyWin?.sendToPage(id, ch, p) }, allowed: { widget: (e) => widgetOnly(e), lights: (e) => fromPage(e, lightsWin?.webContents), page: (e, id) => fromUtilityPage(e, id) }, log: console.log });
@@ -5009,7 +5033,7 @@ function getNativeBoard() {
   }
   return nativeBoardService;
 }
-const fromNativeBoardSettings = settingsOnly;
+const fromNativeBoardSettings = settingsPane('advanced');
 const nativeBoardAction = (fn) => async (e, ...args) => {
   if (!fromNativeBoardSettings(e)) return { ok: false, error: 'Not allowed.' };
   try { return await fn(getNativeBoard(), ...args); } catch (err) { return { ok: false, error: err.message }; }
@@ -5081,7 +5105,7 @@ require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPag
 require('./src/guardrails-main.js').install({ ipcMain, dialog, shell, BrowserWindow, rootDir: ROOT_DIR, allowed: (e) => fromUtilityPage(e, 'home'), broadcast: () => broadcastStatus(), log: console.log });
 explainSvc = require('./src/explain-main.js').install({ ipcMain, rootDir: ROOT_DIR, home: os.homedir(), config: loadConfig, inputs: () => aggregateState().inputs || [], sessions: () => aggregateState().sessions || [], inputAllowed: inputSenderOk, homeAllowed: (e) => fromUtilityPage(e, 'home'), clipboard, shell, Notification, openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // explain mode (opt-in, config.explainMode)
 require('./src/widget-lane-main.js').install({ ipcMain, send: (ch, v) => { if (win && !win.isDestroyed()) win.webContents.send(ch, v); }, allowed: (e) => !!win && !win.isDestroyed() && e.sender === win.webContents, sources: { state: () => aggregateState(), local: localSessions, collisions: collisionAlerts, git: { active: () => gitEvents(loadConfig()) }, spend: () => spendSnapshot(loadConfig()), warnAt: () => loadConfig().spend.warnAt } });
-deployStatus = require('./src/deploy-status-main.js').install({ ipcMain, file: path.join(ROOT_DIR, 'deploy-status.json'), safeStorage: require('electron').safeStorage, fetch: (...a) => net.fetch(...a), clipboard, shell, sessions: () => readSessions(loadConfig()), online: () => online, allowedHome: (e) => fromUtilityPage(e, 'home'), allowedSettings: settingsOnly, scrub: (t) => require('./src/scrub.js').scrub(t, { home: os.homedir() }), paused: IS_DEV_RUN, onFired: () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); maybePlayAlertSound(); }, log: (m) => console.log(m) }); // privacy-flow: deploy-status
+deployStatus = require('./src/deploy-status-main.js').install({ ipcMain, file: path.join(ROOT_DIR, 'deploy-status.json'), safeStorage: require('electron').safeStorage, fetch: (...a) => net.fetch(...a), clipboard, shell, sessions: () => readSessions(loadConfig()), online: () => online, allowedHome: (e) => fromUtilityPage(e, 'home'), allowedSettings: settingsPane('advanced'), scrub: (t) => require('./src/scrub.js').scrub(t, { home: os.homedir() }), paused: IS_DEV_RUN, onFired: () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); maybePlayAlertSound(); }, log: (m) => console.log(m) }); // privacy-flow: deploy-status
 // Home's "Start with a pack" card (src/starter-pack-main.js): the stack of recent folders, the matching gallery pack, one confirm, then its first recipe as a task.
 {
   const StarterMain = require('./src/starter-pack-main.js');
@@ -5158,12 +5182,12 @@ ipcMain.handle('home:inbox-read', async (e, keys) => {
 // Preferences' "Connect other agents" buttons open the AI tools page on that
 // tool, where the exact change is previewed and confirmed (src/ai-tools.js).
 ipcMain.handle('connect-agent', async (e, which) => {
-  if (!fromNativeBoardSettings(e)) return { ok: false, error: 'Not allowed.' };
+  if (!settingsPane('none')(e)) return { ok: false, error: 'Not allowed.' };
   if (typeof which !== 'string' || !['codex', 'cursor', 'gemini', 'hermes'].includes(which)) return { ok: false };
   return { ok: aiToolsOpen(`aitools:${which}`), opened: true };
 });
-ipcMain.handle('git-status', (e) => settingsOnly(e) ? ({ ...git.status(), enabled: loadConfig().gitSignals !== false }) : null);
-utilityHandle('signal-endpoint', e => settingsOnly(e) || widgetConfigSender(e), () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));
+ipcMain.handle('git-status', (e) => settingsPane('advanced')(e) ? ({ ...git.status(), enabled: loadConfig().gitSignals !== false }) : null);
+utilityHandle('signal-endpoint', e => settingsPane('advanced')(e) || widgetConfigSender(e), () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));
 // Preferences / Health → "Install Ghostty Dock…" (src/ghostty-dock-install.js): Settings or Home only, an action name and nothing else.
 const GhosttyDockInstall = require('./src/ghostty-dock-install.js');
 const dockNotes = new Set();
@@ -5183,10 +5207,10 @@ const ghosttyDockInstaller = GhosttyDockInstall.createController({
     note.on('close', () => dockNotes.delete(note));
     note.show();
   },
-  changed: (s) => buddyWin?.sendToPage('settings', 'ghostty-dock-changed', s),
+  changed: (s) => sendToSettings('ghostty-dock-changed', s),
 });
-GhosttyDockInstall.register({ utilityHandle, allowed: (e) => settingsOnly(e) || fromUtilityPage(e, 'home'), controller: ghosttyDockInstaller });
-require('./src/cli-install.js').register({ utilityHandle, allowed: settingsOnly, dialog, BrowserWindow, home: os.homedir(), packaged: app.isPackaged, resourcesPath: process.resourcesPath, appDir: __dirname });
+GhosttyDockInstall.register({ utilityHandle, allowed: (e) => settingsPane('advanced')(e) || fromUtilityPage(e, 'home'), controller: ghosttyDockInstaller });
+require('./src/cli-install.js').register({ utilityHandle, allowed: settingsPane('advanced'), dialog, BrowserWindow, home: os.homedir(), packaged: app.isPackaged, resourcesPath: process.resourcesPath, appDir: __dirname });
 // Not the signal server's port: an ssh -R tunnel makes this one reachable to
 // every user of the far host, so it serves only the signed device route.
 // A bad override is reported in Settings, never thrown at startup.
@@ -5201,22 +5225,22 @@ function remoteDevicesView() {
   for (const s of readRemoteSessions(loadConfig())) live[s.device] = (live[s.device] || 0) + 1;
   return { devices: RemoteDevices.list(live), port: REMOTE_PORT, loopback: RemoteDevices.loopbackStatus(), tailnet: { enabled: !!loadConfig().remoteTailscale, ...RemoteDevices.tailnetStatus() } };
 }
-utilityHandle('remote-devices', settingsOnly, () => remoteDevicesView());
+utilityHandle('remote-devices', settingsPane('advanced'), () => remoteDevicesView());
 // The pairing code goes to the window that asked, once; nothing else keeps it.
-utilityHandle('remote-pair', settingsOnly, (_e, name) => {
+utilityHandle('remote-pair', settingsPane('advanced'), (_e, name) => {
   const r = RemoteDevices.pair(String(name || ''));
   return r.error ? { error: r.error } : { ...remoteDevicesView(), paired: r.device, code: r.code };
 });
 // The clipboard forgets the code after a minute, unless something else has
 // been copied since.
-utilityHandle('remote-copy-code', settingsOnly, (_e, code) => {
+utilityHandle('remote-copy-code', settingsPane('advanced'), (_e, code) => {
   const text = String(code || '');
   if (!/^buddy-pair-v1\./.test(text)) return false;
   clipboard.writeText(text);
   setTimeout(() => { if (clipboard.readText() === text) clipboard.writeText(''); }, 60000);
   return true;
 });
-utilityHandle('remote-revoke', settingsOnly, (_e, id) => {
+utilityHandle('remote-revoke', settingsPane('advanced'), (_e, id) => {
   const revoked = RemoteDevices.revoke(String(id || ''));
   return { ...remoteDevicesView(), revoked };
 });
@@ -5259,7 +5283,7 @@ function healthReport() {
       ? c : { ...c, ...(fix ? { fix, fixLabel } : {}) });
   return report;
 }
-utilityHandle('health-report', settingsOnly, () => healthReport());
+utilityHandle('health-report', settingsPane('advanced'), () => healthReport());
 ipcMain.handle('health-fix', (e, id) => {
   if (!fromNativeBoardSettings(e)) return { error: 'Not allowed.' };
   // Enabling goes through Hermes' own CLI, so this one fix answers asynchronously.
@@ -5306,7 +5330,7 @@ ipcMain.handle('health-fix', (e, id) => {
   return { error, report: healthReport() };
 });
 // Preferences → Backups. Settings is the only caller.
-const backupsSenderOk = settingsOnly;
+const backupsSenderOk = settingsPane('privacy');
 const backupsOff = { error: 'Backups are off in this run.' };
 const safeId = Backups.isSnapshotId;
 ipcMain.handle('backups-list', (e) => {
@@ -5373,7 +5397,7 @@ function buildDiagnostics() {
   });
   return text;
 }
-utilityHandle('health-copy-diagnostics', settingsOnly, () => {
+utilityHandle('health-copy-diagnostics', settingsPane('advanced'), () => {
   const text = buildDiagnostics();
   clipboard.writeText(text);
   return { lines: text.split('\n').length - 1 };
@@ -5416,7 +5440,7 @@ utilityHandle('cameos-remove', widgetConfigSender, (_e, id) => {
 // here in between.
 const readCameoPng = (id) => fs.readFileSync(path.join(CAMEO_DIR, `${id}.png`));
 let pendingSetup = null;
-utilityHandle('setup-export', e => settingsOnly(e) || widgetConfigSender(e), async (e) => {
+utilityHandle('setup-export', e => settingsPane('privacy')(e) || widgetConfigSender(e), async (e) => {
   const r = await dialog.showSaveDialog(BrowserWindow.fromWebContents(e.sender) || undefined, { title: 'Export setup', defaultPath: path.join(app.getPath('documents'), 'plexiform-setup.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return null;
   try {

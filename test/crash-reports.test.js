@@ -193,6 +193,6 @@ test('main.js records crashes into the ring and exposes only settings-page IPC f
   assert.match(main, /process\.on\('uncaughtException'[^\n]*CrashReports\.record\('uncaughtException'/);
   assert.match(main, /process\.on\('unhandledRejection'[^\n]*CrashReports\.record\('unhandledRejection'/);
   assert.match(main, /app\.on\('render-process-gone'[^\n]*CrashReports\.record\('renderer-gone'/);
-  for (const ch of ['crash-reports:state', 'crash-reports:set-opt-in', 'crash-reports:export']) assert.match(main, new RegExp(`utilityHandle\\('${ch}', settingsOnly,`));
+  for (const ch of ['crash-reports:state', 'crash-reports:set-opt-in', 'crash-reports:export']) assert.match(main, new RegExp(`utilityHandle\\('${ch}', settingsPane\\('privacy'\\),`));
   assert.doesNotMatch(main, /sendCrashReport/);
 });

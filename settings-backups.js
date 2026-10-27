@@ -3,6 +3,7 @@
 // in with textContent only.
 (function () {
   const api = window.settingsApi;
+  if (window.SettingsPanes && !window.SettingsPanes.inPane('privacy')) return; // R8-1: another pane owns this block
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const REASON = { save: 'saved automatically', daily: 'daily check', manual: 'you asked for it', 'before-restore': 'kept before a restore' };
   const $ = (id) => document.getElementById(id);
