@@ -30,9 +30,10 @@ test('main reads the gate once from IS_DEV_RUN and app.isPackaged and hands it t
   assert.equal(mainSrc.match(/chatPreviewOn\(/g).length, 1);
   assert.match(mainSrc, /const CHAT_PREVIEW = require\('\.\/src\/chat-preview\.js'\)\.chatPreviewOn\(\{ isDevRun: IS_DEV_RUN, isPackaged: app\.isPackaged, env: process\.env \}\);/);
   assert.match(mainSrc, /buddyWin = createBuddyWindow\(\{[^]*?\n      chatFirst: CHAT_PREVIEW,\n/);
-  // Read once; used by the Buddy window, the sidebar's read-only session rows (overview-main)
-  // and the R2a thread (registered only when on, and told the gate), nothing else.
-  assert.equal((mainSrc.match(/CHAT_PREVIEW/g) || []).length, 5);
+  // Read once; used by the Buddy window, the sidebar's read-only session rows (overview-main),
+  // the R2a thread (registered only when on, and told the gate) and its deep links, nothing else.
+  assert.equal((mainSrc.match(/CHAT_PREVIEW/g) || []).length, 6);
+  assert.match(mainSrc, /    if \(CHAT_PREVIEW && !invited\) \{\n/);
   assert.match(mainSrc, /\nif \(CHAT_PREVIEW\) \{\n  const SidebarRows[^]*?buddy: \(\) => buddyWin, chatPreview: CHAT_PREVIEW,\n/);
   assert.match(mainSrc, /createOverviewMain\(\{\n  buddy:\(\)=>buddyWin,chatPreview:CHAT_PREVIEW,/);
   assert.match(src, /simpleMode = \(\) => false, chatFirst = false,/, 'off unless main says so');

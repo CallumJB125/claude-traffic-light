@@ -2174,11 +2174,18 @@ function showHealth() {
 // then. The link is never logged: it carries an invite token.
 const pendingLinks = [];
 let linksReady = false;
+const ChatLinks = require('./src/chat-links.js');
+const chatLinkFresh = ChatLinks.coalescer();
 function handleDeepLink(url) {
   if (typeof url !== 'string' || url.length > 2048 || !DEEP_LINK_RE.test(url)) return;
   if (!linksReady) { if (pendingLinks.length < 5) pendingLinks.push(url); return; }
   try {
-    getBuddy().openInvite(url);
+    const invited = getBuddy().openInvite(url);
+    // Chat-first preview: a page or thread link (src/chat-links.js). Never an account flow.
+    if (CHAT_PREVIEW && !invited) {
+      const target = ChatLinks.parse(url);
+      if (target) { if (chatLinkFresh(target)) buddyWin.openLink(target); return; }
+    }
     openBuddy();
   } catch (err) {
     console.error(`[deep-link] could not open ${BRAND.NAME}:`, err.message);

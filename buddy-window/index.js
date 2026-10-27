@@ -1358,6 +1358,17 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       return {window:win,contents:wc,frame:wc.mainFrame,generation:threadDocument,boundId:threadId,foreground:win.isFocused()};
     },
     openThread,
+    // Chat-first preview: a deep link main parsed (src/chat-links.js); navigation only.
+    // A page goes through route(), never goTo(), so no link starts an account flow.
+    openLink(target) {
+      if (chatFirst !== true || !target || typeof target.id !== 'string') return;
+      open();
+      if (target.kind === 'page' && pageById(target.id)) { route(target.id); return; }
+      if (target.kind === 'thread' && openThread(target.id)) return;
+      // A row this Mac can't show (ended, moved, or a paired device's): Board, the sidebar on All.
+      select('board');
+      focusSidebar('all');
+    },
     overviewReadContext(){
       const v=localViews.get('overview'),wc=v?.webContents;
       if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='overview'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized())return null;
