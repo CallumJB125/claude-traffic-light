@@ -108,6 +108,7 @@ usage	buddy-window/pages.js	PAGES	1
 usage	buddy-window/pages.js	SECTIONS	1
 usage	home-compose.js	navigate	1
 usage	main.js	openBuddy	3
+usage:today	test-visual/usage-today.spec.js	data-page	2
 usage:today	test/chat-preview.test.js	select	1
 waiting	buddy-window/pages.js	PAGES	1
 waiting	main.js	openBuddy	1
