@@ -31,7 +31,18 @@ function freePort() {
 }
 
 // Variables that point back into the real home whatever HOME is set to.
-const HOME_POINTERS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'ZDOTDIR'];
+const HOME_POINTERS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'HERMES_HOME', 'GEMINI_CLI_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'ZDOTDIR'];
+// A real path below the OS temp dir (symlinks such as /var -> /private/var resolved).
+// (/tmp too: the app's own TMPDIR on macOS, where specs make some of their temp dirs.)
+const underTmp = (p) => { try { const r = fs.realpathSync(p); return [os.tmpdir(), '/tmp'].some((t) => { try { return r.startsWith(fs.realpathSync(t) + path.sep); } catch { return false; } }); } catch { return false; } };
+// A caller's PATH keeps the spec's own temp-dir stubs first (tasks-engine puts its fake codex there) and gets this app's fakes
+// ahead of everything else, so no real install can win. Entries outside the temp dir start at the first non-temp one.
+const withFakesFirst = (userHome, callerPath) => {
+  const dirs = String(callerPath).split(path.delimiter);
+  const at = dirs.findIndex((d) => !underTmp(d));
+  dirs.splice(at < 0 ? dirs.length : at, 0, path.join(userHome, '.local', 'bin'));
+  return dirs.join(path.delimiter);
+};
 const homeEnv = (userHome, base = process.env) => ({
   ...Object.fromEntries(Object.entries(base).filter(([k]) => !HOME_POINTERS.includes(k))),
   HOME: userHome,
@@ -92,6 +103,8 @@ const fakeProviderCalls = (userHome) => {
 async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = {}, env = {} } = {}) {
   // The app's HOME is the one below; a caller's HOME would drop the fake providers and reach the real CLIs. Use homeFiles.
   if ('HOME' in env || 'USERPROFILE' in env) throw new Error('launchApp: do not pass env.HOME or env.USERPROFILE; the app gets its own (h.userHome, seeded with homeFiles)');
+  // The variables that point back into a home (CLAUDE_CONFIG_DIR, ZDOTDIR, XDG_*, CODEX_HOME) may only name a temp dir.
+  for (const k of HOME_POINTERS) if (k in env && !underTmp(env[k])) throw new Error(`launchApp: env.${k} must point under the temp dir, not ${env[k]}`);
   const launchedAt = Date.now();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-home-'));
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'cbuddy-visual-ud-'));
@@ -143,6 +156,7 @@ async function launchApp({ extraArgs = [], config = {}, files = {}, homeFiles = 
       // No voice helper, built or not: Settings shows the same Voice block on every machine.
       PLEXIFORM_VOICE_HELPER_PATH: path.join(home, 'no-voice-helper', 'buddy-listen'),
       ...env,
+      ...(env.PATH ? { PATH: withFakesFirst(userHome, env.PATH) } : {}),
     },
   });
   // Electron now and then dies in the first second under load ("Target page, context or browser has been closed" at the
@@ -262,4 +276,4 @@ async function focusMainWindow(app) {
 }
 
 module.exports = {
-  HOME_POINTERS, homeEnv, isBootDeath, installFakeProviders, fakeProviderCalls, FAKE_PROVIDER_PATHS, focusMainWindow, launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };
+  HOME_POINTERS, homeEnv, isBootDeath, underTmp, withFakesFirst, installFakeProviders, fakeProviderCalls, FAKE_PROVIDER_PATHS, focusMainWindow, launchApp, signal, status, windowByFile, embedded, openSettingsPane, snapToPixels };
