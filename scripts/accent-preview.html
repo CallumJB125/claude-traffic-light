@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Accent preview</title>
+<!-- Redesign R0a (plan-redesign §1.2, §R2.2, §R3.12). A review page, not shipped: open it in a browser to see each
+     accent option on real components in both themes. Graphite (D) is Callum's pick and shows the exact R0b state
+     shades; A–C show rest values, with hover and pressed mixed 8 % / 16 % for comparison only.
+     Neutrals are copied from tokens.css so the page stands alone. -->
+<style>
+  :root { --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; font: 400 14px/20px var(--font); background: #d9dce1; color: #20252d; }
+  h1 { font: 600 16px/22px var(--font); margin: 0 0 4px; }
+  p.lead { margin: 0 0 20px; max-width: 720px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .theme { padding: 16px; border-radius: 12px; background: var(--bg); color: var(--text); }
+  .theme.light { --bg: #f4f5f7; --panel: #ffffff; --panel-2: #eef0f3; --line: #dde1e6; --line-strong: #c3cad3; --text: #20252d; --muted: #556171; --halo: #ffffff; --mix: #ffffff; }
+  .theme.dark { --bg: #17191d; --panel: #202329; --panel-2: #292d34; --line: #343941; --line-strong: #4b535f; --text: #f0f1f3; --muted: #b0b7c2; --halo: #17191d; --mix: #000000; }
+  .theme h2 { font: 600 14px/20px var(--font); margin: 0 0 12px; }
+  .theme h2 small { font-weight: 400; color: var(--muted); }
+  .opt { --hover: color-mix(in srgb, var(--accent) 92%, var(--mix)); --pressed: color-mix(in srgb, var(--accent) 84%, var(--mix)); display: grid; grid-template-columns: 120px 1fr; gap: 12px; padding: 12px; margin-bottom: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .side { background: var(--panel-2); border-radius: 4px; padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+  .row { height: 30px; display: flex; align-items: center; padding: 0 8px; border-radius: 4px; font-size: 13px; }
+  .row.hover { background: var(--line); }
+  .row.sel { background: var(--soft); box-shadow: inset 2px 0 0 var(--accent); font-weight: 600; }
+  .row.focus { outline: 2px solid var(--accent); outline-offset: -4px; box-shadow: inset 0 0 0 2px var(--halo); }
+  .bits { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .btn { height: 32px; padding: 0 12px; border-radius: 8px; border: 0; font: 600 13px/1 var(--font); background: var(--accent); color: var(--ink); }
+  .btn.h { background: var(--hover); } .btn.p { background: var(--pressed); }
+  .btn.f { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: 0 0 0 2px var(--halo); }
+  .ghost { height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line-strong); background: transparent; color: var(--text); font: 400 13px/1 var(--font); }
+  a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+  .name { grid-column: 1 / -1; font-weight: 600; }
+  .name code { font-weight: 400; color: var(--muted); }
+  .light .A { --accent: #4338ca; --ink: #ffffff; --soft: rgba(67, 56, 202, 0.14); }
+  .dark .A { --accent: #a5b4fc; --ink: #14152e; --soft: rgba(165, 180, 252, 0.16); }
+  .light .B { --accent: #1d5fbf; --ink: #ffffff; --soft: rgba(29, 95, 191, 0.14); }
+  .dark .B { --accent: #86b4ff; --ink: #0d1a2e; --soft: rgba(134, 180, 255, 0.16); }
+  .light .C { --accent: #7b3fa6; --ink: #ffffff; --soft: rgba(123, 63, 166, 0.14); }
+  .dark .C { --accent: #cfa8f0; --ink: #22132e; --soft: rgba(207, 168, 240, 0.16); }
+  .light .D { --accent: #24292f; --hover: #3a4048; --pressed: #4b525b; --ink: #ffffff; --soft: rgba(36, 41, 47, 0.14); }
+  .dark .D { --accent: #e6e8eb; --hover: #c4c9cf; --pressed: #a8afb7; --ink: #17191d; --soft: rgba(230, 232, 235, 0.14); }
+  .light .T { --accent: #a34425; --ink: #ffffff; --soft: rgba(163, 68, 37, 0.08); }
+  .dark .T { --accent: #e49a78; --ink: #251c18; --soft: rgba(228, 154, 120, 0.14); }
+  @media (max-width: 420px) { body { padding: 16px; } .opt { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<h1>Accent options</h1>
+<p class="lead">Each option on a sidebar (hover, selected, focused row), the primary button (rest, hover, pressed, focused), a ghost button and an inline link. Contrast is checked by <code>test/tokens-contrast.test.js</code>.</p>
+<div class="grid" id="grid"></div>
+<template id="opt">
+  <div class="opt">
+    <div class="name"></div>
+    <div class="side"><div class="row">Inbox</div><div class="row hover">Hover</div><div class="row sel">Selected</div><div class="row focus">Focused</div></div>
+    <div class="bits">
+      <button class="btn" tabindex="-1">Send</button><button class="btn h" tabindex="-1">Hover</button><button class="btn p" tabindex="-1">Pressed</button><button class="btn f" tabindex="-1">Focused</button>
+      <button class="ghost" tabindex="-1">Cancel</button>
+      <span>Read the <a href="#grid">setup notes</a> first.</span>
+    </div>
+  </div>
+</template>
+<script>
+  const OPTIONS = [
+    ['D', 'D. Graphite (chosen)', '#24292f / #e6e8eb'],
+    ['A', 'A. Indigo', '#4338ca / #a5b4fc'],
+    ['B', 'B. Ink blue', '#1d5fbf / #86b4ff'],
+    ['C', 'C. Plum', '#7b3fa6 / #cfa8f0'],
+    ['T', 'Today: terracotta (retired)', '#a34425 / #e49a78'],
+  ];
+  const grid = document.getElementById('grid');
+  const tpl = document.getElementById('opt');
+  for (const theme of ['light', 'dark']) {
+    const box = document.createElement('section');
+    box.className = `theme ${theme}`;
+    const h = document.createElement('h2');
+    h.textContent = theme === 'light' ? 'Light ' : 'Dark ';
+    const small = document.createElement('small');
+    small.textContent = theme === 'light' ? 'on #f4f5f7' : 'on #17191d';
+    h.append(small);
+    box.append(h);
+    for (const [key, label, hex] of OPTIONS) {
+      const node = tpl.content.firstElementChild.cloneNode(true);
+      node.classList.add(key);
+      const name = node.querySelector('.name');
+      name.textContent = `${label} `;
+      const code = document.createElement('code');
+      code.textContent = hex;
+      name.append(code);
+      box.append(node);
+    }
+    grid.append(box);
+  }
+</script>
+</body>
+</html>

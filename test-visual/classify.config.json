@@ -1,0 +1,4 @@
+{
+  "//": "Redesign classifier config (plan-redesign §R3.10, §R4.4). The accent families come from tokens.css at the base and the head, so only the named exceptions live here. R0b adds Check-it, Paused and the removed card borders, each tied to the baselines it may change. Entry shape: { \"name\", \"baselines\": [\"test-visual/__screenshots__/<spec>/<file>.png\"], \"old\": [\"#hex\"], \"new\": [\"#hex\"] }.",
+  "exceptions": []
+}
