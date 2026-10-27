@@ -1248,8 +1248,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   if (chatFirst === true) ipcMain.on('thread:board', (e) => { if (fromThread(e)) select('board'); });
   // The sidebar's New chat (navigation only; nothing is sent or started).
   // R8-1: a Settings pane opens another pane. Navigation only: pane documents only, a closed id list, nothing else opens.
-  const fromSettingsPane = (e) => SettingsPanes.PANES.some((p) => { const wc = localViews.get(`settings:${p}`)?.webContents; return !!wc && e.sender === wc && e.senderFrame === wc.mainFrame && isLocalPage(e.senderFrame?.url ?? ''); });
-  if (chatFirst === true) ipcMain.on('settings:go-pane', (e, pane) => { if (fromSettingsPane(e) && SettingsPanes.isPane(pane)) select(`settings:${pane}`); });
+  const fromSettingsPane = (e) => SettingsPanes.OWNERS.some((p) => { const wc = localViews.get(`settings:${p}`)?.webContents; return !!wc && e.sender === wc && e.senderFrame === wc.mainFrame && isLocalPage(e.senderFrame?.url ?? ''); });
+  if (chatFirst === true) ipcMain.on('settings:go-pane', (e, pane) => { if (fromSettingsPane(e) && SettingsPanes.isOwner(pane)) select(`settings:${pane}`); });
   if (chatFirst === true) ipcMain.on('buddy:open-newchat', (e) => { if (fromSidebar(e)) openNewChat(); });
   // A sidebar row opens its thread (navigation only; main resolves the row).
   if (chatFirst === true) ipcMain.on('buddy:open-thread', (e, id) => {

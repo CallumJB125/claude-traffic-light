@@ -5,7 +5,7 @@
 (() => {
   const api = window.lightsApi && window.lightsApi.burstUsage ? window.lightsApi : null;
   const after = document.getElementById('usage-history');
-  if (!api || !after) return;
+  if (!api || !after || window.lightsRulesPane) return; // not in the Settings sheet's rules pane (it may not call the Usage channels)
   const sec = document.createElement('section');
   sec.id = 'burst-usage';
   sec.hidden = true;

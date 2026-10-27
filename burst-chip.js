@@ -4,7 +4,7 @@
 // interval main asks for; it stops for good when main says 0.
 (() => {
   const api = (window.trafficLight && window.trafficLight.burstChip) ? window.trafficLight : (window.lightsApi && window.lightsApi.burstChip) ? window.lightsApi : null;
-  if (!api) return;
+  if (!api || window.lightsRulesPane) return; // not in the Settings sheet's rules pane
   const widget = api === window.trafficLight;
   const host = widget ? document.body : document.querySelector('#mix > div');
   if (!host) return;

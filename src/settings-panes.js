@@ -13,6 +13,27 @@
   // separate widget/hatch/phone/aitools pages come in R8-3.
   const PANES = Object.freeze(['general', 'notifications', 'aitools', 'widget', 'spend', 'privacy', 'phone', 'advanced']);
 
+  // R8-2b: the widget-rules editor (lights.html, view=rules) is a second kind of pane: its own document and preload, its own
+  // key list. It is an owner in KEY_OWNER but not one of PANES (those are settings.html's sections).
+  const RULES_PANE = 'widget-rules';
+  const OWNERS = Object.freeze([...PANES, RULES_PANE]);
+  const NAV = OWNERS;
+  const WIDGET_RULES = Object.freeze({
+    // control fields of save-config, stripped in commitConfig and never stored. __prefsFrom names the template whose prefs ride in this save.
+    control: Object.freeze(['__backupReason', '__prefsFrom']),
+    // The one deliberate exception to "a key has one owner": a template's prefs are saved with its rules (lights-view
+    // prefsToSave), so a save naming a template may also write these other panes' keys, and only the values that
+    // template implies (main checks that). The test pins this list to the union of all template prefs keys.
+    crossWrites: Object.freeze({
+      seasonal: 'a template can turn seasonal looks off (Widget pane key)',
+      notifyStates: 'a template can turn individual notification states off (Notifications pane key)',
+      notifyOnStates: 'a template can turn state notifications off (Notifications pane key)',
+      spend: 'a template can turn the budget warning off (Spend pane key; a whole object, so the pane re-reads before applying)',
+    }),
+    // read-only extras for get-config: the template merge needs the saved notifyStates and spend
+    reads: Object.freeze(['simpleMode', 'notifyStates', 'spend']),
+  });
+
   // Every channel settings-preload.js exposes, with the one pane whose section uses it. 'none' = no pane may call
   // it (the old Settings page still can); get-config / save-config are filtered by KEY_OWNER instead.
   const CHANNEL_PANE = Object.freeze({
@@ -47,24 +68,28 @@
     agentRoster: 'aitools', agentKinds: 'aitools', agentChipSize: 'aitools', roam: 'widget', randomEvents: 'widget', simpleMode: 'general', homeComposer: 'general',
     teamSessionSharing: 'phone', teamBrief: 'phone', explainMode: 'phone', remoteInteractionHost: 'phone', codexDaemonMessaging: 'phone',
     integrations: 'aitools', gitSignals: 'advanced', gitRepos: 'advanced', gitDeployWorkflows: 'advanced', remoteTailscale: 'phone', agentBus: 'advanced', compaction: 'aitools',
-    character: 'none', snoozeUntil: 'none', fastHook: 'none', keepAwake: 'none', paceTooltip: 'none', agentAwareness: 'none', mcpBusUserOff: 'none', mcpUserOff: 'none',
-    remoteInteractionResetPending: 'none', autoAnswer: 'none', persona: 'none',
+    rules: 'widget-rules', template: 'widget-rules', presets: 'widget-rules', character: 'widget-rules', autoAnswer: 'widget-rules',
+    snoozeUntil: 'none', fastHook: 'none', keepAwake: 'none', paceTooltip: 'none', agentAwareness: 'none', mcpBusUserOff: 'none', mcpUserOff: 'none',
+    remoteInteractionResetPending: 'none', persona: 'none',
   });
 
-  const TITLE = Object.freeze({ general: 'General', notifications: 'Notifications', aitools: 'AI tools', widget: 'Widget', spend: 'Spend and limits', privacy: 'Privacy and data', phone: 'Phone', advanced: 'Advanced' });
+  const TITLE = Object.freeze({ 'widget-rules': 'Widget rules', general: 'General', notifications: 'Notifications', aitools: 'AI tools', widget: 'Widget', spend: 'Spend and limits', privacy: 'Privacy and data', phone: 'Phone', advanced: 'Advanced' });
 
   // Keys every pane may READ (never write): simpleMode decides which developer sections the page shows at all.
   const SHARED_READS = Object.freeze(['simpleMode']);
 
   const isPane = (p) => typeof p === 'string' && PANES.includes(p);
+  const isOwner = (p) => typeof p === 'string' && OWNERS.includes(p);
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
-  const ownedKeys = (pane) => (isPane(pane) ? Object.keys(KEY_OWNER).filter((k) => KEY_OWNER[k] === pane) : []);
-  const readKeys = (pane) => (isPane(pane) ? [...new Set([...ownedKeys(pane), ...SHARED_READS])] : []);
+  const ownedKeys = (pane) => (isOwner(pane) ? Object.keys(KEY_OWNER).filter((k) => KEY_OWNER[k] === pane) : []);
+  const readKeys = (pane) => (isOwner(pane) ? [...new Set([...ownedKeys(pane), ...(pane === RULES_PANE ? WIDGET_RULES.reads : SHARED_READS)])] : []);
   /** The channel's pane, or null for an unknown channel. */
   const paneOfChannel = (ch) => (typeof ch === 'string' && own(CHANNEL_PANE, ch) ? CHANNEL_PANE[ch] : null);
   /** True when every key of `partial` is owned by `pane` (an empty object is fine). */
-  const writesAllowed = (pane, partial) => isPane(pane) && !!partial && typeof partial === 'object' && !Array.isArray(partial)
-    && Object.keys(partial).every((k) => own(KEY_OWNER, k) && KEY_OWNER[k] === pane);
+  const writesAllowed = (pane, partial) => isOwner(pane) && !!partial && typeof partial === 'object' && !Array.isArray(partial)
+    && Object.keys(partial).every((k) => (own(KEY_OWNER, k) && KEY_OWNER[k] === pane) || (pane === RULES_PANE && WIDGET_RULES.control.includes(k)));
+  /** Keys of a widget-rules save that belong to other panes (a template's prefs). */
+  const crossKeys = (partial) => (partial && typeof partial === 'object' ? Object.keys(partial).filter((k) => own(WIDGET_RULES.crossWrites, k)) : []);
   const pick = (obj, keys) => { const o = {}; for (const k of keys) if (own(obj, k)) o[k] = obj[k]; return o; };
   /** A saved config as a pane may see it. */
   const readView = (pane, config) => pick(config || {}, readKeys(pane));
@@ -79,5 +104,5 @@
   const current = root && root.location && typeof root.location.search === 'string' ? paneFromSearch(root.location.search) : null;
   const inPane = (...panes) => current === null || panes.includes(current);
 
-  return { current, inPane, TITLE, PANES, CHANNEL_PANE, KEY_OWNER, SHARED_READS, isPane, ownedKeys, readKeys, paneOfChannel, writesAllowed, pick, readView, paneFromSearch };
+  return { current, inPane, TITLE, PANES, RULES_PANE, OWNERS, NAV, WIDGET_RULES, isOwner, crossKeys, CHANNEL_PANE, KEY_OWNER, SHARED_READS, isPane, ownedKeys, readKeys, paneOfChannel, writesAllowed, pick, readView, paneFromSearch };
 }));

@@ -952,6 +952,9 @@
   body.embedded-analytics .view-seg, body.embedded-analytics #titlebar .tools,
   body.embedded-analytics #footer, body.embedded-analytics #presets { display: none; }
   body.embedded-analytics #frame { grid-template-rows: 52px 1fr; }
+  body.embedded-rules #titlebar { padding-left: 22px; -webkit-app-region: no-drag; }
+  body.embedded-rules #prefs-btn { display: none; }
+  #back-settings[hidden] { display: none; }
 
   /* Nobody can see the editor: every preview holds its frame. */
   body.motion-paused * { animation-play-state: paused !important; }
@@ -961,6 +964,7 @@
 <div id="frame" data-view="rules">
   <div id="titlebar">
     <h1>Lights</h1>
+    <button class="btn ghost" id="back-settings" type="button" hidden>Back to Settings</button>
     <div class="seg view-seg" role="tablist" aria-label="View">
       <button id="view-rules" class="on" role="tab" aria-controls="rules right">Rules</button>
       <button id="view-stats" role="tab" aria-controls="stats">Stats</button>

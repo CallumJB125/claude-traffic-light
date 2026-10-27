@@ -603,7 +603,25 @@ function settingsPane(pane) {
   return (e) => fromUtilityPage(e, 'settings') || (pane !== 'none' && CHAT_PREVIEW === true && fromUtilityPage(e, `settings:${pane}`));
 }
 /** The pane document a sender is (preview only), or null for the old page and everyone else. */
-const settingsPaneOf = (e) => (CHAT_PREVIEW === true ? SettingsPanes.PANES.find((p) => fromUtilityPage(e, `settings:${p}`)) ?? null : null);
+const settingsPaneOf = (e) => (CHAT_PREVIEW === true ? SettingsPanes.OWNERS.find((p) => fromUtilityPage(e, `settings:${p}`)) ?? null : null);
+// R8-2b: the widget rules editor in the sheet (lights.html view=rules). rulesEditor is bound ONLY at the rules-editor channels
+// below; every other lights channel keeps widgetConfigSender (the Lights window), so the pane cannot reach them.
+const rulesPane = (e) => CHAT_PREVIEW === true && fromUtilityPage(e, `settings:${SettingsPanes.RULES_PANE}`);
+const rulesEditor = (e) => widgetConfigSender(e) || rulesPane(e);
+/** A push the Lights window gets, also to the rules pane (preview only; with the gate off nothing is sent). */
+function sendToRules(channel, ...args) { if (CHAT_PREVIEW === true) buddyWin?.sendToPage(`settings:${SettingsPanes.RULES_PANE}`, channel, ...args); }
+const sameValue = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+/** Keys of a rules-pane save it may not make: a key it does not own, or another pane's key that the named template does not imply. */
+function rulesRefusal(partial) {
+  if (!partial || typeof partial !== 'object' || Array.isArray(partial)) return ['(not an object)'];
+  const cross = SettingsPanes.crossKeys(partial);
+  const bad = Object.keys(partial).filter((k) => !cross.includes(k) && !SettingsPanes.writesAllowed(SettingsPanes.RULES_PANE, { [k]: partial[k] }));
+  if (!cross.length) return bad;
+  const prefs = typeof partial.__prefsFrom === 'string' ? Rules.templatePrefs(partial.__prefsFrom) : {};
+  const implied = (want, got) => (want && typeof want === 'object' ? !!got && typeof got === 'object' && Object.keys(want).every((k) => sameValue(want[k], got[k])) : sameValue(want, got));
+  for (const k of cross) if (!Object.prototype.hasOwnProperty.call(prefs, k) || !implied(prefs[k], partial[k])) bad.push(k);
+  return bad;
+}
 const settingsAnyPane = (e) => fromUtilityPage(e, 'settings') || settingsPaneOf(e) !== null;
 // O3: the Tasks helper's wrapped tasks that did real work, as session-shaped records with the scope a session in
 // that folder gets, handed to Buddy's automatic cards only.
@@ -1241,6 +1259,7 @@ function setMotionPaused(reason, on) { return widgetMotion.set(reason, !!on); }
 // rate; hidden, minimised or behind a locked screen that is pure waste.
 const lightsMotion = createMotionGate((paused) => {
   if (lightsWin && !lightsWin.isDestroyed()) { lightsWin.webContents.send('motion-paused', paused); syncBackgroundThrottling(lightsWin.webContents, paused); }
+  sendToRules('motion-paused', paused);
 });
 
 // Spend, GitHub and busy/Focus share one tick (src/away-feeds.js) that holds
@@ -1504,8 +1523,8 @@ function broadcastCharacters() {
 }
 function createHatchWindow() { openBuddy('hatch'); }
 const fromHatch = (e) => fromUtilityPage(e, 'hatch');
-utilityHandle('characters:list', e => widgetOnly(e) || widgetConfigSender(e) || fromHatch(e), () => characterStore.list().map((c) => c.character));
-ipcMain.handle('hatch:open', (e) => { if (widgetConfigSender(e)) createHatchWindow(); });
+utilityHandle('characters:list', e => widgetOnly(e) || rulesEditor(e) || fromHatch(e), () => characterStore.list().map((c) => c.character));
+ipcMain.handle('hatch:open', (e) => { if (rulesEditor(e)) createHatchWindow(); });
 ipcMain.handle('hatch:close', (e) => { if (fromHatch(e)) createLightsWindow(); });
 const HatchAi = require('./src/hatch-ai.js');
 const hatchAiBin = () => require('./src/claude-code-session.js').findClaudeBin();
@@ -1563,7 +1582,7 @@ ipcMain.handle('hatch:save', (e, token) => {
   }
 });
 ipcMain.handle('hatch:remove', (e, id) => {
-  if (!widgetConfigSender(e)) return false;
+  if (!rulesEditor(e)) return false;
   try { const ok = characterStore.remove(id); if (ok) broadcastCharacters(); return ok; } catch { return false; }
 });
 
@@ -1604,7 +1623,7 @@ const { fromPage } = require('./src/utility-pages.js');
 const fromUtilityPage = (e, id) => fromPage(e, buddyWin?.pageWebContents(id));
 const widgetConfigSender = (e) => fromPage(e, lightsWin?.webContents);
 const analyticsSender = (e) => fromUtilityPage(e, 'usage') || fromUtilityPage(e, 'stats');
-const configReader = (e) => widgetOnly(e) || widgetConfigSender(e) || settingsAnyPane(e) || analyticsSender(e);
+const configReader = (e) => widgetOnly(e) || rulesEditor(e) || settingsAnyPane(e) || analyticsSender(e);
 function utilityHandle(channel, allowed, handler) {
   ipcMain.handle(channel, (e, ...args) => allowed(e) ? handler(e, ...args) : null);
 }
@@ -2525,7 +2544,7 @@ let galleryService = null;
     profile: { get: () => loadConfig().galleryAuthor || null, set: (v) => saveConfig({ galleryAuthor: v }) },
     openExternal: (url) => shell.openExternal(url), clipboard, demo: () => Demo.active(), // privacy-flow: gallery-publish
   });
-  Publish.register({ ipcMain, allowed: (e) => tasksSenderOk(e) || widgetConfigSender(e) || fromUtilityPage(e, 'hatch'), publish });
+  Publish.register({ ipcMain, allowed: (e) => tasksSenderOk(e) || rulesEditor(e) || fromUtilityPage(e, 'hatch'), publish });
 }
 
 let lightsWin = null;
@@ -3404,6 +3423,7 @@ function broadcastStatus() {
   }
   try { keepAwakeMain?.sync(aggregateState().sessions); } catch { /* the blocker is best-effort */ }
   lightsWin?.webContents.send('status-changed');
+  sendToRules('status-changed');
   onboardingWin?.webContents.send('status-changed');
   for (const id of ['usage', 'stats', 'help', 'aitools']) buddyWin?.sendToPage(id, 'status-changed');
   try {
@@ -3980,7 +4000,7 @@ ipcMain.on('resize-window-by', (e, factor) => {
   resizeBy(factor);
 });
 
-utilityHandle('get-aggregate-status', e => widgetOnly(e) || widgetConfigSender(e), () => {
+utilityHandle('get-aggregate-status', e => widgetOnly(e) || rulesEditor(e), () => {
   const state = aggregateState();
   const facing = widgetMuzzle()?.facing || 'right';
   return { ...state, providerStatus: ProviderStatus.snapshot({ sessions: localSessions(state.sessions || []), online }), look: { ...state.look, facing } };
@@ -4035,12 +4055,14 @@ utilityHandle('get-config', configReader, (e) => { const pane = settingsPaneOf(e
 
 utilityHandle('save-config', e => settingsAnyPane(e) || widgetConfigSender(e), (e, partial) => {
   const pane = settingsPaneOf(e);
-  if (pane && !SettingsPanes.writesAllowed(pane, partial)) {
-    const bad = partial && typeof partial === 'object' ? Object.keys(partial).filter((k) => SettingsPanes.KEY_OWNER[k] !== pane) : [];
+  const rules = pane === SettingsPanes.RULES_PANE;
+  const rulesBad = rules ? rulesRefusal(partial) : [];
+  if (rules ? rulesBad.length : pane && !SettingsPanes.writesAllowed(pane, partial)) {
+    const bad = rules ? rulesBad : partial && typeof partial === 'object' ? Object.keys(partial).filter((k) => SettingsPanes.KEY_OWNER[k] !== pane) : [];
     console.warn(`[settings] pane ${pane} refused a write outside its keys: ${bad.slice(0, 8).join(', ') || '(not an object)'}`);
     return { error: 'Could not save: that setting is not on this page.' };
   }
-  try { return commitConfig(partial); } catch (err) {
+  try { const done = commitConfig(partial); return rules && done && !done.error ? SettingsPanes.readView(pane, done) : done; } catch (err) {
     console.warn('[save-config]', err.message);
     return { error: `Could not save: ${err.message}` };
   }
@@ -4063,6 +4085,7 @@ function commitConfig(partial) {
   // (template, preset, reset); a big content change counts too.
   const marker = partial.__backupReason;
   delete partial.__backupReason;
+  delete partial.__prefsFrom; // R8-2b: control field of the rules pane's template saves (checked in rulesRefusal), never stored
   if (Backups.needsBackup({
     prevRules: prev.rules, nextRules: Array.isArray(partial.rules) ? partial.rules.map(Rules.normalizeRule) : undefined,
     prevPresets: prev.presets, nextPresets: partial.presets, marker: typeof marker === 'string' ? marker : null,
@@ -4915,7 +4938,7 @@ ipcMain.handle('open-auto-rule', (e, from) => {
   showLightsView('auto', prefill ? { event: 'auto-rule-prefill', data: prefill } : null);
   return !!prefill;
 });
-ipcMain.handle('check-auto-rule', (e, rule) => (widgetConfigSender(e) ? { reason: AutoRules.refusal(rule) } : { reason: 'not allowed' }));
+ipcMain.handle('check-auto-rule', (e, rule) => (rulesEditor(e) ? { reason: AutoRules.refusal(rule) } : { reason: 'not allowed' }));
 
 // The attach command a detached session's open returned, by input id. The
 // renderer asks for it to be copied; it never supplies the text.
@@ -4955,7 +4978,7 @@ let strip = WidgetStrip.NONE;
 let applyingStrip = false;
 require('./src/widget-page.js').register({ utilityHandle, allowed: (e) => fromUtilityPage(e, 'widget'), loadConfig, commitConfig, widget: () => win, strip: () => strip, ensureWidget: () => { if (!win) createWindow(); applyWidgetVisibility(); }, resizeBy, busy: () => roamState.busy || !!gardenRun, stopGlide, saveBounds, screen, limits: { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }, openPage: (id) => { openBuddy(id); if (id === 'settings') buddyWin?.sendToPage('settings', 'show-section', 'widget'); }, platform: process.platform, composeShortcut: () => ComposeShortcut.view() });
 spendSafety = require('./src/spend-safety-main.js').install({ Notification, handle: utilityHandle, allowed: (e) => analyticsSender(e) || settingsPane('spend')(e), rootDir: ROOT_DIR, projectsDir: PROJECTS_DIR, home: os.homedir(), env: process.env, provider: () => require('./src/claude-carry.js').carryFor(process.env)?.resolve() ?? null, config: loadConfig, turns: () => getUsageTurns(), spend: () => spendSnapshot(loadConfig()), silent: IS_DEV_RUN, log: console.log });
-require('./src/rule-notify-main.js').install({ Notification, busy: () => BusyWatch.holding(), paused: (id) => spendSafety?.nudgesPaused(id), handle: utilityHandle, allowed: widgetConfigSender, config: loadConfig, sessions: () => aggregateState({ ignoreTravel: true }).sessions || [], env: () => { const c = loadConfig(); return { offline: !online, ...BusyWatch.env(), git: gitEvents(c), spend: spendSnapshot(c) }; }, log: console.log });
+require('./src/rule-notify-main.js').install({ Notification, busy: () => BusyWatch.holding(), paused: (id) => spendSafety?.nudgesPaused(id), handle: utilityHandle, allowed: rulesEditor, config: loadConfig, sessions: () => aggregateState({ ignoreTravel: true }).sessions || [], env: () => { const c = loadConfig(); return { offline: !online, ...BusyWatch.env(), git: gitEvents(c), spend: spendSnapshot(c) }; }, log: console.log });
 const WidgetPolish = require('./src/widget-polish-main.js').install({ ipcMain, globalShortcut, utilityHandle, config: loadConfig, commitConfig, widgetWindow: () => win, quiet: Quiet, widgetAllowed: (e) => widgetOnly(e), pageAllowed: (e) => fromUtilityPage(e, 'widget'), sessions: () => localSessions(aggregateState().sessions || []), strip: () => strip, saveBounds, stopGlide, screen, sizing: { aspect: WIDGET_ASPECT, minWidth: MIN_WIDTH }, log: console.log });
 const FirstRunTour = require('./src/first-run-tour-main.js').install({ ipcMain, config: loadConfig, saveConfig, setupOpen: () => !!onboardingWin, demo: Demo, hasConnectedTool: () => AiTools.quick().some((t) => t.connected), windows: { widget: () => win, widgetShown: () => !!win && !win.isDestroyed() && win.isVisible(), lights: () => lightsWin, openLights: () => createLightsWindow(), openPage: (id) => openBuddy(id), sendToPage: (id, ch, p) => !!buddyWin?.sendToPage(id, ch, p) }, allowed: { widget: (e) => widgetOnly(e), lights: (e) => fromPage(e, lightsWin?.webContents), page: (e, id) => fromUtilityPage(e, id) }, log: console.log });
 let updateRowShown = false;
@@ -5019,16 +5042,16 @@ function applyStrip(asking, away = false, update = false, budget = false) {
   ackStrip();
 }
 
-utilityHandle('preview-sound', widgetConfigSender, (e, name) => playSound(name));
+utilityHandle('preview-sound', rulesEditor, (e, name) => playSound(name));
 
-utilityHandle('export-rules', widgetConfigSender, async (e, rules) => {
+utilityHandle('export-rules', rulesEditor, async (e, rules) => {
   const r = await dialog.showSaveDialog(lightsWin || undefined, { title: 'Export rules', defaultPath: path.join(app.getPath('documents'), 'claude-traffic-light-rules.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return null;
   fs.writeFileSync(r.filePath, JSON.stringify(Rules.shareFile(rules || []), null, 2));
   return r.filePath;
 });
 
-utilityHandle('import-rules', widgetConfigSender, async () => {
+utilityHandle('import-rules', rulesEditor, async () => {
   const r = await dialog.showOpenDialog(lightsWin || undefined, { title: 'Import rules', properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePaths[0]) return null;
   try {
@@ -5458,7 +5481,7 @@ utilityHandle('health-copy-diagnostics', settingsPane('advanced'), () => {
   return { lines: text.split('\n').length - 1 };
 });
 
-utilityHandle('choose-sound-file', widgetConfigSender, async () => {
+utilityHandle('choose-sound-file', rulesEditor, async () => {
   const r = await dialog.showOpenDialog(lightsWin || undefined, {
     title: 'Choose a sound',
     properties: ['openFile'],
@@ -5467,8 +5490,8 @@ utilityHandle('choose-sound-file', widgetConfigSender, async () => {
   return r.canceled || !r.filePaths[0] ? null : `file:${r.filePaths[0]}`;
 });
 
-utilityHandle('cameos-list', widgetConfigSender, () => cameoListing());
-utilityHandle('cameos-choose-file', widgetConfigSender, async () => {
+utilityHandle('cameos-list', rulesEditor, () => cameoListing());
+utilityHandle('cameos-choose-file', rulesEditor, async () => {
   const r = await dialog.showOpenDialog(lightsWin || undefined, {
     title: 'Choose a photo',
     properties: ['openFile'],
@@ -5477,12 +5500,12 @@ utilityHandle('cameos-choose-file', widgetConfigSender, async () => {
   if (r.canceled || !r.filePaths[0]) return null;
   try { return Cameos.readSource(nativeImage, r.filePaths[0]); } catch (err) { return { error: err.message }; }
 });
-utilityHandle('cameos-add', widgetConfigSender, (_e, p) => {
+utilityHandle('cameos-add', rulesEditor, (_e, p) => {
   const res = Cameos.addPhoto({ dir: CAMEO_DIR, nativeImage, source: p?.source, rect: p?.rect, shape: p?.shape, name: p?.name, replace: p?.replace, eyes: p?.eyes, mouth: p?.mouth });
   if (res.error) return { error: res.error };
   return { id: res.id, list: cameosChanged() };
 });
-utilityHandle('cameos-remove', widgetConfigSender, (_e, id) => {
+utilityHandle('cameos-remove', rulesEditor, (_e, id) => {
   try {
     backupFirst();
     Cameos.removePhoto(CAMEO_DIR, String(id));
@@ -5536,7 +5559,7 @@ utilityHandle('reset-rules', widgetConfigSender, () => {
 
 // The Lights editor can push a look onto the real widget for a few seconds so
 // the user sees the rule in place, at size, in the corner it actually lives in.
-utilityHandle('preview-on-widget', widgetConfigSender, (e, look, ms = 4000) => {
+utilityHandle('preview-on-widget', rulesEditor, (e, look, ms = 4000) => {
   previewLook = { look, expiresAt: Date.now() + ms };
   win?.show();
   broadcastStatus();

@@ -3,7 +3,7 @@
 (() => {
   const api = window.lightsApi && window.lightsApi.limits ? window.lightsApi : null;
   const after = document.getElementById('usage-history');
-  if (!api || !after) return;
+  if (!api || !after || window.lightsRulesPane) return; // not in the Settings sheet's rules pane
   const sec = document.createElement('section');
   sec.id = 'usage-limits';
   sec.hidden = true;
