@@ -83,7 +83,7 @@
 
 /* Work scope (contract §C2): small and quiet; personal reads as a tag. */
 .ib-scope { flex: none; padding: 0 6px; border-radius: var(--radius-pill); font-size: 12px; font-weight: 600; white-space: nowrap; background: rgba(255, 255, 255, 0.07); color: var(--muted); max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
-.ib-scope.tone-count { background: rgba(218, 119, 86, 0.18); color: var(--accent); }
+.ib-scope.tone-count { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 .ib-scope.tone-personal { background: rgba(255, 255, 255, 0.12); color: var(--text); }
 .ib-scope-line { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
 .ib-scope-line .ib-scope { max-width: none; }

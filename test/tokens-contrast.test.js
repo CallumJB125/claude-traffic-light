@@ -196,6 +196,41 @@ test('tokens: the selected tint is the accent at 14 %', () => {
   }
 });
 
+// The old terracotta literals became accent washes at their original alpha. `color-mix(in srgb, var(--accent) N%,
+// transparent)` is the accent at alpha N %. The percentages are read from the files, so a change there is re-checked.
+const washPct = (file, re) => {
+  const m = fs.readFileSync(path.join(ROOT, file), 'utf8').match(re);
+  assert.ok(m, `${file}: wash rule not found`);
+  return Number(m[1]) / 100;
+};
+const wash = (theme, a) => ({ ...color(theme, '--accent'), a });
+
+test('tokens: accent text on the counting pill wash is at least 4.5:1 on every surface, in both themes', () => {
+  const a = washPct('input-bubble.css', /\.ib-scope\.tone-count \{ background: color-mix\(in srgb, var\(--accent\) (\d+)%, transparent\)/);
+  for (const theme of Object.keys(THEMES)) {
+    // The widget's bubble card (.ib-item, rgba(20, 20, 22, 0.94)) exists only in dark: index.html pins
+    // data-theme="dark". The Waiting page swaps the card for --panel (.ib-page .ib-item), so it sits on token surfaces.
+    const surfaces = ['--bg', '--panel', '--panel-2'].map((s) => [s, color(theme, s)]);
+    if (theme === 'dark') surfaces.unshift(['bubble card', over({ r: 20, g: 20, b: 22, a: 0.94 }, color(theme, '--bg'))]);
+    for (const [name, surface] of surfaces) {
+      const r = ratio(color(theme, '--accent'), over(wash(theme, a), surface));
+      assert.ok(r >= 4.5, `${theme} pill text on its wash over ${name} is ${r.toFixed(2)}:1`);
+    }
+  }
+});
+
+test('tokens: text on the Lights selection wash, and the primary label on hover, are at least 4.5:1 in both themes', () => {
+  const a = washPct('lights.html', /::selection \{ background: color-mix\(in srgb, var\(--accent\) (\d+)%, transparent\)/);
+  for (const theme of Object.keys(THEMES)) {
+    for (const bg of ['--bg', '--panel']) {
+      const r = ratio(color(theme, '--text'), over(wash(theme, a), color(theme, bg)));
+      assert.ok(r >= 4.5, `${theme} selected text over ${bg} is ${r.toFixed(2)}:1`);
+    }
+    const hover = ratio(color(theme, '--accent-ink'), color(theme, '--accent-hover'));
+    assert.ok(hover >= 4.5, `${theme} --accent-ink on --accent-hover is ${hover.toFixed(2)}:1`);
+  }
+});
+
 // R0b lifted dark `--idle` from #726c62 (2.66:1 on `--panel-2`) to #7c766b, same warm grey.
 test('tokens: status buckets are at least 3:1 on every surface', () => {
   for (const theme of Object.keys(THEMES)) {
