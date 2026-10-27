@@ -1,0 +1,14 @@
+{"dir":"c>k","type":1,"json":{"v":1,"op":"hello","id":1,"minor":0,"app":"terminal","version":"1.0.0"}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":1,"ok":true,"code":null,"text":"","welcome":{"minor":0,"keeper":{"version":"1.0.0","build":7},"role":"driver","caps":[]}}}
+{"dir":"c>k","type":1,"json":{"v":1,"op":"attach","id":2,"sessionId":"k1","cols":120,"rows":32}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":2,"ok":true,"code":null,"text":"","channel":1}}
+{"dir":"k>c","type":2,"channel":1,"b64":"ZWFybGllciBvdXRwdXQNCg=="}
+{"dir":"k>c","type":2,"channel":1,"b64":"G1s/MTA0OWwbWyFwG1tyG1sySg=="}
+{"dir":"k>c","type":2,"channel":1,"b64":"G1tIJCAbWz8yMDA0aA=="}
+{"dir":"k>c","type":1,"json":{"v":1,"ev":"handoff","channel":1}}
+{"dir":"c>k","type":2,"channel":1,"b64":"bHMN"}
+{"dir":"k>c","type":2,"channel":1,"b64":"bHMNClJFQURNRS5tZA0K"}
+{"dir":"c>k","type":1,"json":{"v":1,"op":"handoff","id":3,"channel":1}}
+{"dir":"c>k","type":1,"json":{"v":1,"op":"detach","id":4,"channel":1}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":3,"ok":true,"code":null,"text":""}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":4,"ok":true,"code":null,"text":""}}

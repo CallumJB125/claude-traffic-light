@@ -1,0 +1,2 @@
+{"dir":"c>k","type":1,"json":{"v":1,"op":"hello","id":1,"minor":0,"app":"plexiform","version":"0.9.0"}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":1,"ok":false,"code":"CLIENT_OUTDATED","text":"Plexiform needs an update to use this session keeper."}}

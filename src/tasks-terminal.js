@@ -17,6 +17,36 @@ const ghosttyDockLauncher = ({ detect = GhosttyDock.detect, run = GhosttyDock.ru
   const r = await run('open', [cwd, '--command', quote(file)], { dock: detect() });
   if (!r.ok) throw new Error(r.reason || 'Ghostty Dock did not open the tab');
 };
+// The launcher for each app terminalApp() can name (plan-agent-terminal PR 0s).
+// Terminal is launchTaskTerminal's own default, the same function; T3 adds
+// 'plexiform'. Ghostty Dock is built per launch, as main built it before.
+const launchers = Object.freeze({ Terminal: () => openTerminal, 'Ghostty Dock': () => ghosttyDockLauncher() });
+function launcherFor(app) {
+  if (!Object.hasOwn(launchers, app)) throw Object.assign(new Error(`No launcher for ${String(app).slice(0, 40)}.`), { code: 'CAPABILITY_MISSING' });
+  return launchers[app]();
+}
+
+// "Has this person used take-over before" for T3's upgrade migration
+// (§R3.10 m3): the last time, stamped each time the launch was requested, which is exactly when
+// tasks:open-terminal returns OK. Machine state, not a setting, so it lives
+// beside config.json and Backups (an allow-list) never copies or restores it.
+// A failed write never changes the launch result.
+const STATE_FILE = 'terminal-state.json';
+function stampTakeover(result, dataDir, now = Date.now) {
+  if (result?.status !== 'requested') return result;
+  try {
+    const file = path.join(dataDir, STATE_FILE), tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ takeoverUsedAt: now() }) + '\n', { mode: 0o600 });
+    try { fs.renameSync(tmp, file); } catch (e) { fs.rmSync(tmp, { force: true }); throw e; }
+  } catch { /* the stamp is a hint for a later migration, never a reason to fail */ }
+  return result;
+}
+function takeoverUsedAt(dataDir) {
+  try {
+    const v = JSON.parse(fs.readFileSync(path.join(dataDir, STATE_FILE), 'utf8')).takeoverUsedAt;
+    return Number.isSafeInteger(v) && v >= 0 ? v : null;
+  } catch { return null; }
+}
 
 async function launchTaskTerminal(descriptor, { current = () => true, platform = process.platform, launch = openTerminal, resolve = resolveBin, tempDir = os.tmpdir() } = {}) {
   if (platform !== 'darwin') throw Object.assign(new Error('Automatic terminal launch is available on macOS.'), { code: 'CAPABILITY_MISSING' });
@@ -50,4 +80,4 @@ async function launchTaskTerminal(descriptor, { current = () => true, platform =
   }
 }
 
-module.exports = { launchTaskTerminal, ghosttyDockLauncher };
+module.exports = { launchTaskTerminal, ghosttyDockLauncher, launcherFor, stampTakeover, takeoverUsedAt, STATE_FILE };

@@ -1,0 +1,8 @@
+{"dir":"c>k","type":1,"json":{"v":1,"op":"hello","id":1,"minor":0,"app":"terminal","version":"1.0.0"}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":1,"ok":true,"code":null,"text":"","welcome":{"minor":0,"keeper":{"version":"1.0.0","build":7},"role":"driver","caps":[]}}}
+{"dir":"c>k","type":1,"json":{"v":1,"op":"attach","id":2,"sessionId":"k1","cols":120,"rows":32}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":2,"ok":true,"code":null,"text":"","channel":1}}
+{"dir":"k>c","type":1,"json":{"v":1,"ev":"resync","channel":1}}
+{"dir":"k>c","type":1,"json":{"v":1,"ev":"detached","channel":1,"reason":"resync"}}
+{"dir":"c>k","type":1,"json":{"v":1,"op":"attach","id":3,"sessionId":"k1","cols":120,"rows":32}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":3,"ok":true,"code":null,"text":"","channel":2}}
