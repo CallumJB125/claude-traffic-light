@@ -268,3 +268,45 @@ test('a quiet task keeps its last activity: the move into quiet is not activity'
   h.api.onChange({ conn: { status: 'connected' }, tasks: [{ id: 't1', state: 'quiet', stateSinceMs: clock, lastActivityMs: lastEvent + 5000 }] });
   assert.equal(h.wc.sent.filter(([ch]) => ch === 'compose:task').at(-1)[1].row.lastActivityMs, lastEvent + 5000);
 });
+
+// ── Sessions' "Start": a prompt left for Home's box, handed over once, never run ──
+const offer = (h, over = {}) => h.api.offerDraft({ dir: '/Users/demo/app', ai: 'claude', text: 'fix the bug', ...over });
+
+test('draft: offered by Sessions, handed once to Home\u2019s info with a folder handle, tells the page to look, starts nothing', async () => {
+  const h = harness();
+  assert.deepEqual(offer(h), { ok: true });
+  assert.deepEqual(h.wc.sent.map((x) => x[0]), ['compose:changed']);
+  const info = await h.call('compose:info');
+  assert.deepEqual(info.draft, { text: 'fix the bug', folder: { handle: 'h:/Users/demo/app', label: '/Users/demo/app' }, ai: 'claude' });
+  assert.equal((await h.call('compose:info')).draft, null, 'handed over once');
+  assert.equal(h.calls.create.length + h.calls.act.length, 0);
+});
+test('draft: another page or a subframe never receives it; it waits for Home', async () => {
+  const h = harness(); offer(h);
+  const other = { id: 9, mainFrame: {}, isDestroyed: () => false };
+  assert.equal(await h.handlers.get('compose:info')({ sender: other, senderFrame: other.mainFrame }), null);
+  assert.equal(await h.handlers.get('compose:info')({ sender: h.wc, senderFrame: {} }), null);
+  assert.equal((await h.call('compose:info')).draft.text, 'fix the bug');
+});
+test('draft: a stale, cross-workspace, missing-folder or unusable-AI draft is dropped or downgraded', async () => {
+  let t = 1000;
+  const h = harness({ now: () => t }); offer(h); t += 61_000;
+  assert.equal((await h.call('compose:info')).draft, null, 'expired after 60 s');
+  const w = harness(); offer(w); w.st.workspace = 'w2';
+  assert.equal((await w.call('compose:info')).draft, null, 'workspace switched');
+  const m = harness({ missing: ['/Users/demo/app'] }); offer(m);
+  assert.equal((await m.call('compose:info')).draft, null, 'folder gone');
+  const u = harness(); offer(u, { ai: 'codex' });
+  assert.equal((await u.call('compose:info')).draft.ai, 'auto', 'codex is not usable here');
+});
+test('draft: refused when the box is off, Home is showing a task, or this is the new chat; a newer offer replaces an unread one', async () => {
+  const off = harness(); off.st.hidden = true; assert.deepEqual(offer(off), { ok: false, why: 'off' });
+  const busy = harness();
+  const key = await peersKey(busy);
+  assert.equal((await busy.call('compose:run', draft({ peersKey: key }))).ok, true);
+  assert.deepEqual(offer(busy), { ok: false, why: 'busy' });
+  const c = Compose.createCompose({ ipcMain: { handle() {} }, buddy: () => null, service: () => ({}), config: () => ({}), isDir: async () => true, sessions: () => [] }, { draftable: false });
+  assert.deepEqual(c.offerDraft({ dir: '/x', ai: 'claude', text: 'a' }), { ok: false, why: 'off' });
+  const h = harness(); offer(h, { text: 'first' }); offer(h, { text: 'second' });
+  assert.equal((await h.call('compose:info')).draft.text, 'second');
+});

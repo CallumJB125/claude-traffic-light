@@ -14,14 +14,15 @@ const row = (over = {}) => ({ source: 'codex', sessionId: 's1', cwd: CWD, ...ove
 function rig(over = {}) {
   const dir = testTempDir('sact-');
   const links = Links.create({ file: path.join(dir, 'l.json') });
-  const log = { clip: [], pages: [], linked: [], created: [], captured: [] };
+  const log = { clip: [], pages: [], linked: [], created: [], captured: [], offered: [] };
   const a = Actions.create({
     sessions: () => [row()], repoOf: async () => 'github.com/org/app', rootOf: async (c) => c,
     boards: { boards: async () => [{ key: 'local', label: 'My board', kind: 'local' }], linkRepo: async (b, c) => { log.linked.push([b, c]); return { ok: true }; },
       captureKey: async (b) => (b === 'unlinked' ? null : b), searchCards: async () => [{ card_id: 'c1', card_key: 'APP-1', title: 'Fix it', board: 'My board', boardKey: 'local' }], destinationOf: () => ({ kind: 'local' }) },
     capture: { captureOnce: async (r, k) => { log.captured.push(k); return { ok: true, card_id: 'x' }; } }, links,
-    tasks: () => ({ composerInfo: async () => ({ ais: [{ id: 'claude', label: 'Claude', installed: true, loggedIn: true }, { id: 'codex', label: 'Codex', installed: false, loggedIn: null }] }),
-      registerFolder: (p) => ({ handle: `h:${p}` }), create: async (d) => { log.created.push(d); return { ok: true, id: 't' }; } }),
+    tasks: () => ({ composerInfo: async () => ({ ais: [{ id: 'claude', label: 'Claude', installed: true, loggedIn: true, capabilities: { background: true } }, { id: 'codex', label: 'Codex', installed: false, loggedIn: null, capabilities: { background: false } }, { id: 'gemini', label: 'Gemini', installed: true, loggedIn: null, capabilities: { background: false } }] }),
+      registerFolder: (p) => ({ handle: `h:${p}` }), create: async (d) => { log.created.push(d); throw new Error('Sessions must never create a task'); } }),
+    offerDraft: (d) => { log.offered.push(d); return { ok: true }; },
     clipboard: { writeText: (t) => log.clip.push(t) }, pickFolder: async () => '/Users/me/other', openPage: (id) => log.pages.push(id), ...over,
   });
   return { a, log, links };
@@ -46,15 +47,33 @@ test('link repo without a git remote says so and calls nothing', async () => {
   const { a, log } = rig({ repoOf: async () => null }); const s = await a.setup();
   const r = await a.linkRepo({ folder: s.repos[0].handle, board: 'local' }); assert.equal(r.ok, false); assert.equal(log.linked.length, 0);
 });
-test('start session: prompt launches via the tasks launcher in a terminal tab; no prompt or no launcher copies the command', async () => {
+test('start session: a prompt goes to Home\u2019s box for the person to Run; nothing is created, nothing is copied', async () => {
   const { a, log } = rig(); const s = await a.setup(); const f = s.repos[0].handle;
-  let r = await a.startSession({ folder: f, ai: 'claude', prompt: 'fix the bug' });
-  assert.equal(r.ok, true); assert.equal(log.created[0].surface, 'tab'); assert.equal(log.created[0].text, 'fix the bug'); assert.equal(log.clip.length, 0);
-  r = await a.startSession({ folder: f, ai: 'claude', prompt: '' });
-  assert.equal(r.copied, true); assert.equal(log.clip[0], `cd '${CWD}' && claude`); assert.match(r.text, /copied/);
-  r = await a.startSession({ folder: f, ai: 'cursor', prompt: 'x' }); assert.equal(r.ok, false);
-  const down = rig({ tasks: () => ({ composerInfo: async () => ({ ais: [] }), registerFolder: () => ({ handle: 'h' }), create: async () => ({ ok: false }) }) });
-  r = await down.a.startSession({ folder: (await down.a.setup()).repos[0].handle, ai: 'codex', prompt: 'x' }); assert.equal(r.copied, true);
+  const r = await a.startSession({ folder: f, ai: 'claude', prompt: '  fix the bug ' });
+  assert.equal(r.ok, true); assert.equal(r.copied, undefined);
+  assert.deepEqual(log.offered, [{ dir: CWD, ai: 'claude', text: 'fix the bug' }]);
+  assert.deepEqual(log.pages, ['home']); assert.equal(log.clip.length, 0); assert.equal(log.created.length, 0);
+  assert.match(r.text, /Press Run/); assert.match(r.text, /background task/);
+});
+test('start session: the command is copied only when nothing can be handed over, always before anything is attempted', async () => {
+  const cases = [
+    ['no prompt', {}, { ai: 'claude', prompt: '' }, /first prompt/],
+    ['AI that Tasks cannot run', {}, { ai: 'gemini', prompt: 'x' }, /can’t run gemini as a task/],
+    ['AI not installed', {}, { ai: 'codex', prompt: 'x' }, /can’t run codex as a task/],
+    ['task runner down', { tasks: () => ({ composerInfo: async () => { throw new Error('down'); } }) }, { ai: 'claude', prompt: 'x' }, /can’t run claude as a task/],
+    ['task runner not connected', { tasks: () => ({ composerInfo: async () => ({ ais: [] }) }) }, { ai: 'claude', prompt: 'x' }, /can’t run claude as a task/],
+    ['Home busy', { offerDraft: () => ({ ok: false, why: 'busy' }) }, { ai: 'claude', prompt: 'x' }, /already showing a task/],
+    ['chat-first view', { offerDraft: () => ({ ok: false, why: 'gate' }) }, { ai: 'claude', prompt: 'x' }, /not in this view/],
+    ['Home box off', { offerDraft: () => ({ ok: false, why: 'off' }) }, { ai: 'claude', prompt: 'x' }, /not available/],
+  ];
+  for (const [name, over, req, re] of cases) {
+    const { a, log } = rig({ wait: 0, ...over }); const f = (await a.setup()).repos[0].handle;
+    const r = await a.startSession({ folder: f, ...req });
+    assert.equal(r.copied, true, name); assert.match(r.text, re, name);
+    assert.deepEqual(log.clip, [`cd '${CWD}' && ${req.ai}`], name); assert.equal(log.pages.length, 0, name); assert.equal(log.created.length, 0, name);
+  }
+  const { a, log } = rig(); const f = (await a.setup()).repos[0].handle;
+  const r = await a.startSession({ folder: f, ai: 'cursor', prompt: 'x' }); assert.equal(r.ok, false); assert.equal(log.clip.length, 0);
 });
 test('make a card: needs the repo linked to a team board, dedupes against an attachment', async () => {
   const { a, log, links } = rig(); const handle = a.rowInfo(row()).handle;
