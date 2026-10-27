@@ -62,12 +62,19 @@ function controls() {
     old: image((x, y) => (box(x, y, 10, 10, 50, 30) ? DO : L)), new: image((x, y) => (box(x, y, 10, 10, 50, 30) ? DN : L)) });
   out.push({ name: 'unthemed light image with a light accent swap', theme: 'infer', baseline: 'controls/unthemed-darwin.png', expect: 'pass',
     old: image((x, y) => (box(x, y, 10, 10, 50, 30) ? hex(THEMES.light.accentOld) : L)), new: image((x, y) => (box(x, y, 10, 10, 50, 30) ? hex(THEMES.light.accentNew) : L)) });
+  // (c′) the name says light but the image is dark: even a correct dark swap must fail (disagreement fails closed)
+  const DB = hex(THEMES.dark.bg);
+  out.push({ name: 'name says light, image is dark', theme: 'infer', baseline: 'controls/menu-light-darwin.png', expect: 'fail',
+    old: image((x, y) => (box(x, y, 10, 10, 50, 30) ? DO : DB)), new: image((x, y) => (box(x, y, 10, 10, 50, 30) ? DN : DB)) });
+  // a mixed image (light page, dark panel, about half each) is ambiguous and fails closed
+  out.push({ name: 'mixed light and dark image', theme: 'infer', baseline: 'controls/mixed-darwin.png', expect: 'fail',
+    old: image((x, y) => (box(x, y, 20, 18, 28, 26) ? DO : x < 32 ? DB : L)), new: image((x, y) => (box(x, y, 20, 18, 28, 26) ? DN : x < 32 ? DB : L)) });
   return out;
 }
 
 // Runs one control through the classifier and the gate. Returns { failed, result }.
 function judgeControl(c, families) {
-  const fam = c.theme === 'infer' ? lib.familiesFor(families, c.baseline, c.old) : families[c.theme];
+  const fam = c.theme === 'infer' ? lib.familiesFor(families, c.baseline, c.old, c.new) : families[c.theme];
   const result = lib.classifyImage(c.old, c.new, fam);
   const verdict = lib.verdictOf([{ baseline: `controls/${c.name}.png`, ...result }]);
   return { failed: verdict.failures.length > 0, result };

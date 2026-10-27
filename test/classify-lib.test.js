@@ -145,15 +145,15 @@ test('classifier (c): the theme comes from the file name and picks that theme\'s
   assert.equal(lib.themeOf('x/light-dark.png'), 'both');
   assert.equal(lib.themeOf('x/widget-ask-long-command-darwin.png'), 'both');
   assert.equal(lib.themeOf('x/darkroom-darwin.png'), 'both');
-  assert.equal(lib.familiesFor(ALL, 'x/a-dark-darwin.png'), ALL.dark);
-  assert.equal(lib.familiesFor(ALL, 'x/a-darwin.png'), ALL.none, 'no theme and no image: fail closed, never pooled');
+  assert.equal(lib.familiesFor(ALL, 'x/a-dark-darwin.png', image(4, 4, () => hex('#202329'))), ALL.dark);
+  assert.equal(lib.familiesFor(ALL, 'x/a-darwin.png'), ALL.none, 'no image: fail closed, never pooled');
   assert.deepEqual(ALL.light.surfaces.map((c) => c.join()), ['244,245,247', '255,255,255', '238,240,243']);
   assert.deepEqual(ALL.dark.surfaces.map((c) => c.join()), ['23,25,29', '32,35,41', '41,45,52']);
   // the old dark accent turning into the new dark accent passes in a dark baseline but is a theme mix-up in a light one
   const oldImg = image(4, 4, () => hex('#e49a78'));
   const newImg = image(4, 4, () => hex('#e6e8eb'));
-  assert.equal(lib.classifyImage(oldImg, newImg, lib.familiesFor(ALL, 'x/a-dark-darwin.png')).pass, 16);
-  assert.equal(lib.classifyImage(oldImg, newImg, lib.familiesFor(ALL, 'x/a-light-darwin.png')).unexpected, 16);
+  assert.equal(lib.classifyImage(oldImg, newImg, ALL.dark).pass, 16);
+  assert.equal(lib.classifyImage(oldImg, newImg, ALL.light).unexpected, 16);
 });
 
 test('classifier (d): it runs when the branch\'s expected file starts with `# classify`', () => {
@@ -294,16 +294,23 @@ test('classifier (iii): an unresolved color-mix fails closed: it builds no membe
   assert.equal(lib.classifyImage(fill(o), fill(n), resolved.dark).unexpected, 0);
 });
 
-test('classifier (c′): an unthemed baseline takes its theme from the base image; ambiguous or contradicted fails closed', () => {
+test('classifier (c′): the theme comes from the unchanged pixels\' lightness; mixed or contradicted fails closed', () => {
   const L = hex('#eef0f3'); const D = hex('#292d34');
   const split = (shareLight) => image(20, 20, (x) => (x < 20 * shareLight ? L : D));
-  const t = (name, img) => { const r = lib.themeFor(ALL, name, img); return [r.theme, r.source]; };
+  const t = (name, img, head) => { const r = lib.themeFor(ALL, name, img, head); return [r.theme, r.source]; };
   assert.deepEqual(t('x/menu-darwin.png', split(0.9)), ['light', 'image']);
   assert.deepEqual(t('x/menu-darwin.png', split(0.2)), ['dark', 'image']);
   assert.deepEqual(t('x/menu-darwin.png', split(0.6)), ['none', 'ambiguous']);
-  assert.deepEqual(t('x/menu-darwin.png', image(4, 4, () => hex('#ff00ff'))), ['none', 'ambiguous']);
-  assert.deepEqual(t('x/menu-dark-darwin.png', split(0.2)), ['dark', 'name']);
+  // native chrome that is no surface token still votes: a #c3c3c3 menu is light
+  assert.deepEqual(t('x/menu-darwin.png', image(10, 10, () => [195, 195, 195])), ['light', 'image']);
+  assert.deepEqual(t('x/menu-darwin.png', image(4, 4, () => [119, 119, 119])), ['none', 'ambiguous']);
+  assert.deepEqual(t('x/menu-dark-darwin.png', split(0.2)), ['dark', 'name+image']);
   assert.deepEqual(t('x/menu-dark-darwin.png', split(0.9)), ['none', 'mismatch (name dark, image light)']);
+  assert.deepEqual(t('x/menu-light-darwin.png', split(0.6)), ['none', 'ambiguous']);
+  assert.deepEqual(t('x/menu-light-darwin.png'), ['none', 'no image']);
+  // only unchanged pixels vote: a light page whose dark half changed is still light
+  const head = image(20, 20, (x) => (x < 12 ? L : [60, 60, 60]));
+  assert.deepEqual(t('x/menu-darwin.png', split(0.6), head), ['light', 'image']);
   assert.equal(lib.familiesFor(ALL, 'x/menu-darwin.png', split(0.6)), ALL.none);
   assert.equal(lib.THEME_DOMINANCE, 0.7);
   // fail closed: with `none`, an otherwise perfect accent swap is all unexpected

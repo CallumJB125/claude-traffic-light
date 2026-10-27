@@ -23,7 +23,8 @@
 //       absorbed and a low-contrast change can't hide in it unseen.
 //   (b) A baseline that exists on only one side (added or removed) fails the gate: an accent flip renames nothing.
 //   (c) The surface fallback and the families are picked by theme from the file name (-dark- / -light-); a name
-//       with neither is themed from the base image (c′, themeFor). Never pooled; ambiguous fails closed.
+//       with neither is themed from the base image (c′, themeFor); a name is checked against the image. Never
+//       pooled; a mixed image or a disagreement fails closed.
 //   (d) classify.spec.js runs on its own when the branch's test-visual/expected/<branch>.txt starts `# classify`.
 // R0b extensions and tightening (lead conditions; §R4.4): (i) surfaces as neutrals as well as the local N;
 // (ii) text over the soft tint; (iii) accent color-mix() rules parsed from the stylesheets; members that don't
@@ -336,43 +337,42 @@ function themeOf(baseline) {
   const dark = /(^|-)dark(-|\.png$)/.test(name); const light = /(^|-)light(-|\.png$)/.test(name);
   return dark === light ? 'both' : dark ? 'dark' : 'light';
 }
-// (c′) Which theme a baseline was rendered in. The file name decides when it says -dark- or -light-; otherwise
-// the base image does: the share of its opaque pixels within ΔE00 1 of each theme's surface tokens. The winner
-// must hold at least 70 % of the surface-matched pixels. Fail closed, never pool: an ambiguous image, or a name
-// that the image contradicts, gets no members at all (`none`), so its changed pixels are unexpected. The head
-// image uses the base image's theme.
+// (c′) Which theme a baseline was rendered in, from the image itself (review refinements):
+//   - the pixels that did NOT change between base and head (opaque) vote by lightness: L* ≥ 60 light,
+//     L* ≤ 40 dark, the middle abstains. Native chrome (#c3c3c3 menus, scrollbars) votes too, which exact
+//     surface-token hits would miss;
+//   - the winner needs ≥ 70 % of the votes. Otherwise the image is mixed (a light page with a dark widget, a dark
+//     tooltip in a light shot) and fails closed: no members (`none`), never pooled;
+//   - a -dark-/-light- file name is checked against the image, and a disagreement fails closed too.
+// The head image uses the same theme.
 const THEME_DOMINANCE = 0.7;
-function surfaceCoverage(img, families) {
-  const cover = { light: 0, dark: 0 };
+const L_LIGHT = 60; const L_DARK = 40;
+function lightnessVotes(baseImg, headImg) {
+  const votes = { light: 0, dark: 0 };
   const cache = new Map();
-  const D = img.data;
-  for (let j = 0; j < D.length; j += 4) {
-    if (D[j + 3] !== 255) continue;
-    const key = (D[j] << 16) | (D[j + 1] << 8) | D[j + 2];
-    let hit = cache.get(key);
-    if (hit === undefined) {
-      const L = lab([D[j], D[j + 1], D[j + 2]]);
-      hit = ['light', 'dark'].find((t) => families[t].surfaces.some((s) => deltaE00(L, lab(s)) <= DE_NOISE)) || '';
-      cache.set(key, hit);
-    }
-    if (hit) cover[hit] += 1;
+  const A = baseImg.data; const B = headImg && headImg.data.length === A.length ? headImg.data : null;
+  for (let j = 0; j < A.length; j += 4) {
+    if (A[j + 3] !== 255) continue;
+    if (B && (A[j] !== B[j] || A[j + 1] !== B[j + 1] || A[j + 2] !== B[j + 2] || B[j + 3] !== 255)) continue;
+    const key = (A[j] << 16) | (A[j + 1] << 8) | A[j + 2];
+    let v = cache.get(key);
+    if (v === undefined) { const L = lab([A[j], A[j + 1], A[j + 2]])[0]; v = L >= L_LIGHT ? 'light' : L <= L_DARK ? 'dark' : ''; cache.set(key, v); }
+    if (v) votes[v] += 1;
   }
-  return cover;
+  return votes;
 }
-function themeFor(families, baseline, baseImg) {
+function themeFor(families, baseline, baseImg, headImg) {
   const named = themeOf(baseline);
-  const cover = baseImg ? surfaceCoverage(baseImg, families) : { light: 0, dark: 0 };
-  const sum = cover.light + cover.dark;
-  const inferred = !sum ? null : cover.light / sum >= THEME_DOMINANCE ? 'light' : cover.dark / sum >= THEME_DOMINANCE ? 'dark' : null;
-  const share = sum ? +(Math.max(cover.light, cover.dark) / sum).toFixed(3) : 0;
-  if (named !== 'both') {
-    if (baseImg && inferred && inferred !== named) return { theme: 'none', source: `mismatch (name ${named}, image ${inferred})`, coverage: cover, share, families: families.none };
-    return { theme: named, source: 'name', coverage: cover, share, families: families[named] };
-  }
-  if (!inferred) return { theme: 'none', source: 'ambiguous', coverage: cover, share, families: families.none };
-  return { theme: inferred, source: 'image', coverage: cover, share, families: families[inferred] };
+  if (!baseImg) return { theme: 'none', source: 'no image', coverage: null, share: 0, families: families.none };
+  const votes = lightnessVotes(baseImg, headImg);
+  const sum = votes.light + votes.dark;
+  const share = sum ? +(Math.max(votes.light, votes.dark) / sum).toFixed(3) : 0;
+  const inferred = !sum ? null : votes.light / sum >= THEME_DOMINANCE ? 'light' : votes.dark / sum >= THEME_DOMINANCE ? 'dark' : null;
+  if (!inferred) return { theme: 'none', source: 'ambiguous', coverage: votes, share, families: families.none };
+  if (named !== 'both' && named !== inferred) return { theme: 'none', source: `mismatch (name ${named}, image ${inferred})`, coverage: votes, share, families: families.none };
+  return { theme: inferred, source: named === 'both' ? 'image' : 'name+image', coverage: votes, share, families: families[inferred] };
 }
-const familiesFor = (families, baseline, baseImg) => themeFor(families, baseline, baseImg).families;
+const familiesFor = (families, baseline, baseImg, headImg) => themeFor(families, baseline, baseImg, headImg).families;
 
 // (d) The expected-list file for a branch, and whether it asks for the classifier (first line `# classify`).
 const expectedFileFor = (branch) => `test-visual/expected/${String(branch).trim().replace(/\//g, '-')}.txt`;
@@ -569,4 +569,4 @@ function verdictOf(results) {
   return { failures, crops };
 }
 
-module.exports = { NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, surfaceCoverage, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
+module.exports = { NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
