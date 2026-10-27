@@ -83,7 +83,7 @@ test('a pane guard accepts the old page and that ONE pane (preview), never anoth
     assert.equal(ok(from(`settings:${pane}`)), true);
     assert.equal(ok(from(`settings:${pane}`, false)), false, 'subframe');
     for (const other of SP.PANES.filter((p) => p !== pane)) assert.equal(ok(from(`settings:${other}`)), false, `${other} cannot use ${pane}'s channels`);
-    for (const id of ['home', 'lights', 'usage', 'settings:projects', 'settings:*', 'sessions', undefined]) assert.equal(ok(from(id)), false, String(id));
+    for (const id of ['home', 'lights', 'usage', 'settings:nope', 'settings:*', 'sessions', undefined]) assert.equal(ok(from(id)), false, String(id));
   }
   const none = g.settingsPane('none');
   assert.equal(none(from('settings')), true);
@@ -109,7 +109,7 @@ test('main.js: no unbound settingsOnly(...) guard is left, and guards never read
   assert.doesNotMatch(helper, /searchParams|location|\.query|\.url/, 'authority is the page id main created, not anything the page sent');
   assert.doesNotMatch(mainSrc, /settingsPane\(\s*['"`]?\*|settings:\*/, 'no generic settings:* predicate');
   // Each wiring site names exactly one pane (a variable would let one site go generic).
-  for (const m of mainSrc.matchAll(/settingsPane\(([^)]*)\)/g)) assert.match(m[1], /^'(general|notifications|aitools|widget|spend|privacy|phone|advanced|none)'$|^pane$/, m[0]);
+  for (const m of mainSrc.matchAll(/settingsPane\(([^)]*)\)/g)) assert.match(m[1], /^'(general|notifications|aitools|projects|terminal|widget|spend|privacy|phone|agent-messages|advanced|none)'$|^pane$/, m[0]);
 });
 
 test('every guarded channel is bound to the pane its table row names', () => {
@@ -127,9 +127,9 @@ test('every guarded channel is bound to the pane its table row names', () => {
   const bound = [
     [/data-rights-main\.js'\)\.register\(\{ utilityHandle, allowed: settingsPane\('privacy'\)/, 'data:*'],
     [/spend-safety-main\.js'\)\.install\(\{[^\n]*allowed: \(e\) => analyticsSender\(e\) \|\| settingsPane\('spend'\)\(e\)/, 'spend-safety:*'],
-    [/deploy-status-main\.js'\)\.install\(\{[^\n]*allowedSettings: settingsPane\('advanced'\)/, 'deploy:*'],
+    [/deploy-status-main\.js'\)\.install\(\{[^\n]*allowedSettings: settingsPane\('projects'\)/, 'deploy:*'],
     [/cli-install\.js'\)\.register\(\{ utilityHandle, allowed: settingsPane\('general'\)/, 'cli-install*'],
-    [/GhosttyDockInstall\.register\(\{ utilityHandle, allowed: \(e\) => settingsPane\('aitools'\)\(e\) \|\| fromUtilityPage\(e, 'home'\)/, 'ghostty-dock-install'],
+    [/GhosttyDockInstall\.register\(\{ utilityHandle, allowed: \(e\) => settingsPane\('terminal'\)\(e\) \|\| fromUtilityPage\(e, 'home'\)/, 'ghostty-dock-install'],
     [/const fromNativeBoardSettings = settingsPane\('aitools'\);/, 'native-board-*'],
     [/const backupsSenderOk = settingsPane\('privacy'\);/, 'backups-*'],
     [/settingsAllowed: settingsPane\('privacy'\)/, 'policy:*'],
@@ -138,7 +138,7 @@ test('every guarded channel is bound to the pane its table row names', () => {
   ];
   for (const [re, what] of bound) assert.match(mainSrc, re, what);
   assert.equal(SP.CHANNEL_PANE['policy:state'], 'privacy');
-  assert.equal(SP.CHANNEL_PANE['deploy:settings'], 'advanced');
+  assert.equal(SP.CHANNEL_PANE['deploy:settings'], 'projects');
   assert.equal(SP.CHANNEL_PANE['spend-safety:get'], 'spend');
 });
 
@@ -257,7 +257,7 @@ test('settings:go-pane: pane senders only, a closed list of six ids, nothing els
   const g = goPane();
   g.go(g.evMain('general'), 'spend');
   assert.deepEqual(g.selected, ['settings:spend']);
-  for (const bad of ['nope', 'settings', 'home', '../x', 'settings:spend', '', null, undefined, 5, {}, ['spend'], '__proto__', 'projects']) g.go(g.evMain('general'), bad);
+  for (const bad of ['nope', 'settings', 'home', '../x', 'settings:spend', '', null, undefined, 5, {}, ['spend'], '__proto__', 'accounts']) g.go(g.evMain('general'), bad);
   assert.deepEqual(g.selected, ['settings:spend'], 'only the closed list');
   g.go({ sender: {}, senderFrame: {} }, 'widget');
   g.go({ sender: g.views.get('settings:general').webContents, senderFrame: { url: 'file:///settings.html' } }, 'widget');
@@ -449,7 +449,7 @@ const SECTION_TABLE = {
   Spend: 'spend', 'Runaway sessions': 'spend',
   Privacy: 'privacy', 'Crash reports': 'privacy', Policies: 'privacy', Backups: 'privacy',
   'Sharing and remote control': 'phone', 'Remote devices': 'phone',
-  Health: 'advanced', 'Git and CI': 'advanced', 'Agent bus': 'advanced',
+  Health: 'advanced', 'Git and CI': 'projects', 'Agent bus': 'agent-messages', 'Ghostty Dock': 'terminal',
 };
 
 function settingsDoc() { return new JSDOM(read('settings.html')).window.document; }
@@ -461,7 +461,7 @@ test('every top-level element of every pane carries a data-pane, each section is
   for (const el of doc.querySelectorAll('.pane > *')) {
     const pane = el.dataset.pane;
     assert.ok(pane === 'none' || SP.isPane(pane), `${el.tagName}#${el.id} has no valid data-pane (${pane})`);
-    const name = el.tagName === 'H2' ? el.textContent.trim() : el.id === 'crash-reports' ? 'Crash reports' : el.id === 'policies' ? 'Policies' : el.id === 'backups' ? 'Backups' : el.id === 'health' ? 'Health' : null;
+    const name = el.tagName === 'H2' ? el.textContent.trim() : el.id === 'crash-reports' ? 'Crash reports' : el.id === 'policies' ? 'Policies' : el.id === 'backups' ? 'Backups' : el.id === 'health' ? 'Health' : el.querySelector('#ghosttyDock') ? 'Ghostty Dock' : null;
     if (name) { section = name; seen.set(name, new Set()); }
     assert.ok(section, 'content before the first heading');
     seen.get(section).add(pane);
@@ -557,4 +557,40 @@ test('route() takes a pane id only with the preview on', () => {
   assert.deepEqual(on.calls, [['state'], ['local', 'settings:advanced']]);
   const bad = world(true); bad.api.route(`settings:${'nope'}`);
   assert.deepEqual(bad.calls, [], 'not a pane, not a page');
+});
+
+// ── R8-3a: Projects, Terminal, Agent messages ──────────────────────────────
+
+test('R8-3a: the three panes exist as sheet documents and own what the plan says', () => {
+  for (const p of ['projects', 'terminal', 'agent-messages']) { assert.ok(SP.isPane(p)); assert.ok(Pages.paneById(`settings:${p}`), p); assert.ok(SP.NAV.includes(p)); }
+  assert.deepEqual(Pages.FUTURE_IDS.filter((x) => x.startsWith('settings:')), [], 'the reserved ids are real panes now');
+  assert.deepEqual(SP.ownedKeys('projects').sort(), ['gitDeployWorkflows', 'gitRepos', 'gitSignals']);
+  assert.deepEqual(SP.ownedKeys('agent-messages'), ['agentBus']);
+  assert.deepEqual(SP.ownedKeys('terminal'), ['integrations'], 'the Ghostty select saves integrations through save-config');
+  assert.equal(SP.ownedKeys('aitools').includes('integrations'), false);
+  for (const ch of ['git-status', 'deploy:settings', 'deploy:set-enabled', 'deploy:token-save', 'deploy:token-remove']) assert.equal(SP.CHANNEL_PANE[ch], 'projects', ch);
+  assert.equal(SP.CHANNEL_PANE['ghostty-dock-install'], 'terminal');
+  assert.equal(SP.CHANNEL_PANE['health-fix'], 'advanced', 'Health, including its Ghostty ids, stays in Advanced');
+  assert.match(mainSrc, /ipcMain\.handle\('git-status', \(e\) => settingsPane\('projects'\)\(e\)/);
+  assert.match(mainSrc, /ipcMain\.handle\('health-fix', \(e, id\) => \{\n  if \(!settingsPane\('advanced'\)\(e\)\)/);
+  // Agent mail (teammates' questions) stays a Notifications control; the Sharing hint says so.
+  assert.equal(SP.KEY_OWNER.agentMailInbox, 'notifications');
+});
+
+test('R8-3a: the Terminal pane saves integrations, AI tools does not, and each pane loads only its own block', async () => {
+  const t = await boot({ pane: 'terminal' });
+  try {
+    t.calls.length = 0;
+    const sel = t.w.document.getElementById('ghosttyDock'); sel.value = 'off';
+    sel.dispatchEvent(new t.w.Event('change', { bubbles: true }));
+    await settle();
+    assert.deepEqual(Object.keys(lastSave(t)), ['integrations']);
+    assert.ok(t.calls.some((c) => c.name === 'ghosttyDock'), 'the Ghostty block runs in the Terminal pane');
+  } finally { t.close(); }
+  const a = await boot({ pane: 'aitools' });
+  try { assert.equal(a.calls.some((c) => c.name === 'ghosttyDock'), false, 'AI tools no longer runs the Ghostty block'); } finally { a.close(); }
+  const p = await boot({ pane: 'projects' });
+  try { assert.ok(p.calls.some((c) => c.name === 'gitStatus')); } finally { p.close(); }
+  const g = await boot({ pane: 'general' });
+  try { assert.equal(g.calls.some((c) => c.name === 'gitStatus'), false); } finally { g.close(); }
 });

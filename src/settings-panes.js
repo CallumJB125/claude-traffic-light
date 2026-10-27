@@ -11,7 +11,7 @@
   // R8-1/2: the panes settings.html's sections are shown in. Every top-level element of settings.html carries data-pane
   // (R8-2a); the old page ignores it and keeps its six div.pane. Projects, Terminal, Agent messages, Account and the
   // separate widget/hatch/phone/aitools pages come in R8-3.
-  const PANES = Object.freeze(['general', 'notifications', 'aitools', 'widget', 'spend', 'privacy', 'phone', 'advanced']);
+  const PANES = Object.freeze(['general', 'notifications', 'aitools', 'projects', 'terminal', 'widget', 'spend', 'privacy', 'phone', 'agent-messages', 'advanced']);
 
   // R8-2b: the widget-rules editor (lights.html, view=rules) is a second kind of pane: its own document and preload, its own
   // key list. It is an owner in KEY_OWNER but not one of PANES (those are settings.html's sections).
@@ -46,9 +46,9 @@
     'data:inventory': 'privacy', 'data:export': 'privacy', 'data:export-activity': 'privacy', 'data:delete': 'privacy',
     'backups-list': 'privacy', 'backups-now': 'privacy', 'backups-diff': 'privacy', 'backups-restore': 'privacy', 'backups-open-folder': 'privacy',
     'interaction-host-status': 'phone', 'open-feedback': 'privacy',
-    'cli-install-status': 'general', 'cli-install': 'general', 'ghostty-dock-install': 'aitools', 'signal-endpoint': 'aitools',
+    'cli-install-status': 'general', 'cli-install': 'general', 'ghostty-dock-install': 'terminal', 'signal-endpoint': 'aitools',
     'native-board-status': 'aitools', 'native-board-boards': 'aitools', 'native-board-connect': 'aitools', 'native-board-disconnect': 'aitools',
-    'git-status': 'advanced', 'deploy:settings': 'advanced', 'deploy:set-enabled': 'advanced', 'deploy:token-save': 'advanced', 'deploy:token-remove': 'advanced',
+    'git-status': 'projects', 'deploy:settings': 'projects', 'deploy:set-enabled': 'projects', 'deploy:token-save': 'projects', 'deploy:token-remove': 'projects',
     'remote-devices': 'phone', 'remote-pair': 'phone', 'remote-revoke': 'phone', 'remote-copy-code': 'phone',
     'health-report': 'advanced', 'health-fix': 'advanced', 'health-copy-diagnostics': 'advanced', 'compaction-stats': 'aitools',
     'connect-agent': 'none', 'account-view': 'none', 'account-open': 'none',
@@ -67,13 +67,13 @@
     showWidget: 'widget', menuBarMode: 'widget', lowPower: 'widget', seasonal: 'widget', askFromWidget: 'notifications', showTasks: 'widget', showAgents: 'aitools',
     agentRoster: 'aitools', agentKinds: 'aitools', agentChipSize: 'aitools', roam: 'widget', randomEvents: 'widget', simpleMode: 'general', homeComposer: 'general',
     teamSessionSharing: 'phone', teamBrief: 'phone', explainMode: 'phone', remoteInteractionHost: 'phone', codexDaemonMessaging: 'phone',
-    integrations: 'aitools', gitSignals: 'advanced', gitRepos: 'advanced', gitDeployWorkflows: 'advanced', remoteTailscale: 'phone', agentBus: 'advanced', compaction: 'aitools',
+    integrations: 'terminal', gitSignals: 'projects', gitRepos: 'projects', gitDeployWorkflows: 'projects', remoteTailscale: 'phone', agentBus: 'agent-messages', compaction: 'aitools',
     rules: 'widget-rules', template: 'widget-rules', presets: 'widget-rules', character: 'widget-rules', autoAnswer: 'widget-rules',
     snoozeUntil: 'none', fastHook: 'none', keepAwake: 'none', paceTooltip: 'none', agentAwareness: 'none', mcpBusUserOff: 'none', mcpUserOff: 'none',
     remoteInteractionResetPending: 'none', persona: 'none',
   });
 
-  const TITLE = Object.freeze({ 'widget-rules': 'Widget rules', general: 'General', notifications: 'Notifications', aitools: 'AI tools', widget: 'Widget', spend: 'Spend and limits', privacy: 'Privacy and data', phone: 'Phone', advanced: 'Advanced' });
+  const TITLE = Object.freeze({ 'widget-rules': 'Widget rules', general: 'General', notifications: 'Notifications', aitools: 'AI tools', projects: 'Projects', terminal: 'Terminal', 'agent-messages': 'Agent messages', widget: 'Widget', spend: 'Spend and limits', privacy: 'Privacy and data', phone: 'Phone', advanced: 'Advanced' });
 
   // Keys every pane may READ (never write): simpleMode decides which developer sections the page shows at all.
   const SHARED_READS = Object.freeze(['simpleMode']);

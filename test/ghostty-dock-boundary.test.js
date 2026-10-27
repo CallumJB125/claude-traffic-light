@@ -167,7 +167,7 @@ test('the installer command is a fixed literal, used only by the one-use script,
 
 test('the install handler is Settings- or Home-only and takes an action name; Health routes fixed ids to it', () => {
   const main = read('main.js');
-  assert.match(main, /GhosttyDockInstall\.register\(\{ utilityHandle, allowed: \(e\) => settingsPane\('aitools'\)\(e\) \|\| fromUtilityPage\(e, 'home'\), controller: ghosttyDockInstaller \}\);/);
+  assert.match(main, /GhosttyDockInstall\.register\(\{ utilityHandle, allowed: \(e\) => settingsPane\('terminal'\)\(e\) \|\| fromUtilityPage\(e, 'home'\), controller: ghosttyDockInstaller \}\);/);
   assert.equal((main.match(/ghosttyDockInstaller\.act\(/g) || []).length, 1);
   assert.match(main, /ghosttyDockInstaller\.act\(id === 'ghostty-dock-install' \? 'install' : 'recheck'\)/);
   assert.equal((main.match(/'ghostty-dock-install'/g) || []).length, 3, 'the health-fix route (twice) and the Health row fix id, nothing else');
