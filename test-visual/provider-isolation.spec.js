@@ -39,3 +39,14 @@ test('an app launched by launchApp finds only the fakes in its own HOME', async 
     for (const name of Object.keys(FAKE_PROVIDER_PATHS)) expect(under(h.userHome, onPath(name, env.PATH)), `PATH ${name}`).toBe(true);
   } finally { await h.cleanup(); }
 });
+
+test('every tool the AI tools page probes has a fake, found first on PATH (so it never falls through to /opt/homebrew/bin)', () => {
+  // The names come from the tool table in code, not from a list kept by hand here.
+  const names = [...new Set(require('../src/ai-tools.js').TOOLS.flatMap((t) => t.bins))];
+  expect(names.length).toBeGreaterThan(5);
+  const run = process.env.PLEXIFORM_VISUAL_RUN_HOME;
+  for (const name of names) {
+    expect(Object.keys(FAKE_PROVIDER_PATHS), `no fake for ${name}`).toContain(name);
+    expect(under(run, onPath(name, process.env.PATH)), `ai-tools would find ${name} at ${onPath(name, process.env.PATH)}`).toBe(true);
+  }
+});
