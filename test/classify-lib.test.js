@@ -496,3 +496,54 @@ test('classifier: the pale-tint exceptions are exact pairs, scoped to their base
   assert.equal(lib.classifyImage(fill('#f7f1ef'), fill('#d7d8db'), ALL.light, { exceptions: ex }).unexpected, 900);
   assert.equal(lib.exceptionsFor('x/elsewhere-darwin.png', config, 'light').length, 0);
 });
+
+test('classifier: exception guards — no old colour near a surface or text token; soft pairs recomputed from tokens', () => {
+  const fs = require('node:fs'); const path = require('node:path'); const { execFileSync } = require('node:child_process');
+  const root = path.join(__dirname, '..');
+  const config = JSON.parse(fs.readFileSync(path.join(root, 'test-visual', 'classify.config.json'), 'utf8'));
+  const head = lib.tokensOf(fs.readFileSync(path.join(root, 'tokens.css'), 'utf8'));
+  const de = (a, b) => lib.deltaE00(lib.lab(lib.parseColour(a).slice(0, 3)), lib.lab(lib.parseColour(b).slice(0, 3)));
+  const NEUTRAL = ['--bg', '--panel', '--panel-2', '--text', '--muted', '--faint'];
+  for (const e of config.exceptions) {
+    assert.ok(e.theme === 'light' || e.theme === 'dark', `${e.name}: needs a theme scope`);
+    const pairs = e.pairs || (e.old || []).flatMap((o) => (e.new || []).map((n) => [o, n]));
+    for (const [o] of pairs) for (const k of NEUTRAL) assert.ok(de(o, head[e.theme][k]) > 2, `${e.name}: old ${o} is within ΔE 2 of ${e.theme} ${k} (an exception must not explain a neutral)`);
+  }
+  // soft-tint pairs: old = base --accent-soft over `over`, new = head --accent-soft over `over` (ΔE ≤ 1)
+  let base;
+  try { base = lib.tokensOf(execFileSync('git', ['show', 'origin/main:tokens.css'], { cwd: root, encoding: 'utf8' })); }
+  catch { base = lib.tokensOf(fs.readFileSync(path.join(__dirname, 'fixtures', 'tokens-terracotta-r0a.css'), 'utf8')); }
+  const over = (soft, g) => { const s = lib.parseColour(soft); const G = lib.parseColour(g); return s.slice(0, 3).map((v, i) => v * s[3] + G[i] * (1 - s[3])); };
+  const tints = config.exceptions.filter((e) => e.name.startsWith('tint-'));
+  assert.equal(tints.length, 3);
+  for (const e of tints) {
+    assert.equal(e.theme, 'light');
+    assert.equal(e.baselines.length, 1);
+    for (const [o, n, g] of e.pairs) {
+      assert.ok(g, `${e.name}: ${o} needs its measured surface`);
+      const surface = ['--bg', '--panel', '--panel-2'].some((k) => de(g, head.light[k]) === 0);
+      const [L, A, B] = lib.lab(lib.parseColour(g).slice(0, 3));
+      assert.ok(surface || (L >= 95 && Math.hypot(A, B) <= 1), `${e.name}: ${g} is neither a light surface nor a neutral near-white`);
+      const po = over(base.light['--accent-soft'], g); const pn = over(head.light['--accent-soft'], g);
+      assert.ok(lib.deltaE00(lib.lab(po), lib.lab(lib.parseColour(o).slice(0, 3))) <= 1, `${e.name}: ${o} is not base soft over ${g}`);
+      assert.ok(lib.deltaE00(lib.lab(pn), lib.lab(lib.parseColour(n).slice(0, 3))) <= 1, `${e.name}: ${n} is not head soft over ${g}`);
+    }
+  }
+  assert.deepEqual(tints.map((e) => e.baselines[0].split('/').pop()).sort(), ['lights-template-minimal-darwin.png', 'lights-templates-menu-darwin.png', 'lights-window-darwin.png']);
+});
+
+test('classifier: the widget dark mapping — no app script writes data-theme; a contradicting image fails closed', () => {
+  const fs = require('node:fs'); const path = require('node:path'); const { execFileSync } = require('node:child_process');
+  const root = path.join(__dirname, '..');
+  const files = execFileSync('git', ['ls-files', '*.js', '*.mjs', '*.html'], { cwd: root, encoding: 'utf8' }).split('\n')
+    .filter((f) => f && !f.startsWith('test/') && !f.startsWith('test-visual/') && !f.includes('node_modules/'));
+  const writers = files.filter((f) => /dataset\.theme\s*=|setAttribute\(\s*['"`]data-theme|removeAttribute\(\s*['"`]data-theme|\[['"`]data-theme['"`]\]\s*=/.test(fs.readFileSync(path.join(root, f), 'utf8')));
+  // the board's mock server is a separate web app; index.html never loads it
+  assert.deepEqual(writers, ['board/tasks-api/mock-server.js'], 'a script now writes data-theme: the index.html → dark mapping may be stale');
+  const config = JSON.parse(fs.readFileSync(path.join(root, 'test-visual', 'classify.config.json'), 'utf8'));
+  const b = config.themes[0].baselines[0];
+  const light = image(20, 20, () => hex('#eef0f3'));
+  assert.deepEqual([lib.themeFor(ALL, b, light, light, config).theme, lib.themeFor(ALL, b, light, light, config).source], ['none', 'mismatch (config dark, image light)']);
+  const mixed = image(20, 20, (x) => (x < 12 ? hex('#eef0f3') : hex('#292d34')));
+  assert.equal(lib.themeFor(ALL, b, mixed, mixed, config).theme, 'dark');
+});

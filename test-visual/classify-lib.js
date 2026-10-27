@@ -412,7 +412,16 @@ function themeFromConfig(baseline, config) {
 }
 function themeFor(families, baseline, baseImg, headImg, config) {
   const pinned = themeFromConfig(baseline, config);
-  if (pinned) return { theme: pinned.theme, source: `config (${pinned.source})`, coverage: null, share: 1, families: families[pinned.theme] };
+  if (pinned) {
+    // sanity check (review round 3): a mapping that contradicts a clear vote fails closed instead of lending
+    // one theme's members to the other's image
+    const votes = baseImg ? lightnessVotes(baseImg, headImg) : { light: 0, dark: 0 };
+    const sum = votes.light + votes.dark;
+    const other = pinned.theme === 'dark' ? 'light' : 'dark';
+    const share = sum ? +(votes[pinned.theme] / sum).toFixed(3) : 0;
+    if (sum && votes[other] / sum >= THEME_DOMINANCE) return { theme: 'none', source: `mismatch (config ${pinned.theme}, image ${other})`, coverage: votes, share, families: families.none };
+    return { theme: pinned.theme, source: `config (${pinned.source})`, coverage: votes, share, families: families[pinned.theme] };
+  }
   const named = themeOf(baseline);
   if (!baseImg) return { theme: 'none', source: 'no image', coverage: null, share: 0, families: families.none };
   const votes = lightnessVotes(baseImg, headImg);

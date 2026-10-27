@@ -1,5 +1,5 @@
 {
-  "//": "Redesign classifier config (plan-redesign §R3.10, §R4.4). The accent families come from tokens.css at the base and the head, so only the named exceptions live here. Entry shape: { \"name\", \"reason\", \"baselines\": [\"test-visual/__screenshots__/<spec>/<file>.png\"], \"theme\"?: \"light\" | \"dark\", \"old\": [\"#hex\"], \"new\": [\"#hex\"] }. Only the listed baselines; only the exact old→new pair (±ΔE00 1) is strong, and its anti-aliased blends count only within 2 px of such a core pixel. `noise`: per-baseline noise allowances { baseline, maxRatio, reason } above the general cap (CAPS.noiseRatio 0.25 %), each with a named cause. `pairs` ([[old, new], …]) keeps each old colour with its own new one. `themes`: { theme, source, reason, baselines } sets a baseline's theme from source instead of the lightness vote, for exactly those baselines.",
+  "//": "Redesign classifier config (plan-redesign §R3.10, §R4.4). The accent families come from tokens.css at the base and the head, so only the named exceptions live here. Entry shape: { \"name\", \"reason\", \"baselines\": [\"test-visual/__screenshots__/<spec>/<file>.png\"], \"theme\"?: \"light\" | \"dark\", \"old\": [\"#hex\"], \"new\": [\"#hex\"] }. Only the listed baselines; only the exact old→new pair (±ΔE00 1) is strong, and its anti-aliased blends count only within 2 px of such a core pixel. `noise`: per-baseline noise allowances { baseline, maxRatio, reason } above the general cap (CAPS.noiseRatio 0.25 %), each with a named cause. `pairs` ([[old, new, over?], …]) keeps each old colour with its own new one; `over` records the surface a soft-tint pair was measured over (a surface token, or a neutral native grey), and a unit test recomputes the pair from the base and head --accent-soft over it. `themes`: { theme, source, reason, baselines } sets a baseline's theme from source instead of the lightness vote, for exactly those baselines.",
   "exceptions": [
     {
       "name": "idle",
@@ -24,11 +24,13 @@
       "pairs": [
         [
           "#f7f1ef",
-          "#e0e1e2"
+          "#e0e1e2",
+          "#ffffff"
         ],
         [
           "#ede8e8",
-          "#d7d8db"
+          "#d7d8db",
+          "#f4f5f7"
         ]
       ],
       "//": "Measured (base 47ad8ac1): #f7f1ef → #e0e1e2 18,762 px (over #ffffff, model ΔE 0.59); #ede8e8 → #d7d8db 1,591 px (over --bg #f4f5f7, ΔE 0.79/0.43)."
@@ -43,11 +45,13 @@
       "pairs": [
         [
           "#f7f1ef",
-          "#e0e1e2"
+          "#e0e1e2",
+          "#ffffff"
         ],
         [
           "#ede8e8",
-          "#d7d8db"
+          "#d7d8db",
+          "#f4f5f7"
         ]
       ],
       "//": "Measured: #f7f1ef → #e0e1e2 12,349 px; #ede8e8 → #d7d8db 1,488 px."
@@ -62,19 +66,23 @@
       "pairs": [
         [
           "#f7f1ef",
-          "#e0e1e2"
+          "#e0e1e2",
+          "#ffffff"
         ],
         [
           "#f2ecea",
-          "#dcddde"
+          "#dcddde",
+          "#fafafa"
         ],
         [
           "#f0eae8",
-          "#dadbdc"
+          "#dadbdc",
+          "#f8f8f8"
         ],
         [
           "#eee8e7",
-          "#d8d9da"
+          "#d8d9da",
+          "#f5f6f6"
         ]
       ],
       "//": "Measured: #f7f1ef → #e0e1e2 14,622 px; siblings over the native menu's near-white greys (model ΔE ≤ 0.78): #f2ecea → #dcddde 131, #f0eae8 → #dadbdc 76, #eee8e7 → #d8d9da 69 (neighbouring pairs within ΔE 1 of these fall in their core)."
