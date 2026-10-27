@@ -21,6 +21,8 @@ function applyConfigSideEffects(prev, next, d, touched) {
   if (hit('agentMailInbox')) d.syncAgentMail?.();
   if (hit('agentBus')) d.syncAgentBus?.();
   if (hit('widgetShortcut') || hit('widgetSize')) d.widgetPolish?.(prev, next);
+  // C4: "Show chats" (homeComposer) flipped: the main window drops a showing new chat and tells its sidebar.
+  if ((prev.homeComposer !== false) !== (next.homeComposer !== false)) d.chatsChanged?.();
   // Then once more if it was taken: clearing the widget's key gives the task box the key it was waiting for.
   if (composeHit) d.composeShortcutSettle?.(next);
   d.broadcastStatus();

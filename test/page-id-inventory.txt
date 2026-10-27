@@ -13,7 +13,7 @@ aitools	buddy-window/pages.js	PAGES	1
 aitools	buddy-window/sidebar-chat.js	select	1
 aitools	main.js	openBuddy	1
 board	buddy-window/account-flow.js	select	5
-board	buddy-window/index.js	select	8
+board	buddy-window/index.js	select	7
 board	buddy-window/pages.js	PAGES	1
 board	buddy-window/pages.js	SECTIONS	1
 board	test-visual/newchat.spec.js	data-page	1
@@ -43,6 +43,7 @@ hatch	buddy-window/pages.js	PAGES	1
 hatch	main.js	openBuddy	1
 help	buddy-window/pages.js	PAGES	1
 help	main.js	openBuddy	1
+home	buddy-window/index.js	select	1
 home	buddy-window/pages.js	PAGES	1
 home	buddy-window/pages.js	SECTIONS	1
 home	main.js	openBuddy	4

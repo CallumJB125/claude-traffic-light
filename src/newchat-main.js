@@ -44,7 +44,8 @@ function createNewChat(deps, glue) {
     pageWc: () => buddy()?.newChatWebContents?.() ?? null,
     docNow: () => buddy()?.newChatDocument?.() ?? null,
     context: () => buddy()?.newChatContext?.(),
-    hidden: () => false,
+    // C4: "Show chats" off refuses every new-chat channel, as Home's box does with the same key.
+    hidden: () => deps.config()?.homeComposer === false,
     openCard: false, oneAtATime: true, keepAlive: 'create', afterCreate,
     settled: (wcId) => buddy()?.newChatSettled?.(wcId),
   });

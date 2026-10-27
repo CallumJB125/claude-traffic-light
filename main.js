@@ -1664,6 +1664,8 @@ function getBuddy() {
       // The chat-first sidebar's collapsed groups (only read or written with the preview on).
       sidebarGroups: { load: () => loadConfig().ui?.sidebarGroups ?? null, save: (v) => saveConfig({ ui: { ...(loadConfig().ui ?? {}), sidebarGroups: v } }) },
       simpleMode: () => loadConfig().simpleMode === true,
+      // C4: "Show chats" (homeComposer, default on). Off: the new chat never opens; existing chats are unchanged.
+      chatsOn: () => loadConfig().homeComposer !== false,
       // O4: Home stays alive while a task its box started is live; its retired document drops that task's slot.
       homeBusy: () => Compose.busy(),
       onHomeRetired: (wcId) => Compose.retire(wcId),
@@ -2485,6 +2487,7 @@ if (CHAT_PREVIEW) {
   require('./src/newchat-home-main.js').createNewChatHome({
     ipcMain, buddy: () => buddyWin,
     rows: (alive) => OverviewMain.passiveSidebarRows(alive),
+    chatsOn: () => loadConfig().homeComposer !== false,
     folderOf: (handle) => getTasks().folderOf(handle),
     git: (cwd, args, opts) => ncGit.run(cwd, args, opts),
     ciFailedRepos: () => gitEvents(loadConfig()).filter((ev) => ev && ev.signal === 'ci-failed').map((ev) => ev.repo),
@@ -4109,6 +4112,7 @@ function applyConfigEffects(prev, next, touched) {
     composeShortcutSettle: (n) => { ComposeShortcut.settle(n); refreshTrayMenu?.(); },
     syncAgentMail: () => AgentMail.sync(),
     syncAgentBus: () => AgentBusMain.sync(),
+    chatsChanged: () => buddyWin?.chatsChanged?.(),
   }, touched);
 }
 function commitConfig(partial) {

@@ -97,7 +97,9 @@ function createNewChatHome(deps) {
     return { window: c.window, contents: c.contents, frame: c.contents.mainFrame, generation: c.generation, document: c.document, foreground: c.foreground === true };
   }
   const keyOf = (o) => `${o.document}:${o.generation}`;
-  const from = (e) => { const o = owner(); return o && e?.sender === o.contents && e.senderFrame === o.frame ? o : null; };
+  // C4: with "Show chats" off nothing is answered (no new-chat document can be open then; this is the second lock).
+  const chatsOn = () => { try { return typeof deps.chatsOn !== 'function' || deps.chatsOn() !== false; } catch { return false; } };
+  const from = (e) => { if (!chatsOn()) return null; const o = owner(); return o && e?.sender === o.contents && e.senderFrame === o.frame ? o : null; };
   const same = (before) => { const o = owner(); return !!o && ['window', 'contents', 'frame', 'generation', 'document'].every((k) => o[k] === before[k]); };
 
   function fresh(before) {

@@ -231,6 +231,8 @@ ul { padding: 0; list-style: none; }
 .sidebar[data-chat-first] .sb-scroll { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
 .sidebar[data-chat-first] .sb-tree, .sidebar[data-chat-first] .sb-tree ul { list-style: none; margin: 0; padding: 0; }
 .sidebar[data-chat-first] .sb-tree [hidden], .sidebar[data-chat-first] .sb-empty[hidden] { display: none; }
+/* C4: chats off hides New chat and the Chats filter. */
+.sidebar[data-chat-first] .sb-new[hidden], .sidebar[data-chat-first] .sb-filter-opt[hidden] { display: none; }
 .sidebar[data-chat-first] .sb-group { outline: none; margin-bottom: 6px; }
 .sidebar[data-chat-first] .sb-group-head {
   display: flex; align-items: center; min-height: 24px; padding: 0 8px; border-radius: var(--radius-sm);

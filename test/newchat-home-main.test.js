@@ -25,7 +25,7 @@ function harness(over = {}) {
     openThread: (id) => { st.opened.push(id); return st.openOk; },
   };
   const svc = NCH.createNewChatHome({
-    ipcMain, buddy: () => buddy,
+    ipcMain, buddy: () => buddy, chatsOn: () => st.chats !== false,
     rows: async (alive) => { st.rowsCalls++; if (st.rowsGate) await st.rowsGate; return alive() ? { schema: 1, status: 'complete', sessions: st.sessions.map((r) => ({ ...r })) } : null; },
     folderOf: (h) => st.folders[h] ?? null,
     git: async (cwd, args, opts) => { st.git.push({ cwd, args, opts }); if (st.gitFail) throw new Error('boom'); return args[0] === 'remote' ? st.remotes : st.tree; },
@@ -218,4 +218,18 @@ test('gate off: main registers the module only inside the CHAT_PREVIEW block', (
   assert.ok(!/\n}\n/.test(between), 'the block has not closed before it');
   const ov = fs.readFileSync(path.join(__dirname, '..', 'src/overview-main.js'), 'utf8');
   assert.match(ov, /passiveSidebarRows:alive=>stopped\|\|chatPreview!==true\?Promise\.resolve\(null\)/);
+});
+
+test('C4: with "Show chats" off the three reads answer nothing and read nothing, even from the new-chat document', async () => {
+  const h = harness();
+  await h.call('newchat:home', h.ev());
+  h.st.chats = false;
+  const reads = h.st.rowsCalls;
+  assert.equal(await h.call('newchat:home', h.ev()), null);
+  assert.deepEqual(await h.call('newchat:starters', h.ev(), { handle: 'h1' }), { starters: [] });
+  assert.deepEqual(await h.call('newchat:open-row', h.ev(), { id: A }), { ok: false });
+  assert.equal(h.st.rowsCalls, reads, 'no sidebar read');
+  assert.deepEqual(h.st.opened, []);
+  h.st.chats = true;
+  assert.notEqual(await h.call('newchat:home', h.ev()), null, 'on again');
 });
