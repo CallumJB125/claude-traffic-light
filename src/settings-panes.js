@@ -16,7 +16,12 @@
   // R8-2b: the widget-rules editor (lights.html, view=rules) is a second kind of pane: its own document and preload, its own
   // key list. It is an owner in KEY_OWNER but not one of PANES (those are settings.html's sections).
   const RULES_PANE = 'widget-rules';
-  const OWNERS = Object.freeze([...PANES, RULES_PANE]);
+  // R8-3b-1: documents that are not settings.html and do not use get-config/save-config; each has its own preload and its own
+  // channels (widget-page:*, hatch:*), guarded by a predicate bound to that one document in main.
+  const WIDGET_LOOK = 'widget-look';
+  const CHARACTER = 'character';
+  const CONFIG_OWNERS = Object.freeze([...PANES, RULES_PANE]); // who may call get-config / save-config (filtered by KEY_OWNER)
+  const OWNERS = Object.freeze([...CONFIG_OWNERS, WIDGET_LOOK, CHARACTER]); // every sheet document (go-pane senders and targets)
   const NAV = OWNERS;
   const WIDGET_RULES = Object.freeze({
     // control fields of save-config, stripped in commitConfig and never stored. __prefsFrom names the template whose prefs ride in this save.
@@ -33,6 +38,18 @@
     // read-only extras for get-config: the template merge needs the saved notifyStates and spend
     reads: Object.freeze(['simpleMode', 'notifyStates', 'spend']),
   });
+
+  // The config keys widget-look may change through widget-page:set (src/widget-page.js cleanPatch drops anything else; a test
+  // pins this list to what cleanPatch can emit). Keys another pane also owns are written by both documents, through different
+  // channels and only as partial patches; both re-read when the sheet shows them again (settings:shown), so neither reverts the other.
+  const WIDGET_LOOK_KEYS = Object.freeze([
+    'showWidget', 'menuBarMode', 'showTasks', 'showAgents', 'agentRoster', 'paceTooltip', 'agentChipSize', 'agentKinds',
+    'widgetSnap', 'widgetSize', 'widgetShortcut', 'composeShortcut', 'projectColours',
+  ]);
+
+  // Old page id -> the sheet document that replaces it (preview). The REDIRECTS rows keep their `until`: resolve() learns
+  // `to: 'settings'` at the cut-over (R6a), not here.
+  const SHEET_TARGET = Object.freeze({ widget: WIDGET_LOOK, hatch: CHARACTER, lights: RULES_PANE, settings: 'general' });
 
   // Every channel settings-preload.js exposes, with the one pane whose section uses it. 'none' = no pane may call
   // it (the old Settings page still can); get-config / save-config are filtered by KEY_OWNER instead.
@@ -73,7 +90,7 @@
     remoteInteractionResetPending: 'none', persona: 'none',
   });
 
-  const TITLE = Object.freeze({ 'widget-rules': 'Widget rules', general: 'General', notifications: 'Notifications', aitools: 'AI tools', projects: 'Projects', terminal: 'Terminal', 'agent-messages': 'Agent messages', widget: 'Widget', spend: 'Spend and limits', privacy: 'Privacy and data', phone: 'Phone', advanced: 'Advanced' });
+  const TITLE = Object.freeze({ 'widget-rules': 'Widget rules', 'widget-look': 'Widget look', character: 'Character', general: 'General', notifications: 'Notifications', aitools: 'AI tools', projects: 'Projects', terminal: 'Terminal', 'agent-messages': 'Agent messages', widget: 'Widget', spend: 'Spend and limits', privacy: 'Privacy and data', phone: 'Phone', advanced: 'Advanced' });
 
   // Keys every pane may READ (never write): simpleMode decides which developer sections the page shows at all.
   const SHARED_READS = Object.freeze(['simpleMode']);
@@ -104,5 +121,5 @@
   const current = root && root.location && typeof root.location.search === 'string' ? paneFromSearch(root.location.search) : null;
   const inPane = (...panes) => current === null || panes.includes(current);
 
-  return { current, inPane, TITLE, PANES, RULES_PANE, OWNERS, NAV, WIDGET_RULES, isOwner, crossKeys, CHANNEL_PANE, KEY_OWNER, SHARED_READS, isPane, ownedKeys, readKeys, paneOfChannel, writesAllowed, pick, readView, paneFromSearch };
+  return { current, inPane, TITLE, PANES, RULES_PANE, WIDGET_LOOK, CHARACTER, WIDGET_LOOK_KEYS, SHEET_TARGET, CONFIG_OWNERS, OWNERS, NAV, WIDGET_RULES, isOwner, crossKeys, CHANNEL_PANE, KEY_OWNER, SHARED_READS, isPane, ownedKeys, readKeys, paneOfChannel, writesAllowed, pick, readView, paneFromSearch };
 }));

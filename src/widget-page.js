@@ -219,7 +219,7 @@ function register(ctx) {
     return { ok: true, state: state() };
   });
 
-  utilityHandle('widget-page:open', allowed, (_e, id) => { if (PAGES.includes(id)) ctx.openPage(id); return null; });
+  utilityHandle('widget-page:open', allowed, (e, id) => { if (PAGES.includes(id)) ctx.openPage(id, e); return null; });
 
   return { state };
 }
