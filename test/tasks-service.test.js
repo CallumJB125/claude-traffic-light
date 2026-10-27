@@ -191,12 +191,50 @@ test('approvals: the prompt shown is the one answered; a StartTask accept names 
   const a = opened.detail.openApprovals[0];
   assert.equal(a.tool, 'StartTask');
   dialogs.length = 0; answer = false;
-  const cancelled = await svc.act({ id, action: 'approve', payload: { approvalId: a.approvalId, scope: 'task' } });
+  const elsewhere = await svc.act({ id, action: 'approve', payload: { approvalId: a.approvalId, scope: 'task' } }, 8);
+  assert.equal(elsewhere.code, 'NOT_FOUND', 'shown to page 7 only, so not answerable from page 8');
+  assert.equal(dialogs.length, 0);
+  const cancelled = await svc.act({ id, action: 'approve', payload: { approvalId: a.approvalId, scope: 'task' } }, 7);
   assert.equal(cancelled.cancelled, true);
   assert.equal(dialogs[0].source, 'board');
   assert.match(dialogs[0].detail, /came from board/);
   assert.equal(svc.snapshot().tasks.find((x) => x.id === id).state, 'queued');
   await svc.closeTask(7);
+});
+
+// labfix-review R2a nit 2 (plan-r2b-auth §2.3): what one document was shown makes ids answerable from that
+// document only. A thread's openTask never widens what the Tasks page may approve.
+test('relayed ids are per document: an id shown only to one page is refused from another', async () => {
+  const c = await (await import(pathToFileURL(path.join(__dirname, '..', 'board', 'tasks-api', 'client.js')).href)).connect({ socketPath: srv.socketPath, tokenPath: srv.tokenPath });
+  const { id } = await c.createTask({ text: 'Per-document relay', cwd: '/Users/demo/Development/acme-web', ai: 'claude', source: 'board', sourceMeta: { userId: 'stranger', displayName: 'Mallory', boardId: 'b', cardId: 'c2' } });
+  c.close();
+  await until(() => svc.snapshot().tasks.find((x) => x.id === id && x.actions.includes('approve')));
+  const thread = await svc.openTask(id, 21);
+  const a = thread.detail.openApprovals[0];
+  dialogs.length = 0; answer = false;
+  const fromTasks = await svc.act({ id, action: 'approve', payload: { approvalId: a.approvalId, scope: 'task' } }, 20);
+  assert.equal(fromTasks.code, 'NOT_FOUND', 'the Tasks page never opened it');
+  assert.equal(dialogs.length, 0, 'refused before any dialog');
+  assert.equal((await svc.openTask(id, 20)).ok, true);
+  await svc.closeTask(21);
+  const own = await svc.act({ id, action: 'approve', payload: { approvalId: a.approvalId, scope: 'task' } }, 20);
+  assert.equal(own.cancelled, true, 'the Tasks page approves what it was shown; closing the thread left its entry intact');
+  assert.equal(dialogs.length, 1);
+  const closed = await svc.act({ id, action: 'approve', payload: { approvalId: a.approvalId, scope: 'task' } }, 21);
+  assert.equal(closed.code, 'NOT_FOUND', 'a closed document keeps nothing');
+  await svc.closeTask(20);
+});
+
+test('relayed ids are per document after a refresh too: a live approval reaches only the open page', async () => {
+  const { id } = await svc.create({ text: 'Ask before installing', folder: svc.registerFolder('/Users/demo/Development/acme-web').handle, ai: 'claude', permissionLevel: 'ask', surface: 'background', when: 'now' });
+  assert.ok(id);
+  assert.equal((await svc.openTask(id, 31)).ok, true);
+  const ids = await until(() => events.filter(([tid, e, wc]) => wc === 31 && tid === id && e.type === 'detail').map(([, e]) => e.detail.openApprovals[0]?.approvalId).find(Boolean), 20000);
+  const fromOther = await svc.act({ id, action: 'deny', payload: { approvalId: ids } }, 30);
+  assert.equal(fromOther.code, 'NOT_FOUND', 'refreshOpen wrote only into page 31');
+  const fromOwn = await svc.act({ id, action: 'deny', payload: { approvalId: ids } }, 31);
+  assert.equal(fromOwn.ok, true, JSON.stringify(fromOwn));
+  await svc.closeTask(31);
 });
 
 test('one open task per page: opening again replaces it, and a superseded open leaves no subscription behind', async () => {
