@@ -225,8 +225,8 @@
     return el('li', { role: 'treeitem', class: 'sidebar-row sb-gone', 'data-key': `x:${id}`, 'data-parent': parent, 'aria-level': 3,
       'aria-label': `${whose(g)}, ${TEAM.gone}. Dismiss`, tabindex: -1 },
     el('span', { class: 'sb-dot', 'data-bucket': 'idle', 'aria-hidden': 'true' }),
-    el('span', { class: 'sb-text' }, el('span', { class: 'sb-title' }, whose(g)), el('span', { class: 'sb-meta' }, TEAM.gone)),
-    el('span', { class: 'sb-dismiss', 'aria-hidden': 'true' }, 'Dismiss'));
+    el('span', { class: 'sb-text' }, el('span', { class: 'sb-title' }, whose(g)), el('span', { class: 'sb-meta', title: TEAM.gone }, TEAM.gone)),
+    el('span', { class: 'sb-dismiss', title: 'Dismiss', 'aria-hidden': 'true' }, svg('M4.5 4.5l7 7M11.5 4.5l-7 7', 'sb-icon')));
   }
   function renderTeam(own, empty) {
     const stale = team.status === 'unavailable';

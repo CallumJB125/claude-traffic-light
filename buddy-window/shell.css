@@ -288,7 +288,8 @@ ul { padding: 0; list-style: none; }
 .sidebar[data-chat-first] .sb-gone { color: var(--muted); }
 .sidebar[data-chat-first] .sb-gone .sb-title { font-weight: 500; color: var(--muted); }
 .sidebar[data-chat-first] .sb-gone .sb-dot { opacity: .5; }
-.sidebar[data-chat-first] .sb-dismiss { font: var(--t-small); color: var(--muted); padding: 1px 6px; border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px var(--line); cursor: default; }
+.sidebar[data-chat-first] .sb-dismiss { display: inline-grid; place-items: center; width: 18px; height: 18px; color: var(--muted); border-radius: var(--radius-sm); cursor: default; }
+.sidebar[data-chat-first] .sb-dismiss .sb-icon { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
 .sidebar[data-chat-first] .sb-dismiss:hover { color: var(--text); background: var(--panel); }
 .sidebar[data-chat-first] .sb-team-more[hidden] { display: none; }
 .sidebar[data-chat-first] .sb-link { all: unset; color: var(--accent); cursor: default; }

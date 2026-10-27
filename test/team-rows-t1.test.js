@@ -105,10 +105,12 @@ function sidebarRig({ hub = createFakeTeamHub(FIXTURE), chatPreview = true } = {
     overviewReadContext: () => ({ window: win, contents: owc, foreground: true, generation: overviewGen, document: 1 }),
   };
   let current = hub;
-  const main = createOverviewMain({ buddy: () => buddy, sessions: () => [], teamHub: () => (hubOn ? current : null), chatPreview, now: () => time });
+  const presence = { reads: 0, views: 0 };
+  const main = createOverviewMain({ buddy: () => buddy, sessions: () => [], teamHub: () => (hubOn ? current : null), chatPreview, now: () => time,
+    presence: () => { presence.reads++; return null; }, presenceView: () => { presence.views++; return 0; } });
   const handlers = new Map(); main.register({ handle: (name, fn) => handlers.set(name, fn) });
   const side = { sender: swc, senderFrame: swc.mainFrame }, over = { sender: owc, senderFrame: owc.mainFrame };
-  return { main, handlers, side, over, hub,
+  return { main, handlers, side, over, hub, presence,
     rows: (...a) => handlers.get('sidebar:team-rows')(side, ...a), hint: (e = over) => handlers.get('overview:open-hint')(e),
     tick: (ms) => { time += ms; }, reloadSidebar: () => { sidebarGen++; }, signOut: () => { hubOn = false; },
     switchTo: (next) => { current = next; } };
@@ -132,6 +134,7 @@ test('sidebar:team-rows: teammates only, a fixed path-free shape, the first 4 te
   assert.equal(ann.title, "Ann Lee's Codex session", 'no task reported');
   const text = JSON.stringify(out);
   for (const bad of ['r-bob', 'r-ann', "Bob's laptop", 'mini', 'u-bob', 't-1']) assert.ok(!text.includes(bad), bad);
+  assert.deepEqual(x.presence, { reads: 0, views: 0 }, 'no presence read, and the person is never shown as viewing');
   // A teammate's delivery text never reaches the sidebar.
   await x.hub.send({ id: 'u-me' }, 't-1', 'r-bob', 'PRIVATE MESSAGE TEXT');
   x.tick(16_000);
@@ -171,6 +174,10 @@ test('sidebar:team-rows guard: other senders, preview off, args, a document chan
   z = sidebarRig({ hub: slow });
   const got = await z.rows();
   assert.equal(got.status, 'unavailable'); assert.deepEqual(got.rows, []);
+  // ... and after the service read, before the reply: the final re-check.
+  const late = sidebarRig(), project = SidebarRows.teamRows;
+  SidebarRows.teamRows = (out) => { late.reloadSidebar(); return project(out); };
+  try { const r = await late.rows(); assert.equal(r.status, 'unavailable'); assert.deepEqual(r.rows, []); } finally { SidebarRows.teamRows = project; }
 });
 
 test('open hint: armed only for a listed row of this viewer, consumed once by the Overview document, 10 s, gone after sign-out', async () => {
