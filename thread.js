@@ -176,7 +176,7 @@
     return RECEIPT[req.action] || 'Sent';
   };
   // Plexiform's own facts about a task a StartTask would start, as the Tasks page lists them.
-  const SOURCE = { cli: 'the buddy command', mcp: 'another AI session', board: 'a teammate', phone: 'a phone', slack: 'Slack', voice: 'voice', bus: 'another AI on this Mac' };
+  const SOURCE = { cli: 'the buddy command', mcp: 'another AI session', board: 'a teammate', phone: 'a phone', slack: 'Slack', voice: 'voice', bus: `another AI on this ${MACHINE}` };
   // After a cancelled switch the review is spent, so its button offers a fresh one (labfix-review's nit).
   const switchLabel = (c, id, label) => (c.again === id ? 'Review the handover again' : label);
   function switchButtons(row, c, key) {
