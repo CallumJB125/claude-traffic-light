@@ -1671,6 +1671,8 @@ function getBuddy() {
       onHomeRetired: (wcId) => Compose.retire(wcId),
       // Chat-first preview (redesign R2a): which row a thread may show, and its document ending.
       threadTarget: (id) => OverviewMain.threadTarget(id),
+      // T1: a teammate row's click arms Overview's one-shot open hint (navigation only).
+      openTeamRow: (id) => OverviewMain.armTeamHint(id),
       onThreadRetired: (wcId) => ThreadMain?.retire(wcId),
       // R2b-2: the new chat is kept only while a create it sent is in flight (review S1).
       newChatBusy: () => NewChat?.busy() === true,

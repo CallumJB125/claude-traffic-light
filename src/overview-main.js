@@ -38,6 +38,42 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
   const r=await sidebarRead.result;
   return r&&sameSidebar(before)?structuredClone(r):null;
  }
+ // T1: teammates' shared sessions for the sidebar's Team filter: the same sidebar owner, its own
+ // 15 s floor (each pass may relay state reads to owners' computers). Row id → route, main-only:
+ // the opaque team key and directory entry id the Overview page re-reads through its own fences.
+ const TEAM_MIN_MS=15000,ROUTE_MS=60000,HINT_MS=10000;
+ let teamRead=null,hint=null;const teamRoutes=new Map();
+ async function sidebarTeamState(before,args){
+  if(args.length!==0)return null;
+  const t=clock();
+  if(!(teamRead&&equal(teamRead.owner,before)&&(teamRead.pending||t-teamRead.at<TEAM_MIN_MS))){
+   const read={owner:before,at:t,pending:true,result:null};
+   read.result=service.passiveTeamRows(()=>sameSidebar(before)).then(out=>{
+    if(!out)return null;
+    const at=clock();
+    for(const x of out.entries){if(typeof x?.rowId!=='string')continue;teamRoutes.delete(x.rowId);teamRoutes.set(x.rowId,{teamKey:x.teamKey,entryId:x.entryId,viewerScope:out.viewerScope,expires:at+ROUTE_MS});}
+    for(const [k,v] of teamRoutes)if(v.expires<at||v.viewerScope!==out.viewerScope)teamRoutes.delete(k);
+    while(teamRoutes.size>300)teamRoutes.delete(teamRoutes.keys().next().value);
+    return SidebarRows.teamRows(out);
+   },()=>null).then(r=>{read.pending=false;read.at=clock();if(!r&&teamRead===read)teamRead=null;return r;});
+   teamRead=read;
+  }
+  const r=await teamRead.result;
+  // A failed read still names the current viewer, so the sidebar drops another account's rows (an account switch
+  // whose first read fails must not leave the previous person's teammates up, even marked stale).
+  if(r&&sameSidebar(before))return structuredClone(r);
+  let viewer=null;try{viewer=service.viewerScope();}catch{viewer=null;}
+  return{schema:1,status:'unavailable',viewer:typeof viewer==='string'?viewer:null,teams:[],teamsTotal:0,rows:[]};
+ }
+ // A teammate row click (index.js, from the sidebar document): navigation only. The hint names
+ // what Overview should open; every read and action stays on Overview's own fences.
+ function armTeamHint(id){
+  if(stopped||chatPreview!==true||typeof id!=='string'||!/^[0-9a-f]{64}$/.test(id))return false;
+  const r=teamRoutes.get(id),scope=service.viewerScope();
+  if(!r||r.expires<clock()||!scope||r.viewerScope!==scope)return false;
+  hint={teamKey:r.teamKey,entryId:r.entryId,viewerScope:scope,at:clock()};return true;
+ }
+ function takeHint(){const h=hint;hint=null;if(!h||clock()-h.at>HINT_MS||h.viewerScope!==service.viewerScope())return null;return{team:h.teamKey,entry:h.entryId};}
  const adopt=before=>{if(authority&&!equal(authority,before))service.invalidate();authority=before;};
  return{
   register(ipc){
@@ -46,6 +82,9 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
     // Recompute focus after the final await; this changes only public controls.
     if(!same(before))for(const row of result.sessions)for(const action of ['open','message'])if(row.capabilities[action].enabled)row.capabilities[action]={...row.capabilities[action],enabled:false,reason:'Focus Plexiform and refresh before acting.'};
     return result;});
+   ipc.handle('sidebar:team-rows',async(e,...args)=>{const side=fromSidebarDoc(e);return side?sidebarTeamState(side,args):null;});
+   // T1: the Overview document consumes a teammate-row hint (once; 10 s; same viewer).
+   ipc.handle('overview:open-hint',(e,...args)=>{const before=owner(true);if(!allowed(e,before)||args.length!==0)return null;return takeHint();});
    ipc.handle('overview:directory',async(e,...args)=>{const before=owner(true);if(!allowed(e,before)||args.length!==1)return null;
     adopt(before);const result=await service.directory(args[0]);return same(before,true)?result:null;});
    ipc.handle('overview:viewing',async(e,...args)=>{const before=owner(true);if(!allowed(e,before)||args.length!==1)return response('unavailable');adopt(before);return service.viewing(args[0]);});
@@ -73,7 +112,8 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
   threadForTask:id=>stopped?null:service.threadForTask(id),
   // R7-1: main-only, for the new chat's Needs-you rows (src/newchat-home-main.js): the sidebar's projection, read with the caller's liveness.
   passiveSidebarRows:alive=>stopped||chatPreview!==true?Promise.resolve(null):service.passiveRows(alive).then(out=>out?SidebarRows.sidebarRows(out):null,()=>null),
-  invalidate(){authority=null;sidebarRead=null;service.invalidate();},close(){stopped=true;authority=null;sidebarRead=null;if(pump)clearInterval(pump);service.invalidate();},
+  armTeamHint,
+  invalidate(){authority=null;sidebarRead=null;teamRead=null;hint=null;service.invalidate();},close(){stopped=true;authority=null;sidebarRead=null;teamRead=null;hint=null;teamRoutes.clear();if(pump)clearInterval(pump);service.invalidate();},
  };
 }
 module.exports={createOverviewMain};

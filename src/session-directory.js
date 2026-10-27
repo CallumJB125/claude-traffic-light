@@ -326,6 +326,8 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
 // the in-memory stand-in until the real hub directory lands):
 //   teams(viewer)              -> [{id, name}] teams the viewer is a current member of
 //   sessions(viewer, teamId)   -> hub entries explicitly shared with that team (server-filtered)
+//   passiveSessions(viewer)    -> {teamsTotal, teams: [{id, name, entries}] (first 4), partial}:
+//                              the sidebar's read-only pass (T1); it never moves what Overview watches
 //   send(viewer, teamId, ref, text, requestId) -> {ok, status, delivery?}
 //   onChange(fn)               -> off; pushes when shares/sessions change
 //   label                      -> shown with the team (e.g. a fake hub says so)

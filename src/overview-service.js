@@ -374,6 +374,34 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   const notice=adapterTeam?(hub.fake===true?`${clean(hub.label,80)||'Fake team hub'}: these teammates and sessions are test data, not a real team.`:''):'Your own sessions in this team are shown. Teammates\' shared sessions appear once your team hub\'s shared-session directory is connected.';
   return{schema:1,view,status,observed_at:time,teams:teamList,team:{key:selected.key,name:selected.name,source:selected.source},notice,entries:model.entries,counts:directoryModel.counts(model.entries)};
  }
+ // T1: the chat-first sidebar's teammate rows. Read-only for Overview: no build(), no routeEpoch,
+ // teamView, teamRefs, viewCards/viewTeam, controls or coordinator write, and no presence read
+ // or presenceView. The viewer token is opaque (an HMAC of hub origin and viewer id).
+ const passiveOrigin=hub=>hub?.fake!==true&&typeof hub?.origin==='string'?hub.origin:'adapter:';
+ function viewerScope(){const hub=safe(teamHub,null),viewer=viewerOf(hub);return hub&&viewer?stable(['viewer',passiveOrigin(hub),viewer.id]):null;}
+ async function passiveTeamRows(alive){
+  const ok=()=>{try{return alive()===true;}catch{return false;}};
+  const hub=safe(teamHub,null),viewer=viewerOf(hub);
+  if(!ok())return null;
+  if(!hub||!viewer)return{viewerScope:null,teams:[],teamsTotal:0,entries:[],partial:false};
+  const scope=viewerScope(),origin=passiveOrigin(hub),still=()=>ok()&&safe(teamHub,null)===hub&&viewerOf(hub)?.id===viewer.id;
+  if(typeof hub.passiveSessions!=='function')return null;
+  let got;try{got=await hub.passiveSessions(viewer);}catch{got=null;}
+  if(!still()||!object(got)||!Array.isArray(got.teams))return null;
+  const entries=[],teams=[];
+  for(const t of got.teams.filter(t=>object(t)&&typeof t.id==='string').slice(0,4)){
+   const key=teamKey(origin,t.id),name=clean(t.name,80)||'Team',fake=hub.fake===true;
+   teams.push({key,name,fake,label:fake?clean(hub.label,80)||'Fake team hub':''});
+   const hubEntries=Array.isArray(t.entries)?t.entries:[];
+   const model=directoryModel.team({team:{key,name,id:t.id},viewer,member:true,personal:[],hubEntries});
+   // Main-only beside each entry (never projected; SidebarRows.teamRows takes a fixed shape): the hub ref, team id and
+   // card id, so a later step (T2) re-resolves a row through this same read rather than a second path.
+   for(const e of model.entries){if(entries.length>=200)break;if(e.owner?.self)continue;const ref=model.refs.get(e.id);if(!ref)continue;
+    const x=hubEntries.find(h=>object(h)&&h.ref===ref.ref),cardId=typeof x?.card?.id==='string'&&x.card.id&&x.card.id.length<=128?x.card.id:null;
+    entries.push({rowId:stable(['shared',e.id]),entryId:e.id,teamKey:key,teamId:t.id,teamName:name,fake,label:fake?clean(hub.label,80)||'Fake team hub':'',scope:ref.scope,ref:ref.ref,cardId,entry:e});}
+  }
+  return{viewerScope:scope,teams,teamsTotal:Number.isSafeInteger(got.teamsTotal)&&got.teamsTotal>=teams.length?got.teamsTotal:teams.length,entries,partial:got.partial===true};
+ }
  // Message a teammate's session shared with the selected team to send.
  async function teamMessage(request){
   if(!closed(request,['id','text'])||typeof request.id!=='string'||!/^[0-9a-f]{40}$/.test(request.id)||typeof request.text!=='string'||request.text.includes('\0')||!request.text.trim()||request.text.trim().length>4000||Buffer.byteLength(request.text.trim())>8192)return response('invalid');
@@ -391,7 +419,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   if(!alive())return{ok:false,status:'unconfirmed',error:'The view changed. Inspect the receipt before sending again.'};
   return out?.ok===true?out:{ok:false,status:['forbidden','stale','busy','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
- return{snapshot,passiveRows,threadTarget,threadForTask,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
+ return{snapshot,passiveRows,passiveTeamRows,viewerScope,threadTarget,threadForTask,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
   followupReview,followupEnqueue,
   coordinatorRequestOwner:coordinator.requestOwner,coordinatorRemoteList:coordinator.remoteList,coordinatorRemoteSend:coordinator.remoteSend,coordinatorRemoteCancel:coordinator.remoteCancel,coordinatorRemoteReplace:coordinator.remoteReplace,
   coordinatorInventory:coordinator.inventory,coordinatorPropose:coordinator.propose,coordinatorConfirm:coordinator.confirm,coordinatorResults:coordinator.results,coordinatorCancel:coordinator.cancel,

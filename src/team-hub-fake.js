@@ -41,6 +41,11 @@ function createFakeTeamHub(fixture = {}, { now = Date.now } = {}) {
         };
       });
     },
+    // T1: the sidebar's passive read (same interface as the real client's).
+    async passiveSessions(viewer) {
+      const listed = await this.teams(viewer);
+      return { teamsTotal: listed.length, teams: await Promise.all(listed.slice(0, 4).map(async (t) => ({ id: t.id, name: t.name, entries: await this.sessions(viewer, t.id) }))), partial: false };
+    },
     // A fake "delivery": accepted, then a canned acknowledgement + reply, so the
     // page's message → ack → response path can be exercised without a real hub.
     async send(viewer, teamId, ref, text) {

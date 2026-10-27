@@ -19,7 +19,7 @@ const ROWS = [
 ];
 
 // One app per test: the gate is read once at boot, and each test needs its own rows.
-async function open({ rows = ROWS, theme = 'dark', env = { CLAUDE_TRAFFIC_LIGHT_CHAT_PREVIEW: '1' }, config = {} } = {}) {
+async function open({ rows = ROWS, theme = 'dark', env = { CLAUDE_TRAFFIC_LIGHT_CHAT_PREVIEW: '1' }, config = {}, team = null } = {}) {
   const h = await launchApp({ env, config });
   if (rows) {
     // Answers the sidebar document only, as main does; nothing else in these shots reads it.
@@ -27,6 +27,14 @@ async function open({ rows = ROWS, theme = 'dark', env = { CLAUDE_TRAFFIC_LIGHT_
       ipcMain.removeHandler('overview:state');
       ipcMain.handle('overview:state', (e) => (/\/buddy-window\/sidebar\.html$/.test(e.sender.getURL()) ? { schema: 1, status: 'complete', sessions: rows } : null));
     }, rows);
+  }
+  if (team) {
+    // T1: teammates' rows, the fixed shape src/overview-sidebar-rows.js teamRows returns; one payload per read, the last repeats.
+    await h.app.evaluate(({ ipcMain }, team) => {
+      let n = 0;
+      ipcMain.removeHandler('sidebar:team-rows');
+      ipcMain.handle('sidebar:team-rows', (e) => (/\/buddy-window\/sidebar\.html$/.test(e.sender.getURL()) ? team[Math.min(n++, team.length - 1)] : null));
+    }, team);
   }
   const widget = await windowByFile(h.app, 'index.html');
   await widget.evaluate(() => window.trafficLight.openHelp());
@@ -162,5 +170,48 @@ test('640 px: the window at its narrowest has no horizontal scroll in the sideba
     expect(await side.evaluate(() => { const f = document.querySelector('.sb-filter'); return f.scrollWidth <= f.clientWidth; })).toBe(true);
     const over = await side.evaluate(() => [...document.querySelectorAll('.sidebar *')].filter((n) => n.scrollWidth > n.clientWidth + 1 && getComputedStyle(n).overflowX === 'visible' && n.clientWidth > 0).map((n) => n.className));
     expect(over).toEqual([]);
+  } finally { await h.cleanup(); }
+});
+
+// ── T1: teammates' shared sessions under the Team filter ───────────────────
+const VIEWER = 'a'.repeat(64);
+const mate = (n, over) => ({ id: `${'c'.repeat(62)}${n.toString(16).padStart(2, '0')}`, person: 'Bob Stone', initials: 'BS', team: 'Dev team', title: 'Review the billing migration', provider: 'Claude Code', bucket: 'working', freshness: 'recent', age_ms: 60000, scope: 'watch', inbox: false, ...over });
+const SHARED = [
+  mate(1, { bucket: 'needs', title: 'Pick the retry policy', scope: 'interact' }),
+  mate(2, { freshness: 'stale', bucket: 'idle', title: 'Draft the changelog' }),
+  mate(3, { person: 'Ann Lee', initials: 'AL', provider: 'Codex', title: 'Port the CSV exporter' }),
+  mate(4, { person: 'Ann Lee', initials: 'AL', provider: 'Codex', title: 'Benchmark the parser', bucket: 'check' }),
+];
+const teamPayload = (rows, over = {}) => ({ schema: 1, status: 'complete', viewer: VIEWER, teams: [{ name: 'Dev team' }], teamsTotal: 1, rows, ...over });
+async function teamFilter(side) {
+  await side.locator('.sb-filter-opt[data-filter="team"]').click();
+}
+for (const theme of ['dark', 'light']) {
+  test(`T1 team (${theme}): my team work, then Shared with you by person; watch and send, stale and a tombstone`, async () => {
+    // The second read drops Ann's exporter: it becomes a tombstone (no title).
+    const { h, side } = await open({ theme, team: [teamPayload(SHARED), teamPayload(SHARED.filter((r) => r.title !== 'Port the CSV exporter'))] });
+    try {
+      await teamFilter(side);
+      await expect(side.locator('.sb-shared')).toHaveCount(4);
+      await side.locator('.sb-filter-opt[data-filter="all"]').click();
+      await teamFilter(side);
+      await expect(side.locator('.sb-gone')).toHaveCount(1);
+      await expect(side.locator('.sb-gone .sb-title')).toHaveText("Ann Lee's Codex session");
+      await expect(side.locator('.sb-group[aria-level="1"] > .sb-group-head .sb-group-label')).toHaveText(['Your team work', 'Shared with you']);
+      await expect(side.locator('.sb-group[aria-level="2"] .sb-person')).toHaveText(['Bob Stone', 'Ann Lee']);
+      await side.locator('.sb-filter-opt[data-filter="team"]').blur();
+      await shot(side.locator('.sidebar'), `sidebar-team-shared-${theme}.png`);
+    } finally { await h.cleanup(); }
+  });
+}
+
+test('T1 team empty (dark): no team yet, one sentence and Account & team', async () => {
+  const { h, side } = await open({ rows: [], team: [teamPayload([], { teams: [], teamsTotal: 0 })] });
+  try {
+    await teamFilter(side);
+    await expect(side.locator('#sb-empty')).toHaveText("Join a team to see teammates' shared sessions.");
+    await expect(side.locator('#sb-team-join')).toBeVisible();
+    await side.locator('.sb-filter-opt[data-filter="team"]').blur();
+    await shot(side.locator('.sidebar'), 'sidebar-team-empty-dark.png');
   } finally { await h.cleanup(); }
 });

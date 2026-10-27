@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('buddy', {
     sessions: () => ipcRenderer.invoke('overview:state'),
     setGroups: (ids) => ipcRenderer.send('buddy:sidebar-groups', Array.isArray(ids) ? ids.slice(0, 8).map(String) : []),
     openThread: (id) => ipcRenderer.send('buddy:open-thread', String(id)),
+    // T1: teammates' shared sessions (Team filter), and opening one in Overview › Team sessions (navigation only).
+    teamRows: () => ipcRenderer.invoke('sidebar:team-rows'),
+    openTeamRow: (id) => ipcRenderer.send('buddy:open-team-row', String(id)),
     // R2b-2: the New chat button (navigation only).
     openNewChat: () => ipcRenderer.send('buddy:open-newchat'),
   } : {}),

@@ -221,7 +221,9 @@ test('index.js: the sidebar context exists only with the gate on and has its own
   assert.match(src, /if \(chatFirst === true\) sidebar\.webContents\.on\('did-start-navigation', \(\) => \{ sidebarGeneration\+\+; \}\);/);
   assert.equal((src.match(/sidebarGeneration\+\+/g) || []).length, 1, 'select() never bumps it');
   const om = fs.readFileSync(path.join(__dirname, '..', 'src', 'overview-main.js'), 'utf8');
-  assert.equal((om.match(/fromSidebarDoc\(e\)/g) || []).length, 1, 'only overview:state consults the sidebar');
+  // T1 adds sidebar:team-rows, the only other channel the sidebar document reads.
+  assert.equal((om.match(/fromSidebarDoc\(e\)/g) || []).length, 2, 'only overview:state and sidebar:team-rows consult the sidebar');
+  assert.match(om, /ipc\.handle\('sidebar:team-rows',async\(e,\.\.\.args\)=>\{const side=fromSidebarDoc\(e\);return side\?sidebarTeamState\(side,args\):null;\}\);/);
   assert.match(om, /ipc\.handle\('overview:state',async\(e,\.\.\.args\)=>\{const side=fromSidebarDoc\(e\);if\(side\)return sidebarState\(side,args\);/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'), /createOverviewMain\(\{\n  buddy:\(\)=>buddyWin,chatPreview:CHAT_PREVIEW,/);
 });

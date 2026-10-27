@@ -13,6 +13,8 @@ const MAX_SHARED = 300, MAX_TEAMS = 64, MAX_PER_TEAM = 100, FANOUT = 6;
 const MAX_TEXT = 4000, MAX_BYTES = 8192, MAX_BODY = 1_000_000;
 const POLL_MS = 5000, TIMEOUT_MS = 15_000, DEADLINE_MS = 20_000, BACKOFF_MAX_MS = 60_000;
 const DIRECTORY_STATE_MS = 45_000;
+// T1: the sidebar's passive teammate read (passiveSessions).
+const PASSIVE_TEAMS = 4, PASSIVE_ROWS = 200, PASSIVE_REFRESH = 24, PASSIVE_SPAN_MS = 2500;
 const DELIVERY_STATES = Object.freeze(['queued', 'sending', 'unconfirmed', 'delivered', 'acknowledged', 'recorded', 'responding', 'completed', 'interrupted', 'failed', 'replied', 'refused', 'expired', 'unknown']);
 const ACTIVITY_LABELS = Object.freeze(['Thinking', 'Running a command', 'Editing files', 'Reading files', 'Searching', 'Using a tool', 'Coordinating agents']);
 const REASONS = Object.freeze({
@@ -351,7 +353,15 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     return out;
   }
 
+  // T1: the parse half is pure (no route is recorded), so a passive sidebar
+  // read can list board runs without evicting Overview's message routes.
   async function boardRows(teamId, deadline = 0) {
+    const routes = [], out = await parseBoardRows(teamId, deadline, routes);
+    for (const [ref, route] of routes) boardRoutes.set(ref, route);
+    while (boardRoutes.size > 500) boardRoutes.delete(boardRoutes.keys().next().value);
+    return out;
+  }
+  async function parseBoardRows(teamId, deadline, routes) {
     const r = await request(`${base}/api/team-session-directory`, { method: 'GET', team: teamId, deadline });
     const at = atNow(), b = r.body, me = viewer();
     if (r.status !== 200 || !object(b) || b.schema !== 1 || !['complete', 'partial'].includes(b.status)
@@ -373,7 +383,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
         card: x.card.id, repo: x.card.repo_id, fence: x.card.fence, owner: x.owner.user_id, ownerMember: x.owner.id, provider: x.provider.id,
         canSend: writer && online && x.canSend === true, received: at };
       const ref = routeRef(route);
-      boardRoutes.set(ref, route);
+      routes.push([ref, route]);
       const input = online && x.input_needed === true;
       out.push({ ref, boardRunId: route.run, kind: 'board-run', messageContract: 'task-inbox', notice: TASK_INBOX_NOTICE,
         team: { id: teamId, name: str(b.team.name, 80) || 'Team' },
@@ -388,7 +398,6 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
         input_needed: input, input_reported_needed: false, observed_at: age === null ? null : Math.max(0, at - age), online,
         self_reported: null, capabilities: { steer: false, interrupt: false }, handoffs: [], children: [], deliveries: [] });
     }
-    while (boardRoutes.size > 500) boardRoutes.delete(boardRoutes.keys().next().value);
     if (b.status === 'partial' || b.sessions.length > 200 || out.length < b.sessions.length) out.partial = true;
     return out;
   }
@@ -452,6 +461,9 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     let rows;
     try { rows = await listShared(); } catch (e) { if (!boardDirectory) throw e; rows = []; }
     cache = rows;
+    return teamsOf(rows);
+  }
+  async function teamsOf(rows) {
     const out = boardDirectory ? await accountTeams().catch(() => []) : [], seen = new Set(out.map(t => t.id));
     for (const row of rows) if (!seen.has(row.team.id) && out.length < MAX_TEAMS) { seen.add(row.team.id); out.push({ id: row.team.id, name: row.team.name }); }
     return out;
@@ -581,6 +593,77 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     } finally { clearTimeout(cutTimer); }
   }
 
+  // T1: the chat-first sidebar's teammate rows. Read-only and side-effect free
+  // for Overview: one shared list for every team, the same 45 s state cache
+  // (so it adds no relay call inside a window Overview already filled), at most
+  // PASSIVE_REFRESH expired slots refreshed per pass, a shorter deadline. It
+  // never writes cache, watchedTeams or boardRoutes, never schedules poll(), and
+  // a slot it refreshes calls no listener (poll()'s fingerprint never reads slots).
+  // → { teamsTotal, teams: [{ id, name, entries }] (the first PASSIVE_TEAMS of teams()'s order), partial }.
+  async function passiveSessions(viewerArg) {
+    const result = { teamsTotal: 0, teams: [], partial: false };
+    if (!sameViewer(viewerArg)) return result;
+    let all;
+    try { all = await listShared(); } catch (e) { if (!boardDirectory) throw e; all = []; result.partial = true; }
+    const listed = await teamsOf(all);
+    result.teamsTotal = listed.length;
+    const picked = listed.slice(0, PASSIVE_TEAMS), ids = picked.map((t) => t.id);
+    const deadline = Date.now() + Math.min(span, PASSIVE_SPAN_MS);
+    let room = PASSIVE_ROWS;
+    const rows = [];
+    for (const id of ids) {
+      const mine = all.filter((r) => r.team.id === id).slice(0, Math.min(MAX_PER_TEAM, Math.max(room, 0)));
+      room -= mine.length;
+      if (all.filter((r) => r.team.id === id).length > mine.length) result.partial = true;
+      const entries = mine.map(baseEntry);
+      result.teams.push({ id, name: picked.find((t) => t.id === id).name, entries });
+      mine.forEach((row, i) => rows.push({ row, entry: entries[i] }));
+    }
+    const at = atNow(), due = [];
+    for (const x of rows) {
+      const slot = stateSlot(x.row, viewerArg);
+      applyCached(x.entry, slot);
+      if (!slot.pending && !(slot.readAt !== null && at >= slot.readAt && at - slot.readAt < DIRECTORY_STATE_MS)) due.push({ ...x, slot });
+    }
+    // Never-read slots first, then the oldest; the rest keep their cached report.
+    due.sort((a, b) => (a.slot.readAt ?? -1) - (b.slot.readAt ?? -1));
+    if (due.length > PASSIVE_REFRESH) result.partial = true;
+    const refresh = due.slice(0, PASSIVE_REFRESH);
+    const boardPending = boardDirectory ? Promise.all(ids.map((id) => parseBoardRows(id, deadline, []).catch(partialRows))) : Promise.resolve([]);
+    let next = 0, settled = false, cutTimer;
+    const cut = new Promise((done) => { cutTimer = setTimeout(() => { result.partial = true; done(); }, Math.max(deadline - Date.now(), 0)); });
+    try {
+      const worker = async () => {
+        for (;;) {
+          const i = next++;
+          if (settled || i >= refresh.length || Date.now() >= deadline) return;
+          const { row, entry, slot } = refresh[i];
+          if (slot.pending) continue;
+          slot.pending = true; slot.readAt = atNow(); const version = ++slot.version;
+          try {
+            const got = hubResult(await sharedCall(row.ref, crypto.randomUUID(), 'state', { session: row.session }, deadline));
+            if (got.ok && stateCache.get(row.ref) === slot && slot.version === version) {
+              const data = projectState(row, got.result.state, atNow());
+              if (data) slot.data = data;
+            }
+            if (!settled) applyCached(entry, slot);
+          } catch { /* listed with its cached state */ } finally { slot.pending = false; }
+        }
+      };
+      await Promise.race([Promise.all(Array.from({ length: Math.min(FANOUT, refresh.length) }, worker)), cut]);
+      settled = true;
+      if (next < refresh.length) result.partial = true;
+      const boards = await Promise.race([boardPending, cut.then(() => null)]);
+      if (!boards) { if (boardDirectory) result.partial = true; return result; }
+      boards.forEach((list, i) => {
+        if (list.partial === true) result.partial = true;
+        const t = result.teams[i];
+        t.entries = t.entries.concat(list.slice(0, MAX_PER_TEAM));
+      });
+      return result;
+    } finally { clearTimeout(cutTimer); }
+  }
+
   async function send(viewerArg, teamId, ref, text, requestId, fresh = () => true) {
     const message = typeof text === 'string' ? text.trim() : '';
     if (!message || message.includes('\0') || message.length > MAX_TEXT || Buffer.byteLength(message) > MAX_BYTES) return failed('invalid', REASONS.invalid);
@@ -669,7 +752,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     };
   }
 
-  return Object.defineProperty({ teams, sessions, inspect, act, send, proposals, onChange, viewer }, 'origin', { value: new URL(base).origin, enumerable: true });
+  return Object.defineProperty({ teams, sessions, passiveSessions, inspect, act, send, proposals, onChange, viewer }, 'origin', { value: new URL(base).origin, enumerable: true });
 }
 
 module.exports = { createTeamHubClient, parseBase };

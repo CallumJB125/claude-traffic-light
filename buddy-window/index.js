@@ -127,7 +127,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, chatsOn = () => true, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, onThreadRetired = () => {}, newChatBusy = () => false, onNewChatRetired = () => {}, loginEnv = () => null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, chatsOn = () => true, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, openTeamRow = () => false, onThreadRetired = () => {}, newChatBusy = () => false, onNewChatRetired = () => {}, loginEnv = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -1337,6 +1337,16 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     if (!fromSidebar(e) || typeof id !== 'string' || !ROW_ID.test(id)) return;
     if (!openThread(id)) { if (!content) select('board'); }
   });
+  // T1: a teammate's shared row opens Overview › Team sessions on it. Main arms a one-shot hint
+  // (the row's route, this viewer only) and does a plain select: route() would send overview to
+  // the sidebar's All filter under the preview. The page reads the hint through its own fences.
+  function openTeamRowFromSidebar(e, ...args) {
+    if (!fromSidebar(e) || e.senderFrame !== sidebar.webContents.mainFrame || args.length !== 1 || typeof args[0] !== 'string' || !ROW_ID.test(args[0])) return;
+    let armed = false;
+    try { armed = openTeamRow(args[0]) === true; } catch { armed = false; }
+    if (armed) select('overview');
+  }
+  if (chatFirst === true) ipcMain.on('buddy:open-team-row', openTeamRowFromSidebar);
   if (chatFirst === true) ipcMain.on('buddy:sidebar-groups', (e, ids) => {
     if (!fromSidebar(e)) return;
     const clean = sidebarCollapsed(ids);

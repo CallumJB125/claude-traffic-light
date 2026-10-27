@@ -11,6 +11,8 @@ const messageText = text => {
 };
 contextBridge.exposeInMainWorld('overviewApi', {
   state: () => ipcRenderer.invoke('overview:state'),
+  // T1: a teammate row the sidebar asked to open (consumed once; navigation only).
+  openHint: () => ipcRenderer.invoke('overview:open-hint'),
   openSearch: () => ipcRenderer.invoke('search:open-page'),
   onReady: callback => {
     if (typeof callback !== 'function') return () => {};

@@ -12,7 +12,7 @@ const ORIGINS = Object.freeze(['iTerm', 'Terminal', 'Plexiform Terminal']);
 // R2b-1: rows are a projection of the session row view model (PR 0s,
 // session-row.js), which owns the title rules (session-title.js). The vm's
 // ref never leaves main: only the two booleans below are derived from it.
-const { AI, NO_PROJECT } = require('./session-title');
+const { AI, NO_PROJECT, text } = require('./session-title');
 const MAX = 200;
 
 function row(vm, origins) {
@@ -61,4 +61,39 @@ function headerOf(target, id) {
   };
 }
 
-module.exports = { sidebarRows, headerOf, KEYS, HEADER_KEYS, NO_PROJECT };
+// T1: teammates' shared sessions for the sidebar's Team filter. The same
+// fixed-shape rule: names, a title and a few closed words, never deliveries,
+// children, capabilities, devices, boards, provenance, refs or entry ids.
+const TEAM_KEYS = Object.freeze(['id', 'person', 'initials', 'team', 'title', 'provider', 'bucket', 'freshness', 'age_ms', 'scope', 'inbox']);
+const TEAM_MAX = 200, TEAM_SHOWN = 4;
+function teamRow(x) {
+  const e = x?.entry;
+  if (!e || typeof e !== 'object' || typeof x.rowId !== 'string' || !/^[0-9a-f]{64}$/.test(x.rowId) || !['watch', 'interact'].includes(x.scope)) return null;
+  const person = text(e.owner?.name, 80) || 'Teammate', provider = text(e.provider?.label, 120) || 'AI';
+  const inbox = e.messageContract === 'task-inbox';
+  const reported = e.task && e.task.source !== 'unknown' ? text(e.task.title, 200) : '';
+  const team = text(x.teamName, 80) || 'Team';
+  return {
+    id: x.rowId, person, initials: text(e.owner?.initials, 8) || '?',
+    team: x.fake === true ? `${team} (test data)` : team,
+    title: reported || (inbox ? `${person}'s board run` : `${person}'s ${provider} session`),
+    provider, bucket: BUCKET_IDS.includes(e.bucket) ? e.bucket : 'idle',
+    freshness: ['recent', 'stale'].includes(e.freshness) ? e.freshness : 'unknown',
+    age_ms: Number.isSafeInteger(e.ageMs) && e.ageMs >= 0 ? e.ageMs : null,
+    scope: x.scope, inbox,
+  };
+}
+/** passiveTeamRows() output → the sidebar's teammate payload. */
+function teamRows(out) {
+  if (!out || typeof out !== 'object' || !Array.isArray(out.entries) || !Array.isArray(out.teams)) return { schema: 1, status: 'unavailable', viewer: null, teams: [], teamsTotal: 0, rows: [] };
+  const rows = [];
+  for (const x of out.entries) { if (rows.length >= TEAM_MAX) break; const r = teamRow(x); if (r) rows.push(r); }
+  const teams = out.teams.slice(0, TEAM_SHOWN).map((t) => ({ name: text(t?.name, 80) || 'Team' }));
+  return {
+    schema: 1, status: out.partial === true ? 'partial' : 'complete',
+    viewer: typeof out.viewerScope === 'string' && /^[0-9a-f]{64}$/.test(out.viewerScope) ? out.viewerScope : null,
+    teams, teamsTotal: Number.isSafeInteger(out.teamsTotal) && out.teamsTotal >= teams.length ? out.teamsTotal : teams.length, rows,
+  };
+}
+
+module.exports = { sidebarRows, headerOf, teamRows, KEYS, HEADER_KEYS, TEAM_KEYS, NO_PROJECT };
