@@ -31,7 +31,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
-const { wantsClassify, expectedFileFor } = require('../test-visual/classify-lib');
+const { wantsClassify, expectedFileFor, htmlParts } = require('../test-visual/classify-lib');
 
 const ROOT = path.join(__dirname, '..');
 const TOKEN_CSS = ['tokens.css', 'buddy-window/burst-theme.css', 'board/web/app.css', 'board/web/phone.css'];
@@ -221,38 +221,6 @@ function colourOnlyPair(minus, plus, maps) {
 }
 
 // <style> content of an HTML file, and the rest (which must not change).
-// Splits an HTML file the way the parser does: <style> and <script> hold raw text up to their end tag (a "<!--"
-// inside them is just text), markup comments only exist between those elements, and a start tag's attribute values
-// are skipped as quoted strings. `styles`: each <style>'s content. `outside`: the file with every <style>'s content
-// emptied and markup comments kept (so a changed comment still counts as changed markup).
-function htmlParts(html) {
-  const styles = []; let outside = ''; let i = 0;
-  while (i < html.length) {
-    const lt = html.indexOf('<', i);
-    if (lt < 0) { outside += html.slice(i); break; }
-    outside += html.slice(i, lt);
-    if (html.startsWith('<!--', lt)) {
-      const end = html.indexOf('-->', lt + 4); const stop = end < 0 ? html.length : end + 3;
-      outside += html.slice(lt, stop); i = stop; continue;
-    }
-    const tag = html.slice(lt).match(/^<([a-zA-Z][\w-]*)/);
-    if (!tag) { outside += '<'; i = lt + 1; continue; }
-    let k = lt + tag[0].length; // to the start tag's '>', skipping quoted attribute values
-    while (k < html.length && html[k] !== '>') {
-      if (html[k] === '"' || html[k] === "'") { const q = html.indexOf(html[k], k + 1); k = q < 0 ? html.length : q + 1; } else k += 1;
-    }
-    const open = Math.min(k + 1, html.length);
-    outside += html.slice(lt, open); i = open;
-    const name = tag[1].toLowerCase();
-    if (name === 'style' || name === 'script') {
-      const close = html.slice(open).search(new RegExp(`</${name}\\b`, 'i'));
-      const end = close < 0 ? html.length : open + close;
-      if (name === 'style') styles.push(html.slice(open, end)); else outside += html.slice(open, end);
-      i = end;
-    }
-  }
-  return { styles, outside };
-}
 const styleOf = (html) => htmlParts(html).styles.join('\n');
 const outsideStyle = (html) => htmlParts(html).outside;
 

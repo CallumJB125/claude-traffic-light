@@ -759,6 +759,16 @@ test('classifier: a terracotta literal → accent mix pair is modelled only when
   assert.match(refused(BASE, HEAD.replace('padding: 2px; background:', 'padding: 2px; background: 1px'), 'rest of value differs'), /rest of the value differs/);
   assert.match(refused(BASE + BASE, HEAD + HEAD, 'declared twice'), /more than once/);
   assert.match(refused(BASE, `:root { --accent: #ff0000; }\n${HEAD}`, 'sheet-local accent'), /redeclared in the sheet/);
+  // review 8b S1: only the retired terracotta pairs, never another colour at the right alpha
+  assert.match(refused(BASE.replace('rgba(218, 119, 86, 0.18)', 'rgba(255, 0, 0, 0.18)'), HEAD, 'a red literal'), /rgb\(255, 0, 0\) is not the retired accent/);
+  assert.match(refused('.c { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5); }', '.c { box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 50%, transparent); }', 'a black shadow'), /rgb\(0, 0, 0\) is not the retired accent/);
+  // nits: theme-scoped rules, gradients, an accent redeclared outside :root, HTML comments only in markup
+  assert.match(refused(`@media (prefers-color-scheme: dark) { ${BASE} }`, `@media (prefers-color-scheme: dark) { ${HEAD} }`, 'theme-scoped'), /theme-scoped/);
+  assert.match(refused('.g { background: linear-gradient(rgba(218, 119, 86, 0.08), transparent); }',
+    '.g { background: linear-gradient(color-mix(in srgb, var(--accent) 8%, transparent), transparent); }', 'gradient'), /gradient/);
+  assert.match(refused(BASE, `.scope { --accent: #ff0000; }\n${HEAD}`, 'accent redeclared outside :root'), /redeclared in the sheet/);
+  assert.equal(pairs(`<script>const a = "<!--";</script><style>${BASE}</style><script>const b = "-->";</script>`,
+    `<script>const a = "<!--";</script><style>${HEAD}</style><script>const b = "-->";</script>`, { oldFile: 'p.html', newFile: 'p.html' }).specs.length, 1);
   // not an accent-at-alpha mix: left to the ordinary rules, never paired with a literal
   assert.equal(refused(BASE, HEAD.replace('transparent', 'var(--panel)'), 'mix with a surface'), '');
 });

@@ -318,12 +318,46 @@ function computeMix(spec, theme) {
 //   - the head file does not redeclare the accent var (the mix then reads a sheet-local value).
 // The member is the literal at base and the mix with the head tokens, each over a surface, per theme.
 const isHtml = (file) => file.endsWith('.html');
-// CSS of a file: a stylesheet as is, an HTML file's <style> contents (markup comments dropped first).
+// Splits an HTML file the way the parser does: <style> and <script> hold raw text up to their end tag (a "<!--"
+// inside them is just text), markup comments only exist between those elements, and a start tag's attribute values
+// are skipped as quoted strings. `styles`: each <style>'s content. `outside`: the file with every <style>'s content
+// emptied and markup comments kept (so a changed comment still counts as changed markup).
+function htmlParts(html) {
+  const styles = []; let outside = ''; let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf('<', i);
+    if (lt < 0) { outside += html.slice(i); break; }
+    outside += html.slice(i, lt);
+    if (html.startsWith('<!--', lt)) {
+      const end = html.indexOf('-->', lt + 4); const stop = end < 0 ? html.length : end + 3;
+      outside += html.slice(lt, stop); i = stop; continue;
+    }
+    const tag = html.slice(lt).match(/^<([a-zA-Z][\w-]*)/);
+    if (!tag) { outside += '<'; i = lt + 1; continue; }
+    let k = lt + tag[0].length; // to the start tag's '>', skipping quoted attribute values
+    while (k < html.length && html[k] !== '>') {
+      if (html[k] === '"' || html[k] === "'") { const q = html.indexOf(html[k], k + 1); k = q < 0 ? html.length : q + 1; } else k += 1;
+    }
+    const open = Math.min(k + 1, html.length);
+    outside += html.slice(lt, open); i = open;
+    const name = tag[1].toLowerCase();
+    if (name === 'style' || name === 'script') {
+      const close = html.slice(open).search(new RegExp(`</${name}\\b`, 'i'));
+      const end = close < 0 ? html.length : open + close;
+      if (name === 'style') styles.push(html.slice(open, end)); else outside += html.slice(open, end);
+      i = end;
+    }
+  }
+  return { styles, outside };
+}
+// CSS of a file: a stylesheet as is, an HTML file's <style> contents (htmlParts: comments only in markup).
 function cssOfFile(file, text) {
   const t = String(text);
-  if (!isHtml(file)) return t;
-  return [...t.replace(/<!--[\s\S]*?-->/g, '').matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n');
+  return isHtml(file) ? htmlParts(t).styles.join('\n') : t;
 }
+// The retired terracotta accent the hard-coded washes used (tokens.css before R0a: --accent #da7756 =
+// rgb(218, 119, 86); lights.html, input-bubble.css). A literal of any other colour is never paired (review 8b S1).
+const RETIRED_ACCENT_RGB = [[218, 119, 86]];
 // Every declaration with its rule context: [{ ctx: 'sel' or '@media … > sel', prop, value }].
 function declarationsOf(css) {
   const src = String(css).replace(/\/\*[\s\S]*?\*\//g, '');
@@ -380,6 +414,7 @@ function alphaLiteralIn(value) {
   const h8 = m[0].match(/^#([0-9a-f]{8})$/i);
   try { rgba = h8 ? [0, 2, 4, 6].map((i) => parseInt(h8[1].slice(i, i + 2), 16)).map((v, i) => (i === 3 ? v / 255 : v)) : parseColour(m[0]); } catch { return { why: 'not a colour literal' }; }
   if (insideVar(value, m.index)) return { why: 'literal inside a var() fallback' };
+  if (!RETIRED_ACCENT_RGB.some((c) => c.every((v, i) => v === rgba[i]))) return { why: `rgb(${rgba.slice(0, 3).join(', ')}) is not the retired accent` };
   return { start: m.index, end: m.index + m[0].length, rgba, raw: m[0] };
 }
 // files: { old: { path: text }, new: { path: text } }. Returns { specs, refused }.
@@ -399,6 +434,10 @@ function literalMixPairsOf(files = {}) {
       const where = `${file}: ${d.ctx} { ${d.prop} }`;
       if (mix.why === 'mix inside a var() fallback') { refused.push({ where, why: mix.why }); continue; }
       if (mix.why) continue; // not this shape: the ordinary mix rules (or none) handle it
+      // members are built for both themes, so a theme-scoped rule would be modelled in the theme it never renders in
+      if (/prefers-color-scheme|data-theme/.test(d.ctx)) { refused.push({ where, why: 'theme-scoped rule' }); continue; }
+      // a gradient's stops interpolate: a flat member can't model them (see the radial wash, afda1ac1)
+      if (/gradient\(/i.test(d.value)) { refused.push({ where, why: 'gradient' }); continue; }
       const k = key(d);
       const refuse = (why) => refused.push({ where, why });
       if (count(headDecls, k) !== 1) { refuse('declared more than once at head'); continue; }
@@ -411,7 +450,8 @@ function literalMixPairsOf(files = {}) {
       if (Math.abs(lit.rgba[3] - mix.pct / 100) > 1e-9) { refuse(`alpha ${lit.rgba[3]} is not ${mix.pct} %`); continue; }
       const tmpl = (v, a, b) => `${v.slice(0, a)}\u0000${v.slice(b)}`.replace(/\s+/g, ' ').trim();
       if (tmpl(base, lit.start, lit.end) !== tmpl(d.value, mix.start, mix.end)) { refuse('the rest of the value differs'); continue; }
-      if (local && (mix.token in (local.dark || {}) || (local.light && mix.token in local.light))) { refuse(`${mix.token} redeclared in the sheet`); continue; }
+      // any declaration of the accent var in the head file (not only :root): the mix may read that value
+      if (headDecls.some((x) => x.prop === mix.token) || (local && (mix.token in (local.dark || {}) || (local.light && mix.token in local.light)))) { refuse(`${mix.token} redeclared in the sheet`); continue; }
       specs.push({ ...mix.spec, raw: `${mix.spec.raw} from ${lit.raw} [${where}]`, baseLiteral: lit.rgba });
     }
   }
@@ -913,4 +953,4 @@ function verdictOf(results, config) {
   return { failures, crops };
 }
 
-module.exports = { literalMixPairsOf, declarationsOf, ALPHA_EDGE_MIN, VOTE_MIN_PX, VOTE_MIN_SHARE, resolveBase, ALPHA_EDGE_MAX, VOTE_CHROMA, sheetTokensOf, aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, themeFromConfig, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, noiseCapFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
+module.exports = { htmlParts, RETIRED_ACCENT_RGB, literalMixPairsOf, declarationsOf, ALPHA_EDGE_MIN, VOTE_MIN_PX, VOTE_MIN_SHARE, resolveBase, ALPHA_EDGE_MAX, VOTE_CHROMA, sheetTokensOf, aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, themeFromConfig, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, noiseCapFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
