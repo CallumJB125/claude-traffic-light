@@ -5,6 +5,8 @@
 const api = window.buddyAccount;
 const root = document.getElementById('acct');
 const screen = new URLSearchParams(location.search).get('screen') ?? 'hub';
+// Set by main only when the visit began in the Settings sheet; read as a flag, never reflected into the page.
+const backToSettings = new URLSearchParams(location.search).get('back') === '1';
 
 function el(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
@@ -778,7 +780,8 @@ async function render() {
   if (!s?.ok) return;
   const draw = SCREENS[s.screen ?? screen] ?? SCREENS.hub;
   const alert = s.alert ? el('p', { class: 'acct-error', role: 'alert' }, s.alert) : null;
-  const card = el('div', { class: `acct-card${WIDE.has(s.screen) ? ' acct-card-wide' : ''}` }, notice(s.notice), alert, draw(s));
+  const back = backToSettings ? el('button', { type: 'button', class: 'acct-link', onclick: () => api.backToSettings() }, 'Back to Settings') : null;
+  const card = el('div', { class: `acct-card${WIDE.has(s.screen) ? ' acct-card-wide' : ''}` }, back, notice(s.notice), alert, draw(s));
   document.title = s.brand?.name ?? '';
   root.textContent = '';
   root.dataset.screen = s.screen ?? screen;

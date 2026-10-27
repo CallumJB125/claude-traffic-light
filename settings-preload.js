@@ -70,5 +70,7 @@ contextBridge.exposeInMainWorld('settingsApi', {
   onShowSection: (cb) => ipcRenderer.on('show-section', (e, id) => cb(id)),
   // Settings sheet (R8-1, preview): open another pane's document; main shows a pane again with 'settings:shown'.
   goPane: (pane) => ipcRenderer.send('settings:go-pane', typeof pane === 'string' ? pane : ''),
+  // R8-3c-2: the nav entries for Account & team, This Mac and Team (navigation only; a closed list in main)
+  goAccount: (id) => ipcRenderer.send('settings:go-account', typeof id === 'string' ? id : ''),
   onShown: (cb) => ipcRenderer.on('settings:shown', () => cb()),
 });

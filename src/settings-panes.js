@@ -26,7 +26,11 @@
   const ACCOUNT_SYNC = 'account-sync';
   const CONFIG_OWNERS = Object.freeze([...PANES, RULES_PANE]); // who may call get-config / save-config (filtered by KEY_OWNER)
   const OWNERS = Object.freeze([...CONFIG_OWNERS, WIDGET_LOOK, CHARACTER, PHONE_PAIRING, AITOOLS_SETUP, ACCOUNT_PLAN, ACCOUNT_SYNC]); // every sheet document (go-pane senders and targets)
-  const NAV = OWNERS;
+  // R8-3c-2: the account screens are not documents (they live in the one shared account view). The sheet nav lists them, and a click
+  // sends settings:go-account (settings.html panes only, this closed map) which selects the existing page like a sidebar click.
+  const ACCOUNT_NAV = Object.freeze({ 'account-team': 'account', 'this-mac': 'thismac', team: 'team' });
+  const HOME_PANE = 'general'; // where the account page's Back to Settings returns
+  const NAV = Object.freeze([...OWNERS, ...Object.keys(ACCOUNT_NAV)]);
   const WIDGET_RULES = Object.freeze({
     // control fields of save-config, stripped in commitConfig and never stored. __prefsFrom names the template whose prefs ride in this save.
     control: Object.freeze(['__backupReason', '__prefsFrom']),
@@ -94,7 +98,7 @@
     remoteInteractionResetPending: 'none', persona: 'none',
   });
 
-  const TITLE = Object.freeze({ 'widget-rules': 'Widget rules', 'widget-look': 'Widget look', character: 'Character', 'phone-pairing': 'Phone pairing', 'aitools-setup': 'AI tools setup', 'account-plan': 'Plan & billing', 'account-sync': 'Sync', general: 'General', notifications: 'Notifications', aitools: 'AI tools', projects: 'Projects', terminal: 'Terminal', 'agent-messages': 'Agent messages', widget: 'Widget', spend: 'Spend and limits', privacy: 'Privacy and data', phone: 'Phone', advanced: 'Advanced' });
+  const TITLE = Object.freeze({ 'widget-rules': 'Widget rules', 'widget-look': 'Widget look', character: 'Character', 'phone-pairing': 'Phone pairing', 'aitools-setup': 'AI tools setup', 'account-team': 'Account & team', 'this-mac': 'This Mac', team: 'Team', 'account-plan': 'Plan & billing', 'account-sync': 'Sync', general: 'General', notifications: 'Notifications', aitools: 'AI tools', projects: 'Projects', terminal: 'Terminal', 'agent-messages': 'Agent messages', widget: 'Widget', spend: 'Spend and limits', privacy: 'Privacy and data', phone: 'Phone', advanced: 'Advanced' });
 
   // Keys every pane may READ (never write): simpleMode decides which developer sections the page shows at all.
   const SHARED_READS = Object.freeze(['simpleMode']);
@@ -125,5 +129,5 @@
   const current = root && root.location && typeof root.location.search === 'string' ? paneFromSearch(root.location.search) : null;
   const inPane = (...panes) => current === null || panes.includes(current);
 
-  return { current, inPane, TITLE, PANES, RULES_PANE, WIDGET_LOOK, CHARACTER, PHONE_PAIRING, AITOOLS_SETUP, ACCOUNT_PLAN, ACCOUNT_SYNC, WIDGET_LOOK_KEYS, SHEET_TARGET, CONFIG_OWNERS, OWNERS, NAV, WIDGET_RULES, isOwner, crossKeys, CHANNEL_PANE, KEY_OWNER, SHARED_READS, isPane, ownedKeys, readKeys, paneOfChannel, writesAllowed, pick, readView, paneFromSearch };
+  return { current, inPane, TITLE, PANES, RULES_PANE, WIDGET_LOOK, CHARACTER, PHONE_PAIRING, AITOOLS_SETUP, ACCOUNT_PLAN, ACCOUNT_SYNC, ACCOUNT_NAV, HOME_PANE, WIDGET_LOOK_KEYS, SHEET_TARGET, CONFIG_OWNERS, OWNERS, NAV, WIDGET_RULES, isOwner, crossKeys, CHANNEL_PANE, KEY_OWNER, SHARED_READS, isPane, ownedKeys, readKeys, paneOfChannel, writesAllowed, pick, readView, paneFromSearch };
 }));

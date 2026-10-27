@@ -23,7 +23,7 @@ const routeSource = [
   block('  async function showClientPage(origin) {', '  async function resolveHub() {'),
   block('  async function resolveHub() {', '  // Key presses'),
   block('  async function showHubPage(page) {', '  // ── selection'),
-  block('  function select(id) {', '  const fromSidebar ='),
+  block('  function select(id, { fromSheet = false } = {}) {', '  const fromSidebar ='),
   block('  function switchWorkspace(id, { show = true } = {}) {', '  async function onSignOut'),
   block('  const fromHubView =', '  let selectedSessionKey ='),
 ].join('\n');
