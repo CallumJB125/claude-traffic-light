@@ -143,10 +143,11 @@ function createNewChatHome(deps) {
   }
 
   async function ciFor(dir) {
-    let remotes = '';
-    try { remotes = await deps.git(dir, ['remote', '-v'], { timeoutMs: GIT_TIMEOUT_MS, maxBuffer: 64 << 10 }); } catch { return false; }
+    // No live ci-failed event anywhere → no need to ask git which repo this is.
     const red = new Set((deps.ciFailedRepos?.() || []).filter((r) => typeof r === 'string'));
     if (!red.size) return false;
+    let remotes = '';
+    try { remotes = await deps.git(dir, ['remote', '-v'], { timeoutMs: GIT_TIMEOUT_MS, maxBuffer: 64 << 10 }); } catch { return false; }
     for (const line of String(remotes).split('\n')) {
       const p = line.split(/\s+/);
       if (p[2] === '(fetch)' && red.has(deps.repoOf(p[1]))) return true;
