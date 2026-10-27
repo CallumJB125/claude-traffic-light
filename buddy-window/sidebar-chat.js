@@ -46,6 +46,19 @@
     chats: true,
   };
   const filters = () => FILTERS.filter((f) => ui.chats || f.id !== 'chats');
+  // T1: teammates' shared sessions, Team filter only (read-only rows; a click opens Overview ›
+  // Team sessions). Memory only: person groups' open state is never saved (names stay out of
+  // config), and a tombstone keeps who and which AI, never the title.
+  const TEAM = {
+    shared: 'Shared with you', own: 'Your team work',
+    gone: 'No longer shared with you, or it ended',
+    none: "Join a team to see teammates' shared sessions.",
+    empty: 'Nothing shared with you yet. Sessions appear here when teammates share them with your team.',
+    unavailable: "Teammates' sessions are unavailable right now.",
+  };
+  const team = { viewer: undefined, rows: [], gone: new Map(), status: null, teams: [], teamsTotal: 0, loaded: false, collapsed: new Set(), people: new Map() };
+  const EYE = 'M1.75 8s2.25-4.25 6.25-4.25S14.25 8 14.25 8 12 12.25 8 12.25 1.75 8 1.75 8zM8 6.25a1.75 1.75 0 1 1 0 3.5 1.75 1.75 0 0 1 0-3.5z';
+  const SEND = 'M3 8h8.5M8.5 5l3 3-3 3';
 
   function el(tag, attrs = {}, ...kids) {
     const n = document.createElement(tag);
@@ -82,7 +95,7 @@
     return ui.rows;
   };
   const collapsible = (id) => id !== 'needs';
-  const isOpen = (id) => !collapsible(id) || !ui.collapsed.has(id);
+  const isOpen = (id) => !collapsible(id) || !(id.startsWith('t:') ? team.collapsed : ui.collapsed).has(id);
 
   // ── render ───────────────────────────────────────────────────────────────
   let tree = null;
@@ -112,7 +125,12 @@
     tree.addEventListener('focusin', (e) => { const key = keyOf(e.target); if (key && key !== ui.focusKey) { ui.focusKey = key; for (const i of treeItems()) i.tabIndex = i.dataset.key === key ? 0 : -1; } });
     const connect = el('button', { type: 'button', class: 'sb-connect', id: 'sb-connect', hidden: true }, 'How to connect a tool');
     connect.addEventListener('click', () => window.buddy.select('aitools'));
-    nav.append(top, filter, el('div', { class: 'sb-scroll' }, tree, el('p', { class: 'sb-empty', id: 'sb-empty', hidden: true }), connect));
+    const join = el('button', { type: 'button', class: 'sb-connect', id: 'sb-team-join', hidden: true }, 'Account & team');
+    join.addEventListener('click', () => window.buddy.select('account'));
+    const overview = el('button', { type: 'button', class: 'sb-link', id: 'sb-team-overview' }, 'Team overview');
+    overview.addEventListener('click', () => window.buddy.select('overview'));
+    const more = el('p', { class: 'sb-empty sb-team-more', id: 'sb-team-more', hidden: true }, el('span', {}), ' · ', overview);
+    nav.append(top, filter, el('div', { class: 'sb-scroll' }, tree, el('p', { class: 'sb-empty', id: 'sb-empty', hidden: true }), connect, join, more));
     const foot = document.getElementById('nav-foot');
     foot.textContent = '';
     foot.setAttribute('aria-label', 'Workspace');
@@ -138,33 +156,22 @@
     // Rebuilding replaces the nodes; keep keyboard focus where it was (a poll must never steal it).
     const hadFocus = tree.contains(document.activeElement);
     tree.textContent = '';
-    for (const b of BUCKETS) {
-      const mine = rows.filter((r) => r.bucket === b.id);
-      if (!mine.length) continue; // an empty group is hidden; Needs you never shows empty
-      const open = isOpen(b.id);
-      const label = el('span', { class: 'sb-group-label' }, b.label);
-      const head = el('div', { class: 'sb-group-head' }, label, el('span', { class: 'sb-count', 'aria-hidden': 'true' }, ` · ${mine.length}`),
-        collapsible(b.id) ? svg('M6 4.5l3.5 3.5L6 11.5', 'sb-chevron') : null);
-      const group = el('li', { role: 'treeitem', class: 'sb-group', 'data-key': `g:${b.id}`, 'data-bucket': b.id, 'aria-level': 1,
-        'aria-expanded': String(open), 'aria-label': `${b.label}, ${mine.length}`, tabindex: -1 }, head);
-      const list = el('ul', { role: 'group', hidden: !open });
-      for (const r of mine) {
-        const meta = [r.project, r.origin].filter(Boolean).join(' · ');
-        const row = el('li', { role: 'treeitem', class: 'sidebar-row', 'data-key': `r:${r.id}`, 'data-bucket': r.bucket, 'aria-level': 2,
-          'aria-selected': String(ui.selectedRow === r.id), tabindex: -1 },
-        el('span', { class: 'sb-dot', 'data-bucket': r.bucket, 'aria-hidden': 'true' }),
-        el('span', { class: 'sb-text' }, el('span', { class: 'sb-title' }, r.title), meta ? el('span', { class: 'sb-meta' }, meta) : null),
-        el('span', { class: 'sb-age' }, age(r.age_ms)));
-        list.append(row);
-      }
-      group.append(list);
-      tree.append(group);
-    }
     const empty = document.getElementById('sb-empty');
-    empty.hidden = rows.length > 0 || !ui.loaded;
-    empty.textContent = !ui.chats && ui.filter === 'all' ? EMPTY_NO_CHATS : EMPTY[ui.filter];
+    let shown = rows.length;
+    document.getElementById('sb-team-join').hidden = true;
+    document.getElementById('sb-team-more').hidden = true;
+    if (ui.filter === 'team') shown = renderTeam(rows, empty);
+    else {
+      for (const b of BUCKETS) {
+        const mine = rows.filter((r) => r.bucket === b.id);
+        if (!mine.length) continue; // an empty group is hidden; Needs you never shows empty
+        tree.append(groupEl(b.id, b.label, mine.length, 1, null, mine.map((r) => ownRow(r, 2, null))));
+      }
+      empty.hidden = rows.length > 0 || !ui.loaded;
+      empty.textContent = !ui.chats && ui.filter === 'all' ? EMPTY_NO_CHATS : EMPTY[ui.filter];
+    }
     document.getElementById('sb-connect').hidden = empty.hidden || ui.filter !== 'all';
-    tree.hidden = rows.length === 0;
+    tree.hidden = shown === 0;
     // Roving tabindex: exactly one tree item is tabbable.
     const items = treeItems();
     const current = items.find((i) => i.dataset.key === ui.focusKey) ?? items.find((i) => i.getAttribute('aria-selected') === 'true') ?? items[0];
@@ -172,6 +179,91 @@
     if (current) ui.focusKey = current.dataset.key;
     if (hadFocus && current) current.focus();
     paintFoot();
+  }
+
+  // A tree group: header (label, count, chevron) and its child list. `id` is the collapse id.
+  function groupEl(id, label, count, level, parent, kids, { person = null } = {}) {
+    const open = isOpen(id);
+    const head = el('div', { class: 'sb-group-head' }, person ? el('span', { class: 'sb-initials', 'aria-hidden': 'true' }, person.initials) : null,
+      el('span', { class: person ? 'sb-person' : 'sb-group-label' }, label), el('span', { class: 'sb-count', 'aria-hidden': 'true' }, ` · ${count}`),
+      collapsible(id) ? svg('M6 4.5l3.5 3.5L6 11.5', 'sb-chevron') : null);
+    const group = el('li', { role: 'treeitem', class: 'sb-group', 'data-key': `g:${id}`, 'data-bucket': id, 'data-parent': parent, 'aria-level': level,
+      'aria-expanded': String(open), 'aria-label': `${label}, ${count}`, tabindex: -1 }, head);
+    const list = el('ul', { role: 'group', hidden: !open });
+    list.append(...kids);
+    group.append(list);
+    return group;
+  }
+  function ownRow(r, level, parent) {
+    const meta = [r.project, r.origin].filter(Boolean).join(' · ');
+    return el('li', { role: 'treeitem', class: 'sidebar-row', 'data-key': `r:${r.id}`, 'data-bucket': r.bucket, 'data-parent': parent, 'aria-level': level,
+      'aria-selected': String(ui.selectedRow === r.id), tabindex: -1 },
+    el('span', { class: 'sb-dot', 'data-bucket': r.bucket, 'aria-hidden': 'true' }),
+    el('span', { class: 'sb-text' }, el('span', { class: 'sb-title' }, r.title), meta ? el('span', { class: 'sb-meta' }, meta) : null),
+    el('span', { class: 'sb-age' }, age(r.age_ms)));
+  }
+
+  // T1: the Team filter. My own team-board rows, then teammates' shared sessions by person.
+  const whose = (r) => (r.inbox ? `${r.person}'s board run` : `${r.person}'s ${r.provider} session`);
+  const BUCKET_ORDER = (b) => { const i = BUCKETS.findIndex((x) => x.id === b); return i < 0 ? BUCKETS.length : i; };
+  function personKey(person, teamName) {
+    const k = JSON.stringify([person, teamName]);
+    if (!team.people.has(k)) team.people.set(k, `t:p${team.people.size}`);
+    return team.people.get(k);
+  }
+  function sharedRow(r, parent, stale) {
+    const old = stale || r.freshness !== 'recent';
+    const meta = [r.provider, old ? 'Stale' : null].filter(Boolean).join(' · ');
+    const glyph = el('span', { class: 'sb-scope', title: r.scope === 'interact' ? 'Watch and send' : 'Shared with you to watch' }, svg(EYE, 'sb-icon'), r.scope === 'interact' ? svg(SEND, 'sb-icon') : null);
+    const name = `${r.title}, ${whose(r)}, shared with you to ${r.scope === 'interact' ? 'watch and send' : 'watch'}${old ? ', stale' : ''}`;
+    return el('li', { role: 'treeitem', class: 'sidebar-row sb-shared', 'data-key': `s:${r.id}`, 'data-bucket': r.bucket, 'data-parent': parent, 'aria-level': 3,
+      'aria-selected': 'false', 'aria-label': name, tabindex: -1 },
+    el('span', { class: 'sb-dot', 'data-bucket': r.bucket, 'aria-hidden': 'true' }),
+    el('span', { class: 'sb-text' }, el('span', { class: 'sb-title' }, r.title), el('span', { class: 'sb-meta' }, meta)), glyph);
+  }
+  function goneRow(id, g, parent) {
+    return el('li', { role: 'treeitem', class: 'sidebar-row sb-gone', 'data-key': `x:${id}`, 'data-parent': parent, 'aria-level': 3,
+      'aria-label': `${whose(g)}, ${TEAM.gone}. Dismiss`, tabindex: -1 },
+    el('span', { class: 'sb-dot', 'data-bucket': 'idle', 'aria-hidden': 'true' }),
+    el('span', { class: 'sb-text' }, el('span', { class: 'sb-title' }, whose(g)), el('span', { class: 'sb-meta' }, TEAM.gone)),
+    el('span', { class: 'sb-dismiss', 'aria-hidden': 'true' }, 'Dismiss'));
+  }
+  function renderTeam(own, empty) {
+    const stale = team.status === 'unavailable';
+    if (own.length) tree.append(groupEl('t:own', TEAM.own, own.length, 1, null, own.map((r) => ownRow(r, 2, 'g:t:own'))));
+    const people = new Map();
+    const at = (person, initials, teamName) => {
+      const k = personKey(person, teamName);
+      if (!people.has(k)) people.set(k, { key: k, person, initials, team: teamName, rows: [], gone: [] });
+      return people.get(k);
+    };
+    for (const r of team.rows) at(r.person, r.initials, r.team).rows.push(r);
+    for (const [id, g] of team.gone) at(g.person, g.initials, g.team).gone.push([id, g]);
+    if (people.size) {
+      const multi = new Set([...people.values()].map((p) => p.team)).size > 1;
+      const rank = (p) => (p.rows.some((r) => r.bucket === 'needs') ? 0 : p.rows.some((r) => r.bucket === 'working') ? 1 : 2);
+      const order = [...people.values()].sort((a, b) => rank(a) - rank(b) || a.person.localeCompare(b.person) || a.team.localeCompare(b.team));
+      const kids = order.map((p) => {
+        const fake = p.team.endsWith(' (test data)');
+        const label = multi ? `${p.person} · ${p.team}` : fake ? `${p.person} (test data)` : p.person;
+        const rows = [...p.rows].sort((a, b) => BUCKET_ORDER(a.bucket) - BUCKET_ORDER(b.bucket));
+        return groupEl(p.key, label, p.rows.length, 2, 'g:t:shared',
+          [...rows.map((r) => sharedRow(r, `g:${p.key}`, stale)), ...p.gone.map(([id, g]) => goneRow(id, g, `g:${p.key}`))], { person: p });
+      });
+      tree.append(groupEl('t:shared', TEAM.shared, team.rows.length, 1, null, kids));
+    }
+    const shown = own.length + people.size;
+    let note = '';
+    if (stale) note = TEAM.unavailable;
+    else if (!shown && team.loaded) note = team.teamsTotal === 0 ? TEAM.none : TEAM.empty;
+    else if (!shown) note = EMPTY.team;
+    empty.textContent = note;
+    empty.hidden = !note || !(ui.loaded || team.loaded);
+    document.getElementById('sb-team-join').hidden = !(note === TEAM.none && !empty.hidden);
+    const more = document.getElementById('sb-team-more');
+    more.hidden = !(team.teamsTotal > team.teams.length && team.teams.length > 0);
+    more.firstChild.textContent = `Showing ${team.teams.length} of ${team.teamsTotal} teams`;
+    return shown;
   }
 
   function paintFoot() {
@@ -196,9 +288,10 @@
 
   function toggle(bucket, open) {
     if (!collapsible(bucket)) return;
-    const next = open ?? ui.collapsed.has(bucket);
-    if (next) ui.collapsed.delete(bucket); else ui.collapsed.add(bucket);
-    window.buddy.setGroups([...ui.collapsed]);
+    const set = bucket.startsWith('t:') ? team.collapsed : ui.collapsed;
+    const next = open ?? set.has(bucket);
+    if (next) set.delete(bucket); else set.add(bucket);
+    if (set === ui.collapsed) window.buddy.setGroups([...ui.collapsed]);
     render();
     focusKey(`g:${bucket}`);
   }
@@ -220,10 +313,21 @@
     focusKey(key);
   }
 
+  // T1: a teammate row opens Overview › Team sessions on it (main checks the id and the viewer).
+  function openShared(key) { ui.focusKey = key; window.buddy.openTeamRow?.(key.slice(2)); }
+  function dismiss(key) {
+    const items = treeItems(), i = items.findIndex((n) => n.dataset.key === key);
+    team.gone.delete(key.slice(2));
+    render();
+    const after = treeItems(), next = after[Math.min(i, after.length - 1)];
+    if (next) focusKey(next.dataset.key);
+  }
   function onTreeClick(e) {
     const key = keyOf(e.target);
     if (!key) return;
     if (key.startsWith('g:')) { if (e.target.closest('.sb-group-head')) toggle(key.slice(2)); return; }
+    if (key.startsWith('s:')) { openShared(key); return; }
+    if (key.startsWith('x:')) { if (e.target.closest('.sb-dismiss')) dismiss(key); return; }
     openRow(key);
   }
 
@@ -242,16 +346,21 @@
       case 'ArrowRight':
         e.preventDefault();
         if (isGroup && node.getAttribute('aria-expanded') === 'false') toggle(key.slice(2), true);
-        else if (isGroup && items[i + 1]?.dataset.key.startsWith('r:')) focusKey(items[i + 1].dataset.key);
+        else if (isGroup && items[i + 1] && node.contains(items[i + 1])) focusKey(items[i + 1].dataset.key);
         return;
       case 'ArrowLeft':
         e.preventDefault();
-        if (isGroup) { if (collapsible(key.slice(2)) && node.getAttribute('aria-expanded') === 'true') toggle(key.slice(2), false); }
-        else focusKey(`g:${node.dataset.bucket}`);
+        if (isGroup) {
+          if (collapsible(key.slice(2)) && node.getAttribute('aria-expanded') === 'true') toggle(key.slice(2), false);
+          else if (node.dataset.parent) focusKey(node.dataset.parent);
+        } else focusKey(node.dataset.parent || `g:${node.dataset.bucket}`);
         return;
       case 'Enter': case ' ':
         e.preventDefault();
-        if (isGroup) toggle(key.slice(2)); else openRow(key);
+        if (isGroup) toggle(key.slice(2)); else if (key.startsWith('s:')) openShared(key); else if (key.startsWith('x:')) dismiss(key); else openRow(key);
+        return;
+      case 'Delete': case 'Backspace':
+        if (key.startsWith('x:')) { e.preventDefault(); dismiss(key); }
         return;
       default:
     }
@@ -269,6 +378,7 @@
   function setFilter(id, { focus = true, needs = false } = {}) {
     ui.filter = filters().some((f) => f.id === id) ? id : 'all';
     render();
+    if (ui.filter === 'team') refreshTeam();
     if (!focus) return;
     const items = treeItems();
     const target = (needs && items.find((n) => n.dataset.key.startsWith('r:') && n.dataset.bucket === 'needs')) || items.find((n) => n.dataset.key === ui.focusKey) || items[0];
@@ -290,7 +400,38 @@
       const key = JSON.stringify(out.sessions.map(({ age_ms, ...rest }) => rest));
       if (ui.loaded && key === rowsKey) { ui.rows = out.sessions; paintAges(); return; }
       rowsKey = key; ui.rows = out.sessions; ui.loaded = true; render();
-    } catch { /* keep the last rows */ } finally { refreshing = false; }
+    } catch { /* keep the last rows */ } finally { refreshing = false; refreshTeam(); }
+  }
+
+  // T1: read only while the Team filter is showing in a visible window (main also holds a 15 s floor).
+  let teamFetching = false;
+  async function refreshTeam() {
+    if (teamFetching || ui.filter !== 'team' || typeof window.buddy.teamRows !== 'function' || document.visibilityState !== 'visible') return;
+    teamFetching = true;
+    try {
+      const out = await window.buddy.teamRows();
+      if (out && typeof out === 'object' && applyTeam(out) && ui.filter === 'team') render();
+    } catch { /* keep the last rows */ } finally { teamFetching = false; }
+  }
+  // → whether anything shown changed. A different viewer (or signed out) clears every row and
+  // tombstone at once; unavailable keeps the last rows, marked stale.
+  function applyTeam(out) {
+    const before = JSON.stringify([team.viewer, team.status, team.rows, [...team.gone], team.teams, team.teamsTotal, team.loaded]);
+    const viewer = typeof out.viewer === 'string' ? out.viewer : null;
+    if (out.status === 'unavailable') team.status = 'unavailable';
+    else {
+      if (viewer !== team.viewer || viewer === null) { team.rows = []; team.gone.clear(); team.people.clear(); team.collapsed.clear(); }
+      const rows = Array.isArray(out.rows) ? out.rows.filter((r) => r && typeof r.id === 'string') : [];
+      const ids = new Set(rows.map((r) => r.id));
+      for (const r of team.rows) if (!ids.has(r.id)) team.gone.set(r.id, { person: r.person, initials: r.initials, team: r.team, provider: r.provider, inbox: r.inbox });
+      for (const id of ids) team.gone.delete(id);
+      while (team.gone.size > 50) team.gone.delete(team.gone.keys().next().value);
+      team.viewer = viewer; team.rows = rows; team.status = out.status === 'partial' ? 'partial' : 'complete';
+      team.teams = Array.isArray(out.teams) ? out.teams : [];
+      team.teamsTotal = Number.isSafeInteger(out.teamsTotal) ? out.teamsTotal : team.teams.length;
+    }
+    team.loaded = true;
+    return JSON.stringify([team.viewer, team.status, team.rows, [...team.gone], team.teams, team.teamsTotal, team.loaded]) !== before;
   }
 
   function paintAges() {

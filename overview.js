@@ -754,6 +754,7 @@
   if (typeof api.onReady === 'function') api.onReady(() => {
     ready = true;
     if (!document.hidden) { void refresh(); void refreshOwned(); void dir?.refresh(); }
+    void dir?.takeHint?.();
   });
   $('refresh').addEventListener('click', () => { void refresh(); void dir?.refresh(); });
   for (const filter of filters) $(`${filter}-filter`).addEventListener('change', () => { clearInteractions(); if (snapshot) renderWork(); });

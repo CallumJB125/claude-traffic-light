@@ -27,11 +27,11 @@ const ROWS = [
 const open = [];
 test.afterEach(() => { while (open.length) open.pop().close(); });
 
-async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus = { filter: 'all', seq: 0 }, early = null, selected = undefined, chats = undefined } = {}) {
+async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus = { filter: 'all', seq: 0 }, early = null, selected = undefined, chats = undefined, team = undefined } = {}) {
   const dom = new JSDOM(HTML, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'file:///app/buddy-window/sidebar.html' });
   const w = dom.window;
   open.push(w);
-  const calls = { select: [], groups: [], sessions: 0, thread: [], newchat: 0 };
+  const calls = { select: [], groups: [], sessions: 0, thread: [], newchat: 0, team: 0, openTeam: [] };
   let onState = [];
   w.buddy = {
     pages: async () => ({ pages: Pages.PAGES, groups: Pages.GROUPS, sections: Pages.SECTIONS, footer: Pages.FOOTER, brand: { name: 'Plexiform', hubText: {} },
@@ -42,6 +42,8 @@ async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus
     openThread: (x) => calls.thread.push(x),
     openNewChat: () => { calls.newchat++; },
     setGroups: (ids) => calls.groups.push([...ids]),
+    // T1: teammates' rows (only when a test gives them).
+    ...(team !== undefined ? { teamRows: async () => { calls.team++; return typeof team === 'function' ? team() : team; }, openTeamRow: (x) => calls.openTeam.push(x) } : {}),
   };
   w.CSS = w.CSS || {};
   w.CSS.escape = w.CSS.escape || ((s) => String(s).replace(/[^a-zA-Z0-9_:-]/g, (c) => `\\${c}`));
@@ -339,9 +341,9 @@ test('R1 follow-up 8b: the sidebar bridge has the chat-first channels only when 
   };
   const off = exposed(['electron', '--type=renderer']);
   const on = exposed(['electron', '--type=renderer', '--plexiform-chat-preview']);
-  assert.ok(!off.includes('sessions') && !off.includes('setGroups') && !off.includes('openThread') && !off.includes('openNewChat'));
-  // R2b-2 adds openNewChat, gate-on only like the rest.
-  assert.deepEqual(on.filter((k) => !off.includes(k)), ['openNewChat', 'openThread', 'sessions', 'setGroups']);
+  assert.ok(!off.includes('sessions') && !off.includes('setGroups') && !off.includes('openThread') && !off.includes('openNewChat') && !off.includes('teamRows') && !off.includes('openTeamRow'));
+  // R2b-2 adds openNewChat, T1 teamRows and openTeamRow, gate-on only like the rest.
+  assert.deepEqual(on.filter((k) => !off.includes(k)), ['openNewChat', 'openTeamRow', 'openThread', 'sessions', 'setGroups', 'teamRows']);
   const index = read('buddy-window/index.js');
   assert.match(index, /preload: path\.join\(DIR, 'sidebar-preload\.js'\), \.\.\.\(chatFirst === true \? \{ additionalArguments: \['--plexiform-chat-preview'\] \} : \{\}\) \} \}\);/);
 });
@@ -379,4 +381,122 @@ test('C4: a redirect to the Chats filter lands on All; the live flip both ways; 
   assert.equal(empty.q('#sb-empty').textContent, 'No sessions yet. Run claude or codex in any terminal and it shows up here.');
   const emptyOn = await boot({ rows: [] });
   assert.equal(emptyOn.q('#sb-empty').textContent, 'No chats or sessions yet. Run claude or codex in any terminal and it shows up here.');
+});
+
+// ── T1: teammates' shared sessions under the Team filter ───────────────────
+const VIEWER = 'a'.repeat(64), VIEWER2 = 'b'.repeat(64);
+const mate = (n, over = {}) => ({ id: `${'c'.repeat(62)}${n.toString(16).padStart(2, '0')}`, person: 'Bob Stone', initials: 'BS', team: 'Dev team', title: `Bob task ${n}`, provider: 'Claude Code', bucket: 'working', freshness: 'recent', age_ms: 1000, scope: 'watch', inbox: false, ...over });
+const payload = (rows, over = {}) => ({ schema: 1, status: 'complete', viewer: VIEWER, teams: [{ name: 'Dev team' }], teamsTotal: 1, rows, ...over });
+const settle = async (s) => { for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0)); return s; };
+async function teamBoot(team, more = {}) {
+  const s = await boot({ team, focus: { filter: 'team', seq: 1 }, ...more });
+  return settle(s);
+}
+const labels = (s) => s.qa('.sb-group').map((g) => g.getAttribute('aria-label'));
+
+test('T1: the Team filter groups my team work, then Shared with you by person (Needs first, then Working, then name)', async () => {
+  let rows = [
+    mate(1, { person: 'Zed Ames', initials: 'ZA', bucket: 'idle', title: 'Zed idle' }),
+    mate(2, { person: 'Ann Lee', initials: 'AL', bucket: 'idle', title: 'Ann idle' }),
+    mate(3, { person: 'Bob Stone', bucket: 'working', title: 'Bob works' }),
+    mate(4, { person: 'Zed Ames', initials: 'ZA', bucket: 'needs', title: 'Zed needs', scope: 'interact' }),
+    mate(5, { person: 'Zed Ames', initials: 'ZA', bucket: 'working', title: 'Zed works' }),
+  ];
+  const s = await teamBoot(() => payload(rows));
+  assert.ok(s.calls.team >= 1, 'read while the Team filter shows');
+  assert.deepEqual(labels(s), ['Your team work, 1', 'Shared with you, 5', 'Zed Ames, 3', 'Bob Stone, 1', 'Ann Lee, 1']);
+  const zed = s.qa('.sb-group[aria-level="2"]')[0];
+  assert.deepEqual([...zed.querySelectorAll('.sb-shared .sb-title')].map((n) => n.textContent), ['Zed needs', 'Zed works', 'Zed idle'], 'bucket order within a person');
+  const needs = zed.querySelector('.sb-shared');
+  assert.equal(needs.getAttribute('aria-label'), "Zed needs, Zed Ames's Claude Code session, shared with you to watch and send");
+  assert.equal(needs.querySelectorAll('.sb-scope svg').length, 2, 'eye + send for watch and send');
+  assert.equal(s.q('.sb-group[aria-level="2"]:nth-child(2) .sb-shared .sb-scope').querySelectorAll('svg').length, 1);
+  assert.equal(s.q('.sb-group[data-key="g:t:own"] .sidebar-row .sb-title').textContent, 'Approve the deploy', 'my own team-board row, unchanged');
+  // All and Needs you never show a teammate's row, nor count it.
+  s.qa('.sb-filter-opt[data-filter="all"]')[0].click();
+  await settle(s);
+  assert.equal(s.qa('.sb-shared').length, 0);
+  assert.equal(s.q('.sb-group[data-key="g:needs"]').getAttribute('aria-label'), 'Needs you, 2', 'a teammate Needs row is not counted');
+  void rows;
+});
+
+test('T1: a teammate row opens through main (navigation only); stale, board-run and fake-hub wording', async () => {
+  const s = await teamBoot(payload([
+    mate(1, { freshness: 'stale', title: 'Old work' }),
+    mate(2, { inbox: true, title: "Bob Stone's board run", person: 'Bob Stone' }),
+  ], { teams: [{ name: 'Fake (test data)' }] }));
+  const [stale, run] = s.qa('.sb-shared');
+  assert.equal(stale.getAttribute('aria-label'), "Old work, Bob Stone's Claude Code session, shared with you to watch, stale");
+  assert.equal(stale.querySelector('.sb-meta').textContent, 'Claude Code · Stale');
+  assert.match(run.getAttribute('aria-label'), /Bob Stone's board run, shared with you to watch$/);
+  stale.click();
+  assert.deepEqual(s.calls.openTeam, [mate(1).id]);
+  assert.deepEqual(s.calls.thread, [], 'never a thread');
+  assert.deepEqual(s.calls.select, [], 'main does the navigation');
+  run.focus(); s.key('Enter');
+  assert.deepEqual(s.calls.openTeam, [mate(1).id, mate(2).id]);
+  const f = await teamBoot(payload([mate(1, { team: 'Fake team (test data)' })]), { rows: [] });
+  assert.equal(f.q('.sb-group[aria-level="2"] .sb-person').textContent, 'Bob Stone (test data)');
+});
+
+test('T1: a row that stops being shared becomes a tombstone without its title; a viewer change clears with no tombstones', async () => {
+  let out = payload([mate(1, { title: 'Secret launch plan' }), mate(2)]);
+  const s = await teamBoot(() => out, { rows: [] });
+  out = payload([mate(2)]);
+  s.w.document.querySelector('.sb-filter-opt[data-filter="all"]').click();
+  s.w.document.querySelector('.sb-filter-opt[data-filter="team"]').click();
+  await settle(s);
+  const gone = s.q('.sb-gone');
+  assert.ok(gone, 'a tombstone');
+  assert.equal(gone.querySelector('.sb-title').textContent, "Bob Stone's Claude Code session");
+  assert.equal(gone.querySelector('.sb-meta').textContent, 'No longer shared with you, or it ended');
+  assert.ok(!s.q('.sb-scroll').textContent.includes('Secret launch plan'), 'the title is dropped');
+  // Unavailable with the same viewer keeps the last rows, marked stale.
+  out = { schema: 1, status: 'unavailable', viewer: null, teams: [], teamsTotal: 0, rows: [] };
+  s.w.document.querySelector('.sb-filter-opt[data-filter="all"]').click();
+  s.w.document.querySelector('.sb-filter-opt[data-filter="team"]').click();
+  await settle(s);
+  assert.equal(s.qa('.sb-shared').length, 1);
+  assert.match(s.q('.sb-shared').getAttribute('aria-label'), /, stale$/);
+  assert.equal(s.q('#sb-empty').textContent, "Teammates' sessions are unavailable right now.");
+  // Dismiss by keyboard.
+  s.q('.sb-gone').focus(); s.key('Delete');
+  assert.equal(s.qa('.sb-gone').length, 0);
+  // Someone else signs in: every teammate row and tombstone goes at once.
+  out = payload([mate(1, { title: 'Old person row' })]);
+  s.w.document.querySelector('.sb-filter-opt[data-filter="all"]').click();
+  s.w.document.querySelector('.sb-filter-opt[data-filter="team"]').click();
+  await settle(s);
+  out = payload([mate(9, { person: 'Cara Wu', initials: 'CW' })], { viewer: VIEWER2 });
+  s.w.document.querySelector('.sb-filter-opt[data-filter="all"]').click();
+  s.w.document.querySelector('.sb-filter-opt[data-filter="team"]').click();
+  await settle(s);
+  assert.equal(s.qa('.sb-gone').length, 0, 'no tombstones across viewers');
+  assert.deepEqual(s.qa('.sb-shared .sb-title').map((n) => n.textContent), ['Bob task 9']);
+  assert.ok(!s.q('.sb-scroll').textContent.includes('Bob Stone'));
+});
+
+test('T1: empty states, the team cap line, and keyboard through person groups (never saved)', async () => {
+  const none = await teamBoot(payload([], { teams: [], teamsTotal: 0 }), { rows: [] });
+  assert.equal(none.q('#sb-empty').textContent, "Join a team to see teammates' shared sessions.");
+  assert.ok(!none.q('#sb-team-join').hidden);
+  none.q('#sb-team-join').click();
+  assert.deepEqual(none.calls.select, ['account']);
+  const nothing = await teamBoot(payload([]), { rows: [] });
+  assert.equal(nothing.q('#sb-empty').textContent, 'Nothing shared with you yet. Sessions appear here when teammates share them with your team.');
+  assert.ok(nothing.q('#sb-team-join').hidden);
+  const capped = await teamBoot(payload([mate(1)], { teams: [1, 2, 3, 4].map((n) => ({ name: `T${n}` })), teamsTotal: 6 }), { rows: [] });
+  assert.ok(!capped.q('#sb-team-more').hidden);
+  assert.equal(capped.q('#sb-team-more').textContent, 'Showing 4 of 6 teams · Team overview');
+  capped.q('#sb-team-overview').click();
+  assert.deepEqual(capped.calls.select, ['overview']);
+  // Keyboard: Shared with you → person → row, and back out; collapsing a person is memory only.
+  const s = await teamBoot(payload([mate(1), mate(2, { person: 'Ann Lee', initials: 'AL' })]), { rows: [] });
+  s.q('.sb-group[data-key="g:t:shared"]').focus();
+  s.key('ArrowRight'); assert.equal(s.doc.activeElement.getAttribute('aria-level'), '2');
+  s.key('ArrowRight'); assert.ok(s.doc.activeElement.classList.contains('sb-shared'));
+  s.key('ArrowLeft'); assert.equal(s.doc.activeElement.getAttribute('aria-level'), '2');
+  s.key('ArrowLeft'); assert.equal(s.doc.activeElement.getAttribute('aria-expanded'), 'false');
+  s.key('ArrowLeft'); assert.equal(s.doc.activeElement.dataset.key, 'g:t:shared');
+  assert.deepEqual(s.calls.groups, [], 'person groups never reach config');
 });

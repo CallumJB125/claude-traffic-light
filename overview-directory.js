@@ -772,6 +772,26 @@
     void refreshFollowups();
     if (which === 'team' && selected) void inspectActivity(selected);
     set(status, `Checked ${new Date(data.observed_at).toLocaleTimeString()}. Updates automatically.${data.status === 'partial' ? ' Some activity is unavailable.' : ''}`);
+    if (which === 'team' && hint) { const h = hint; hint = null; landHint(h, data); }
+  }
+  // T1: a teammate row the sidebar asked to open. Main hands it over once (overview:open-hint);
+  // the row is opened through this page's own read and openActivity, exactly as a click would.
+  let hint = null;
+  async function takeHint() {
+    if (typeof api.openHint !== 'function') return;
+    let h; try { h = await api.openHint(); } catch { h = null; }
+    if (!h || typeof h !== 'object' || !hex(h.team, 32) || !hex(h.entry, 40)) return;
+    hint = { team: h.team, entry: h.entry, at: Date.now() };
+    if (team !== h.team) { clearActivity(); lists.team.rows.clear(); lists.team.groups?.clear(); $('team-list').replaceChildren(); team = h.team; received = 0; }
+    if (view !== 'team') show('team'); else void refresh();
+  }
+  function landHint(h, data) {
+    if (Date.now() - h.at > 10000) return;
+    applyFilter({});
+    const v = data.team?.key === h.team ? lists.team.rows.get(h.entry) : null;
+    if (!v || v.gone) { set($('team-status'), 'That session is no longer shared with you.'); return; }
+    v.li.scrollIntoView?.({ block: 'center' }); v.li.classList.add('selected'); setTimeout(() => v.li.classList.remove('selected'), 2000);
+    void openActivity(v);
   }
   function show(next) {
     if (view === next) return;
@@ -803,5 +823,5 @@
     document.addEventListener('visibilitychange', () => { if (document.hidden && selected) { selected.preview = null; selected.review.hidden = true; } });
     if (typeof api.onDirectoryChanged === 'function') api.onDirectoryChanged(soon);
   }
-  window.OverviewDirectory = Object.freeze({ start, refresh, soon, rerender: () => { render('mine'); render('team'); }, index, openFromPalette });
+  window.OverviewDirectory = Object.freeze({ start, refresh, soon, rerender: () => { render('mine'); render('team'); }, index, openFromPalette, takeHint });
 })();

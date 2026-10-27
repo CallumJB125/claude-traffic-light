@@ -39,12 +39,14 @@ const FIXTURE = {
   ],
 };
 
-function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed = true, shares = [], channelAdapter = null, prepareChannel = null, scripts = [], presence = null, presenceView = null, looseEnds = null } = {}) {
+function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed = true, shares = [], channelAdapter = null, prepareChannel = null, scripts = [], presence = null, presenceView = null, looseEnds = null, chatPreview = false } = {}) {
   const handlers = new Map(), listeners = new Map(), results = [];
   const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => ctx.foreground };
   const contents = { id: 9, isDestroyed: () => false, mainFrame: {}, send: (ch, ...a) => { for (const fn of listeners.get(ch) ?? []) fn({}, ...structuredClone(a)); } };
   const ctx = { window: win, contents, generation: 1, document: 1, foreground: true };
-  const buddy = { overviewContext: () => (ctx.foreground ? ctx : null), overviewReadContext: () => ctx };
+  // T1: a sidebar document (its own contents) for sidebar:team-rows, with the chat-first preview on.
+  const sidebar = { id: 10, isDestroyed: () => false, mainFrame: {} };
+  const buddy = { overviewContext: () => (ctx.foreground ? ctx : null), overviewReadContext: () => ctx, sidebarReadContext: () => ({ window: win, contents: sidebar, generation: 1, document: 1 }) };
   const adapter = memAdapter();
   const interaction = createInteractionMain({ context: () => (ctx.foreground ? ctx : null), readContext: () => ctx, adapters: { codex: adapter,...(channelAdapter?{'claude-channel':channelAdapter}:{}) },prepareChannel, owned: null, localModels: null, workspace: (id) => `/private/tmp/plexiform-owned-${id.slice(-6)}`, currentBoard: () => 'local' });
   interaction.register({ handle: (ch, fn) => handlers.set(ch, fn) });
@@ -55,7 +57,7 @@ function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed
     buddy: () => buddy, sessions: () => raw, work: async () => ({ sources: [], capture: [] }), now,
     owned: () => interaction.listOwned(), shares: () => ({ origin: 'https://hub.example', list: shares }),
     hubTeams: async () => ({ origin: 'https://hub.example', teams: [] }), teamHub: () => teamHub,
-    ...(presence ? { presence } : {}), ...(presenceView ? { presenceView } : {}), ...(looseEnds ? { looseEnds } : {}),
+    ...(presence ? { presence } : {}), ...(presenceView ? { presenceView } : {}), ...(looseEnds ? { looseEnds } : {}), chatPreview,
   });
   overview.register({ handle: (ch, fn) => handlers.set(ch, fn) });
   teamHub?.onChange(() => overview.directoryChanged());
@@ -82,6 +84,7 @@ function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed
   const change = (id, value) => { $(id).value = value; $(id).dispatchEvent(new dom.window.Event('change')); };
   return {
     dom, doc, $, rows, row, change, adapter, interaction, overview, teamHub, ctx, api, results, raw,
+    sidebarRows: () => handlers.get('sidebar:team-rows')({ sender: sidebar, senderFrame: sidebar.mainFrame }),
     ready: async () => { ready(); await tick(); },
     poll: async () => { for (const fn of intervals) fn(); await tick(); },
     team: async () => { $('tab-team').click(); await tick(); },
@@ -487,5 +490,32 @@ test('My sessions PR 3: a fold is saved only in Project mode; Status and AI tool
     assert.equal(ls.getItem('plexiform.overview.mine.groupBy.v1'), 'bucket');
     s.change('mine-group', 'project'); await tick();
     assert.equal(s.$('mine-list').querySelector('.group-body').hidden, true, 'the saved fold');
+  } finally { s.close(); }
+});
+
+// T1: a teammate row clicked in the chat-first sidebar opens here, on Team sessions, with its activity.
+test('T1 open hint: the page consumes it on ready, switches to that team and opens the row; a gone row says so', async () => {
+  const s = stack({ chatPreview: true });
+  try {
+    await s.ready();
+    const side = await s.sidebarRows();
+    const cara = side.rows.find((r) => r.person === 'Cara');
+    assert.ok(cara, 'the sidebar lists Cara');
+    assert.equal(s.overview.armTeamHint(cara.id), true);
+    await s.ready(); await tick(); await tick();
+    assert.equal(s.$('tab-team').getAttribute('aria-selected'), 'true', 'Team sessions');
+    const box = s.doc.querySelector('.team-activity');
+    assert.ok(box, 'the activity is open');
+    assert.match(box.getAttribute('aria-label'), /Write docs/);
+    assert.ok(s.results.some(([ch]) => ch === 'overview:team-inspect'), 'through the page\'s own inspect');
+    assert.equal(s.results.filter(([ch]) => ch === 'overview:open-hint').length, 2);
+    // Consumed: another ready opens nothing new.
+    assert.equal(await s.api.openHint(), null);
+    // A row that is no longer shared: the page says so, nothing is opened.
+    assert.equal(s.overview.armTeamHint(side.rows.find((r) => r.person !== 'Cara').id), true);
+    s.teamHub.revoke('bob-1', 't-dev');
+    await s.ready(); await tick(); await tick();
+    assert.equal(s.$('team-status').textContent, 'That session is no longer shared with you.');
+    assert.ok(!/Fix login/.test(s.doc.querySelector('.team-activity')?.getAttribute('aria-label') ?? ''), 'Bob\'s activity was not opened');
   } finally { s.close(); }
 });

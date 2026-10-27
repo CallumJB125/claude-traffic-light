@@ -275,6 +275,24 @@ ul { padding: 0; list-style: none; }
 }
 
 .sidebar[data-chat-first] .sb-empty { margin: 8px; font: var(--t-small); color: var(--muted); }
+/* T1: teammates' shared sessions under the Team filter (person groups, read-only rows, tombstones). */
+.sidebar[data-chat-first] .sb-group[aria-level="2"] > .sb-group-head { padding-left: 8px; font-size: var(--text-sm, 12px); font-weight: 600; letter-spacing: 0; color: var(--text); gap: 6px; }
+.sidebar[data-chat-first] .sb-group[aria-level="2"] { margin-bottom: 2px; }
+.sidebar[data-chat-first] .sb-person { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar[data-chat-first] .sb-initials {
+  flex: none; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); font-size: 9px; font-weight: 650; letter-spacing: 0;
+}
+.sidebar[data-chat-first] .sb-shared .sb-scope { display: inline-flex; gap: 1px; padding-top: 2px; color: var(--muted); }
+.sidebar[data-chat-first] .sb-scope .sb-icon { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.sidebar[data-chat-first] .sb-gone { color: var(--muted); }
+.sidebar[data-chat-first] .sb-gone .sb-title { font-weight: 500; color: var(--muted); }
+.sidebar[data-chat-first] .sb-gone .sb-dot { opacity: .5; }
+.sidebar[data-chat-first] .sb-dismiss { font: var(--t-small); color: var(--muted); padding: 1px 6px; border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px var(--line); cursor: default; }
+.sidebar[data-chat-first] .sb-dismiss:hover { color: var(--text); background: var(--panel); }
+.sidebar[data-chat-first] .sb-team-more[hidden] { display: none; }
+.sidebar[data-chat-first] .sb-link { all: unset; color: var(--accent); cursor: default; }
+.sidebar[data-chat-first] .sb-link:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; border-radius: 2px; }
 .sidebar[data-chat-first] .sb-connect { all: unset; box-sizing: border-box; margin: 0 8px; min-height: 28px; padding: 0 10px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--panel); color: var(--text); font: var(--t-small); }
 .sidebar[data-chat-first] .sb-connect[hidden] { display: none; }
 .sidebar[data-chat-first] .sb-connect:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; box-shadow: var(--focus); }
