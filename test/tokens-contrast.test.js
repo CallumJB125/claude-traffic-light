@@ -302,7 +302,9 @@ test('tokens: the exported replay page uses the Graphite accent and it reads on 
 test('tokens: the Lights window and the replay export have no terracotta literals left', () => {
   const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
   for (const f of ['lights.html', 'lights-view.js']) assert.ok(!/218,\s*119,\s*86|b4532e|ffb4a8/i.test(read(f)), `${f} has a terracotta literal`);
-  // lights-view.js keeps '#da7756' as the mascot body-colour default (character art stays by plan).
+  // Character art stays terracotta by plan: lights-view.js keeps exactly one '#da7756', the mascot body-colour picker's default.
+  const mascot = read('lights-view.js').split('\n').filter((l) => /da7756/i.test(l));
+  assert.deepEqual(mascot.map((l) => l.trim()), ["$('body-color').value = character.bodyColor || '#da7756';"], 'lights-view.js: only the mascot default');
   assert.ok(!/da7756/i.test(read('lights.html')), 'lights.html has #da7756');
   assert.ok(!/b4532e|da7756|218,\s*119,\s*86/i.test(read('src/session-replay.js')), 'session-replay.js has terracotta');
 });
