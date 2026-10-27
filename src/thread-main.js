@@ -291,7 +291,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     if (extra) {
       let row = null;
       try { row = (tasks()?.snapshot?.()?.tasks || []).find((x) => x && x.id === taskId) ?? null; } catch { row = null; }
-      if (!row || !Array.isArray(row.confirm) || !row.confirm.includes(req.action)) return fail('VALIDATION');
+      if (!row || !Array.isArray(row.confirm) || !row.confirm.includes(send.action)) return fail('VALIDATION');
       send.confirmed = true;
     }
     // 8. Checked by tasks-service immediately before client.act: the document, the task, and (for a request) the same hash.
@@ -306,7 +306,8 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     } finally { sending.delete(busy); }
     // 9. Nothing was sent: the request changed. Sent, or maybe sent: say so (S1).
     if (refusedBeforeSend) return fail('NOT_READY');
-    if (!current()) return fail('CONFLICT', req.action === 'stop' ? ACT_TEXT.CONFLICT_STOP : ACT_TEXT.CONFLICT);
+    // After the send only the chat itself is checked: a request that was answered disappears, which is success, not a change.
+    if (!base()) return fail('CONFLICT', req.action === 'stop' ? ACT_TEXT.CONFLICT_STOP : ACT_TEXT.CONFLICT);
     if (r && r.ok === true) return { ok: true };
     // 10. Engine and guard codes, as plain sentences.
     const code = typeof r?.code === 'string' ? r.code : 'INTERNAL';

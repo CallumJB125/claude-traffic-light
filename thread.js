@@ -137,7 +137,7 @@
     for (const k of [...cards.keys()]) if (!live.has(k)) cards.delete(k);
     const ask = reqs.find((r) => r.kind === 'ask' && r.answer);
     if (!ask) bound = null;
-    else if (!bound || bound.askId !== ask.k.askId) bound = { askId: ask.k.askId, armedUntil: t + ARM_MS };
+    else if (!bound || bound.askId !== ask.k.askId || bound.sig !== ask.sig) bound = { askId: ask.k.askId, sig: ask.sig, armedUntil: t + ARM_MS };
   }
   function rearmAll() {
     const t = Date.now() + ARM_MS;

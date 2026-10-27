@@ -479,6 +479,19 @@ test('reply box: a refused answer stays in the box; a changed question rebinds o
   assert.deepEqual(acts(p).map((r) => r.askId), ['ask-1', 'ask-2'], 'each send names the askId the box was bound to');
 });
 
+test('reply box: the same question rewritten (same askId, new text) re-arms the box', async () => {
+  const p = await stacked({ openApprovals: [] });
+  p.advance(600);
+  p.$('th-reply-text').value = 'dev';
+  p.$('th-reply-text').dispatchEvent(new p.w.Event('input'));
+  assert.equal(p.$('th-send').disabled, false);
+  p.event({ id: ID, event: { type: 'detail', detail: live({ openApprovals: [], openAsk: { ...ASK, text: 'Which remote, really?' } }).detail } });
+  assert.equal(p.$('th-send').disabled, true, 'what the question says changed, so the box waits again');
+  assert.equal(p.$('th-reply-text').value, 'dev');
+  p.advance(600);
+  assert.equal(p.$('th-send').disabled, false);
+});
+
 test('reply box with approvals and no question: no box, or the draft kept and the box off, plural when several', async () => {
   const p = await stacked({ openAsk: null });
   assert.equal(p.$('th-reply').hidden, true);

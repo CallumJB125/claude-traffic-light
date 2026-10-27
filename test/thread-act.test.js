@@ -304,6 +304,36 @@ test('a reload before the send: NOT_READY with zero sends; a reload after it: CO
   }
 });
 
+test('a successful act whose request resolves while it is in flight (the engine\'s state lands first) → ok, not CONFLICT', async () => {
+  for (const [req, next] of [
+    [once(1), DETAIL({ openApprovals: [ap(2)] })],
+    [{ id: A, action: 'deny', approvalId: 'ap-1' }, DETAIL({ openApprovals: [ap(2)] })],
+    [{ id: A, action: 'answer', askId: 'ask-1', answer: 'dev' }, DETAIL({ openAsk: null })],
+  ]) {
+    const h = held();
+    const r = rig({ act: async (q, wcId, current, calls) => { if (current() !== true) return { ok: false }; calls.push(['act', q]); await h.gate; return { ok: true }; } });
+    const d = await r.open();
+    const p = r.call(d, req);
+    await settle();
+    r.refresh(next); // remember() drops the answered request from what was relayed
+    h.release();
+    assert.deepEqual(await p, { ok: true }, req.action);
+    assert.equal(r.calls.length, 1);
+  }
+});
+
+test('task.confirm on a choice: the row is checked for the engine action (resume), not the page action (choose)', async () => {
+  const ask = { askId: 'ask-1', text: 'Paused at the limit', options: null, choices: [{ id: 'wait_reset', label: 'Wait for the reset', action: 'resume', payload: { when: 'reset' } }] };
+  const r = rig({ detail: DETAIL({ openAsk: ask }), row: { id: 'task-a', confirm: ['resume'] } });
+  const d = await r.open();
+  assert.deepEqual(await r.call(d, { id: A, action: 'choose', askId: 'ask-1', choiceId: 'wait_reset', confirmed: true }), { ok: true });
+  assert.deepEqual(r.calls.map(([, q]) => q), [{ id: 'task-a', action: 'resume', payload: { when: 'reset' }, confirmed: true }]);
+  const s = rig({ detail: DETAIL({ openAsk: ask }), row: { id: 'task-a', confirm: ['choose'] } });
+  const e = await s.open();
+  assert.equal((await s.call(e, { id: A, action: 'choose', askId: 'ask-1', choiceId: 'wait_reset', confirmed: true })).code, 'VALIDATION');
+  assert.equal(s.calls.length, 0);
+});
+
 test('an account or workspace switch, focus loss, or the row moving to another task after the send → CONFLICT', async () => {
   for (const flip of [(r) => { r.w.ctx.setupSourcesGeneration++; }, (r) => { r.w.ctx.store.ws = 'ws-2'; }, (r) => { r.w.win.focused = false; }]) {
     const h = held();
