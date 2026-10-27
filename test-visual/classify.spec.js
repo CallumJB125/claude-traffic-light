@@ -175,7 +175,7 @@ test('classifier: every changed baseline changed only by the accent swap', async
   } finally {
     await browser.close();
   }
-  const verdict = lib.verdictOf(report.baselines);
+  const verdict = lib.verdictOf(report.baselines, config);
   report.crops = verdict.crops;
   const sum = (k) => report.baselines.reduce((n, b) => n + (b[k] || 0), 0);
   report.totals = Object.fromEntries(['changed', 'noise', 'pass', 'unchanged', 'skipped', 'exception', 'unexpected'].map((k) => [k, sum(k)]));

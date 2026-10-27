@@ -114,7 +114,8 @@ function controls() {
     out.push({ name: `dark: grey ${o.join(',')} shifted along the idle direction, exception loaded`, theme: 'dark', expect: 'fail', exceptions: IDLE,
       old: image((x, y) => (el(x, y) ? o : PANEL)), new: image((x, y) => (el(x, y) ? n : PANEL)) });
   }
-  const dot = (x, y, c) => { const d = Math.hypot(x - 32, y - 24); return d <= 5 ? c : d < 7 ? mix(c, PANEL, (7 - d) / 2) : PANEL; };
+  // one anti-aliased ring at half coverage (a softer ring is mostly sub-ΔE1 noise, over the 0.25 % cap on a 64×48 image)
+  const dot = (x, y, c) => { const d = Math.hypot(x - 32, y - 24); return d <= 5 ? c : d < 6 ? mix(c, PANEL, 0.5) : PANEL; };
   out.push({ name: 'dark: the Idle dot (solid + anti-aliased) passes as the idle exception', theme: 'dark', expect: 'pass', exceptions: IDLE,
     old: image((x, y) => dot(x, y, hex('#726c62'))), new: image((x, y) => dot(x, y, hex('#7c766b'))) });
   return out;

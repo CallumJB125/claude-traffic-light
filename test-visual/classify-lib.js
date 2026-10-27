@@ -605,12 +605,18 @@ function exceptionsFor(baseline, config, theme) {
 }
 
 // The gate: § R3.10 item 6.
-// M2 (review): noise caps. Calibrated on the real R0b run over the 65 changed baselines (before these fixes; the
-// noise pre-filter itself is unchanged): the highest noise share was 0.691 % (home-compose routed-light), the next
-// 0.12 %. The cap is that maximum plus ~0.3 points: 1.0 %. A tile counts as dense noise at ≥ 50 % of its pixels.
+// M2 (review): noise caps. A tile counts as dense noise at ≥ 50 % of its pixels. The total cap is recalibrated
+// (review round 2) on the R0b run over the 65 changed baselines (base 47ad8ac1): routed-light 0.693 %, then
+// 0.134 % (lights-template-minimal), 0.130 %, 0.062 %, all others ≤ 0.024 %. The cap is 0.25 % (about twice
+// the second highest). routed-light has a named cause and a scoped allowance in classify.config.json `noise`.
 const NOISE_TILE_SHARE = 0.5;
-const CAPS = { unexpectedRatio: 0.005, crops: 200, noiseRatio: 0.01 };
-function verdictOf(results) {
+const CAPS = { unexpectedRatio: 0.005, crops: 200, noiseRatio: 0.0025 };
+// A per-baseline noise allowance from classify.config.json: { baseline, maxRatio, reason }. Exact path only.
+const noiseCapFor = (baseline, config) => {
+  const hit = ((config && config.noise) || []).find((n) => n.baseline === baseline);
+  return hit ? hit.maxRatio : CAPS.noiseRatio;
+};
+function verdictOf(results, config) {
   const failures = [];
   let crops = 0;
   for (const r of results) {
@@ -619,11 +625,12 @@ function verdictOf(results) {
     if (/(^|\/)characters\.spec\.js\//.test(r.baseline) && r.changed) failures.push(`${r.baseline}: characters may not change (${r.changed} pixels)`);
     if (r.sizeChanged) failures.push(`${r.baseline}: size changed`);
     else if (r.unexpected / r.total > CAPS.unexpectedRatio) failures.push(`${r.baseline}: ${(100 * r.unexpected / r.total).toFixed(3)} % unexpected (cap 0.5 %)`);
-    if (!r.sizeChanged && r.noise / r.total > CAPS.noiseRatio) failures.push(`${r.baseline}: ${(100 * r.noise / r.total).toFixed(3)} % noise (cap ${100 * CAPS.noiseRatio} %)`);
+    const noiseCap = noiseCapFor(r.baseline, config);
+    if (!r.sizeChanged && r.noise / r.total > noiseCap) failures.push(`${r.baseline}: ${(100 * r.noise / r.total).toFixed(3)} % noise (cap ${+(100 * noiseCap).toFixed(3)} %)`);
     if (r.noiseTiles) failures.push(`${r.baseline}: ${r.noiseTiles} tile(s) at least ${100 * NOISE_TILE_SHARE} % noise (a dense shift under ΔE 1)`);
   }
   if (crops > CAPS.crops) failures.push(`${crops} review crops (cap ${CAPS.crops})`);
   return { failures, crops };
 }
 
-module.exports = { aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
+module.exports = { aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, noiseCapFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };

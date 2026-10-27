@@ -1,5 +1,5 @@
 {
-  "//": "Redesign classifier config (plan-redesign §R3.10, §R4.4). The accent families come from tokens.css at the base and the head, so only the named exceptions live here. Entry shape: { \"name\", \"reason\", \"baselines\": [\"test-visual/__screenshots__/<spec>/<file>.png\"], \"theme\"?: \"light\" | \"dark\", \"old\": [\"#hex\"], \"new\": [\"#hex\"] }. Only the listed baselines; only the exact old→new pair (±ΔE00 1) is strong, and its anti-aliased blends count only within 2 px of such a core pixel.",
+  "//": "Redesign classifier config (plan-redesign §R3.10, §R4.4). The accent families come from tokens.css at the base and the head, so only the named exceptions live here. Entry shape: { \"name\", \"reason\", \"baselines\": [\"test-visual/__screenshots__/<spec>/<file>.png\"], \"theme\"?: \"light\" | \"dark\", \"old\": [\"#hex\"], \"new\": [\"#hex\"] }. Only the listed baselines; only the exact old→new pair (±ΔE00 1) is strong, and its anti-aliased blends count only within 2 px of such a core pixel. `noise`: per-baseline noise allowances { baseline, maxRatio, reason } above the general cap (CAPS.noiseRatio 0.25 %), each with a named cause.",
   "exceptions": [
     {
       "name": "idle",
@@ -13,6 +13,13 @@
         "#7c766b"
       ],
       "//": "Derived from the R0b run (2026-10-27): none of the 65 changed baselines contains a #726c62 → #7c766b change, so the list is empty. Add a baseline here only when a run shows the dark Idle colour in it."
+    }
+  ],
+  "noise": [
+    {
+      "baseline": "test-visual/__screenshots__/home-compose.spec.js/routed-light-darwin.png",
+      "maxRatio": 0.0075,
+      "reason": "R0b light --focus-halo #f4f5f7 → #ffffff: the halo's anti-aliased edge overlaps the focused compose textarea's 1 px --line-input border, moving its top and bottom hairlines (y 59, 122, x 31–882) by one sRGB step. 1,706 px = 0.693 %; allowance 0.75 %."
     }
   ]
 }

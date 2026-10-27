@@ -342,7 +342,7 @@ test('classifier S3: a zero-length segment explains nothing', () => {
   assert.ok(!(r.verdict === 'pass' && r.key === 'ink'), `explained as ${r.verdict} ${r.key}`);
 });
 
-test('classifier M2: a dense shift under ΔE 1 fails (noise tiles and the 1 % cap); sparse edge noise does not', () => {
+test('classifier M2: a dense shift under ΔE 1 fails (noise tiles and the 0.25 % cap); sparse edge noise does not', () => {
   const bg = hex('#eef0f3'); const nudged = [237, 239, 242];
   assert.ok(lib.deltaE00(lib.lab(bg), lib.lab(nudged)) <= lib.DE_NOISE);
   // a 60×40 region nudged one step in a 96×72 image: every pixel is noise, densely
@@ -352,12 +352,12 @@ test('classifier M2: a dense shift under ΔE 1 fails (noise tiles and the 1 % ca
   assert.ok(dense.noiseTiles > 0);
   assert.ok(dense.tiles.some((t) => t.kind === 'noise'), 'noise tiles are in the crops');
   const failures = lib.verdictOf([{ baseline: 'x/a-light-darwin.png', ...dense }]).failures;
-  assert.ok(failures.some((f) => /noise \(cap 1 %\)/.test(f)) && failures.some((f) => /tile\(s\) at least 50 % noise/.test(f)), failures.join('; '));
-  // sparse: one noisy pixel every 4th column on a single row, as anti-aliased edges are
-  const sparse = lib.classifyImage(image(96, 72, () => bg), image(96, 72, (x, y) => (y === 30 && x % 4 === 0 ? nudged : bg)), ALL.light);
+  assert.ok(failures.some((f) => /noise \(cap 0.25 %\)/.test(f)) && failures.some((f) => /tile\(s\) at least 50 % noise/.test(f)), failures.join('; '));
+  // sparse: one noisy pixel every 8th column on a single row, as anti-aliased edges are (12 px = 0.17 %)
+  const sparse = lib.classifyImage(image(96, 72, () => bg), image(96, 72, (x, y) => (y === 30 && x % 8 === 0 ? nudged : bg)), ALL.light);
   assert.equal(sparse.noiseTiles, 0);
   assert.deepEqual(lib.verdictOf([{ baseline: 'x/a-light-darwin.png', ...sparse }]).failures, []);
-  assert.equal(lib.CAPS.noiseRatio, 0.01);
+  assert.equal(lib.CAPS.noiseRatio, 0.0025);
   assert.equal(lib.NOISE_TILE_SHARE, 0.5);
 });
 
@@ -435,4 +435,18 @@ test('classifier N2: an exception is strong only at its core; a grey moved along
   assert.equal(near.unexpected, 0);
   const lone = lib.classifyImage(image(10, 10, (x) => (x === 6 ? blend : P)), image(10, 10, (x) => (x === 6 ? blendN : P)), ALL.dark, { exceptions: ex });
   assert.equal(lone.unexpected, lone.changed);
+});
+
+test('classifier: noise allowance is per named baseline only, with a reason', () => {
+  const config = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'test-visual', 'classify.config.json'), 'utf8'));
+  const routed = 'test-visual/__screenshots__/home-compose.spec.js/routed-light-darwin.png';
+  const entry = config.noise.find((n) => n.baseline === routed);
+  assert.ok(entry && /focus-halo/.test(entry.reason));
+  assert.equal(lib.noiseCapFor(routed, config), 0.0075);
+  assert.equal(lib.noiseCapFor('test-visual/__screenshots__/home-compose.spec.js/routed-dark-darwin.png', config), lib.CAPS.noiseRatio);
+  const row = (baseline, noise) => ({ baseline, total: 10000, changed: noise, noise, unexpected: 0, sizeChanged: false, tiles: [], noiseTiles: 0 });
+  assert.deepEqual(lib.verdictOf([row(routed, 70)], config).failures, []);
+  assert.equal(lib.verdictOf([row(routed, 80)], config).failures.length, 1);
+  assert.equal(lib.verdictOf([row('x/other.png', 30)], config).failures.length, 1);
+  assert.deepEqual(lib.verdictOf([row('x/other.png', 25)], config).failures, []);
 });
