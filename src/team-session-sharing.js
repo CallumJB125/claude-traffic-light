@@ -31,7 +31,9 @@ function createTeamSessionSharing({ host, origin, sessions, association, now = D
       // An explicit manual watch share takes precedence over automatic control.
       if (h.shared().some(s => s.session === d.session && s.team.id === d.team)) continue;
       blocked.set(key, now() + 60_000);
-      const result = await h.shareSession({ session: d.session, team: d.team, scope: 'interact' });
+      // New automatic shares watch. A terminal channel the owner attached on purpose keeps send access.
+      const result = await h.shareSessionAutomatic({ session: d.session, team: d.team, scope: d.provider === 'claude-channel' ? 'interact' : 'watch' });
+      if (result?.status === 'exists') { blocked.delete(key); continue; }
       const current = association(d.board);
       if (result?.ok) {
         const session = sessions().find(x => x.state.session === d.session)?.state;
