@@ -221,8 +221,40 @@ function colourOnlyPair(minus, plus, maps) {
 }
 
 // <style> content of an HTML file, and the rest (which must not change).
-const styleOf = (html) => [...html.replace(/<!--[\s\S]*?-->/g, '').matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n');
-const outsideStyle = (html) => html.replace(/(<style\b[^>]*>)[\s\S]*?(<\/style>)/gi, '$1$2');
+// Splits an HTML file the way the parser does: <style> and <script> hold raw text up to their end tag (a "<!--"
+// inside them is just text), markup comments only exist between those elements, and a start tag's attribute values
+// are skipped as quoted strings. `styles`: each <style>'s content. `outside`: the file with every <style>'s content
+// emptied and markup comments kept (so a changed comment still counts as changed markup).
+function htmlParts(html) {
+  const styles = []; let outside = ''; let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf('<', i);
+    if (lt < 0) { outside += html.slice(i); break; }
+    outside += html.slice(i, lt);
+    if (html.startsWith('<!--', lt)) {
+      const end = html.indexOf('-->', lt + 4); const stop = end < 0 ? html.length : end + 3;
+      outside += html.slice(lt, stop); i = stop; continue;
+    }
+    const tag = html.slice(lt).match(/^<([a-zA-Z][\w-]*)/);
+    if (!tag) { outside += '<'; i = lt + 1; continue; }
+    let k = lt + tag[0].length; // to the start tag's '>', skipping quoted attribute values
+    while (k < html.length && html[k] !== '>') {
+      if (html[k] === '"' || html[k] === "'") { const q = html.indexOf(html[k], k + 1); k = q < 0 ? html.length : q + 1; } else k += 1;
+    }
+    const open = Math.min(k + 1, html.length);
+    outside += html.slice(lt, open); i = open;
+    const name = tag[1].toLowerCase();
+    if (name === 'style' || name === 'script') {
+      const close = html.slice(open).search(new RegExp(`</${name}\\b`, 'i'));
+      const end = close < 0 ? html.length : open + close;
+      if (name === 'style') styles.push(html.slice(open, end)); else outside += html.slice(open, end);
+      i = end;
+    }
+  }
+  return { styles, outside };
+}
+const styleOf = (html) => htmlParts(html).styles.join('\n');
+const outsideStyle = (html) => htmlParts(html).outside;
 
 // Changed lines (comments stripped, blank lines ignored) that are not a lone colour declaration.
 // `maps` = { head, base }: token maps used to resolve var() (head) and to check a custom property's base value.
@@ -447,6 +479,16 @@ test('structural gate rule 3: in a rule line only colours may change; layout, se
   const page2 = '<!-- the editor\'s inline <style> note -->\n<style>\n.a { padding: 4px; }\n</style>';
   assert.notDeepEqual(badCssLines(styleOf(page2), styleOf(page2.replace('padding: 4px', 'padding: 6px')), maps, { rules: true }), []);
   assert.equal(styleOf(page2).includes('editor'), false);
+  // labfix-review: comments are stripped only in markup. Inside <style> a "<!--" is CSS text, and string literals
+  // "<!--" / "-->" in scripts on either side of a real <style> must not swallow it.
+  const page3 = '<style><!-- .a{padding:4px} --></style>';
+  assert.notDeepEqual(badCssLines(styleOf(page3), styleOf(page3.replace('padding:4px', 'padding:6px')), maps, { rules: true }), []);
+  const page4 = '<script>const open = "<!--";</script>\n<style>\n.a { padding: 4px; }\n</style>\n<script>const close = "-->";</script>';
+  assert.equal(styleOf(page4), '\n.a { padding: 4px; }\n');
+  assert.notDeepEqual(badCssLines(styleOf(page4), styleOf(page4.replace('padding: 4px', 'padding: 6px')), maps, { rules: true }), []);
+  assert.equal(outsideStyle(page4), outsideStyle(page4.replace('padding: 4px', 'padding: 6px')), 'the style change is judged as CSS, not markup');
+  assert.notEqual(outsideStyle(page4), outsideStyle(page4.replace('"-->"', '"--> "')), 'script text is markup');
+  assert.equal(styleOf('<p title="<style>x</style>">hi</p>'), '', 'a quoted attribute value is not an element');
   // in HTML only <style> content is compared; markup must not change
   const page = '<style>\n.x { color: #e5866a; }\n</style>\n<div class="a">hi</div>';
   assert.equal(outsideStyle(page), outsideStyle(page.replace('#e5866a', 'var(--accent)')));
