@@ -2,7 +2,11 @@
   const $ = (id) => document.getElementById(id);
   const pageQuery = new URLSearchParams(location.search);
   const embeddedView = pageQuery.get('embedded') === '1' && ['stats', 'mix'].includes(pageQuery.get('view')) ? pageQuery.get('view') : null;
-  const widgetOnly = pageQuery.get('utility') === 'widget';
+  // R8-2b: the rules editor as a page of the Settings sheet (preview only). Presentation only: main decides who it is (rulesEditor).
+  const rulesPane = pageQuery.get('embedded') === '1' && pageQuery.get('view') === 'rules';
+  window.lightsRulesPane = rulesPane; // read by the Usage modules loaded after this one, which then do nothing
+  const widgetOnly = pageQuery.get('utility') === 'widget' || rulesPane;
+  document.body.classList.toggle('embedded-rules', rulesPane);
   document.body.classList.toggle('embedded-analytics', !!embeddedView);
   document.body.classList.toggle('widget-configuration', widgetOnly);
   if (embeddedView) {
@@ -150,6 +154,7 @@
   // them in its shape), and the settings it implies, staged until Save.
   let templateId = null;
   let stagedPrefs = null;
+  let stagedFrom = null; // the template id stagedPrefs came from (the rules pane names it to main)
   let applying = false;
   function setDirty(v) {
     dirty = v;
@@ -1038,7 +1043,9 @@
   let replaceWhy = null;
   async function save() {
     if (!dirty) return;
-    try { config = await window.lightsApi.saveConfig({ rules, template: templateId, ...(replaceWhy && { __backupReason: replaceWhy }), ...prefsToSave() }); stagedPrefs = null; replaceWhy = null; } catch (err) {
+    // The sheet's Spend and Notifications panes own spend / notifyStates, and a template's prefs are merged into them: read them fresh first.
+    if (rulesPane && stagedPrefs) { try { const fresh = await window.lightsApi.getConfig(); config = { ...config, notifyStates: fresh.notifyStates, spend: fresh.spend }; } catch { /* the merge uses what was loaded */ } }
+    try { config = await window.lightsApi.saveConfig({ rules, template: templateId, ...(replaceWhy && { __backupReason: replaceWhy }), ...prefsToSave(), ...(rulesPane && stagedPrefs && { __prefsFrom: stagedFrom }) }); stagedPrefs = null; replaceWhy = null; } catch (err) {
       // stay dirty: nothing was stored, and the edits are still only here
       flash(`Save failed — ${err.message}`);
       return;
@@ -1118,6 +1125,7 @@
     applying = false;
     templateId = tpl ? tpl.id : null;
     stagedPrefs = tpl && Object.keys(tpl.prefs).length ? tpl.prefs : null;
+    stagedFrom = stagedPrefs ? tpl.id : null;
     $('presets').hidden = true;
     renderList(); renderEditor(); renderStage();
   }
@@ -1432,6 +1440,20 @@
   $('view-auto').hidden = !window.lightsApi.showAutoAnswer;
   $('view-rules').addEventListener('click', () => setView('rules'));
   window.lightsApi.onShowView((v) => setView(v));
+  if (rulesPane) {
+    $('back-settings').hidden = false;
+    $('back-settings').addEventListener('click', () => window.lightsApi.goPane?.('widget'));
+    // The sheet keeps this view alive: when it is shown again another pane or window may have changed what is stored. Unsaved edits are kept.
+    window.lightsApi.onShown?.(async () => {
+      try {
+        config = await window.lightsApi.getConfig();
+        if (dirty) return;
+        rules = config.rules.map(R.normalizeRule); templateId = config.template || null; stagedPrefs = null; stagedFrom = null;
+        if (!selected()) selectedId = rules[0]?.id || null;
+        renderList(); renderEditor(); renderStage();
+      } catch { /* keep what is shown */ }
+    });
+  }
   window.lightsApi.onMotionPaused((paused) => {
     motionPaused = !!paused;
     document.body.classList.toggle('motion-paused', motionPaused);

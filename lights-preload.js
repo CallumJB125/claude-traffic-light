@@ -51,6 +51,8 @@ contextBridge.exposeInMainWorld('lightsApi', {
     remove: (id) => ipcRenderer.invoke('cameos-remove', id),
   },
   onStatusChanged: (callback) => ipcRenderer.on('status-changed', callback),
+  goPane: (pane) => ipcRenderer.send('settings:go-pane', typeof pane === 'string' ? pane : ''), // R8-2b: only the preview's rules pane is answered
+  onShown: (cb) => ipcRenderer.on('settings:shown', () => cb()),
   onShowView: (cb) => ipcRenderer.on('show-view', (e, v) => cb(v)),
   // Auto-answer rules: main says why a rule can't be saved (null = fine).
   checkAutoRule: (rule) => ipcRenderer.invoke('check-auto-rule', rule),

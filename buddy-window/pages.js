@@ -79,7 +79,12 @@ const SETTINGS_PANES = Object.freeze(SettingsPanes.PANES.map((pane) => Object.fr
   id: `settings:${pane}`, title: SettingsPanes.TITLE[pane], icon: 'gear', kind: 'local', file: 'settings.html', preload: 'settings-preload.js',
   query: Object.freeze({ embedded: '1', pane }), group: 'you', unlisted: true, pane,
 })));
-function paneById(id) { return typeof id === 'string' ? SETTINGS_PANES.find((p) => p.id === id) ?? null : null; }
+// R8-2b: the widget rules editor in the sheet: lights.html's rules view, with lights-preload.js (its own guard in main: rulesEditor).
+const RULES_PANE = Object.freeze({
+  id: `settings:${SettingsPanes.RULES_PANE}`, title: SettingsPanes.TITLE[SettingsPanes.RULES_PANE], icon: 'lights', kind: 'local', file: 'lights.html', preload: 'lights-preload.js',
+  query: Object.freeze({ embedded: '1', view: 'rules' }), group: 'you', unlisted: true, pane: SettingsPanes.RULES_PANE,
+});
+function paneById(id) { return typeof id === 'string' ? [...SETTINGS_PANES, RULES_PANE].find((p) => p.id === id) ?? null : null; }
 
 const GROUPS = [
   { id: 'work', title: null },
@@ -507,4 +512,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, FUTURE_IDS, DESTINATIONS, SIDEBAR_FILTERS, COLLAPSIBLE, DEFAULT_COLLAPSED, sidebarCollapsed, REDIRECTS, resolve, sectionTarget, sectionAddress, sectionsFor, sectionOf, flat, pageById, SETTINGS_PANES, paneById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
+module.exports = { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, FUTURE_IDS, DESTINATIONS, SIDEBAR_FILTERS, COLLAPSIBLE, DEFAULT_COLLAPSED, sidebarCollapsed, REDIRECTS, resolve, sectionTarget, sectionAddress, sectionsFor, sectionOf, flat, pageById, SETTINGS_PANES, RULES_PANE, paneById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };

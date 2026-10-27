@@ -6,7 +6,7 @@
 (() => {
   const api = window.lightsApi && window.lightsApi.spendSafety ? window.lightsApi.spendSafety : null;
   const before = document.getElementById('mix-loading');
-  if (!api || !before) return;
+  if (!api || !before || window.lightsRulesPane) return; // not in the Settings sheet's rules pane
   const sec = document.createElement('section');
   sec.id = 'usage-limit-estimate';
   sec.hidden = true;

@@ -370,7 +370,7 @@ test('the same millisecond twice gets two snapshots', () => {
 test('main wiring: every destructive action snapshots first, every backups IPC checks its sender', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   for (const channel of ['reset-rules', 'cameos-remove', 'setup-import-apply']) {
-    const at = main.indexOf(`utilityHandle('${channel}', widgetConfigSender,`);
+    const at = Math.max(main.indexOf(`utilityHandle('${channel}', widgetConfigSender,`), main.indexOf(`utilityHandle('${channel}', rulesEditor,`)) // R8-2b: cameos-remove is on rulesEditor (Lights window or the preview's rules pane);
     assert.ok(at > 0, channel);
     const body = main.slice(at, main.indexOf('\n});', at) + 4);
     assert.match(body, /backupFirst\(\)/, `${channel} must take a backup first`);
@@ -767,14 +767,14 @@ test('production destructive utility handlers reject foreign senders and back up
   const wrapperAt = main.indexOf('function utilityHandle(');
   const wrapper = main.slice(wrapperAt, main.indexOf('\n}', wrapperAt) + 2);
   const handlers = new Map(), owned = {}, effects = [];
-  const context = { ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, widgetConfigSender: e => e.sender === owned,
+  const context = { ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, widgetConfigSender: e => e.sender === owned, rulesEditor: e => e.sender === owned,
     backupFirst: () => effects.push('backup'), saveConfig: () => effects.push('save'), broadcastStatus() {},
     Rules: { defaultRules: () => [] }, Cameos: { removePhoto: () => effects.push('remove'), loadIndex: () => [] }, CAMEO_DIR: '/fixture', cameosChanged() {},
     pendingSetup: {}, Setup: { planImport: () => { effects.push('import'); return { remove: [], add: [], partial: {} }; } },
     loadConfig: () => ({}), readCameoPng() {}, commitConfig() {} };
   const vm = require('node:vm'); vm.createContext(context); vm.runInContext(wrapper, context);
   for (const [channel, effect] of [['reset-rules', 'save'], ['cameos-remove', 'remove'], ['setup-import-apply', 'import']]) {
-    const at = main.indexOf(`utilityHandle('${channel}', widgetConfigSender,`);
+    const at = Math.max(main.indexOf(`utilityHandle('${channel}', widgetConfigSender,`), main.indexOf(`utilityHandle('${channel}', rulesEditor,`)) // R8-2b: cameos-remove is on rulesEditor (Lights window or the preview's rules pane);
     assert.ok(at > 0, channel);
     vm.runInContext(main.slice(at, main.indexOf('\n});', at) + 4), context);
     assert.equal(handlers.get(channel)({ sender: {} }, 'replace'), null);

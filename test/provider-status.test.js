@@ -68,7 +68,7 @@ test('actual aggregate handler projection retains exact main-frame authority and
   const owner = { mainFrame: {}, isDestroyed: () => false }; let calls = 0, fn;
   const state = { reason: 'session', sessions: [row('codex')], look: { name: 'Human', clicks: { human: true } }, firedNames: ['Human'] };
   vm.runInNewContext(source.slice(begin, end), { utilityHandle: (_channel, guard, handler) => { fn = e => guard(e) ? handler(e) : null; },
-    widgetOnly: e => fromPage(e, owner), widgetConfigSender: () => false,
+    widgetOnly: e => fromPage(e, owner), widgetConfigSender: () => false, rulesEditor: () => false,
     aggregateState: () => { calls++; return state; }, widgetMuzzle: () => null, ProviderStatus: Provider, localSessions: a => a, online: true });
   for (const e of [{}, { sender: owner, senderFrame: {} }, { sender: {}, senderFrame: owner.mainFrame }]) assert.equal(fn(e), null);
   assert.equal(calls, 0);

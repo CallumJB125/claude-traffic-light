@@ -278,11 +278,11 @@
       saving = saving.then(saveAll);
     });
 
-    const SECTIONS = PANE ? window.SettingsPanes.PANES : ['general', 'notifications', 'spend', 'widget', 'privacy', 'advanced'];
+    const SECTIONS = PANE ? window.SettingsPanes.NAV : ['general', 'notifications', 'spend', 'widget', 'privacy', 'advanced'];
     // R8-2a: a pane document shows the elements tagged data-pane=<its pane>, wherever they sit; the old page keeps its six div.pane.
     if (PANE) {
       const nav = document.getElementById('section-nav');
-      nav.replaceChildren(...window.SettingsPanes.PANES.map((id) => { const b = document.createElement('button'); b.type = 'button'; b.dataset.go = id; b.textContent = window.SettingsPanes.TITLE[id]; return b; }));
+      nav.replaceChildren(...window.SettingsPanes.NAV.map((id) => { const b = document.createElement('button'); b.type = 'button'; b.dataset.go = id; b.textContent = window.SettingsPanes.TITLE[id]; return b; }));
       for (const p of document.querySelectorAll('.pane')) {
         for (const c of p.children) c.classList.toggle('not-pane', c.dataset.pane !== PANE);
         p.dataset.section = [...p.children].some((c) => c.dataset.pane === PANE) ? PANE : '';

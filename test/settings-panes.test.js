@@ -38,7 +38,7 @@ test('every config key has exactly one owner: the defaults and everything the pa
   const savedKeys = [...saveAll.matchAll(/^        ([A-Za-z]+):/gm)].map((m) => m[1]);
   assert.ok(defaults.length > 40 && savedKeys.length > 30);
   for (const k of new Set([...defaults, ...savedKeys])) assert.ok(k in SP.KEY_OWNER, `${k} needs an owner (or none)`);
-  for (const [k, p] of Object.entries(SP.KEY_OWNER)) assert.ok(SP.isPane(p) || p === 'none', `${k} -> ${p}`);
+  for (const [k, p] of Object.entries(SP.KEY_OWNER)) assert.ok(SP.isOwner(p) || p === 'none', `${k} -> ${p}`);
   for (const k of savedKeys) assert.ok(SP.isPane(SP.KEY_OWNER[k]), `${k} is saved by the page-wide save, so a pane must own it`);
   // The pages' own saves (voice, compaction) are inside owned keys too.
   assert.equal(SP.KEY_OWNER.voice, 'general');
@@ -505,7 +505,7 @@ test('nothing in a pane document survives on screen from another pane (the switc
   const b = await boot({ pane: 'phone' });
   try {
     const buttons = [...b.w.document.querySelectorAll('#section-nav button')].map((x) => x.dataset.go);
-    assert.deepEqual(buttons, SP.PANES);
+    assert.deepEqual(buttons, SP.NAV);
     assert.equal(b.w.document.getElementById('answering-title').textContent, 'Answering from the widget');
     for (const el of b.w.document.querySelectorAll('.pane > *')) {
       assert.equal(el.classList.contains('not-pane'), el.dataset.pane !== 'phone', `${el.tagName}#${el.id}`);
