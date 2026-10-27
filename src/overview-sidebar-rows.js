@@ -5,7 +5,7 @@
 // no handles, capabilities, devices, boards, children or anything a later
 // field might add. Strings only, and none of them is a path.
 
-const KEYS = Object.freeze(['id', 'bucket', 'title', 'project', 'origin', 'age_ms', 'team']);
+const KEYS = Object.freeze(['id', 'bucket', 'title', 'project', 'origin', 'age_ms', 'team', 'terminal']);
 const BUCKET_IDS = Object.freeze(['needs', 'working', 'check', 'stuck', 'idle']);
 const ORIGINS = Object.freeze(['iTerm', 'Terminal', 'Plexiform Terminal']);
 const UNTITLED = 'Untitled session';
@@ -28,6 +28,8 @@ function row(dto, origins) {
     origin: ORIGINS.includes(origin) ? origin : null,
     age_ms: Number.isFinite(dto.age_ms) && dto.age_ms >= 0 ? Math.round(dto.age_ms) : null,
     team: dto.board?.kind === 'team',
+    // A session reported from this computer's terminals (the origins map covers exactly those).
+    terminal: !!origins?.has?.(dto.id),
   };
 }
 

@@ -39,7 +39,7 @@ test('main reads the gate once from IS_DEV_RUN and app.isPackaged and hands it t
 });
 
 test('the sidebar learns the gate only from buddy:pages, and only when it is on', () => {
-  assert.match(src, /\.\.\.\(chatFirst === true \? \{ chatFirst: true \} : \{\}\) \} : null\)\);/);
+  assert.match(src, /\.\.\.\(chatFirst === true \? \{ chatFirst: true, chat: chatPagesExtra\(\) \} : \{\}\) \} : null\)\);/);
   assert.match(src, /\.\.\.\(chatFirst === true \? \{ chat: \{ focus: sidebarFocus \} \} : \{\}\),/);
 });
 

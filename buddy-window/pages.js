@@ -400,6 +400,16 @@ const DESTINATIONS = Object.freeze(['palette', 'library']);
 // The sidebar filters a redirect can land on (focus the tree, set the filter).
 const SIDEBAR_FILTERS = Object.freeze(['all', 'needs', 'terminals', 'chats', 'team']);
 
+// The bucket groups a person can collapse in the chat-first sidebar (Needs
+// you never collapses), and the default: Idle starts collapsed.
+const COLLAPSIBLE = Object.freeze(['working', 'check', 'stuck', 'idle']);
+const DEFAULT_COLLAPSED = Object.freeze(['idle']);
+/** A saved or sent collapsed list → a clean one, or null when it is not one. */
+function sidebarCollapsed(v) {
+  if (!Array.isArray(v) || v.length > COLLAPSIBLE.length || !v.every((x) => COLLAPSIBLE.includes(x))) return null;
+  return COLLAPSIBLE.filter((x) => v.includes(x));
+}
+
 // Where every page id goes once the redesign is on, from the §R2.5 table.
 //   { keep: true }            the page stays.
 //   { sidebar: <filter> }     focus the sidebar with that filter (built in R1).
@@ -487,4 +497,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, FUTURE_IDS, DESTINATIONS, SIDEBAR_FILTERS, REDIRECTS, resolve, sectionTarget, sectionAddress, sectionsFor, sectionOf, flat, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
+module.exports = { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, FUTURE_IDS, DESTINATIONS, SIDEBAR_FILTERS, COLLAPSIBLE, DEFAULT_COLLAPSED, sidebarCollapsed, REDIRECTS, resolve, sectionTarget, sectionAddress, sectionsFor, sectionOf, flat, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };

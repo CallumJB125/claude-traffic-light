@@ -17,7 +17,7 @@ const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage, dialog, clipboard } = require('electron'); // privacy-flow: team-hub-account
-const { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, sectionsFor, pageById, resolve, sectionTarget, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
+const { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, DEFAULT_COLLAPSED, sidebarCollapsed, sectionsFor, pageById, resolve, sectionTarget, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 const { MAIN_WINDOW } = require('../src/widget-placement.js');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
@@ -125,7 +125,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, homeBusy = () => false, onHomeRetired = () => {}, loginEnv = () => null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, loginEnv = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -1109,8 +1109,20 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   ipcMain.on('optimiser:docs', (e) => { if (fromOptimiser(e)) shell.openExternal(BurstEmbed.DOCS_URL); }); // privacy-flow: burst-dashboard-links
   ipcMain.on('optimiser:link', (e, id) => { const url = Object.hasOwn(OptimiserTools.LINKS, id) ? OptimiserTools.LINKS[id] : null; if (fromOptimiser(e) && url) shell.openExternal(url); }); // privacy-flow: burst-dashboard-links
   ipcMain.on('optimiser:open-page', (e, id) => { if (fromOptimiser(e) && OptimiserTools.PAGES.includes(id) && pageById(id)) select(id); });
+  // Chat-first preview only: the sidebar's collapsed groups, saved per user.
+  // Registered only with the gate on, so the ordinary app has no such channel.
+  function chatPagesExtra() {
+    let saved = null;
+    try { saved = sidebarCollapsed(sidebarGroups.load()); } catch { saved = null; }
+    return { collapsed: saved ?? [...DEFAULT_COLLAPSED], focus: sidebarFocus };
+  }
+  if (chatFirst === true) ipcMain.on('buddy:sidebar-groups', (e, ids) => {
+    if (!fromSidebar(e)) return;
+    const clean = sidebarCollapsed(ids);
+    if (clean) { try { sidebarGroups.save(clean); } catch { /* keep the old value */ } }
+  });
   ipcMain.on('buddy:optimiser-section', (e, id) => { if (fromSidebar(e) && typeof id === 'string') optimiser.section(id); });
-  ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS, sections: require('../src/simple-mode.js').sidebarSections(sectionsFor(), simpleMode() === true), footer: FOOTER, brand: { name: BRAND.NAME, hubText: BRAND.HUB_TEXT }, ...(chatFirst === true ? { chatFirst: true } : {}) } : null));
+  ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS, sections: require('../src/simple-mode.js').sidebarSections(sectionsFor(), simpleMode() === true), footer: FOOTER, brand: { name: BRAND.NAME, hubText: BRAND.HUB_TEXT }, ...(chatFirst === true ? { chatFirst: true, chat: chatPagesExtra() } : {}) } : null));
   for (const [op, fn] of Object.entries(flow.ACCT)) {
     ipcMain.handle(`buddy:acct:${op}`, async (e, ...args) => {
       if (!fromAccount(e)) return { ok: false, error: 'Not allowed.' };

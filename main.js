@@ -1609,6 +1609,8 @@ function getBuddy() {
     buddyWin = createBuddyWindow({
       isConstrained: () => lowPowerOn,
       chatFirst: CHAT_PREVIEW,
+      // The chat-first sidebar's collapsed groups (only read or written with the preview on).
+      sidebarGroups: { load: () => loadConfig().ui?.sidebarGroups ?? null, save: (v) => saveConfig({ ui: { ...(loadConfig().ui ?? {}), sidebarGroups: v } }) },
       simpleMode: () => loadConfig().simpleMode === true,
       // O4: Home stays alive while a task its box started is live; its retired document drops that task's slot.
       homeBusy: () => Compose.busy(),
