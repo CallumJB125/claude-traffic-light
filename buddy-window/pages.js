@@ -406,7 +406,7 @@ const FLOW_IDS = Object.freeze(['signin', 'join', 'create-team']);
 // Documents the redesign adds later (§R4.5.9). They are deliberately not in
 // PAGES: pageById() stays null for them, so selecting one is still a no-op.
 // Each moves into PAGES in the PR that builds it.
-const FUTURE_IDS = Object.freeze(['sidebar', 'newchat', 'thread', 'settings:projects', 'settings:agent-messages']);
+const FUTURE_IDS = Object.freeze(['sidebar', 'newchat', 'thread']);
 
 // Destinations that are not page ids at all: the ⌘K palette document and the
 // Library sheet (R14). Named so the redirect table can say where an id goes.

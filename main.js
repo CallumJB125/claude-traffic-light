@@ -4071,7 +4071,7 @@ utilityHandle('get-config', configReader, (e) => { const pane = settingsPaneOf(e
 utilityHandle('save-config', e => settingsAnyPane(e) || widgetConfigSender(e), (e, partial) => {
   const pane = settingsPaneOf(e);
   const rules = pane === SettingsPanes.RULES_PANE;
-  const rulesBad = rules ? rulesRefusal(partial) : [];
+  const rulesBad = rules ? rulesRefusal(partial) : []; // note: for an allowed template save this also overwrites the cross-pane keys of `partial` with the template's prefs
   if (rules ? rulesBad.length : pane && !SettingsPanes.writesAllowed(pane, partial)) {
     const bad = rules ? rulesBad : partial && typeof partial === 'object' ? Object.keys(partial).filter((k) => SettingsPanes.KEY_OWNER[k] !== pane) : [];
     console.warn(`[settings] pane ${pane} refused a write outside its keys: ${bad.slice(0, 8).join(', ') || '(not an object)'}`);
@@ -4098,6 +4098,7 @@ function commitConfig(partial) {
   const prev = loadConfig();
   // The Lights window says when a save replaces the rules wholesale
   // (template, preset, reset); a big content change counts too.
+  // __backupReason is only compared with Backups' closed marker list to decide whether to snapshot first (backupFirst() takes no label): never stored, logged or used in a filename.
   const marker = partial.__backupReason;
   delete partial.__backupReason;
   delete partial.__prefsFrom; // R8-2b: control field of the rules pane's template saves (checked in rulesRefusal), never stored
@@ -5198,7 +5199,7 @@ require('./src/home-main.js').register({ ipcMain, allowed: (e) => fromUtilityPag
 require('./src/guardrails-main.js').install({ ipcMain, dialog, shell, BrowserWindow, rootDir: ROOT_DIR, allowed: (e) => fromUtilityPage(e, 'home'), broadcast: () => broadcastStatus(), log: console.log });
 explainSvc = require('./src/explain-main.js').install({ ipcMain, rootDir: ROOT_DIR, home: os.homedir(), config: loadConfig, inputs: () => aggregateState().inputs || [], sessions: () => aggregateState().sessions || [], inputAllowed: inputSenderOk, homeAllowed: (e) => fromUtilityPage(e, 'home'), clipboard, shell, Notification, openHome: () => openBuddy('home'), onQuit: (fn) => onQuit(app, fn), log: (m) => console.warn(m) }); // explain mode (opt-in, config.explainMode)
 require('./src/widget-lane-main.js').install({ ipcMain, send: (ch, v) => { if (win && !win.isDestroyed()) win.webContents.send(ch, v); }, allowed: (e) => !!win && !win.isDestroyed() && e.sender === win.webContents, sources: { state: () => aggregateState(), local: localSessions, collisions: collisionAlerts, git: { active: () => gitEvents(loadConfig()) }, spend: () => spendSnapshot(loadConfig()), warnAt: () => loadConfig().spend.warnAt } });
-deployStatus = require('./src/deploy-status-main.js').install({ ipcMain, file: path.join(ROOT_DIR, 'deploy-status.json'), safeStorage: require('electron').safeStorage, fetch: (...a) => net.fetch(...a), clipboard, shell, sessions: () => readSessions(loadConfig()), online: () => online, allowedHome: (e) => fromUtilityPage(e, 'home'), allowedSettings: settingsPane('advanced'), scrub: (t) => require('./src/scrub.js').scrub(t, { home: os.homedir() }), paused: IS_DEV_RUN, onFired: () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); maybePlayAlertSound(); }, log: (m) => console.log(m) }); // privacy-flow: deploy-status
+deployStatus = require('./src/deploy-status-main.js').install({ ipcMain, file: path.join(ROOT_DIR, 'deploy-status.json'), safeStorage: require('electron').safeStorage, fetch: (...a) => net.fetch(...a), clipboard, shell, sessions: () => readSessions(loadConfig()), online: () => online, allowedHome: (e) => fromUtilityPage(e, 'home'), allowedSettings: settingsPane('projects'), scrub: (t) => require('./src/scrub.js').scrub(t, { home: os.homedir() }), paused: IS_DEV_RUN, onFired: () => { stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); maybePlayAlertSound(); }, log: (m) => console.log(m) }); // privacy-flow: deploy-status
 // Home's "Start with a pack" card (src/starter-pack-main.js): the stack of recent folders, the matching gallery pack, one confirm, then its first recipe as a task.
 {
   const StarterMain = require('./src/starter-pack-main.js');
@@ -5279,7 +5280,7 @@ ipcMain.handle('connect-agent', async (e, which) => {
   if (typeof which !== 'string' || !['codex', 'cursor', 'gemini', 'hermes'].includes(which)) return { ok: false };
   return { ok: aiToolsOpen(`aitools:${which}`), opened: true };
 });
-ipcMain.handle('git-status', (e) => settingsPane('advanced')(e) ? ({ ...git.status(), enabled: loadConfig().gitSignals !== false }) : null);
+ipcMain.handle('git-status', (e) => settingsPane('projects')(e) ? ({ ...git.status(), enabled: loadConfig().gitSignals !== false }) : null);
 utilityHandle('signal-endpoint', e => settingsPane('aitools')(e) || widgetConfigSender(e), () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));
 // Preferences / Health → "Install Ghostty Dock…" (src/ghostty-dock-install.js): Settings or Home only, an action name and nothing else.
 const GhosttyDockInstall = require('./src/ghostty-dock-install.js');
@@ -5302,7 +5303,7 @@ const ghosttyDockInstaller = GhosttyDockInstall.createController({
   },
   changed: (s) => sendToSettings('ghostty-dock-changed', s),
 });
-GhosttyDockInstall.register({ utilityHandle, allowed: (e) => settingsPane('aitools')(e) || fromUtilityPage(e, 'home'), controller: ghosttyDockInstaller });
+GhosttyDockInstall.register({ utilityHandle, allowed: (e) => settingsPane('terminal')(e) || fromUtilityPage(e, 'home'), controller: ghosttyDockInstaller });
 require('./src/cli-install.js').register({ utilityHandle, allowed: settingsPane('general'), dialog, BrowserWindow, home: os.homedir(), packaged: app.isPackaged, resourcesPath: process.resourcesPath, appDir: __dirname });
 // Not the signal server's port: an ssh -R tunnel makes this one reachable to
 // every user of the far host, so it serves only the signed device route.

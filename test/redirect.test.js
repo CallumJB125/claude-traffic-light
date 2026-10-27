@@ -97,7 +97,7 @@ test('future ids are not pages: pageById is null and none is in PAGES (so the si
     assert.ok(!JSON.stringify(P.PAGES).includes(`"${id}"`), `${id} appears in PAGES`);
     assert.equal(P.sectionOf(id), null, id);
   }
-  assert.deepEqual([...P.FUTURE_IDS].sort(), ['newchat', 'settings:agent-messages', 'settings:projects', 'sidebar', 'thread']);
+  assert.deepEqual([...P.FUTURE_IDS].sort(), ['newchat', 'sidebar', 'thread']);
 });
 
 test('every section id resolves to its default page; page ids win the bare name', () => {

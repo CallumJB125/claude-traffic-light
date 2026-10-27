@@ -329,7 +329,7 @@
         || (r.show === 'recheck' ? `Installed, but not used yet: ${r.reason}.` : r.reason === 'ready' ? 'Installed and in use.' : '');
     };
     const dockAct = async (action) => {
-      if (!inPane('aitools')) return;
+      if (!inPane('terminal')) return;
       try { showDock(await window.settingsApi.ghosttyDock(action)); } catch (err) { showDock({}, err.message); }
     };
     dockAct('status');
@@ -348,7 +348,7 @@
         : g.state === 'rate-limited' || g.state === 'backoff' ? `GitHub didn't answer (${g.error}); trying again later.`
         : '';
     };
-    if (inPane('advanced')) window.settingsApi.gitStatus().then(showGit);
+    if (inPane('projects')) window.settingsApi.gitStatus().then(showGit);
 
     const remoteEl = (id) => document.getElementById(`remote-${id}`);
     const ago = (iso) => {

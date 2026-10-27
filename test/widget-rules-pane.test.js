@@ -82,7 +82,7 @@ test('rulesEditor: the Lights window and the rules pane (top frame, preview only
   assert.equal(g.rulesEditor(from('lights-window')), true, 'the Lights window is unchanged');
   assert.equal(g.rulesEditor(from(RULES)), true);
   assert.equal(g.rulesEditor(from(RULES, false)), false, 'subframe');
-  for (const id of ['usage', 'stats', 'lights', 'settings', 'settings:widget', 'settings:privacy', 'settings:*', 'settings:projects', 'home', 'hatch', undefined]) assert.equal(g.rulesEditor(from(id)), false, String(id));
+  for (const id of ['usage', 'stats', 'lights', 'settings', 'settings:widget', 'settings:privacy', 'settings:*', 'settings:nope', 'home', 'hatch', undefined]) assert.equal(g.rulesEditor(from(id)), false, String(id));
   const off = guards({ preview: false, lights: true });
   assert.equal(off.rulesEditor(from(RULES)), false, 'gate off: the page is no sender');
   assert.equal(off.rulesEditor(from('lights-window')), true);
