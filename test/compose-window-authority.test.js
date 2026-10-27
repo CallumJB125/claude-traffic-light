@@ -158,10 +158,10 @@ test('finding 2: confirmDialog sends Home’s create to homeConfirm and refuses 
   const start = mainSrc.indexOf('    confirmDialog: async (info, wcId) => {', mainSrc.indexOf('function getTasks()'));
   const finish = mainSrc.indexOf('    seen: {', start);
   const shown = []; const homeAsks = []; const tasksAsks = [];
-  const homeWc = { id: 41 }, tasksWc = { id: 42 };
+  const homeWc = { id: 41 }, tasksWc = { id: 42 }, otherWc = { id: 43 }; // 43: a live page that is neither Tasks nor Home
   const ctx = {
     tasksPages: () => [tasksWc], BrowserWindow: { fromWebContents: () => null },
-    buddyWin: { pageWebContents: (id) => (id === 'home' ? homeWc : null), homeConfirm: async (show) => { homeAsks.push(1); return show('home-window'); }, tasksConfirm: async (show) => { tasksAsks.push(1); return show('tasks-window'); } },
+    buddyWin: { pageWebContents: (id) => (id === 'home' ? homeWc : id === 'overview' ? otherWc : null), homeConfirm: async (show) => { homeAsks.push(1); return show('home-window'); }, tasksConfirm: async (show) => { tasksAsks.push(1); return show('tasks-window'); } },
     dialog: { showMessageBox: async (owner, o) => { shown.push([owner, o.buttons]); return { response: ctx.answer }; } }, answer: 1,
   };
   vm.runInNewContext(`globalThis.confirm=({${mainSrc.slice(start, finish)}}).confirmDialog;`, ctx);
