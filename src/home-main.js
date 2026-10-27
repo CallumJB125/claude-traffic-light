@@ -177,6 +177,8 @@ function register({ ipcMain, allowed, state, localSessions, tools, myDay, openPa
   });
   ipcMain.handle('home:morning-seen', (e) => (allowed(e) && !demo?.active() ? !!morning()?.markSeen() : false));
   ipcMain.handle('home:open-card', async (e, handle) => (allowed(e) && !demo?.active() && typeof handle === 'string' && handle.length <= 100 ? !!await myDay.open(handle) : false));
+  // R7-2 (review S2): Usage › Today reads through this same gatherer, so its memos (My day, the cost guard) are shared.
+  return { snapshot };
 }
 
 module.exports = { register, banner, needs, running, today, cards, costs, LOCAL_BOARD };

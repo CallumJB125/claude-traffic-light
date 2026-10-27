@@ -52,7 +52,7 @@ test('the sidebar learns the gate only from buddy:pages, and only when it is on'
 function world(chatFirst) {
   const calls = [];
   const ctx = {
-    calls, pageById: Pages.pageById, paneById: Pages.paneById, resolve: Pages.resolve, sectionTarget: Pages.sectionTarget, chatFirst,
+    calls, pageById: Pages.pageById, paneById: Pages.paneById, usagePaneById: Pages.usagePaneById, resolve: Pages.resolve, sectionTarget: Pages.sectionTarget, chatFirst,
     setupLocalGeneration: 0, tasksGeneration: 0, homeGeneration: 0, selected: 'board', content: null, hubInfo: null,
     sidebar: { webContents: { isDestroyed: () => false, focus: () => calls.push(['focus']) } },
     getTeamHub: () => null, forgetHub: () => {}, optimiser: { open: () => calls.push(['optimiser']) },
@@ -124,6 +124,20 @@ test('R7-1: gate on, Home and My day open the new chat (never select of a non-pa
   const t = world(true);
   t.api.route('tasks');
   assert.deepEqual(t.calls, [['state'], ['local', 'tasks']], 'tasks (otherwise → new chat, until R2) is unbuilt and stays put');
+});
+
+test('R7-2: usage:today is a page only with the preview on (route and the sidebar); off, it does nothing', () => {
+  const on = world(true);
+  on.api.route('usage:today');
+  assert.deepEqual(on.calls, [['state'], ['local', 'usage:today']]);
+  const side = world(true);
+  side.api.onSelect({}, 'usage:today');
+  assert.deepEqual(side.calls, [['state'], ['local', 'usage:today']], 'the sidebar\'s Usage row');
+  for (const f of [(w) => w.api.route('usage:today'), (w) => w.api.select('usage:today'), (w) => w.api.onSelect({}, 'usage:today')]) {
+    const off = world(false); f(off);
+    assert.deepEqual(off.calls, [], 'gate off: not a page');
+  }
+  assert.equal(Pages.pageById('usage:today'), null, 'never in PAGES');
 });
 
 test('gate on: a select from the sidebar is terminal; `from` comes from the sender, never the payload', () => {

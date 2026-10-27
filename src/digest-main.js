@@ -15,7 +15,9 @@ const { createSecureStorage } = require('../buddy-window/secure-storage.js');
 const MAILTO_BODY_MAX = 1800;
 const period = (p) => (p === 'week' ? 'week' : 'day');
 
-function register({ ipcMain, allowed, rootDir, userData, safeStorage, clipboard, dialog, shell, Notification, fetch, usageTurns, costGuard, workCost = async () => null, scheduledRuns = () => [], teamBrief = async () => null, interruptible = () => true, openHome = () => {}, onQuit = () => {}, log = () => {} }) {
+const SHAREABLE = Object.freeze(['get', 'copy', 'save', 'email']);
+
+function register({ ipcMain, allowed, rootDir, userData, safeStorage, clipboard, dialog, shell, Notification, fetch, usageTurns, costGuard, workCost = async () => null, scheduledRuns = () => [], teamBrief = async () => null, interruptible = () => true, openHome = () => {}, onQuit = () => {}, log = () => {}, bindings = [] }) {
   const secure = createSecureStorage(safeStorage);
   const digest = createDigest({
     tasksStoreDir: path.join(userData, 'tasks', 'store'),
@@ -42,10 +44,13 @@ function register({ ipcMain, allowed, rootDir, userData, safeStorage, clipboard,
   });
   onQuit(delivery.start());
 
-  const handle = (channel, fn) => ipcMain.handle(channel, async (e, ...args) => {
-    if (!allowed(e)) return null;
+  // Each handler is kept by name, so a binding (R7-2) can register the same function under its own channel and guard.
+  const fns = new Map();
+  const bind = (channel, fn, may) => ipcMain.handle(channel, async (e, ...args) => {
+    if (!may(e)) return null;
     try { return await fn(...args); } catch (err) { log(`[digest] ${channel}: ${err?.message ?? err}`); return { ok: false, error: 'That did not work. Try again in a moment.' }; }
   });
+  const handle = (channel, fn) => { fns.set(channel.slice('digest:'.length), fn); bind(channel, fn, allowed); };
   handle('digest:get', async (p) => ({ digest: await digest.build(period(p), { withTeam: true }), delivery: delivery.settings() }));
   handle('digest:copy', async (p, as) => {
     const d = await digest.build(period(p));
@@ -73,7 +78,14 @@ function register({ ipcMain, allowed, rootDir, userData, safeStorage, clipboard,
   handle('digest:test', async () => delivery.test());
   handle('digest:preview', async () => delivery.preview());
   handle('digest:set', async (patch) => delivery.set(patch));
+  // R7-2 (review S1, S4): Usage › Today's own channels for the digest, with its own guard only (never Home's, never
+  // OR'd). Reads and the person's own copy, save and email; preview, test, set and the webhook stay Home's (preview
+  // records that the Slack text was seen, which turning Slack on requires).
+  for (const b of Array.isArray(bindings) ? bindings : []) {
+    if (!b || typeof b.prefix !== 'string' || !/^[a-z-]+:[a-z-]*$/.test(b.prefix) || b.prefix.startsWith('digest:') || typeof b.allowed !== 'function') continue;
+    for (const name of b.only || []) if (SHAREABLE.includes(name)) bind(`${b.prefix}${name}`, fns.get(name), b.allowed);
+  }
   return { digest, delivery };
 }
 
-module.exports = { register };
+module.exports = { register, SHAREABLE };

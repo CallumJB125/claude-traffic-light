@@ -23,7 +23,8 @@ test('test/page-id-inventory.txt is current (regenerate with: node scripts/page-
 });
 
 test('every inventoried id is a page, a flow, a section or a reviewed exception, and no exception is stale', () => {
-  const known = new Set([...P.flat().map((p) => p.id), ...P.FLOW_IDS, ...P.SECTIONS.map(P.sectionAddress), ...P.SECTIONS.map((s) => s.id)]);
+  // R7-2: Usage's preview-only panes (usage:today) are pages with the preview on.
+  const known = new Set([...P.flat().map((p) => p.id), ...P.FLOW_IDS, ...P.SECTIONS.map(P.sectionAddress), ...P.SECTIONS.map((s) => s.id), ...P.USAGE_PANES.map((p) => p.id)]);
   const used = new Set();
   for (const line of inventory()) {
     const [id, where, shape] = line.split('\t');

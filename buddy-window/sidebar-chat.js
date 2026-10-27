@@ -30,7 +30,8 @@
   // "Get Plexiform Terminal" path (plan-r1 §5 Q3); its slot is after Usage.
   const FOOT = [
     { id: 'board', label: 'Board', icon: 'M2.75 3h3v10h-3zM6.5 3h3v7h-3zM10.25 3h3v8.5h-3z', section: 'board' },
-    { id: 'usage', label: 'Usage', icon: 'M2.75 13.25h10.5M4.5 11V8M8 11V4.5M11.5 11V6.5', section: 'usage' },
+    // R7-2: Usage opens on Today; the row is current on any of its five tabs (the strip, usage-tabs.html, moves between them).
+    { id: 'usage:today', label: 'Usage', icon: 'M2.75 13.25h10.5M4.5 11V8M8 11V4.5M11.5 11V6.5', tabs: ['usage:today', 'usage', 'stats', 'optimiser', 'clients'] },
     // Plexiform Terminal footer row: returns with the Terminal app (see plan-r1 §5 Q3).
     { id: 'settings', label: 'Settings', icon: 'M8 5.75a2.25 2.25 0 1 1 0 4.5 2.25 2.25 0 0 1 0-4.5zM8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1 1M11.4 11.4l1 1M3.6 12.4l1-1M11.4 4.6l1-1', section: 'settings' },
   ];
@@ -168,7 +169,8 @@
     const open = sectionOf(ui.selectedPage);
     for (const b of document.querySelectorAll('.sb-foot')) {
       const f = FOOT.find((x) => x.id === b.dataset.page);
-      if (f && open === f.section) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+      const on = f && (f.tabs ? f.tabs.includes(ui.selectedPage) : open === f.section);
+      if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
     }
   }
 

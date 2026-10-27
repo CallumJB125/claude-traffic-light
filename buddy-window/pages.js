@@ -86,6 +86,21 @@ const RULES_PANE = Object.freeze({
 });
 function paneById(id) { return typeof id === 'string' ? [...SETTINGS_PANES, RULES_PANE].find((p) => p.id === id) ?? null : null; }
 
+// R7-2: Usage's tabs (chat-first preview only). Each tab is its own document with its own guard; Today is the one new
+// document, a pane like Settings' (not in PAGES, so it exists only with the preview on). The strip (usage-tabs.html)
+// shows over these five and navigates between them only.
+const USAGE_TODAY = Object.freeze({
+  id: 'usage:today', title: 'Today', icon: 'chart', kind: 'local', file: 'usage-today.html', preload: 'usage-today-preload.js',
+  query: Object.freeze({ embedded: '1' }), group: 'you', unlisted: true,
+});
+const USAGE_PANES = Object.freeze([USAGE_TODAY]);
+const USAGE_TABS = Object.freeze([
+  Object.freeze({ id: 'usage:today', label: 'Today' }), Object.freeze({ id: 'usage', label: 'Spend' }), Object.freeze({ id: 'stats', label: 'Stats' }),
+  Object.freeze({ id: 'optimiser', label: 'Burst' }), Object.freeze({ id: 'clients', label: 'Client billing' }),
+]);
+const USAGE_TAB_IDS = Object.freeze(USAGE_TABS.map((t) => t.id));
+function usagePaneById(id) { return typeof id === 'string' ? USAGE_PANES.find((p) => p.id === id) ?? null : null; }
+
 const GROUPS = [
   { id: 'work', title: null },
   { id: 'team', title: 'Team' },
@@ -430,7 +445,7 @@ function sidebarCollapsed(v) {
 //   { sidebar: <filter> }     focus the sidebar with that filter (built in R1).
 //   { to, pane|tab, until }   a destination that `until` names the PR for; not built yet.
 //   bySession                 with a session the id opens that thread (R2); without one, `otherwise`.
-const R8 = 'R8', R7 = 'R7', R2 = 'R2';
+const R8 = 'R8', R2 = 'R2';
 const settings = (pane) => Object.freeze({ to: 'settings', pane, until: R8 });
 const REDIRECTS = Object.freeze({
   home: { to: 'newchat' },
@@ -453,9 +468,10 @@ const REDIRECTS = Object.freeze({
   integrations: settings('account-team/integrations'),
   team: { keep: true },
   usage: { keep: true },
-  stats: { to: 'usage', tab: 'stats', until: R7 },
-  optimiser: { to: 'usage', tab: 'burst', until: R7 },
-  clients: { to: 'usage', tab: 'clients', until: R7 },
+  // R7-2: built. Each tab is that page itself (the strip shows over it), so resolve() keeps the id.
+  stats: { to: 'usage', tab: 'stats' },
+  optimiser: { to: 'usage', tab: 'burst' },
+  clients: { to: 'usage', tab: 'clients' },
   setups: settings('advanced/setups'),
   thismac: settings('general'),
   phone: settings('phone'),
@@ -514,4 +530,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, FUTURE_IDS, DESTINATIONS, SIDEBAR_FILTERS, COLLAPSIBLE, DEFAULT_COLLAPSED, sidebarCollapsed, REDIRECTS, resolve, sectionTarget, sectionAddress, sectionsFor, sectionOf, flat, pageById, SETTINGS_PANES, RULES_PANE, paneById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
+module.exports = { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, FUTURE_IDS, DESTINATIONS, SIDEBAR_FILTERS, COLLAPSIBLE, DEFAULT_COLLAPSED, sidebarCollapsed, REDIRECTS, resolve, sectionTarget, sectionAddress, sectionsFor, sectionOf, flat, pageById, SETTINGS_PANES, RULES_PANE, paneById, USAGE_PANES, USAGE_TABS, USAGE_TAB_IDS, usagePaneById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };

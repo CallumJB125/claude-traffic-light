@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+<title>Today</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="usage-today.css">
+</head>
+<body>
+  <main class="td" id="td" aria-busy="true">
+    <h1 class="td-sr">Today</h1>
+    <p class="td-empty" id="td-empty" hidden>No usage yet. It appears after your first chat or session.</p>
+    <section class="td-card" id="td-today" aria-labelledby="td-today-h">
+      <h2 id="td-today-h">Today</h2>
+      <div class="td-tiles" id="td-tiles"></div>
+    </section>
+    <section class="td-card" id="td-costs" aria-labelledby="td-costs-h" hidden>
+      <h2 id="td-costs-h">Savings and cost guard</h2>
+      <div id="td-costs-body"></div>
+    </section>
+    <section class="td-card" id="td-myday" aria-labelledby="td-myday-h" hidden>
+      <h2 id="td-myday-h">Your team today</h2>
+      <div id="td-myday-body"></div>
+    </section>
+    <section class="td-card" id="td-digest" aria-labelledby="td-digest-h">
+      <div class="td-head">
+        <h2 id="td-digest-h">Digest</h2>
+        <div class="td-switch" role="group" aria-label="Digest period">
+          <button type="button" data-period="day" aria-pressed="true">Daily</button>
+          <button type="button" data-period="week" aria-pressed="false">Weekly</button>
+        </div>
+      </div>
+      <div class="td-digest-body" id="td-digest-body"></div>
+      <div class="td-actions" id="td-digest-actions"></div>
+      <p class="td-muted" id="td-digest-status" aria-live="polite"></p>
+      <p class="td-muted">Sending it automatically is set up on Home for now.</p>
+    </section>
+  </main>
+  <script src="usage-today.js"></script>
+</body>
+</html>
