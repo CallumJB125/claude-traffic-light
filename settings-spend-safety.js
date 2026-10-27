@@ -15,7 +15,12 @@
   }
   function showNow(v) {
     const LABEL = { api: 'API key', pro: 'Claude Pro', max5: 'Claude Max 5x', max20: 'Claude Max 20x' };
-    $('safety-detected').textContent = v.detected ? `Claude Code says: ${LABEL[v.detected]}.` : 'Plexiform could not tell your plan from Claude Code, so pick it here.';
+    // A gateway or cloud provider bills Claude Code itself, so no Claude plan applies (A10).
+    const ROUTED = {
+      gateway: 'Claude Code goes through a gateway (ANTHROPIC_BASE_URL), so that service bills it, not a Claude plan.',
+      cloud: 'Claude Code runs on a cloud provider (Bedrock, Vertex AI or Foundry), which bills it per token, not a Claude plan.',
+    };
+    $('safety-detected').textContent = ROUTED[v.detected] || (v.detected ? `Claude Code says: ${LABEL[v.detected]}.` : 'Plexiform could not tell your plan from Claude Code, so pick it here.');
     if (!v.subscriber || v.showDollars || !v.limits) return;
     // A subscriber who hasn't asked for API prices sees the limit estimate, not dollars.
     $('spend-now').textContent = `${v.limits.fiveHour.text}. ${v.limits.week.text}. (Estimate)`;

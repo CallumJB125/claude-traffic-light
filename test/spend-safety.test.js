@@ -31,7 +31,7 @@ test('effectivePlan: choice, then detection, then spend mode', () => {
   assert.equal(S.effectivePlan({ plan: 'pro' }, 'max20', 'api'), 'pro');
   assert.equal(S.effectivePlan({}, 'max20', 'api'), 'max20');
   assert.equal(S.effectivePlan({}, null, 'api'), 'api');
-  assert.equal(S.effectivePlan({}, null, 'subscription'), 'pro');
+  assert.equal(S.effectivePlan({}, null, 'subscription'), null, 'never a guessed Pro plan (A10)');
 });
 
 test('projectCaps flags warning and over per project folder, today only', () => {
@@ -159,4 +159,150 @@ test('a "pause nudges" runaway rule holds a burning session until its burn is ac
   assert.equal(Main.nudgesPaused('s9'), true, 'a new burn pauses again');
   Main.resumeNudges('s9');
   assert.deepEqual(Main.resumeNudges('nope'), { ok: false });
+});
+
+// Q12 / A10: the plan comes from the provider user-provider.cjs resolves, never a second detector.
+const { claudeProvider } = require('../board/shared/user-provider.cjs');
+const providerFrom = (settingsEnv, extra = {}) => claudeProvider({
+  env: extra.env || {}, home: '/fx/home', platform: 'linux', readDir: () => null,
+  readFile: (f) => (f === '/fx/home/.claude/settings.json' ? JSON.stringify({ env: settingsEnv }) : null),
+});
+
+test('A10: a gateway, a key or a cloud provider is never a Claude plan; Burst carries the plan, so the tier decides', () => {
+  // Burst's base-url mode writes only ANTHROPIC_BASE_URL (docs/burst.md); the plan's own login rides through it.
+  const burst = providerFrom({ ANTHROPIC_BASE_URL: 'http://127.0.0.1:7777' });
+  assert.deepEqual(burst.localGateway, { host: '127.0.0.1', port: 7777 }, 'user-provider.cjs sees the local gateway');
+  assert.equal(burst.auth.kind, 'oauth-or-none');
+  assert.equal(S.providerPlan(burst), null);
+  assert.equal(S.providerPlan(providerFrom({ ANTHROPIC_BASE_URL: 'http://127.0.0.1:7777', ANTHROPIC_API_KEY: 'sk-ant-api03-xyz' })), 'gateway', 'a key of its own through Burst\'s port: billed per token');
+  assert.equal(S.providerPlan(providerFrom({ ANTHROPIC_BASE_URL: 'http://127.0.0.1:4001' })), 'gateway', 'another local gateway');
+  assert.equal(S.providerPlan(providerFrom({ ANTHROPIC_BASE_URL: 'https://llm.example.com/anthropic' })), 'gateway');
+  assert.equal(S.providerPlan(providerFrom({ ANTHROPIC_API_KEY: 'sk-ant-api03-xyz' })), 'api');
+  assert.equal(S.providerPlan(providerFrom({ CLAUDE_CODE_USE_BEDROCK: '1' })), 'cloud');
+  assert.equal(S.providerPlan(providerFrom({})), null, 'OAuth or nothing: the tier decides');
+  assert.equal(S.providerPlan(null), null);
+  // A gateway wins over a subscription tier left in ~/.claude.json; Burst leaves it to the tier.
+  const pro = { oauthAccount: { organizationType: 'claude_pro' } };
+  assert.equal(S.detectPlan({ claudeJson: pro, provider: providerFrom({ ANTHROPIC_BASE_URL: 'https://llm.example.com/anthropic' }) }), 'gateway');
+  assert.equal(S.detectPlan({ claudeJson: pro, provider: burst }), 'pro', 'a Pro user with Burst on keeps the Pro limit view');
+  assert.equal(S.detectPlan({ claudeJson: { oauthAccount: { organizationRateLimitTier: 'default_claude_max_20x' } }, provider: burst }), 'max20');
+  assert.equal(S.detectPlan({ claudeJson: pro, provider: providerFrom({}) }), 'pro');
+  for (const plan of ['gateway', 'cloud', 'api']) {
+    assert.equal(S.SUBSCRIPTIONS.includes(plan), false, plan);
+    assert.ok(S.PLAN_LABEL[plan], plan);
+  }
+});
+
+test('A10: main shows no Claude Pro limit for a gateway user, and asks rather than guessing when nothing says', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-'));
+  try {
+    const handlers = new Map();
+    let provider = providerFrom({ ANTHROPIC_BASE_URL: 'http://127.0.0.1:4001', ANTHROPIC_AUTH_TOKEN: 'sk-lab' });
+    let reads = 0;
+    let t = NOW;
+    Main.install({
+      handle: (ch, allowed, fn) => handlers.set(ch, fn), allowed: () => true, rootDir: path.join(tmp, 'data'), home: tmp, env: {},
+      provider: async () => { reads += 1; return provider; },
+      config: () => ({ spend: { mode: 'subscription' } }), turns: async () => [turn(NOW - 60000, 1)], tick: false, now: () => t,
+    });
+    const v = await handlers.get('spend-safety:get')();
+    assert.equal(v.detected, 'gateway');
+    assert.equal(v.plan, 'gateway');
+    assert.equal(v.subscriber, false);
+    assert.equal(v.limits, null, 'no "How close you are to your Claude Pro limit"');
+    assert.equal(v.unknownPlan, false);
+    assert.equal(v.showDollars, true);
+    provider = providerFrom({});
+    await handlers.get('spend-safety:get')();
+    assert.equal(reads, 1, 'the provider is read at most once a minute');
+    t += 60 * 1000;
+    const unknown = await handlers.get('spend-safety:get')();
+    assert.equal(reads, 2);
+    assert.equal(unknown.plan, null, 'no detection and a subscription spend mode: not a guessed Pro plan');
+    assert.equal(unknown.limits, null);
+    assert.equal(unknown.unknownPlan, true);
+    const chosen = await handlers.get('spend-safety:set')(null, { plan: 'pro' });
+    assert.equal(chosen.ok, true);
+    const pro = await handlers.get('spend-safety:get')();
+    assert.equal(pro.limits.label, 'Claude Pro', 'a plan the person picked still gets its estimate');
+    assert.match(pro.limits.note, /not charged per token on this plan/);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('A10: main reads the provider through the Claude carry, and the Usage page can open Preferences', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(main, /require\('\.\/src\/spend-safety-main\.js'\)\.install\(\{[^\n]*provider: \(\) => require\('\.\/src\/claude-carry\.js'\)\.carryFor\(process\.env\)\?\.resolve\(\)/);
+  assert.match(main, /ipcMain\.handle\('open-preferences', e => \{ if \(widgetConfigSender\(e\) \|\| analyticsSender\(e\)\)/);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'spend-safety.js'), 'utf8');
+  assert.doesNotMatch(src, /ANTHROPIC_BASE_URL'?\]?\s*\|\|\s*env\./, 'no second base-URL detector reading the env directly');
+});
+
+test('A10: callers that arrive while the provider is being read share that one read', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-'));
+  try {
+    const handlers = new Map();
+    let reads = 0;
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    Main.install({
+      handle: (ch, allowed, fn) => handlers.set(ch, fn), allowed: () => true, rootDir: path.join(tmp, 'data'), home: tmp, env: {},
+      provider: async () => { reads += 1; await gate; return providerFrom({ ANTHROPIC_BASE_URL: 'https://llm.example.com' }); },
+      config: () => ({}), turns: async () => [], tick: false, now: () => NOW,
+    });
+    const both = Promise.all([handlers.get('spend-safety:get')(), handlers.get('spend-safety:get')()]);
+    release();
+    const [a, b] = await both;
+    assert.equal(reads, 1);
+    assert.equal(a.plan, 'gateway');
+    assert.equal(b.plan, 'gateway');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('A10: dollars in cap and burn notices stay API-price equivalents unless the plan is the API, an unknown plan included', async () => {
+  for (const [plan, want] of [[undefined, true], ['api', false], ['pro', true]]) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-'));
+    try {
+      const handlers = new Map();
+      Main.install({
+        handle: (ch, allowed, fn) => handlers.set(ch, fn), allowed: () => true, rootDir: path.join(tmp, 'data'), home: tmp, env: {},
+        config: () => ({ spend: { mode: 'subscription' } }), turns: async () => [turn(NOW - 60000, 30)],
+        spend: () => ({ runaway: [{ sessionId: 's1', burn: '$30.00 in 4 min', firedAt: 1 }] }), tick: false, silent: true, now: () => NOW,
+      });
+      if (plan) await handlers.get('spend-safety:set')(null, { plan });
+      const v = await handlers.get('spend-safety:get')();
+      assert.equal(v.apiEquivalent, want, String(plan));
+      const m = Main.install({
+        handle: () => {}, allowed: () => true, rootDir: path.join(tmp, 'data'), home: tmp, env: {},
+        config: () => ({ spend: { mode: 'subscription' } }), turns: async () => [turn(NOW - 60000, 30)],
+        spend: () => ({ runaway: [{ sessionId: 's1', burn: '$30.00 in 4 min', firedAt: 1 }] }), tick: false, silent: true, now: () => NOW,
+      });
+      await m.tick();
+      const burn = Main.alerts().find((a) => a.key.startsWith('burn|'));
+      assert.equal(burn.text, `This session burned $30.00 in 4 min${want ? ' (API-price equivalent)' : ''}`, String(plan));
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+});
+
+test('A10: with an unknown plan the Usage panel offers "Choose your plan", which opens Preferences', async () => {
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM('<!doctype html><body><div id="mix-loading"></div></body>', { runScripts: 'outside-only', pretendToBeVisual: true });
+  const { window } = dom;
+  const opened = [];
+  window.lightsApi = {
+    openPreferences: () => { opened.push(1); return Promise.resolve(); },
+    spendSafety: { get: async () => ({ settings: { plan: 'auto', showApiPrices: false }, plan: null, subscriber: false, showDollars: true, limits: null, unknownPlan: true, projected: null, projects: [], loops: [] }), set: async () => ({ ok: true }) },
+  };
+  window.setInterval = () => 0;
+  window.eval(fs.readFileSync(path.join(__dirname, '..', 'spend-safety-panel.js'), 'utf8'));
+  await new Promise((r) => setTimeout(r, 20));
+  const sec = window.document.getElementById('usage-limit-estimate');
+  assert.equal(sec.hidden, false);
+  assert.match(sec.textContent, /can’t tell which Claude plan you’re on/);
+  assert.doesNotMatch(sec.textContent, /How close you are/);
+  const button = [...sec.querySelectorAll('button')].find((b) => b.textContent === 'Choose your plan');
+  assert.ok(button);
+  assert.equal(button.type, 'button');
+  button.click();
+  assert.equal(opened.length, 1);
+  window.close();
 });

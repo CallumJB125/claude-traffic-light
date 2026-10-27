@@ -46,7 +46,8 @@ function seed() {
   History.record(store, turns);
   History.importLegacy(store, { '2026-04-20': { cost: 6.4 }, '2026-04-21': { cost: 11.9 }, '2026-04-22': { cost: 3.2 } });
   History.flush(store);
-  const files = { 'usage/.backfilled': 'seed' };
+  // A chosen plan pins the limit panel above the history, so the layout never depends on the Claude files in HOME (Q12).
+  const files = { 'usage/.backfilled': 'seed', 'spend-safety.json': JSON.stringify({ plan: 'pro' }) };
   for (const f of fs.readdirSync(path.join(dir, 'usage', 'daily'))) if (!f.includes('.ids.')) files[`usage/daily/${f}`] = fs.readFileSync(path.join(dir, 'usage', 'daily', f), 'utf8');
   fs.rmSync(dir, { recursive: true, force: true });
   return files;
@@ -69,6 +70,8 @@ async function open(scheme) {
   // The cost guard cards above the history arrive from their own async report;
   // shoot only once it has answered and the history has stopped moving.
   await lights.evaluate(() => window.lightsApi.costGuard.report().catch(() => null));
+  // So does the plan panel (spend-safety-panel.js), whose first answer waits on the Claude provider read (Q12).
+  await lights.evaluate(() => window.lightsApi.spendSafety.get().catch(() => null));
   let lastTop = null;
   await expect.poll(async () => {
     const top = await lights.locator('#usage-history').evaluate((el) => el.getBoundingClientRect().top);
@@ -127,6 +130,29 @@ test('usage history: range, compare, project filter, callouts and tables work', 
   await expect(lights.locator('.uv-tip')).toBeVisible();
   // Spend defaults to subscription mode (44c08ab9), where cost reads as the API equivalent.
   await expect(lights.locator('.uv-tip')).toContainText('API-equivalent $');
+  expect(await lights.evaluate(() => window.__errs || [])).toEqual([]);
+});
+
+// Q12: every caveat sits behind one "About these numbers", closed until asked for.
+test('usage history: the caveats sit behind one "About these numbers"', async () => {
+  const lights = await open('dark');
+  const about = lights.getByRole('button', { name: 'About these numbers' });
+  await expect(about).toHaveCount(1);
+  await expect(about).toHaveAttribute('aria-expanded', 'false');
+  await expect(lights.locator('#uv-about')).toBeHidden();
+  await expect(lights.locator('#usage-history > .uv-body > .uv-note, #usage-history .uv-head ~ .uv-note')).toHaveCount(0);
+  await expect(lights.locator('#mix-body > .note')).toHaveCount(0);
+  await about.click();
+  await expect(about).toHaveAttribute('aria-expanded', 'true');
+  const notes = lights.locator('#uv-about .uv-note');
+  // The default 30 days: API-equivalent (subscription spend mode), the unpriced model and the model-mix estimate.
+  // The seeded legacy days are April's, outside this range.
+  await expect(notes).toHaveCount(3);
+  await expect(lights.locator('#uv-about')).toContainText('API-equivalent');
+  await expect(lights.locator('#uv-about')).toContainText('mystery-9');
+  await expect(lights.locator('#uv-about')).toContainText('"routine" means');
+  await about.click();
+  await expect(lights.locator('#uv-about')).toBeHidden();
   expect(await lights.evaluate(() => window.__errs || [])).toEqual([]);
 });
 

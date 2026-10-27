@@ -50,6 +50,15 @@
       lab.append(box, document.createTextNode(' Show what this would cost on the API'));
       kids.push(lab);
     }
+    if (v.unknownPlan) {
+      // Never a guessed plan's limit (A10): ask instead.
+      const pick = el('button', 'Choose your plan', 'btn ghost');
+      pick.type = 'button';
+      pick.addEventListener('click', () => window.lightsApi.openPreferences && window.lightsApi.openPreferences());
+      const line = el('div', 'Plexiform can’t tell which Claude plan you’re on, so it shows no plan limit. ', 'stats-sub');
+      line.append(pick);
+      kids.push(line);
+    }
     if (v.showDollars && v.projected && v.projected.ready) kids.push(el('div', v.projected.text, 'stats-sub'));
     const over = v.projects.filter((p) => p.level);
     if (over.length) { const ul = el('ul'); for (const p of over) ul.append(el('li', p.text, p.level === 'over' ? 'limited' : null)); kids.push(el('div', 'Project caps', 'k'), ul); }

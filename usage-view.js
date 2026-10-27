@@ -43,7 +43,7 @@
   };
 
   function mount(container, { api, now = () => Date.now() }) {
-    const state = { range: '30d', compare: true, project: null, metric: 'cost', data: null, busy: false };
+    const state = { range: '30d', compare: true, project: null, metric: 'cost', data: null, busy: false, about: false };
     const tip = el('div', { class: 'uv-tip', role: 'status', hidden: true });
     container.classList.add('uv');
     container.append(tip);
@@ -216,19 +216,26 @@
       const unit = isSub ? 'API-equivalent $' : 'Cost';
       const kids = [];
 
-      // header: range, compare, project filter, export
+      // Every caveat on the page sits behind one "About these numbers" (Q12): the notes, and the model-mix estimate's terms.
+      const legacy = d.dayFamily.legacyDays;
+      const t = d.dayFamily.total;
+      const about = [
+        isSub ? 'Dollar figures are API-equivalent: what these tokens would cost at API list prices. On a subscription this is not a bill. Change this in Preferences, under Spend.' : null,
+        t.unpricedTurns ? `${num(t.unpricedTurns)} turn${t.unpricedTurns === 1 ? '' : 's'} on models with no price (${d.dayFamily.unpricedModels.join(', ')}) are shown as Unpriced and left out of the cost.` : null,
+        legacy ? `${legacy} early day${legacy === 1 ? '' : 's'} before the record began are cost-only estimates (no turns or tokens).` : null,
+        'The model-mix saving is an estimate: "routine" means a reply under 400 tokens on under 4k new tokens of context. It prices those same tokens at Sonnet rates; the low end allows 35% more tokens on the cheaper model. Quality effects aren\u2019t counted.',
+      ].filter(Boolean);
+
+      // header: range, compare, project filter, export, about
       kids.push(el('div', { class: 'uv-head' },
         el('label', { class: 'uv-check' }, el('input', { type: 'checkbox', checked: state.compare && state.range !== 'all' ? true : null, disabled: state.range === 'all' ? true : null, onchange: (e) => { state.compare = e.target.checked; refresh(); } }), 'Compare to previous period'),
         state.project ? el('button', { type: 'button', class: 'uv-chip', 'aria-label': `Clear filter: ${base(state.project)}`, onclick: () => { state.project = null; refresh(); } }, `Project: ${base(state.project)} ✕`) : null,
         el('span', { class: 'uv-spacer' }),
+        el('button', { type: 'button', class: 'btn ghost', id: 'uv-about-toggle', 'aria-expanded': String(state.about), 'aria-controls': 'uv-about', text: 'About these numbers', onclick: (e) => { state.about = !state.about; e.currentTarget.setAttribute('aria-expanded', String(state.about)); root.querySelector('#uv-about').hidden = !state.about; } }),
         el('button', { type: 'button', class: 'btn ghost', text: 'Export CSV', onclick: () => download('csv') }),
         el('button', { type: 'button', class: 'btn ghost', text: 'Export JSON', onclick: () => download('json') })));
-      if (isSub) kids.push(el('p', { class: 'uv-note', text: 'Dollar figures are API-equivalent: what these tokens would cost at API list prices. On a subscription this is not a bill. Change this in Preferences, under Spend.' }));
+      kids.push(el('div', { class: 'uv-about', id: 'uv-about', hidden: !state.about }, ...about.map((text) => el('p', { class: 'uv-note', text }))));
       if (d.progress) kids.push(el('p', { class: 'uv-note', text: `Reading older transcripts into the record… ${d.progress.done} of ${d.progress.of} files.` }));
-      const legacy = d.dayFamily.legacyDays;
-      if (legacy) kids.push(el('p', { class: 'uv-note', text: `${legacy} early day${legacy === 1 ? '' : 's'} before the record began are cost-only estimates (no turns or tokens).` }));
-      const t = d.dayFamily.total;
-      if (t.unpricedTurns) kids.push(el('p', { class: 'uv-note', text: `${num(t.unpricedTurns)} turn${t.unpricedTurns === 1 ? '' : 's'} on models with no price (${d.dayFamily.unpricedModels.join(', ')}) are shown as Unpriced and left out of the cost.` }));
 
       if (!d.first) {
         kids.push(el('p', { class: 'uv-empty', text: 'No usage yet. Connect an AI tool and run a session; Plexiform records it as you work. ' }, api.openAiTools ? el('button', { type: 'button', class: 'btn', text: 'Connect AI tools', onclick: () => api.openAiTools() }) : null));
