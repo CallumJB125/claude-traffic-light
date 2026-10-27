@@ -80,3 +80,6 @@ test-visual/__screenshots__/updates.spec.js/widget-update-ready-darwin.png
 test-visual/__screenshots__/windows.spec.js/help-window-darwin.png
 test-visual/__screenshots__/windows.spec.js/lights-window-darwin.png
 test-visual/__screenshots__/windows.spec.js/settings-window-darwin.png
+test-visual/__screenshots__/work-scope.spec.js/scope-counting-darwin.png
+test-visual/__screenshots__/work-scope.spec.js/scope-personal-darwin.png
+test-visual/__screenshots__/work-scope.spec.js/scope-watching-darwin.png
