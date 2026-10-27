@@ -22,10 +22,21 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
  function sidebarOwner(){if(chatPreview!==true||stopped)return null;const b=buddy(),c=b?.sidebarReadContext?.();if(!c||!c.window||!c.contents||c.window.isDestroyed()||c.contents.isDestroyed()||!c.contents.mainFrame||!Number.isSafeInteger(c.generation))return null;return{buddy:b,window:c.window,contents:c.contents,frame:c.contents.mainFrame,generation:c.generation,document:c.document??null};}
  const sameSidebar=a=>!stopped&&equal(a,sidebarOwner());
  const fromSidebarDoc=e=>{const s=sidebarOwner();return allowed(e,s)?s:null;};
+ // build() reads every registered board source, so sidebar reads are bounded to
+ // Overview's own 5 s cadence: concurrent reads share one pass, and a finished
+ // pass is reused by the same sidebar document until it is 5 s old.
+ const SIDEBAR_MIN_MS=5000,clock=()=>typeof now==='function'?now():Date.now();
+ let sidebarRead=null;
  async function sidebarState(before,args){
   if(args.length!==0)return null;
-  const out=await service.passiveRows(()=>sameSidebar(before));
-  return out&&sameSidebar(before)?SidebarRows.sidebarRows(out):null;
+  const t=clock();
+  if(!(sidebarRead&&equal(sidebarRead.owner,before)&&(sidebarRead.pending||t-sidebarRead.at<SIDEBAR_MIN_MS))){
+   const read={owner:before,at:t,pending:true,result:null};
+   read.result=service.passiveRows(()=>sameSidebar(before)).then(out=>out?SidebarRows.sidebarRows(out):null,()=>null).then(r=>{read.pending=false;read.at=clock();if(!r&&sidebarRead===read)sidebarRead=null;return r;});
+   sidebarRead=read;
+  }
+  const r=await sidebarRead.result;
+  return r&&sameSidebar(before)?structuredClone(r):null;
  }
  const adopt=before=>{if(authority&&!equal(authority,before))service.invalidate();authority=before;};
  return{
@@ -56,7 +67,7 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
   },
   // A push carries no data: the page re-reads through its own fenced channel.
   directoryChanged(){if(stopped||!authority||!same(authority,true))return;try{authority.contents.send('overview:directory-changed');}catch{}},
-  invalidate(){authority=null;service.invalidate();},close(){stopped=true;authority=null;if(pump)clearInterval(pump);service.invalidate();},
+  invalidate(){authority=null;sidebarRead=null;service.invalidate();},close(){stopped=true;authority=null;sidebarRead=null;if(pump)clearInterval(pump);service.invalidate();},
  };
 }
 module.exports={createOverviewMain};

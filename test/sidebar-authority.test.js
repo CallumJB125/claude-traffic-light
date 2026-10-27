@@ -16,7 +16,7 @@ const SESSIONS = [
   { sessionId: 's-warp', source: 'claude', signal: 'tool-use', updatedAt: now(), hostApp: 'Warp', cwd: '/Users/someone/private/gamma' },
 ];
 
-function fixture({ chatPreview = true } = {}) {
+function fixture({ chatPreview = true, now } = {}) {
   let overviewVisible = true, sidebarGen = 1, sidebarOn = true, release = null, delayed = false;
   const win = { isDestroyed: () => false, isVisible: () => true, isFocused: () => true, isMinimized: () => false };
   const overviewWc = { mainFrame: {}, isDestroyed: () => false };
@@ -27,7 +27,7 @@ function fixture({ chatPreview = true } = {}) {
     sidebarReadContext: () => (sidebarOn ? { window: win, contents: sidebarWc, generation: sidebarGen, document: 0, foreground: false } : null),
   };
   let workCalls = 0;
-  const main = createOverviewMain({ buddy: () => buddy, chatPreview, sessions: () => SESSIONS,
+  const main = createOverviewMain({ buddy: () => buddy, chatPreview, ...(now ? { now } : {}), sessions: () => SESSIONS,
     work: () => { workCalls++; return delayed ? new Promise((r) => { release = r; }) : Promise.resolve({ sources: [], capture: [] }); } });
   const ipc = { handlers: {}, handle(name, fn) { this.handlers[name] = fn; }, on(name, fn) { this.handlers[name] = fn; } };
   main.register(ipc);
@@ -35,7 +35,7 @@ function fixture({ chatPreview = true } = {}) {
     main, ipc, call: (name, e, ...a) => ipc.handlers[name](e, ...a),
     sidebar: { sender: sidebarWc, senderFrame: sidebarWc.mainFrame }, overview: { sender: overviewWc, senderFrame: overviewWc.mainFrame },
     hideOverview: () => { overviewVisible = false; }, reloadSidebar: () => { sidebarGen++; }, sidebarOff: () => { sidebarOn = false; },
-    delay: () => { delayed = true; }, release: () => release({ sources: [], capture: [] }), workCalls: () => workCalls,
+    delay: () => { delayed = true; }, release: () => { delayed = false; release({ sources: [], capture: [] }); }, workCalls: () => workCalls,
   };
 }
 
@@ -124,6 +124,47 @@ test('a page change elsewhere does not void an in-flight sidebar read (its gener
   f.hideOverview();
   f.release();
   assert.equal((await pending).sessions.length, 3);
+});
+
+test('a burst of sidebar reads is one source pass; a finished pass is reused for 5 s, then read again', async () => {
+  let t = Date.parse('2026-10-27T10:00:00Z');
+  const f = fixture({ now: () => t });
+  f.delay();
+  const burst = Array.from({ length: 6 }, () => f.call('overview:state', f.sidebar));
+  await new Promise((r) => setImmediate(r));
+  f.release();
+  const outs = await Promise.all(burst);
+  assert.equal(f.workCalls(), 1, 'six concurrent reads, one pass over the sources');
+  assert.ok(outs.every((o) => o.sessions.length === 3));
+  outs[0].sessions.length = 0; // each caller gets its own copy
+  assert.equal(outs[1].sessions.length, 3);
+  t += 4999;
+  assert.equal((await f.call('overview:state', f.sidebar)).sessions.length, 3);
+  assert.equal(f.workCalls(), 1, 'inside 5 s: reused');
+  t += 2;
+  await f.call('overview:state', f.sidebar);
+  assert.equal(f.workCalls(), 2, 'after 5 s: read again');
+  // The Overview page's own reads are not bounded or shared by this.
+  await f.call('overview:state', f.overview);
+  assert.equal(f.workCalls(), 3);
+});
+
+test('a reloaded sidebar never gets the old document\'s pass, even mid-read', async () => {
+  let t = Date.parse('2026-10-27T10:00:00Z');
+  const f = fixture({ now: () => t });
+  await f.call('overview:state', f.sidebar);
+  f.reloadSidebar();
+  assert.equal((await f.call('overview:state', f.sidebar)).sessions.length, 3);
+  assert.equal(f.workCalls(), 2, 'a new document reads afresh, inside 5 s');
+  t += 6000;
+  f.delay();
+  const pending = f.call('overview:state', f.sidebar);
+  await new Promise((r) => setImmediate(r));
+  f.reloadSidebar();
+  f.release();
+  assert.equal(await pending, null, 'the pass started for the old document answers nobody');
+  assert.equal((await f.call('overview:state', f.sidebar)).sessions.length, 3);
+  assert.equal(f.workCalls(), 4);
 });
 
 test('sidebarRows: pinned keys, clamped values, path-like labels dropped, at most 200 rows', () => {
