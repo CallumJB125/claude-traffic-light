@@ -1,0 +1,6 @@
+{"dir":"c>k","type":1,"json":{"v":1,"op":"hello","id":1,"minor":0,"app":"plexiform","version":"1.9.0"}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":1,"ok":true,"code":null,"text":"","welcome":{"minor":0,"keeper":{"version":"1.0.0","build":7},"role":"control","caps":[]}}}
+{"dir":"c>k","type":1,"json":{"v":1,"op":"byTty","id":2,"tty":"/dev/ttys004"}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":2,"ok":true,"code":null,"text":"","sessionId":"k1"}}
+{"dir":"c>k","type":1,"json":{"v":1,"op":"byTty","id":3,"tty":"/dev/ttys009"}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":3,"ok":false,"code":"NOT_FOUND","text":"No session owns that terminal."}}

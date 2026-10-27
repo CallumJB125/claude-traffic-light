@@ -1,0 +1,1247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "plexiform:keeper-protocol/v1",
+  "title": "Plexiform session keeper control messages, protocol v1.0",
+  "description": "Exactly v1.0. Receivers ignore unknown fields (plan-agent-terminal §R2.3.4), so a peer must not reject an inbound frame with this strict schema; it pins what v1.0 senders emit.",
+  "$defs": {
+    "v": {
+      "const": 1
+    },
+    "id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "channel": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+    },
+    "bucket": {
+      "enum": [
+        "needs",
+        "working",
+        "check",
+        "stuck",
+        "idle"
+      ]
+    },
+    "errorCode": {
+      "enum": [
+        "UNKNOWN_OP",
+        "VALIDATION",
+        "NOT_FOUND",
+        "ROLE",
+        "SPAWN_REFUSED",
+        "LIMIT",
+        "INCOMPATIBLE",
+        "CLIENT_OUTDATED",
+        "TERMINAL_DIDNT_START"
+      ]
+    },
+    "reason": {
+      "enum": [
+        "unsigned-cli",
+        "shape",
+        "cwd-gone",
+        "not-found",
+        "session-locked",
+        "no-driver",
+        "not-shown"
+      ]
+    },
+    "origin": {
+      "type": "object",
+      "required": [
+        "by",
+        "taskId"
+      ],
+      "properties": {
+        "by": {
+          "enum": [
+            "plexiform",
+            "terminal"
+          ]
+        },
+        "taskId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "session": {
+      "type": "object",
+      "required": [
+        "sessionId",
+        "kind",
+        "origin",
+        "provider",
+        "providerSessionId",
+        "cwd",
+        "tty",
+        "pid",
+        "startedAt",
+        "state",
+        "exit"
+      ],
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "kind": {
+          "enum": [
+            "shell",
+            "claude",
+            "codex",
+            "takeover"
+          ]
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "enum": [
+                "claude",
+                "codex"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providerSessionId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "tty": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startedAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "state": {
+          "enum": [
+            "pending-show",
+            "running",
+            "exited"
+          ]
+        },
+        "exit": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "code",
+                "signal"
+              ],
+              "properties": {
+                "code": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "signal": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 16
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "row": {
+      "type": "object",
+      "required": [
+        "sessionId",
+        "bucket",
+        "status"
+      ],
+      "properties": {
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "bucket": {
+          "$ref": "#/$defs/bucket"
+        },
+        "status": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 80
+        }
+      },
+      "additionalProperties": false
+    },
+    "hello": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id",
+        "minor",
+        "app",
+        "version"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "hello"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "minor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "app": {
+          "enum": [
+            "plexiform",
+            "terminal"
+          ]
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        }
+      },
+      "additionalProperties": false
+    },
+    "status": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "status"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        }
+      },
+      "additionalProperties": false
+    },
+    "list": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "list"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        }
+      },
+      "additionalProperties": false
+    },
+    "spawn": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id",
+        "kind",
+        "argv",
+        "cwd",
+        "env",
+        "origin",
+        "cols",
+        "rows",
+        "reveal"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "spawn"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "takeover",
+            "shell",
+            "claude",
+            "codex"
+          ]
+        },
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 4096
+          }
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 4096
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/origin"
+        },
+        "cols": {
+          "$ref": "#/$defs/size"
+        },
+        "rows": {
+          "$ref": "#/$defs/size"
+        },
+        "reveal": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "byTty": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id",
+        "tty"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "byTty"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "tty": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "additionalProperties": false
+    },
+    "reveal": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id",
+        "sessionId"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "reveal"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "rows.publish": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id",
+        "rows"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "rows.publish"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/row"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "jump": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id",
+        "kind"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "jump"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "next",
+            "session"
+          ]
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "additionalProperties": false
+    },
+    "attach": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id",
+        "sessionId",
+        "cols",
+        "rows"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "attach"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "cols": {
+          "$ref": "#/$defs/size"
+        },
+        "rows": {
+          "$ref": "#/$defs/size"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resize": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id",
+        "channel",
+        "cols",
+        "rows"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "resize"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        },
+        "cols": {
+          "$ref": "#/$defs/size"
+        },
+        "rows": {
+          "$ref": "#/$defs/size"
+        }
+      },
+      "additionalProperties": false
+    },
+    "detach": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id",
+        "channel"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "detach"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        }
+      },
+      "additionalProperties": false
+    },
+    "signal": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id",
+        "sessionId",
+        "sig"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "signal"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "sig": {
+          "enum": [
+            "HUP",
+            "INT",
+            "TERM"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "shutdown": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id",
+        "build"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "shutdown"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "build": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "shown": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id",
+        "sessionId"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "shown"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "handoff": {
+      "type": "object",
+      "required": [
+        "v",
+        "op",
+        "id",
+        "channel"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "op": {
+          "const": "handoff"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        }
+      },
+      "additionalProperties": false
+    },
+    "reply": {
+      "type": "object",
+      "required": [
+        "v",
+        "re",
+        "ok",
+        "code",
+        "text"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "re": {
+          "$ref": "#/$defs/id"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/errorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        },
+        "welcome": {
+          "type": "object",
+          "required": [
+            "minor",
+            "keeper",
+            "role",
+            "caps"
+          ],
+          "properties": {
+            "minor": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "keeper": {
+              "type": "object",
+              "required": [
+                "version",
+                "build"
+              ],
+              "properties": {
+                "version": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 40
+                },
+                "build": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "additionalProperties": false
+            },
+            "role": {
+              "enum": [
+                "control",
+                "driver"
+              ]
+            },
+            "caps": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "status": {
+          "type": "object",
+          "required": [
+            "keeper",
+            "protocol",
+            "sessions",
+            "drivers",
+            "refusedPeers",
+            "restarts"
+          ],
+          "properties": {
+            "keeper": {
+              "type": "object",
+              "required": [
+                "version",
+                "build"
+              ],
+              "properties": {
+                "version": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 40
+                },
+                "build": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "additionalProperties": false
+            },
+            "protocol": {
+              "type": "object",
+              "required": [
+                "major",
+                "minor"
+              ],
+              "properties": {
+                "major": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "minor": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            },
+            "sessions": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "drivers": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "refusedPeers": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "restarts": {
+              "type": "object",
+              "required": [
+                "lastHour",
+                "total"
+              ],
+              "properties": {
+                "lastHour": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "total": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/session"
+          }
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "tty": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        }
+      },
+      "additionalProperties": false
+    },
+    "session.added": {
+      "type": "object",
+      "required": [
+        "v",
+        "ev",
+        "session"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "ev": {
+          "const": "session.added"
+        },
+        "session": {
+          "$ref": "#/$defs/session"
+        }
+      },
+      "additionalProperties": false
+    },
+    "session.exited": {
+      "type": "object",
+      "required": [
+        "v",
+        "ev",
+        "sessionId",
+        "code",
+        "signal"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "ev": {
+          "const": "session.exited"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        },
+        "code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "signal": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "session.activity": {
+      "type": "object",
+      "required": [
+        "v",
+        "ev",
+        "sessionId"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "ev": {
+          "const": "session.activity"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "keeper.draining": {
+      "type": "object",
+      "required": [
+        "v",
+        "ev"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "ev": {
+          "const": "keeper.draining"
+        }
+      },
+      "additionalProperties": false
+    },
+    "reveal.event": {
+      "type": "object",
+      "required": [
+        "v",
+        "ev",
+        "sessionId"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "ev": {
+          "const": "reveal"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/sessionId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "rows": {
+      "type": "object",
+      "required": [
+        "v",
+        "ev",
+        "rows"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "ev": {
+          "const": "rows"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/row"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "jump.event": {
+      "type": "object",
+      "required": [
+        "v",
+        "ev",
+        "kind",
+        "key"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "ev": {
+          "const": "jump"
+        },
+        "kind": {
+          "enum": [
+            "next",
+            "session"
+          ]
+        },
+        "key": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "driver.connected": {
+      "type": "object",
+      "required": [
+        "v",
+        "ev"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "ev": {
+          "const": "driver.connected"
+        }
+      },
+      "additionalProperties": false
+    },
+    "detached": {
+      "type": "object",
+      "required": [
+        "v",
+        "ev",
+        "channel",
+        "reason"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "ev": {
+          "const": "detached"
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        },
+        "reason": {
+          "enum": [
+            "moved",
+            "resync",
+            "exited"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "resync": {
+      "type": "object",
+      "required": [
+        "v",
+        "ev",
+        "channel"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "ev": {
+          "const": "resync"
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        }
+      },
+      "additionalProperties": false
+    },
+    "handoff.event": {
+      "type": "object",
+      "required": [
+        "v",
+        "ev",
+        "channel"
+      ],
+      "properties": {
+        "v": {
+          "$ref": "#/$defs/v"
+        },
+        "ev": {
+          "const": "handoff"
+        },
+        "channel": {
+          "$ref": "#/$defs/channel"
+        }
+      },
+      "additionalProperties": false
+    },
+    "request": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/hello"
+        },
+        {
+          "$ref": "#/$defs/status"
+        },
+        {
+          "$ref": "#/$defs/list"
+        },
+        {
+          "$ref": "#/$defs/spawn"
+        },
+        {
+          "$ref": "#/$defs/byTty"
+        },
+        {
+          "$ref": "#/$defs/reveal"
+        },
+        {
+          "$ref": "#/$defs/rows.publish"
+        },
+        {
+          "$ref": "#/$defs/jump"
+        },
+        {
+          "$ref": "#/$defs/attach"
+        },
+        {
+          "$ref": "#/$defs/resize"
+        },
+        {
+          "$ref": "#/$defs/detach"
+        },
+        {
+          "$ref": "#/$defs/signal"
+        },
+        {
+          "$ref": "#/$defs/shutdown"
+        },
+        {
+          "$ref": "#/$defs/shown"
+        },
+        {
+          "$ref": "#/$defs/handoff"
+        }
+      ]
+    },
+    "event": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/session.added"
+        },
+        {
+          "$ref": "#/$defs/session.exited"
+        },
+        {
+          "$ref": "#/$defs/session.activity"
+        },
+        {
+          "$ref": "#/$defs/keeper.draining"
+        },
+        {
+          "$ref": "#/$defs/reveal.event"
+        },
+        {
+          "$ref": "#/$defs/rows"
+        },
+        {
+          "$ref": "#/$defs/jump.event"
+        },
+        {
+          "$ref": "#/$defs/driver.connected"
+        },
+        {
+          "$ref": "#/$defs/detached"
+        },
+        {
+          "$ref": "#/$defs/resync"
+        },
+        {
+          "$ref": "#/$defs/handoff.event"
+        }
+      ]
+    },
+    "control": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/request"
+        },
+        {
+          "$ref": "#/$defs/reply"
+        },
+        {
+          "$ref": "#/$defs/event"
+        }
+      ]
+    }
+  }
+}

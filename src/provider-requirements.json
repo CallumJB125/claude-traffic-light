@@ -1,0 +1,4 @@
+{
+  "claude": "identifier \"com.anthropic.claude-code\" and anchor apple generic and certificate leaf[subject.OU] = \"Q6L2SF6YDW\"",
+  "codex": "identifier \"codex\" and anchor apple generic and certificate leaf[subject.OU] = \"2DC432GLL2\""
+}

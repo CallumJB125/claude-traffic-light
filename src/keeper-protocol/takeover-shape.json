@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "about": "The only spawn the control role (Plexiform) may ask the session keeper for: a take-over, in exactly the shape board/tasks-engine/engine.js builds it. plan-agent-terminal §R3.2.2. scripts/build-keeper.sh generates the keeper's Swift table from this file (PR 0); src/keeper-protocol/takeover-shape.js reads it directly. Anything outside it is SPAWN_REFUSED, reason 'shape'.",
+  "patterns": {
+    "uuid": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    "tool": "^[A-Za-z0-9][A-Za-z0-9_:-]*(\\(.{0,512}\\))?$",
+    "model": "^[\\w.:@/-]{1,100}$",
+    "taskId": "^tsk_[0-9a-f]{12}$",
+    "pid": "^[0-9]{1,9}$"
+  },
+  "enums": {
+    "permissionMode": ["plan", "default", "acceptEdits"]
+  },
+  "claude": {
+    "sequence": [
+      { "flag": ["--resume", "--session-id"], "value": "uuid" },
+      { "flag": "--setting-sources", "value": "empty" },
+      { "flag": "--settings", "value": "runFile:settings.json" },
+      { "flag": "--strict-mcp-config" },
+      { "flag": "--mcp-config", "value": "runFile:mcp.json" },
+      { "flag": "--disallowedTools", "values": "tool", "min": 1 },
+      { "flag": "--permission-mode", "value": "enum:permissionMode" },
+      { "flag": "--model", "value": "model", "optional": true }
+    ],
+    "envRequired": ["TMPDIR", "BOARD_RUN_SOCKET", "BOARD_SUPERVISOR_PID", "BOARD_SUPERVISOR_LSTART", "BUDDY_TASK_ID"]
+  },
+  "codex": null,
+  "codexNote": "PR 0 writes Codex's exact argv shape here (§R3.2.2). Until then a Codex take-over is outside the shape.",
+  "env": {
+    "allow": ["TMPDIR", "CODEX_HOME", "BOARD_RUN_SOCKET", "BOARD_SUPERVISOR_PID", "BOARD_SUPERVISOR_LSTART", "BUDDY_TASK_ID", "CLAUDE_CONFIG_DIR"],
+    "maxValueBytes": 4096,
+    "values": {
+      "TMPDIR": "absolute",
+      "CODEX_HOME": "absolute",
+      "CLAUDE_CONFIG_DIR": "absolute",
+      "BOARD_RUN_SOCKET": "runFile:ipc.sock",
+      "BOARD_SUPERVISOR_PID": "pid",
+      "BOARD_SUPERVISOR_LSTART": "text",
+      "BUDDY_TASK_ID": "taskId"
+    }
+  },
+  "filesystem": "Realpath, ownership, mode and the cwd/run-dir/cache-dir placement checks need the real files and are the keeper's (PR 0) and T3's; this file pins structure only."
+}

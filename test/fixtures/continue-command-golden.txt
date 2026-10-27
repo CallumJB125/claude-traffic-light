@@ -1,0 +1,8 @@
+#!/bin/zsh
+/bin/mkdir '<DIR>/started' 2>/dev/null || exit 0
+/bin/rm -f '<DIR>/continue.command'
+trap '/bin/rm -rf '\''<DIR>'\''' EXIT
+cd '<CWD>' && TMPDIR='/tmp/x y' BUDDY_TASK_ID='tsk_0123456789ab' /bin/echo --resume 11111111-2222-4333-8444-555555555555 --settings /Users/fixture/run/settings.json 'it'\''s $HOME' ''
+result=$?
+print "Plexiform terminal session ended. Return to Tasks to hand it back."
+exit $result

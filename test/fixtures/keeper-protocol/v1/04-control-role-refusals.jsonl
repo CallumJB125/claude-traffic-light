@@ -1,0 +1,12 @@
+{"dir":"c>k","type":1,"json":{"v":1,"op":"hello","id":1,"minor":0,"app":"plexiform","version":"1.9.0"}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":1,"ok":true,"code":null,"text":"","welcome":{"minor":0,"keeper":{"version":"1.0.0","build":7},"role":"control","caps":[]}}}
+{"dir":"c>k","type":1,"json":{"v":1,"op":"attach","id":2,"sessionId":"k1","cols":80,"rows":24}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":2,"ok":false,"code":"ROLE","text":"Not allowed for this role."}}
+{"dir":"c>k","type":1,"json":{"v":1,"op":"resize","id":3,"channel":1,"cols":80,"rows":24}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":3,"ok":false,"code":"ROLE","text":"Not allowed for this role."}}
+{"dir":"c>k","type":1,"json":{"v":1,"op":"signal","id":4,"sessionId":"k1","sig":"TERM"}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":4,"ok":false,"code":"ROLE","text":"Not allowed for this role."}}
+{"dir":"c>k","type":1,"json":{"v":1,"op":"spawn","id":5,"kind":"shell","argv":["/Users/fixture/.local/bin/claude","--resume","11111111-2222-4333-8444-555555555555","--setting-sources","","--settings","/Users/fixture/Library/Application Support/Plexiform/run/tsk_0123456789ab/settings.json","--strict-mcp-config","--mcp-config","/Users/fixture/Library/Application Support/Plexiform/run/tsk_0123456789ab/mcp.json","--disallowedTools","WebFetch","mcp__srv-2__tool","--permission-mode","acceptEdits"],"cwd":"/Users/fixture/work/acme-sync","env":{"TMPDIR":"/Users/fixture/Library/Application Support/Plexiform/cache/tsk_0123456789ab/tmp","BOARD_RUN_SOCKET":"/Users/fixture/Library/Application Support/Plexiform/run/tsk_0123456789ab/ipc.sock","BOARD_SUPERVISOR_PID":"4242","BOARD_SUPERVISOR_LSTART":"Mon Oct 27 10:00:00 2026","BUDDY_TASK_ID":"tsk_0123456789ab"},"origin":{"by":"plexiform","taskId":"tsk_0123456789ab"},"cols":120,"rows":32,"reveal":true}}
+{"dir":"k>c","type":1,"json":{"v":1,"re":5,"ok":false,"code":"ROLE","text":"Not allowed for this role."}}
+{"dir":"c>k","type":2,"channel":1,"b64":"ZWNobyBoaQ0="}
+{"dir":"k>c","type":0,"close":"ROLE"}

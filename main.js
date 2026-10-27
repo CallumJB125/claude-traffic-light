@@ -2244,7 +2244,7 @@ function getTasks() {
     copy: (text) => clipboard.writeText(text),
     // Ghostty Dock when it is on and trusted; the native confirmation names whichever app it is.
     ...(IS_MAC ? { terminalApp: () => (GhosttyDock.modeOf(loadConfig()) !== 'off' && GhosttyDock.detect().canOpen ? GhosttyDock.APP : 'Terminal') } : {}),
-    ...(IS_MAC ? { launchTerminal: (descriptor, current, appName) => { const T = require('./src/tasks-terminal'); return T.launchTaskTerminal(descriptor, { current, ...(appName === GhosttyDock.APP ? { launch: T.ghosttyDockLauncher() } : {}) }); } } : {}),
+    ...(IS_MAC ? { launchTerminal: async (descriptor, current, appName) => { const T = require('./src/tasks-terminal'); return T.stampTakeover(await T.launchTaskTerminal(descriptor, { current, launch: T.launcherFor(appName) }), ROOT_DIR); } } : {}),
     onChange: (snap) => {
       for (const wc of tasksPages()) wc.send('tasks:changed', snap);
       Compose.onChange(snap);

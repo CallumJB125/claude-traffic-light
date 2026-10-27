@@ -103,11 +103,11 @@ function parseEnv(argsText, commandText, names = []) {
 // The code-signing requirement of each provider's real binary, checked on the
 // running process (codesign by pid), so neither a copy of node at an
 // allow-listed path nor a binary swapped after launch passes. Anthropic and
-// OpenAI team ids, as both sign their CLIs on this Mac.
-const REQUIREMENT = Object.freeze({
-  claude: 'identifier "com.anthropic.claude-code" and anchor apple generic and certificate leaf[subject.OU] = "Q6L2SF6YDW"',
-  codex: 'identifier "codex" and anchor apple generic and certificate leaf[subject.OU] = "2DC432GLL2"',
-});
+// OpenAI team ids, as both sign their CLIs on this Mac. One source with the
+// session keeper's codesign gate (plan-agent-terminal §R3.6): its Swift
+// constant is generated from the same file.
+const { claude: CLAUDE_REQUIREMENT, codex: CODEX_REQUIREMENT } = require('./provider-requirements.json');
+const REQUIREMENT = Object.freeze({ claude: CLAUDE_REQUIREMENT, codex: CODEX_REQUIREMENT });
 // target: a pid (the running process) or an absolute path (a file about to be run). → boolean.
 async function signedAs(run, target, provider, platform = process.platform) {
   if (platform !== 'darwin' || !REQUIREMENT[provider]) return false;
