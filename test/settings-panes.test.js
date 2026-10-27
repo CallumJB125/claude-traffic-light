@@ -449,7 +449,7 @@ const SECTION_TABLE = {
   Spend: 'spend', 'Runaway sessions': 'spend',
   Privacy: 'privacy', 'Crash reports': 'privacy', Policies: 'privacy', Backups: 'privacy',
   'Sharing and remote control': 'phone', 'Remote devices': 'phone',
-  Health: 'advanced', 'Git and CI': 'projects', 'Agent bus': 'agent-messages', 'Ghostty Dock': 'terminal',
+  Health: 'advanced', 'Git and CI': 'projects', 'Agent bus': 'agent-messages', 'Ghostty Dock': 'terminal', 'Agent mail': 'agent-messages',
 };
 
 function settingsDoc() { return new JSDOM(read('settings.html')).window.document; }
@@ -461,6 +461,7 @@ test('every top-level element of every pane carries a data-pane, each section is
   for (const el of doc.querySelectorAll('.pane > *')) {
     const pane = el.dataset.pane;
     assert.ok(pane === 'none' || SP.isPane(pane), `${el.tagName}#${el.id} has no valid data-pane (${pane})`);
+    if (el.id === 'agent-mail') { seen.set('Agent mail', new Set([pane])); continue; } // a block inside Alerts that belongs to another pane
     const name = el.tagName === 'H2' ? el.textContent.trim() : el.id === 'crash-reports' ? 'Crash reports' : el.id === 'policies' ? 'Policies' : el.id === 'backups' ? 'Backups' : el.id === 'health' ? 'Health' : el.querySelector('#ghosttyDock') ? 'Ghostty Dock' : null;
     if (name) { section = name; seen.set(name, new Set()); }
     assert.ok(section, 'content before the first heading');
@@ -565,7 +566,7 @@ test('R8-3a: the three panes exist as sheet documents and own what the plan says
   for (const p of ['projects', 'terminal', 'agent-messages']) { assert.ok(SP.isPane(p)); assert.ok(Pages.paneById(`settings:${p}`), p); assert.ok(SP.NAV.includes(p)); }
   assert.deepEqual(Pages.FUTURE_IDS.filter((x) => x.startsWith('settings:')), [], 'the reserved ids are real panes now');
   assert.deepEqual(SP.ownedKeys('projects').sort(), ['gitDeployWorkflows', 'gitRepos', 'gitSignals']);
-  assert.deepEqual(SP.ownedKeys('agent-messages'), ['agentBus']);
+  assert.deepEqual(SP.ownedKeys('agent-messages').sort(), ['agentBus', 'agentMailInbox']);
   assert.deepEqual(SP.ownedKeys('terminal'), ['integrations'], 'the Ghostty select saves integrations through save-config');
   assert.equal(SP.ownedKeys('aitools').includes('integrations'), false);
   for (const ch of ['git-status', 'deploy:settings', 'deploy:set-enabled', 'deploy:token-save', 'deploy:token-remove']) assert.equal(SP.CHANNEL_PANE[ch], 'projects', ch);
@@ -573,8 +574,8 @@ test('R8-3a: the three panes exist as sheet documents and own what the plan says
   assert.equal(SP.CHANNEL_PANE['health-fix'], 'advanced', 'Health, including its Ghostty ids, stays in Advanced');
   assert.match(mainSrc, /ipcMain\.handle\('git-status', \(e\) => settingsPane\('projects'\)\(e\)/);
   assert.match(mainSrc, /ipcMain\.handle\('health-fix', \(e, id\) => \{\n  if \(!settingsPane\('advanced'\)\(e\)\)/);
-  // Agent mail (teammates' questions) stays a Notifications control; the Sharing hint says so.
-  assert.equal(SP.KEY_OWNER.agentMailInbox, 'notifications');
+  // Agent mail (teammates' questions) is an Agent messages control (R8-3b-1; the old page keeps it under Notifications).
+  assert.equal(SP.KEY_OWNER.agentMailInbox, 'agent-messages');
 });
 
 test('R8-3a: the Terminal pane saves integrations, AI tools does not, and each pane loads only its own block', async () => {

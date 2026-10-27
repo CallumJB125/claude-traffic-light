@@ -603,11 +603,16 @@ function settingsPane(pane) {
   return (e) => fromUtilityPage(e, 'settings') || (pane !== 'none' && CHAT_PREVIEW === true && fromUtilityPage(e, `settings:${pane}`));
 }
 /** The pane document a sender is (preview only), or null for the old page and everyone else. */
-const settingsPaneOf = (e) => (CHAT_PREVIEW === true ? SettingsPanes.OWNERS.find((p) => fromUtilityPage(e, `settings:${p}`)) ?? null : null);
+const settingsPaneOf = (e) => (CHAT_PREVIEW === true ? SettingsPanes.CONFIG_OWNERS.find((p) => fromUtilityPage(e, `settings:${p}`)) ?? null : null);
 // R8-2b: the widget rules editor in the sheet (lights.html view=rules). rulesEditor is bound ONLY at the rules-editor channels
 // below; every other lights channel keeps widgetConfigSender (the Lights window), so the pane cannot reach them.
 const rulesPane = (e) => CHAT_PREVIEW === true && fromUtilityPage(e, `settings:${SettingsPanes.RULES_PANE}`);
 const rulesEditor = (e) => widgetConfigSender(e) || rulesPane(e);
+// R8-3b-1: the Widget page and Hatch as sheet documents. Each predicate is bound to ONE sheet document (never a generic sheet predicate) and
+// is handed only to the wiring sites of that document's own channels. Neither document uses get-config/save-config.
+const sheetDoc = (pane) => (e) => CHAT_PREVIEW === true && fromUtilityPage(e, `settings:${pane}`);
+const widgetLookPage = (e) => fromUtilityPage(e, 'widget') || sheetDoc(SettingsPanes.WIDGET_LOOK)(e);
+const fromHatch = (e) => fromUtilityPage(e, 'hatch') || sheetDoc(SettingsPanes.CHARACTER)(e);
 /** A push the Lights window gets, also to the rules pane (preview only; with the gate off nothing is sent). */
 function sendToRules(channel, ...args) { if (CHAT_PREVIEW === true) buddyWin?.sendToPage(`settings:${SettingsPanes.RULES_PANE}`, channel, ...args); }
 /** Keys of a rules-pane save it may not make: a key it does not own, or another pane's key that the named template does not imply.
@@ -1527,10 +1532,10 @@ function broadcastCharacters() {
   for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('characters:changed');
 }
 function createHatchWindow() { openBuddy('hatch'); }
-const fromHatch = (e) => fromUtilityPage(e, 'hatch');
 utilityHandle('characters:list', e => widgetOnly(e) || rulesEditor(e) || fromHatch(e), () => characterStore.list().map((c) => c.character));
-ipcMain.handle('hatch:open', (e) => { if (rulesEditor(e)) createHatchWindow(); });
-ipcMain.handle('hatch:close', (e) => { if (fromHatch(e)) createLightsWindow(); });
+// From the sheet these move between sheet documents; the old Lights and Hatch windows are never opened by a sheet sender.
+ipcMain.handle('hatch:open', (e) => { if (rulesPane(e)) openBuddy(`settings:${SettingsPanes.CHARACTER}`); else if (rulesEditor(e)) createHatchWindow(); });
+ipcMain.handle('hatch:close', (e) => { if (sheetDoc(SettingsPanes.CHARACTER)(e)) openBuddy(`settings:${SettingsPanes.RULES_PANE}`); else if (fromHatch(e)) createLightsWindow(); });
 const HatchAi = require('./src/hatch-ai.js');
 const hatchAiBin = () => require('./src/claude-code-session.js').findClaudeBin();
 let hatchDescribing = false;
@@ -2565,7 +2570,7 @@ let galleryService = null;
     profile: { get: () => loadConfig().galleryAuthor || null, set: (v) => saveConfig({ galleryAuthor: v }) },
     openExternal: (url) => shell.openExternal(url), clipboard, demo: () => Demo.active(), // privacy-flow: gallery-publish
   });
-  Publish.register({ ipcMain, allowed: (e) => tasksSenderOk(e) || rulesEditor(e) || fromUtilityPage(e, 'hatch'), publish });
+  Publish.register({ ipcMain, allowed: (e) => tasksSenderOk(e) || rulesEditor(e) || fromHatch(e), publish });
 }
 
 let lightsWin = null;
@@ -4998,10 +5003,10 @@ const BUBBLE_MIN_W = 288; // the bubble is 280 px wide, with 4 px each side
 const WidgetStrip = require('./src/widget-strip.js');
 let strip = WidgetStrip.NONE;
 let applyingStrip = false;
-require('./src/widget-page.js').register({ utilityHandle, allowed: (e) => fromUtilityPage(e, 'widget'), loadConfig, commitConfig, widget: () => win, strip: () => strip, ensureWidget: () => { if (!win) createWindow(); applyWidgetVisibility(); }, resizeBy, busy: () => roamState.busy || !!gardenRun, stopGlide, saveBounds, screen, limits: { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }, openPage: (id) => { openBuddy(id); if (id === 'settings') buddyWin?.sendToPage('settings', 'show-section', 'widget'); }, platform: process.platform, composeShortcut: () => ComposeShortcut.view() });
+require('./src/widget-page.js').register({ utilityHandle, allowed: widgetLookPage, loadConfig, commitConfig, widget: () => win, strip: () => strip, ensureWidget: () => { if (!win) createWindow(); applyWidgetVisibility(); }, resizeBy, busy: () => roamState.busy || !!gardenRun, stopGlide, saveBounds, screen, limits: { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }, openPage: (id, e) => { if (e && sheetDoc(SettingsPanes.WIDGET_LOOK)(e)) { openBuddy(id === 'lights' ? `settings:${SettingsPanes.RULES_PANE}` : 'settings:widget'); return; } openBuddy(id); if (id === 'settings') buddyWin?.sendToPage('settings', 'show-section', 'widget'); }, platform: process.platform, composeShortcut: () => ComposeShortcut.view() });
 spendSafety = require('./src/spend-safety-main.js').install({ Notification, handle: utilityHandle, allowed: (e) => analyticsSender(e) || settingsPane('spend')(e), rootDir: ROOT_DIR, projectsDir: PROJECTS_DIR, home: os.homedir(), env: process.env, provider: () => require('./src/claude-carry.js').carryFor(process.env)?.resolve() ?? null, config: loadConfig, turns: () => getUsageTurns(), spend: () => spendSnapshot(loadConfig()), silent: IS_DEV_RUN, log: console.log });
 require('./src/rule-notify-main.js').install({ Notification, busy: () => BusyWatch.holding(), paused: (id) => spendSafety?.nudgesPaused(id), handle: utilityHandle, allowed: rulesEditor, config: loadConfig, sessions: () => aggregateState({ ignoreTravel: true }).sessions || [], env: () => { const c = loadConfig(); return { offline: !online, ...BusyWatch.env(), git: gitEvents(c), spend: spendSnapshot(c) }; }, log: console.log });
-const WidgetPolish = require('./src/widget-polish-main.js').install({ ipcMain, globalShortcut, utilityHandle, config: loadConfig, commitConfig, widgetWindow: () => win, quiet: Quiet, widgetAllowed: (e) => widgetOnly(e), pageAllowed: (e) => fromUtilityPage(e, 'widget'), sessions: () => localSessions(aggregateState().sessions || []), strip: () => strip, saveBounds, stopGlide, screen, sizing: { aspect: WIDGET_ASPECT, minWidth: MIN_WIDTH }, log: console.log });
+const WidgetPolish = require('./src/widget-polish-main.js').install({ ipcMain, globalShortcut, utilityHandle, config: loadConfig, commitConfig, widgetWindow: () => win, quiet: Quiet, widgetAllowed: (e) => widgetOnly(e), pageAllowed: widgetLookPage, sessions: () => localSessions(aggregateState().sessions || []), strip: () => strip, saveBounds, stopGlide, screen, sizing: { aspect: WIDGET_ASPECT, minWidth: MIN_WIDTH }, log: console.log });
 const FirstRunTour = require('./src/first-run-tour-main.js').install({ ipcMain, config: loadConfig, saveConfig, setupOpen: () => !!onboardingWin, demo: Demo, hasConnectedTool: () => AiTools.quick().some((t) => t.connected), windows: { widget: () => win, widgetShown: () => !!win && !win.isDestroyed() && win.isVisible(), lights: () => lightsWin, openLights: () => createLightsWindow(), openPage: (id) => openBuddy(id), sendToPage: (id, ch, p) => !!buddyWin?.sendToPage(id, ch, p) }, allowed: { widget: (e) => widgetOnly(e), lights: (e) => fromPage(e, lightsWin?.webContents), page: (e, id) => fromUtilityPage(e, id) }, log: console.log });
 let updateRowShown = false;
 ipcMain.on('update-row', (e, on) => {

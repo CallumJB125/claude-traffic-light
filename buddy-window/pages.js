@@ -80,11 +80,15 @@ const SETTINGS_PANES = Object.freeze(SettingsPanes.PANES.map((pane) => Object.fr
   query: Object.freeze({ embedded: '1', pane }), group: 'you', unlisted: true, pane,
 })));
 // R8-2b: the widget rules editor in the sheet: lights.html's rules view, with lights-preload.js (its own guard in main: rulesEditor).
-const RULES_PANE = Object.freeze({
-  id: `settings:${SettingsPanes.RULES_PANE}`, title: SettingsPanes.TITLE[SettingsPanes.RULES_PANE], icon: 'lights', kind: 'local', file: 'lights.html', preload: 'lights-preload.js',
-  query: Object.freeze({ embedded: '1', view: 'rules' }), group: 'you', unlisted: true, pane: SettingsPanes.RULES_PANE,
+const sheetDoc = (pane, icon, file, preload, query) => Object.freeze({
+  id: `settings:${pane}`, title: SettingsPanes.TITLE[pane], icon, kind: 'local', file, preload, query: Object.freeze(query), group: 'you', unlisted: true, pane,
 });
-function paneById(id) { return typeof id === 'string' ? [...SETTINGS_PANES, RULES_PANE].find((p) => p.id === id) ?? null : null; }
+const RULES_PANE = sheetDoc(SettingsPanes.RULES_PANE, 'lights', 'lights.html', 'lights-preload.js', { embedded: '1', view: 'rules' });
+// R8-3b-1: the Widget page (widget-page.html) and Hatch (hatch.html) as sheet documents, each with its own preload and guard.
+const WIDGET_LOOK_PANE = sheetDoc(SettingsPanes.WIDGET_LOOK, 'lights', 'widget-page.html', 'widget-page-preload.js', { embedded: '1', sheet: '1' });
+const CHARACTER_PANE = sheetDoc(SettingsPanes.CHARACTER, 'puzzle', 'hatch.html', 'hatch-preload.js', { embedded: '1' });
+const SHEET_DOCS = Object.freeze([RULES_PANE, WIDGET_LOOK_PANE, CHARACTER_PANE]);
+function paneById(id) { return typeof id === 'string' ? [...SETTINGS_PANES, ...SHEET_DOCS].find((p) => p.id === id) ?? null : null; }
 
 // R7-2: Usage's tabs (chat-first preview only). Each tab is its own document with its own guard; Today is the one new
 // document, a pane like Settings' (not in PAGES, so it exists only with the preview on). The strip (usage-tabs.html)
@@ -530,4 +534,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, FUTURE_IDS, DESTINATIONS, SIDEBAR_FILTERS, COLLAPSIBLE, DEFAULT_COLLAPSED, sidebarCollapsed, REDIRECTS, resolve, sectionTarget, sectionAddress, sectionsFor, sectionOf, flat, pageById, SETTINGS_PANES, RULES_PANE, paneById, USAGE_PANES, USAGE_TABS, USAGE_TAB_IDS, usagePaneById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
+module.exports = { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, FUTURE_IDS, DESTINATIONS, SIDEBAR_FILTERS, COLLAPSIBLE, DEFAULT_COLLAPSED, sidebarCollapsed, REDIRECTS, resolve, sectionTarget, sectionAddress, sectionsFor, sectionOf, flat, pageById, SETTINGS_PANES, RULES_PANE, SHEET_DOCS, paneById, USAGE_PANES, USAGE_TABS, USAGE_TAB_IDS, usagePaneById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };

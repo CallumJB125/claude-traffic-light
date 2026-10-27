@@ -123,4 +123,10 @@
   }
   document.addEventListener('visibilitychange', sync);
   sync();
+  // In the Settings sheet (preview): a link back, and a fresh read when the sheet shows this page again (another pane may have changed a setting).
+  if (new URLSearchParams(location.search).get('sheet') === '1') {
+    $('back-settings').hidden = false;
+    $('back-settings').addEventListener('click', () => api.goPane?.('widget'));
+    api.onShown?.(() => { refresh(); loadColours(); });
+  }
 })();

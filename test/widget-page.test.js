@@ -123,9 +123,10 @@ test('registry: Widget lives in the Settings section with Widget rules, packaged
   assert.match(html, /connect-src 'none'/);
   const files = JSON.parse(read('package.json')).build.files;
   for (const f of ['widget-page.html', 'widget-page.js', 'widget-page-preload.js']) assert.ok(files.includes(f), f);
-  const channels = [...read('widget-page-preload.js').matchAll(/ipcRenderer\.\w+\('([^']+)'/g)].map((m) => m[1]);
+  // settings:go-pane / settings:shown are the sheet document's navigation (R8-3b-1, test/sheet-docs.test.js); main answers them only for sheet senders
+  const channels = [...read('widget-page-preload.js').matchAll(/ipcRenderer\.\w+\('([^']+)'/g)].map((m) => m[1]).filter((c) => !c.startsWith('settings:'));
   assert.ok(channels.length === 7 && channels.every((c) => c.startsWith('widget-page:') || c === 'widget:recent-projects'), channels.join());
-  assert.match(read('main.js'), /require\('\.\/src\/widget-page\.js'\)\.register\(\{ utilityHandle, allowed: \(e\) => fromUtilityPage\(e, 'widget'\)/);
+  assert.match(read('main.js'), /require\('\.\/src\/widget-page\.js'\)\.register\(\{ utilityHandle, allowed: widgetLookPage/);
 });
 
 test('page: draws main\'s state, sends only fixed requests, and shows the preview image', async (t) => {
