@@ -99,7 +99,8 @@ function register(ctx) {
   const every = setInterval(tick, EVERY_MS); every.unref?.();
   onQuit(() => { clearTimeout(first); clearInterval(every); });
 
-  const fromSync = (e) => { try { return fromPage(e, 'sync'); } catch { return false; } };
+  // ctx.syncAllowed (R8-3c-1): the Sync page, and the Settings sheet's Sync document too; default = the page only.
+  const fromSync = (e) => { try { return typeof ctx.syncAllowed === 'function' ? ctx.syncAllowed(e) : fromPage(e, 'sync'); } catch { return false; } };
   const wrap = (fn) => async (e, ...args) => {
     if (!fromSync(e)) return null;
     try { return await fn(...args); } catch (err) {
@@ -127,7 +128,14 @@ function register(ctx) {
   ipcMain.handle('sync:new-code', wrap(async () => client.newRecoveryCode()));
   ipcMain.handle('sync:now', wrap(async () => round()));
   // The page's Sign in and See plans buttons: only these two pages (sign-in is on Team), as phone:upgrade does.
-  ipcMain.handle('sync:open', wrap(async (page) => { ctx.buddy?.()?.open?.(page === 'upgrade' ? 'upgrade' : 'team'); return null; }));
+  // ctx.openPlan(e) (R8-3c-1) decides by sender where See plans goes; sign-in always opens Team.
+  ipcMain.handle('sync:open', async (e, page) => {
+    if (!fromSync(e)) return null;
+    try {
+      if (page === 'upgrade') { if (typeof ctx.openPlan === 'function') ctx.openPlan(e); else ctx.buddy?.()?.open?.('upgrade'); } else ctx.buddy?.()?.open?.('team');
+      return null;
+    } catch (err) { return { ok: false, code: err?.code ?? 'error', message: err?.message ?? String(err) }; }
+  });
   return { client, round, collect: (lg) => collect(rootDir, lg) };
 }
 

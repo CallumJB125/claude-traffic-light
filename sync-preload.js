@@ -11,4 +11,7 @@ contextBridge.exposeInMainWorld('sync', {
   newCode: () => ipcRenderer.invoke('sync:new-code'),
   now: () => ipcRenderer.invoke('sync:now'),
   open: (page) => ipcRenderer.invoke('sync:open', page === 'upgrade' ? 'upgrade' : 'account'),
+  // R8-3c-1: only the Settings sheet's document is answered (settings:go-pane / settings:shown); inert on the Sync page
+  goPane: (pane) => ipcRenderer.send('settings:go-pane', typeof pane === 'string' ? pane : ''),
+  onShown: (cb) => ipcRenderer.on('settings:shown', () => cb()),
 });

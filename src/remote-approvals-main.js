@@ -342,7 +342,7 @@ function register(ctx) {
   ipcMain.handle('phone:pair-confirm', (e, pid, code) => (ok(e) && typeof pid === 'string' && typeof code === 'string' && code.length <= 20 ? core.confirmPairing(pid, code) : null));
   ipcMain.handle('phone:pair-cancel', (e) => { if (ok(e)) core.cancelPairing(); return null; });
   ipcMain.handle('phone:revoke', (e, deviceId) => (ok(e) && typeof deviceId === 'string' && deviceId.length <= 64 ? core.revoke(deviceId) : null));
-  ipcMain.handle('phone:upgrade', (e) => { if (ok(e)) ctx.buddy?.()?.open?.('upgrade'); return null; });
+  ipcMain.handle('phone:upgrade', (e) => { if (ok(e)) { if (typeof ctx.openPlan === 'function') ctx.openPlan(e); else ctx.buddy?.()?.open?.('upgrade'); } return null; });
 
   const timer = setInterval(() => { core.tick().catch((err) => log(`[phone] ${err?.message ?? err}`)); }, POLL_MS);
   timer.unref?.();

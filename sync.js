@@ -113,4 +113,10 @@
   $('code-done').addEventListener('click', () => { $('code').textContent = ''; $('code-card').hidden = true; });
   window.addEventListener('focus', refresh);
   refresh();
+  // In the Settings sheet (preview): a link back and a fresh read when the sheet shows this page again.
+  if (new URLSearchParams(location.search).get('sheet') === '1') {
+    $('back-settings').hidden = false;
+    $('back-settings').addEventListener('click', () => api.goPane?.('general'));
+    api.onShown?.(() => refresh());
+  }
 })();
