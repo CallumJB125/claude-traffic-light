@@ -55,12 +55,20 @@ function controls() {
       (x, y) => (!box(x, y, 4, 12, 60, 36) ? BG : glyphA(x, y) ? FG : (x + y) % 4 === 0 && box(x, y, 10, 18, 54, 30) ? mix(FG, TO, 0.5) : TO),
       (x, y) => (!box(x, y, 4, 12, 60, 36) ? BG : glyphA(x, y) ? FG : (x + y) % 4 === 0 && box(x, y, 10, 18, 54, 30) ? mix(FG, TN, 0.5) : TN));
   }
+  // (c′) a light window whose only change is the old DARK accent turning into the new dark accent, with no theme
+  // in its name: only dark members could explain it, the image is light, so it must fail
+  const L = hex(THEMES.light.bg); const DO = hex(THEMES.dark.accentOld); const DN = hex(THEMES.dark.accentNew);
+  out.push({ name: 'unthemed light image that only dark members explain', theme: 'infer', baseline: 'controls/unthemed-darwin.png', expect: 'fail',
+    old: image((x, y) => (box(x, y, 10, 10, 50, 30) ? DO : L)), new: image((x, y) => (box(x, y, 10, 10, 50, 30) ? DN : L)) });
+  out.push({ name: 'unthemed light image with a light accent swap', theme: 'infer', baseline: 'controls/unthemed-darwin.png', expect: 'pass',
+    old: image((x, y) => (box(x, y, 10, 10, 50, 30) ? hex(THEMES.light.accentOld) : L)), new: image((x, y) => (box(x, y, 10, 10, 50, 30) ? hex(THEMES.light.accentNew) : L)) });
   return out;
 }
 
 // Runs one control through the classifier and the gate. Returns { failed, result }.
 function judgeControl(c, families) {
-  const result = lib.classifyImage(c.old, c.new, families[c.theme]);
+  const fam = c.theme === 'infer' ? lib.familiesFor(families, c.baseline, c.old) : families[c.theme];
+  const result = lib.classifyImage(c.old, c.new, fam);
   const verdict = lib.verdictOf([{ baseline: `controls/${c.name}.png`, ...result }]);
   return { failed: verdict.failures.length > 0, result };
 }

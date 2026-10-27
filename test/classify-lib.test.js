@@ -142,7 +142,7 @@ test('classifier (c): the theme comes from the file name and picks that theme\'s
   assert.equal(lib.themeOf('x/widget-ask-long-command-darwin.png'), 'both');
   assert.equal(lib.themeOf('x/darkroom-darwin.png'), 'both');
   assert.equal(lib.familiesFor(ALL, 'x/a-dark-darwin.png'), ALL.dark);
-  assert.equal(lib.familiesFor(ALL, 'x/a-darwin.png'), ALL.both);
+  assert.equal(lib.familiesFor(ALL, 'x/a-darwin.png'), ALL.none, 'no theme and no image: fail closed, never pooled');
   assert.deepEqual(ALL.light.surfaces.map((c) => c.join()), ['244,245,247', '255,255,255', '238,240,243']);
   assert.deepEqual(ALL.dark.surfaces.map((c) => c.join()), ['23,25,29', '32,35,41', '41,45,52']);
   // the old dark accent turning into the new dark accent passes in a dark baseline but is a theme mix-up in a light one
@@ -282,4 +282,21 @@ test('classifier (iii): an unresolved color-mix fails closed: it builds no membe
   const known = sheet.replace('var(--local-only)', '#6b6f78');
   const resolved = lib.familiesOf(TOKENS, GRAPHITE, { old: [known], new: [known] });
   assert.equal(lib.classifyImage(fill(o), fill(n), resolved.dark).unexpected, 0);
+});
+
+test('classifier (c′): an unthemed baseline takes its theme from the base image; ambiguous or contradicted fails closed', () => {
+  const L = hex('#eef0f3'); const D = hex('#292d34');
+  const split = (shareLight) => image(20, 20, (x) => (x < 20 * shareLight ? L : D));
+  const t = (name, img) => { const r = lib.themeFor(ALL, name, img); return [r.theme, r.source]; };
+  assert.deepEqual(t('x/menu-darwin.png', split(0.9)), ['light', 'image']);
+  assert.deepEqual(t('x/menu-darwin.png', split(0.2)), ['dark', 'image']);
+  assert.deepEqual(t('x/menu-darwin.png', split(0.6)), ['none', 'ambiguous']);
+  assert.deepEqual(t('x/menu-darwin.png', image(4, 4, () => hex('#ff00ff'))), ['none', 'ambiguous']);
+  assert.deepEqual(t('x/menu-dark-darwin.png', split(0.2)), ['dark', 'name']);
+  assert.deepEqual(t('x/menu-dark-darwin.png', split(0.9)), ['none', 'mismatch (name dark, image light)']);
+  assert.equal(lib.familiesFor(ALL, 'x/menu-darwin.png', split(0.6)), ALL.none);
+  assert.equal(lib.THEME_DOMINANCE, 0.7);
+  // fail closed: with `none`, an otherwise perfect accent swap is all unexpected
+  const r = lib.classifyImage(image(4, 4, () => hex('#e49a78')), image(4, 4, () => hex('#e6e8eb')), ALL.none);
+  assert.equal(r.unexpected, 16);
 });

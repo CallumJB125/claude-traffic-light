@@ -153,8 +153,10 @@ test('classifier: every changed baseline changed only by the accent swap', async
       const newPng = fs.existsSync(headFile) ? fs.readFileSync(headFile) : null;
       if (!oldPng || !newPng) { report.baselines.push({ baseline: rel, added: !oldPng, removed: !newPng, tiles: [] }); continue; }
       if (oldPng.equals(newPng)) continue;
-      const r = lib.classifyImage(await decode(page, oldPng), await decode(page, newPng), lib.familiesFor(families, rel), { exceptions: lib.exceptionsFor(rel, config) });
-      const row = { baseline: rel, theme: lib.themeOf(rel), ...r, unexpectedPct: +(100 * r.unexpected / r.total).toFixed(4) };
+      const oldImg = await decode(page, oldPng);
+      const th = lib.themeFor(families, rel, oldImg);
+      const r = lib.classifyImage(oldImg, await decode(page, newPng), th.families, { exceptions: lib.exceptionsFor(rel, config) });
+      const row = { baseline: rel, theme: th.theme, themeSource: th.source, themeShare: th.share, ...r, unexpectedPct: +(100 * r.unexpected / r.total).toFixed(4) };
       report.baselines.push(row);
       if (r.tiles.length) {
         const sheet = await contactSheet(page, oldPng, newPng, r.tiles);
@@ -176,7 +178,7 @@ test('classifier: every changed baseline changed only by the accent swap', async
   await testInfo.attach('classify-report.json', { body, contentType: 'application/json' });
   for (const b of report.baselines) {
     if (b.added || b.removed) console.log(`classify ${b.baseline}: ${b.added ? 'added' : 'removed'}`);
-    else console.log(`classify ${b.baseline}: changed ${b.changed}, noise ${b.noise}, pass ${b.pass}, unchanged ${b.unchanged}, skipped ${b.skipped}, exception ${b.exception}, unexpected ${b.unexpected} (${b.unexpectedPct} %)`);
+    else console.log(`classify ${b.baseline} [${b.theme} by ${b.themeSource}, ${b.themeShare}]: changed ${b.changed}, noise ${b.noise}, pass ${b.pass}, unchanged ${b.unchanged}, skipped ${b.skipped}, exception ${b.exception}, unexpected ${b.unexpected} (${b.unexpectedPct} %)`);
   }
   console.log(`classify totals: ${JSON.stringify(report.totals)}, crops ${report.crops}`);
   console.log(`classify mixes: ${report.mixes.parsed} accent color-mix rules parsed, ${report.mixes.unresolved.length} unresolved: ${report.mixes.unresolved.join(' | ')}`);

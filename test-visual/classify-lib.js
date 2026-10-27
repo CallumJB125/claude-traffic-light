@@ -23,7 +23,7 @@
 //       absorbed and a low-contrast change can't hide in it unseen.
 //   (b) A baseline that exists on only one side (added or removed) fails the gate: an accent flip renames nothing.
 //   (c) The surface fallback and the families are picked by theme from the file name (-dark- / -light-); a name
-//       with neither (or both) uses both themes, as R0a did.
+//       with neither is themed from the base image (c′, themeFor). Never pooled; ambiguous fails closed.
 //   (d) classify.spec.js runs on its own when the branch's test-visual/expected/<branch>.txt starts `# classify`.
 // R0b extensions and tightening (lead conditions; §R4.4): (i) surfaces as neutrals as well as the local N;
 // (ii) text over the soft tint; (iii) accent color-mix() rules parsed from the stylesheets; members that don't
@@ -314,7 +314,10 @@ function familiesOf(oldCss, newCss, mixTexts = { old: [], new: [] }) {
     out[theme] = { members: built.members, surfaces };
     for (const u of built.unresolved) if (!out.mixes.unresolved.includes(u)) out.mixes.unresolved.push(u);
   }
+  // `both` pools the themes; only the unit tests of single-pixel rules use it. familiesFor() never returns it.
   out.both = { members: [...out.light.members, ...out.dark.members], surfaces: [...out.light.surfaces, ...out.dark.surfaces] };
+  // Fail closed: no member explains anything, so every changed pixel that isn't noise is unexpected.
+  out.none = { members: [], surfaces: [] };
   return out;
 }
 
@@ -324,7 +327,43 @@ function themeOf(baseline) {
   const dark = /(^|-)dark(-|\.png$)/.test(name); const light = /(^|-)light(-|\.png$)/.test(name);
   return dark === light ? 'both' : dark ? 'dark' : 'light';
 }
-const familiesFor = (families, baseline) => families[themeOf(baseline)] || families.both;
+// (c′) Which theme a baseline was rendered in. The file name decides when it says -dark- or -light-; otherwise
+// the base image does: the share of its opaque pixels within ΔE00 1 of each theme's surface tokens. The winner
+// must hold at least 70 % of the surface-matched pixels. Fail closed, never pool: an ambiguous image, or a name
+// that the image contradicts, gets no members at all (`none`), so its changed pixels are unexpected. The head
+// image uses the base image's theme.
+const THEME_DOMINANCE = 0.7;
+function surfaceCoverage(img, families) {
+  const cover = { light: 0, dark: 0 };
+  const cache = new Map();
+  const D = img.data;
+  for (let j = 0; j < D.length; j += 4) {
+    if (D[j + 3] !== 255) continue;
+    const key = (D[j] << 16) | (D[j + 1] << 8) | D[j + 2];
+    let hit = cache.get(key);
+    if (hit === undefined) {
+      const L = lab([D[j], D[j + 1], D[j + 2]]);
+      hit = ['light', 'dark'].find((t) => families[t].surfaces.some((s) => deltaE00(L, lab(s)) <= DE_NOISE)) || '';
+      cache.set(key, hit);
+    }
+    if (hit) cover[hit] += 1;
+  }
+  return cover;
+}
+function themeFor(families, baseline, baseImg) {
+  const named = themeOf(baseline);
+  const cover = baseImg ? surfaceCoverage(baseImg, families) : { light: 0, dark: 0 };
+  const sum = cover.light + cover.dark;
+  const inferred = !sum ? null : cover.light / sum >= THEME_DOMINANCE ? 'light' : cover.dark / sum >= THEME_DOMINANCE ? 'dark' : null;
+  const share = sum ? +(Math.max(cover.light, cover.dark) / sum).toFixed(3) : 0;
+  if (named !== 'both') {
+    if (baseImg && inferred && inferred !== named) return { theme: 'none', source: `mismatch (name ${named}, image ${inferred})`, coverage: cover, share, families: families.none };
+    return { theme: named, source: 'name', coverage: cover, share, families: families[named] };
+  }
+  if (!inferred) return { theme: 'none', source: 'ambiguous', coverage: cover, share, families: families.none };
+  return { theme: inferred, source: 'image', coverage: cover, share, families: families[inferred] };
+}
+const familiesFor = (families, baseline, baseImg) => themeFor(families, baseline, baseImg).families;
 
 // (d) The expected-list file for a branch, and whether it asks for the classifier (first line `# classify`).
 const expectedFileFor = (branch) => `test-visual/expected/${String(branch).trim().replace(/\//g, '-')}.txt`;
@@ -498,4 +537,4 @@ function verdictOf(results) {
   return { failures, crops };
 }
 
-module.exports = { parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
+module.exports = { parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, surfaceCoverage, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
