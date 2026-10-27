@@ -30,8 +30,10 @@ test('main reads the gate once from IS_DEV_RUN and app.isPackaged and hands it t
   assert.equal(mainSrc.match(/chatPreviewOn\(/g).length, 1);
   assert.match(mainSrc, /const CHAT_PREVIEW = require\('\.\/src\/chat-preview\.js'\)\.chatPreviewOn\(\{ isDevRun: IS_DEV_RUN, isPackaged: app\.isPackaged, env: process\.env \}\);/);
   assert.match(mainSrc, /buddyWin = createBuddyWindow\(\{[^]*?\n      chatFirst: CHAT_PREVIEW,\n/);
-  // Read once; used by the Buddy window and by the sidebar's read-only session rows (overview-main), nothing else.
-  assert.equal((mainSrc.match(/CHAT_PREVIEW/g) || []).length, 3);
+  // Read once; used by the Buddy window, the sidebar's read-only session rows (overview-main)
+  // and the R2a thread (registered only when on, and told the gate), nothing else.
+  assert.equal((mainSrc.match(/CHAT_PREVIEW/g) || []).length, 5);
+  assert.match(mainSrc, /\nif \(CHAT_PREVIEW\) \{\n  const SidebarRows[^]*?buddy: \(\) => buddyWin, chatPreview: CHAT_PREVIEW,\n/);
   assert.match(mainSrc, /createOverviewMain\(\{\n  buddy:\(\)=>buddyWin,chatPreview:CHAT_PREVIEW,/);
   assert.match(src, /simpleMode = \(\) => false, chatFirst = false,/, 'off unless main says so');
   // Renderers never read the environment for it.
@@ -40,7 +42,7 @@ test('main reads the gate once from IS_DEV_RUN and app.isPackaged and hands it t
 
 test('the sidebar learns the gate only from buddy:pages, and only when it is on', () => {
   assert.match(src, /\.\.\.\(chatFirst === true \? \{ chatFirst: true, chat: chatPagesExtra\(\) \} : \{\}\) \} : null\)\);/);
-  assert.match(src, /\.\.\.\(chatFirst === true \? \{ chat: \{ focus: sidebarFocus \} \} : \{\}\),/);
+  assert.match(src, /\.\.\.\(chatFirst === true \? \{ chat: \{ focus: sidebarFocus, thread: selected === 'thread' \? threadId : null \} \} : \{\}\),/);
 });
 
 function world(chatFirst) {

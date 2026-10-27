@@ -46,4 +46,16 @@ function sidebarRows(out) {
   return { schema: 1, status: out.status === 'complete' ? 'complete' : 'partial', sessions };
 }
 
-module.exports = { sidebarRows, KEYS, NO_PROJECT };
+// The thread header (redesign R2a): the same fixed, path-free shape as a
+// sidebar row, plus the AI's name, from the row main resolved. A task the
+// latest build hasn't listed yet has no row; its page uses the task detail.
+const HEADER_KEYS = Object.freeze(['title', 'project', 'bucket', 'origin', 'ai', 'terminal']);
+function headerOf(target, id) {
+  if (!target?.row || target.row.id !== id) return null;
+  const origins = new Map(target.kind === 'session' ? [[id, target.origin ?? null]] : []);
+  const r = row(target.row, origins);
+  if (!r) return null;
+  return { title: r.title, project: r.project, bucket: r.bucket, origin: r.origin, ai: AI[target.row.provider?.id] ?? 'AI', terminal: r.terminal };
+}
+
+module.exports = { sidebarRows, headerOf, KEYS, HEADER_KEYS, NO_PROJECT };

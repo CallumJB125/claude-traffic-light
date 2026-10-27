@@ -198,6 +198,7 @@
       "tasks.js",
       "tasks.css",
       "tasks-preload.js",
+      "thread-preload.js",
       "recipes.js",
       "recipes.css",
       "gallery-view.js",

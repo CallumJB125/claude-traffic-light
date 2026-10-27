@@ -125,7 +125,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, loginEnv = () => null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, onThreadRetired = () => {}, loginEnv = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -456,6 +456,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
 
   function attach(view) {
     if (!win || content === view) return;
+    // Any other view taking the content area ends the thread (labfix-review S2).
+    if (threadView && content === threadView && view !== threadView) retireThread();
     if (content) win.contentView.removeChildView(content);
     content = view;
     if (view) win.contentView.addChildView(view);
@@ -465,6 +467,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   }
 
   function pushState() {
+    // The selection left the thread before its next view is attached (a hub page loads first).
+    if (threadView && selected !== 'thread') retireThread();
     if(activeMarker!==store.active().id){tasksGeneration++;homeGeneration++;activeMarker=store.active().id;for(const listener of activeListeners)listener();}
     const markers=store.hubs().map(origin=>[origin,vault(origin).load()]);
     if(markers.length!==setupIdentityMarkers.length || markers.some((value,index)=>value[0]!==setupIdentityMarkers[index]?.[0]||value[1]!==setupIdentityMarkers[index]?.[1])) {
@@ -490,7 +494,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
         : [...vaults.values()].some(v => v.state() === 'locked') ? 'locked' : 'ready',
       accountStorageHelp: storageHelp(),
       runners: flow.runningTeams(),
-      ...(chatFirst === true ? { chat: { focus: sidebarFocus } } : {}),
+      ...(chatFirst === true ? { chat: { focus: sidebarFocus, thread: selected === 'thread' ? threadId : null } } : {}),
       hub: team
         ? { state: viewError ? 'failed' : 'ready', error: viewError, mode: 'team', name: team.name }
         : { state: viewError ? 'failed' : hubStatus.state, error: viewError ?? hubStatus.error ?? null, mode },
@@ -1060,6 +1064,61 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     supervisor.retry().catch(() => {});
   }
 
+  // ── thread (chat-first preview, redesign R2a) ─────────────────────────
+  // One read-only thread document at a time, never kept alive: it holds a Tasks
+  // slot whose subscription marks messages read, so it exists only while it is
+  // the page on screen (labfix-review S2). Not a PAGES entry: reached by a row.
+  let threadView = null, threadId = null, threadWcId = null, threadDocument = 0, resumeThreadId = null;
+  const ROW_ID = /^[0-9a-f]{64}$/;
+  const threadUrl = () => { const u = new URL(pathToFileURL(path.join(DIR, '..', 'thread.html')).href); u.searchParams.set('embedded', '1'); return u.href; };
+  function retireThread({ resume = false } = {}) {
+    const v = threadView;
+    if (!v) return;
+    const wcId = threadWcId, id = threadId;
+    threadView = null; threadId = null; threadWcId = null; threadDocument++;
+    resumeThreadId = resume ? id : null;
+    if (content === v) { try { win?.contentView.removeChildView(v); } catch { /* not attached */ } content = null; }
+    dispose(v, win);
+    try { onThreadRetired(wcId); } catch { /* never blocks retirement */ }
+  }
+  function notifyThreadReady(v) {
+    const wc = v?.webContents;
+    if (!win || win.isDestroyed() || threadView !== v || !wc || wc.isDestroyed() || selected !== 'thread' || content !== v) return;
+    if (wc.getURL() !== threadUrl() || wc.isLoading()) return;
+    try { wc.send('thread:ready', { id: threadId }); } catch { /* document closed */ }
+  }
+  function openThread(rowId) {
+    if (chatFirst !== true || !win || win.isDestroyed() || typeof rowId !== 'string' || !ROW_ID.test(rowId)) return false;
+    let target = null;
+    try { target = threadTarget(rowId); } catch { target = null; }
+    if (!target) return false;
+    retireThread();
+    setupLocalGeneration++; tasksGeneration++; homeGeneration++;
+    flow.leftAccountPages();
+    const v = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, preload: path.join(DIR, '..', 'thread-preload.js') } });
+    v.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
+    lockLocal(v);
+    const wc = v.webContents, wcId = wc.id;
+    // A new document (a reload too) is a new reader: main drops the old slot.
+    wc.on('did-start-navigation', (d) => { if (d.isMainFrame && !d.isSameDocument) { if (threadView === v) threadDocument++; try { onThreadRetired(wcId); } catch { /* never blocks */ } } });
+    wc.on('render-process-gone', () => { if (threadView === v) retireThread(); else try { onThreadRetired(wcId); } catch { /* never blocks */ } });
+    wc.once('destroyed', () => { try { onThreadRetired(wcId); } catch { /* never blocks */ } });
+    wc.on('did-stop-loading', () => notifyThreadReady(v));
+    threadView = v; threadId = rowId; threadWcId = wcId; threadDocument++; resumeThreadId = null;
+    selected = 'thread';
+    attach(v);
+    pushState();
+    wc.loadFile(path.join(DIR, '..', 'thread.html'), { query: { embedded: '1' } }).catch(() => {});
+    return true;
+  }
+  // A hidden or minimised window shows no thread; it comes back as a new document.
+  function resumeThread() {
+    if (selected !== 'thread' || threadView || !resumeThreadId) return;
+    const id = resumeThreadId;
+    resumeThreadId = null;
+    if (!openThread(id)) select('board');
+  }
+
   // ── workspaces ──────────────────────────────────────────────────────────
 
   function switchWorkspace(id, { show = true } = {}) {
@@ -1116,6 +1175,14 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     try { saved = sidebarCollapsed(sidebarGroups.load()); } catch { saved = null; }
     return { collapsed: saved ?? [...DEFAULT_COLLAPSED], focus: sidebarFocus };
   }
+  // The thread page's "Back to Board" (navigation only, from that document's main frame).
+  const fromThread = (e) => !!threadView && e.sender === threadView.webContents && e.senderFrame === threadView.webContents.mainFrame && e.sender.getURL() === threadUrl();
+  if (chatFirst === true) ipcMain.on('thread:board', (e) => { if (fromThread(e)) select('board'); });
+  // A sidebar row opens its thread (navigation only; main resolves the row).
+  if (chatFirst === true) ipcMain.on('buddy:open-thread', (e, id) => {
+    if (!fromSidebar(e) || typeof id !== 'string' || !ROW_ID.test(id)) return;
+    if (!openThread(id)) { if (!content) select('board'); }
+  });
   if (chatFirst === true) ipcMain.on('buddy:sidebar-groups', (e, ids) => {
     if (!fromSidebar(e)) return;
     const clean = sidebarCollapsed(ids);
@@ -1229,7 +1296,16 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     win.on('blur',()=>{if(!homeModalTicket)homeGeneration++;});
     win.on('hide',()=>{tasksGeneration++;homeGeneration++;});
     win.on('minimize',()=>{tasksGeneration++;homeGeneration++;});
+    if (chatFirst === true) {
+      win.on('hide', () => retireThread({ resume: true }));
+      win.on('minimize', () => retireThread({ resume: true }));
+      win.on('show', resumeThread);
+      win.on('restore', resumeThread);
+    }
     win.on('closed', () => {
+      retireThread();
+      if (selected === 'thread') selected = 'board';
+      resumeThreadId = null;
       setupLocalGeneration++;
       tasksGeneration++;
       homeGeneration++;
@@ -1270,6 +1346,17 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       if(wc.getURL()!==expected||wc.mainFrame?.url!==expected||wc.isLoading())return null;
       return {window:win,contents:wc,generation:sidebarGeneration,document:0,foreground:false};
     },
+    // Chat-first preview only: the thread document (src/thread-main.js guard T).
+    // Reads need it on screen; effects also need `foreground` (labfix-review S1).
+    threadContext(){
+      if(chatFirst!==true)return null;
+      const v=threadView,wc=v?.webContents;
+      if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='thread'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized())return null;
+      const expected=threadUrl();
+      if(wc.getURL()!==expected||wc.mainFrame?.url!==expected||wc.isLoading())return null;
+      return {window:win,contents:wc,frame:wc.mainFrame,generation:threadDocument,boundId:threadId,foreground:win.isFocused()};
+    },
+    openThread,
     overviewReadContext(){
       const v=localViews.get('overview'),wc=v?.webContents;
       if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='overview'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized())return null;
