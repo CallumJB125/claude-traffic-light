@@ -1,7 +1,9 @@
 # classify
 test-visual/__screenshots__/agent-bus.spec.js/agent-bus-preferences-darwin.png
 test-visual/__screenshots__/ask.spec.js/widget-ask-edit-darwin.png
+test-visual/__screenshots__/ask.spec.js/widget-ask-long-command-darwin.png
 test-visual/__screenshots__/ask.spec.js/widget-ask-long-command-open-darwin.png
+test-visual/__screenshots__/away.spec.js/widget-away-recap-darwin.png
 test-visual/__screenshots__/backups.spec.js/backups-list-darwin.png
 test-visual/__screenshots__/budget-notice.spec.js/widget-budget-notice-darwin.png
 test-visual/__screenshots__/feedback.spec.js/feedback-form-darwin.png
@@ -75,5 +77,6 @@ test-visual/__screenshots__/updates.spec.js/updates-revert-confirm-darwin.png
 test-visual/__screenshots__/updates.spec.js/widget-update-armed-darwin.png
 test-visual/__screenshots__/updates.spec.js/widget-update-hub-darwin.png
 test-visual/__screenshots__/updates.spec.js/widget-update-ready-darwin.png
+test-visual/__screenshots__/windows.spec.js/help-window-darwin.png
 test-visual/__screenshots__/windows.spec.js/lights-window-darwin.png
 test-visual/__screenshots__/windows.spec.js/settings-window-darwin.png
