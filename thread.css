@@ -46,8 +46,10 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .th-status:empty { display: none; }
 .th-tx { flex: 1; min-height: 120px; width: 100%; border: 0; background: transparent; color-scheme: light dark; }
 
-.th-waiting { flex: none; border: 1px solid var(--line-strong); border-left: 3px solid var(--st-needs); border-radius: var(--radius); background: var(--panel); padding: var(--space-3) var(--space-4); display: grid; gap: var(--space-1); justify-items: start; }
-.th-waiting-title { margin: 0; font-size: var(--text-base); font-weight: 600; }
+.th-waiting { flex: none; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel); padding: var(--space-3) var(--space-4); display: grid; gap: var(--space-1); justify-items: start; }
+.th-waiting-title { margin: 0; font-size: var(--text-base); font-weight: 600; display: flex; align-items: center; gap: var(--space-2); }
+/* The waiting status rides on the title: the header's needs dot, not a side stripe. */
+.th-waiting-title::before { content: ""; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--st-needs); }
 .th-waiting-what { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--text-sm); overflow-wrap: anywhere; }
 .th-waiting-where { margin: 0 0 var(--space-2); color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
 
@@ -64,5 +66,5 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 @media (forced-colors: active) {
   .th-dot { border-color: CanvasText; }
   .th-dot[data-bucket="needs"], .th-dot[data-bucket="stuck"] { background: CanvasText; }
-  .th-waiting { border-left-color: Highlight; }
+  .th-waiting-title::before { background: CanvasText; }
 }

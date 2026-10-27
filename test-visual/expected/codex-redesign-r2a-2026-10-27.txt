@@ -8,4 +8,4 @@ test-visual/__screenshots__/thread.spec.js/thread-native-light-darwin.png
 test-visual/__screenshots__/thread.spec.js/thread-native-dark-darwin.png
 # reason: new. The same terminal session in dark.
 test-visual/__screenshots__/thread.spec.js/thread-waiting-darwin.png
-# reason: new. An open approval: Needs you in the header, and the read-only card "Claude is waiting for you" with the command, the folder and the only Open to answer button (no Allow or Deny in the thread).
+# reason: new. An open approval: Needs you in the header, and the read-only card "Claude is waiting for you" with the command, the folder and the only Open to answer button (no Allow or Deny in the thread). The card has an even border and carries the waiting state as the needs dot on its title, not a side stripe.
