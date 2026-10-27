@@ -212,3 +212,22 @@ test('the Sync page in the sheet: Back button and a re-read when shown; the old 
   const old = await boot('sync.html', '', { sync: { state: SYNC_STATE } });
   try { assert.equal(old.w.document.getElementById('back-settings').hidden, true); assert.equal(old.calls.includes('onShown'), false); } finally { old.close(); }
 });
+
+test('the two sheet documents are refused on every buddy:acct:* channel (fromAccount needs the account view\'s own webContents); no preload names an account or token channel', () => {
+  const winSrc = read('buddy-window/index.js');
+  const line = winSrc.split('\n').find((l) => l.includes('const fromAccount = '));
+  assert.ok(line, 'fromAccount exists');
+  assert.match(line, /accountView && e\.sender === accountView\.webContents && isLocalPage\(e\.senderFrame\?\.url \?\? ''\)/);
+  const accountWc = { id: 'account' };
+  const ctx = { accountView: { webContents: accountWc }, isLocalPage: () => true };
+  vm.runInNewContext(`${line}\nglobalThis.fromAccount = fromAccount;`, ctx);
+  const sheetWc = (id) => ({ id });
+  for (const id of ['upgrade-sheet', 'sync-sheet', 'phone-sheet']) assert.equal(!!ctx.fromAccount({ sender: sheetWc(id), senderFrame: { url: 'file:///x.html' } }), false, id);
+  assert.equal(!!ctx.fromAccount({ sender: accountWc, senderFrame: { url: 'file:///x.html' } }), true, 'only the account view');
+  // every buddy:acct:* handler goes through fromAccount
+  assert.ok(!/ipcMain\.handle\(`buddy:acct:\$\{op\}`/.test(winSrc) || /if \(!fromAccount\(e\)\) return \{ ok: false, error: 'Not allowed\.' \};/.test(winSrc));
+  for (const f of ['upgrade-preload.js', 'sync-preload.js']) {
+    const src = read(f);
+    assert.doesNotMatch(src, /buddy:acct|buddyAccount|token|burst|keepawake/i, f);
+  }
+});
