@@ -17,6 +17,7 @@ board	buddy-window/index.js	select	3
 board	buddy-window/pages.js	PAGES	1
 board	buddy-window/pages.js	SECTIONS	1
 board	test-visual/ownership.spec.js	select	1
+board	test-visual/sidebar-chat.spec.js	data-page	1
 board	test/account-hub-routing.test.js	select	5
 board:calendar	buddy-window/pages.js	PAGES	1
 board:calendar	test-visual/planner.spec.js	select	2
