@@ -57,7 +57,36 @@ function sources() {
 
 const pageText = (html) => html.replace(/<script[^]*?<\/script>/g, ' ').replace(/<style[^]*?<\/style>/g, ' ').replace(/<!--[^]*?-->/g, ' ')
   .replace(/<[^>]*?\b(?:title|aria-label|placeholder|alt)="([^"]*)"[^>]*>/g, ' $1 ').replace(/<[^>]+>/g, '\n');
-const literals = (js) => [...js.replace(/\/\*[^]*?\*\//g, ' ').replace(/(^|[^:\\])\/\/[^\n]*/g, '$1').matchAll(/'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)"|`((?:[^`\\]|\\.)*)`/g)].map((m) => m[1] ?? m[2] ?? m[3]);
+// The string and template literals of a script, in order. One pass, so a "//" or "/*" inside a string is text and a
+// quote inside a comment or a regex literal opens nothing: comments are dropped, regex literals skipped, and each
+// string or template (its `${}` included) is kept whole. A "/" starts a regex when the last token cannot end an expression.
+// Known limits (rare here; a hit this causes in R15 is an allowlist entry, not more parser): a template nested inside a
+// `${}` ends the outer one early (as before), a regex right after ")" is read as division, and "/" after a postfix
+// "++"/"--" is read as a regex.
+function literals(js) {
+  const out = []; const n = js.length; let i = 0; let prev = '';
+  const regexNext = () => prev === '' || /[(,=:[!&|?{};+\-*%<>~^]$/.test(prev) || /^(?:return|typeof|case|in|of|delete|void|throw|new|else|do)$/.test(prev);
+  while (i < n) {
+    const c = js[i]; const d = js[i + 1];
+    if (c === '/' && d === '/') { while (i < n && js[i] !== '\n') i++; continue; }
+    if (c === '/' && d === '*') { const e = js.indexOf('*/', i + 2); i = e < 0 ? n : e + 2; continue; }
+    if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1; let s = '';
+      while (j < n && js[j] !== c && (c === '`' || js[j] !== '\n')) { if (js[j] === '\\') { s += js.slice(j, j + 2); j += 2; } else s += js[j++]; }
+      out.push(s); i = j + 1; prev = 'string'; continue;
+    }
+    if (c === '/' && regexNext()) {
+      let j = i + 1; let inClass = false;
+      while (j < n && js[j] !== '\n') { if (js[j] === '\\') { j += 2; continue; } if (js[j] === '[') inClass = true; else if (js[j] === ']') inClass = false; else if (js[j] === '/' && !inClass) break; j++; }
+      i = j + 1; while (/[a-z]/.test(js[i] || '')) i++;
+      prev = 'regex'; continue;
+    }
+    if (/[\w$]/.test(c)) { let j = i; while (j < n && /[\w$]/.test(js[j])) j++; prev = js.slice(i, j); i = j; continue; }
+    if (!/\s/.test(c)) prev = c;
+    i++;
+  }
+  return out;
+}
 
 const prose = (s) => /\s/.test(s.trim()) || /^[A-Z]/.test(s);
 
@@ -92,6 +121,23 @@ test('the scanner finds old names and respects the allowlist', () => {
   assert.match(pageText('<p title="Widget rules">x</p><script>"Stalled"</script>'), /Widget rules/);
   assert.deepEqual(['worktree', 'Worktree', 'a worktree', 'no-signal'].filter(prose), ['Worktree', 'a worktree']);
   assert.doesNotMatch(pageText('<script>"Stalled"</script>'), /Stalled/);
+});
+
+test('literals: "//" and "/*" inside strings are text, comments and regex literals open no string', () => {
+  // URLs and "//" in strings of any kind, including a "//" with no ":" before it, keep the whole literal
+  assert.deepEqual(literals("a('https://x.example/a // b', \"Waiting on you // soon\", `see //docs ${1}`);"), ['https://x.example/a // b', 'Waiting on you // soon', 'see //docs ${1}']);
+  assert.deepEqual(literals("a('//'); b('Take over /* here */ now');"), ['//', 'Take over /* here */ now']);
+  // real comments are still dropped, with quotes inside them
+  assert.deepEqual(literals("a('x'); // it's 'Worktree'\n/* \"Stalled\" it's */ b('y'); // end"), ['x', 'y']);
+  // regex literals that hold quotes or slashes do not swallow the code after them
+  assert.deepEqual(literals("const q = /['\"]/g; a('Hand back'); const u = /\\/\\//; b('Ready to review');"), ['Hand back', 'Ready to review']);
+  assert.deepEqual(literals("x = s.replace(/'/g, ''); y = 'Agent bus'; z = a / b / c; w = 'Stalled';"), ['', 'Agent bus', 'Stalled']);
+  // division is not a regex
+  assert.deepEqual(literals("const r = (a + b) / 2; const t = 'In review'; const k = n / 3 / 4;"), ['In review']);
+  // an escaped quote stays inside its string
+  assert.deepEqual(literals("a('it\\'s // fine'); b(\"say \\\"hi\\\" // ok\");"), ["it\\'s // fine", 'say \\"hi\\" // ok']);
+  // the old strip ate everything from a "//" in a string to the end of the line, so a phrase after it was never scanned
+  assert.deepEqual(scan(literals("a('a // b', 'Waiting on you'); // done").map((s) => ['x.js', s])).map((h) => h.found), ['Waiting on you']);
 });
 
 test('new copy is held to the glossary now: the chat-first sidebar is clean', () => {
