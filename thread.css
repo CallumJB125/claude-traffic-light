@@ -53,6 +53,27 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .th-waiting-what { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--text-sm); overflow-wrap: anywhere; }
 .th-waiting-where { margin: 0 0 var(--space-2); color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
 
+/* R4-1a: the stacked requests. One card per request; a done card collapses to one line in place. */
+.th-cards { flex: none; display: grid; gap: var(--space-2); }
+.th-card { border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel); padding: var(--space-3) var(--space-4); display: grid; gap: var(--space-1); justify-items: start; min-width: 0; }
+.th-card-title { margin: 0; font-size: var(--text-base); font-weight: 600; display: flex; align-items: center; gap: var(--space-2); }
+.th-card-title::before { content: ""; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--st-needs); }
+.th-card-what { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--text-sm); overflow-wrap: anywhere; max-width: 100%; }
+.th-card-text { margin: 0; overflow-wrap: anywhere; max-width: 100%; white-space: pre-wrap; }
+.th-card-sub { margin: 0; color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.th-card-btns { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+.th-card-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-1); }
+.th-card-ask { margin: 0; font-size: var(--text-sm); font-weight: 600; }
+.th-card-note { margin: 0; font-size: var(--text-sm); color: var(--danger-text); overflow-wrap: anywhere; }
+.th-card-done { padding: var(--space-2) var(--space-4); }
+.th-card-receipt { margin: 0; font-size: var(--text-sm); color: var(--muted); }
+.th-danger { color: var(--danger-text); }
+.th-stop { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.th-stop-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.th-stop-q { font-size: var(--text-sm); font-weight: 600; }
+.th-stop-note { margin: 0; font-size: var(--text-sm); color: var(--muted); }
+.th-stop-note:empty { display: none; }
+
 /* R2b-1: the reply box and the ended state. */
 .th-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .th-reply { flex: none; display: grid; gap: var(--space-2); margin: 0; padding: var(--space-2); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel); }
@@ -88,5 +109,5 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 @media (forced-colors: active) {
   .th-dot { border-color: CanvasText; }
   .th-dot[data-bucket="needs"], .th-dot[data-bucket="stuck"] { background: CanvasText; }
-  .th-waiting-title::before { background: CanvasText; }
+  .th-waiting-title::before, .th-card-title::before { background: CanvasText; }
 }

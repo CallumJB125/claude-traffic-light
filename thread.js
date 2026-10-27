@@ -1,7 +1,9 @@
 // The chat-first thread page (redesign R2a, plan-r2.md §3). It shows one row's
-// chat (a Plexiform task) or one terminal session's activity, and hands
-// anything to decide to the Tasks page. R2b-1: a chat can be replied to
-// (thread:message: the row and the text only; main picks the task and the action). Everything reaches the DOM
+// chat (a Plexiform task) or one terminal session's activity. R2b-1: a chat can be replied to
+// (thread:message: the row and the text only; main picks the task and the action). R4-1a: every pending
+// approval and the one open question render stacked, each with its own 600 ms arm, its own state and its
+// own result; Allow once, Deny, an answer, a resume choice and Stop go through thread:act. Main checks
+// everything again (src/thread-main.js). Everything reaches the DOM
 // through textContent; the transcript is built into the script-less srcdoc
 // frame by TranscriptDom.
 (function () {
@@ -71,8 +73,9 @@
     if (d.openAsk) return { title: `${headView().ai} has a question`, what: d.openAsk.text || '', where: d.where ? `In ${d.where}` : '' };
     return null;
   }
+  // R2a's read-only card stays for a request this chat can't act on (the task offers no approve, deny or answer).
   function renderWaiting() {
-    const w = kind === 'task' ? waitingOf(detail) : null;
+    const w = kind === 'task' && !requestsOf(detail).length ? waitingOf(detail) : null;
     $('th-waiting').hidden = !w;
     if (!w) return;
     $('th-waiting-title').textContent = w.title;
@@ -90,6 +93,194 @@
     text.textContent = origin ? `Running in ${origin}` : `Running in a terminal on this ${MACHINE}`;
     // The state is the header's bucket; the Timeline's own wording could disagree with it.
     b.append(text);
+  }
+
+  // ── requests, stacked (R4-1a, plan-r4 §4 and §11) ─────────────────────────
+  const ARM_MS = 600, MAX_APPROVALS = 10;
+  // key ('approval:<id>' | 'ask:<id>') → { sig, armedUntil, state: idle|sending|sent|gone, text, above, confirm }
+  const cards = new Map();
+  let acting = null; // the one key whose act is in flight; every other control waits for it
+  let armTimer = null;
+  let bound = null; // the reply box as an answer: { askId, armedUntil }
+  let stopAsk = null; // Stop's second step: { armedUntil }
+  let stopNote = '';
+  const has = (a) => Array.isArray(detail?.actions) && detail.actions.includes(a);
+  const asksTwice = (a) => Array.isArray(detail?.confirm) && detail.confirm.includes(a);
+  // What this chat can act on now, in the engine's order; at most 10 approvals (as main relays) and one ask.
+  function requestsOf(d) {
+    if (!d || kind !== 'task') return [];
+    const out = [];
+    const ok = Array.isArray(d.actions) && (d.actions.includes('approve') || d.actions.includes('deny'));
+    if (ok) for (const a of (Array.isArray(d.openApprovals) ? d.openApprovals : []).slice(0, MAX_APPROVALS)) {
+      if (a && typeof a.approvalId === 'string' && a.approvalId) out.push({ key: `approval:${a.approvalId}`, kind: 'approval', a, sig: JSON.stringify([a.tool, a.inputSummary]) });
+    }
+    const k = d.openAsk;
+    if (k && typeof k.askId === 'string' && k.askId) {
+      const all = Array.isArray(k.choices) ? k.choices : [];
+      const choices = all.filter((c) => Array.isArray(d.actions) && d.actions.includes(c.action));
+      const answer = !all.length && Array.isArray(d.actions) && d.actions.includes('answer');
+      if (choices.length || answer) out.push({ key: `ask:${k.askId}`, kind: 'ask', k, choices, answer, sig: JSON.stringify([k.text, k.options || [], all.map((c) => [c.id, c.label, c.action])]) });
+    }
+    return out;
+  }
+  // A card arms when it first appears, when what it shows changes, and when anything above it changed (it moved).
+  function syncCards(reqs) {
+    const t = Date.now(), live = new Set();
+    let above = '';
+    for (const r of reqs) {
+      live.add(r.key);
+      let c = cards.get(r.key);
+      if (!c || c.sig !== r.sig) { c = { sig: r.sig, armedUntil: t + ARM_MS, state: 'idle', text: '', above, confirm: null }; cards.set(r.key, c); }
+      else if (c.above !== above) { c.above = above; c.armedUntil = Math.max(c.armedUntil, t + ARM_MS); }
+      above += `${r.key}:${c.state === 'sent' || c.state === 'gone' ? 1 : 0};`;
+    }
+    for (const k of [...cards.keys()]) if (!live.has(k)) cards.delete(k);
+    const ask = reqs.find((r) => r.kind === 'ask' && r.answer);
+    if (!ask) bound = null;
+    else if (!bound || bound.askId !== ask.k.askId) bound = { askId: ask.k.askId, armedUntil: t + ARM_MS };
+  }
+  function rearmAll() {
+    const t = Date.now() + ARM_MS;
+    for (const c of cards.values()) { c.armedUntil = Math.max(c.armedUntil, t); if (c.confirm) c.confirm.armedUntil = Math.max(c.confirm.armedUntil, t); }
+    if (bound) bound.armedUntil = Math.max(bound.armedUntil, t);
+    if (stopAsk) stopAsk.armedUntil = Math.max(stopAsk.armedUntil, t);
+  }
+  // Wake once when the next arm runs out, so a disabled button comes back by itself.
+  function wakeAt(until) {
+    const wait = until - Date.now();
+    if (wait <= 0 || armTimer) return;
+    armTimer = setTimeout(() => { armTimer = null; renderCards(); renderReply(); renderStop(); }, wait);
+  }
+  const ready = (until) => { if (Date.now() >= until) return true; wakeAt(until); return false; };
+  function cardBtn(label, cls, c, on) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = `th-btn${cls ? ` ${cls}` : ''}`; b.textContent = label;
+    const can = !acting && (c.state === 'idle') && ready(c.armedUntil);
+    b.disabled = !can;
+    b.addEventListener('click', () => { if (!b.disabled) on(); });
+    return b;
+  }
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+  const RECEIPT = { approve: 'Allowed once', deny: 'Denied', answer: 'Answer sent', choose: 'Sent' };
+  function renderCards() {
+    const box = $('th-cards');
+    const reqs = requestsOf(detail);
+    syncCards(reqs);
+    const focusKey = document.activeElement?.closest?.('.th-card')?.dataset.key, focusLabel = document.activeElement?.textContent;
+    box.replaceChildren();
+    box.hidden = !reqs.length;
+    const ai = headView().ai, approvals = reqs.filter((r) => r.kind === 'approval').length;
+    for (const r of reqs) {
+      const c = cards.get(r.key), card = el('section', 'th-card');
+      card.dataset.key = r.key; card.dataset.state = c.state;
+      if (c.state === 'sent' || c.state === 'gone') {
+        // Collapsed in place until the next detail drops it, so the cards below don't jump under the pointer.
+        card.classList.add('th-card-done');
+        card.append(el('p', 'th-card-receipt', c.text));
+        box.append(card);
+        continue;
+      }
+      if (r.kind === 'approval') {
+        const a = r.a;
+        if (a.tool === 'StartTask') {
+          card.append(el('h2', 'th-card-title', 'Waiting for you to accept this task'), el('p', 'th-card-what', a.inputSummary || ''),
+            el('p', 'th-card-sub', 'Starting a new task is accepted on the Tasks page for now.'));
+          const row = el('div', 'th-card-btns');
+          const go = el('button', 'th-btn th-primary', 'Open in Tasks'); go.type = 'button'; go.addEventListener('click', () => api.openInTasks(rowId));
+          row.append(go); card.append(row);
+        } else {
+          card.append(el('h2', 'th-card-title', `${ai} wants to use ${a.tool || 'a tool'}`));
+          if (a.inputSummary) card.append(el('p', 'th-card-what', a.inputSummary));
+          if (detail.where) card.append(el('p', 'th-card-sub', `In ${detail.where}`));
+          const row = el('div', 'th-card-btns');
+          if (has('approve')) row.append(cardBtn('Allow once', 'th-primary', c, () => choose(r.key, { action: 'approve', approvalId: a.approvalId, scope: 'once' })));
+          if (has('deny')) row.append(cardBtn('Deny', 'th-danger', c, () => choose(r.key, { action: 'deny', approvalId: a.approvalId })));
+          card.append(row);
+        }
+      } else {
+        const k = r.k;
+        card.append(el('h2', 'th-card-title', r.answer ? `${ai} has a question` : `${ai} needs you to choose`), el('p', 'th-card-text', k.text || ''));
+        const row = el('div', 'th-card-btns');
+        if (r.answer) for (const o of (k.options || [])) row.append(cardBtn(o, '', c, () => choose(r.key, { action: 'answer', askId: k.askId, answer: o })));
+        let elsewhere = false;
+        for (const ch of r.choices) {
+          if (ch.action === 'resume') row.append(cardBtn(ch.label, '', c, () => choose(r.key, { action: 'choose', askId: k.askId, choiceId: ch.id })));
+          else elsewhere = true;
+        }
+        if (elsewhere) { const go = el('button', 'th-btn', 'Open in Tasks'); go.type = 'button'; go.addEventListener('click', () => api.openInTasks(rowId)); row.append(go); }
+        if (row.childNodes.length) card.append(row);
+        if (r.answer && approvals) card.append(el('p', 'th-card-sub', 'Or type your answer in the box below.'));
+      }
+      if (c.confirm) {
+        const q = el('div', 'th-card-confirm');
+        q.append(el('p', 'th-card-ask', c.confirm.question));
+        const yes = el('button', 'th-btn th-primary', c.confirm.yes); yes.type = 'button';
+        yes.disabled = !!acting || !ready(c.confirm.armedUntil);
+        yes.addEventListener('click', () => { if (yes.disabled) return; const req = { ...c.confirm.req, confirmed: true }; c.confirm = null; runAct(r.key, req); });
+        const no = el('button', 'th-btn', c.confirm.no); no.type = 'button';
+        no.addEventListener('click', () => { c.confirm = null; renderCards(); });
+        q.append(yes, no); card.append(q);
+      }
+      if (c.text) card.append(el('p', 'th-card-note', c.text));
+      box.append(card);
+    }
+    if (focusKey) { const card = [...box.children].find((n) => n.dataset.key === focusKey); const again = card && [...card.querySelectorAll('button')].find((b) => b.textContent === focusLabel && !b.disabled); if (again) again.focus(); }
+  }
+  // A task's own task.confirm asks twice, on the card (plan-r4 §2.6); anything else goes straight to main.
+  const TWICE = { approve: ['Allow this request?', 'Allow', 'Keep it waiting'], deny: ['Deny this request?', 'Deny', 'Keep it waiting'], answer: ['Send this answer?', 'Send', 'Not yet'] };
+  function choose(key, req) {
+    const c = cards.get(key);
+    if (!c || acting || c.state !== 'idle' || Date.now() < c.armedUntil) return;
+    if (TWICE[req.action] && asksTwice(req.action)) {
+      const [question, yes, no] = TWICE[req.action];
+      c.confirm = { req, question, yes, no, armedUntil: Date.now() + ARM_MS };
+      renderCards();
+      return;
+    }
+    return runAct(key, req);
+  }
+  // One act at a time; its result lands on its own card only, and a late one for a card that's gone is dropped.
+  async function runAct(key, req) {
+    const c = cards.get(key);
+    if (acting || !c) return null;
+    const sig = c.sig;
+    acting = key; c.state = 'sending'; c.text = '';
+    renderCards(); renderReply(); renderStop();
+    let r = null;
+    try { r = await api.act(rowId, req); } catch { r = null; }
+    acting = null;
+    rearmAll();
+    const now = cards.get(key);
+    if (now && now.sig === sig) {
+      if (r && r.ok === true) { now.state = 'sent'; now.text = RECEIPT[req.action] || 'Sent'; }
+      else if (r && (r.code === 'ALREADY_ANSWERED' || r.code === 'NOT_FOUND')) { now.state = 'gone'; now.text = 'Already answered'; refresh(); }
+      else { now.state = 'idle'; now.text = r && r.cancelled ? '' : ((r && r.text) || 'That wasn’t sent. Try again.'); now.armedUntil = Math.max(now.armedUntil, Date.now() + ARM_MS); }
+    }
+    renderCards(); renderReply(); renderStop();
+    return r;
+  }
+
+  // ── Stop, in the open chat only (R4-1a): two steps, the second armed for 600 ms ──
+  function renderStop() {
+    const bar = $('th-stop'), show = kind === 'task' && !gone && !!detail && has('stop') && chatState() !== 'ended';
+    bar.hidden = !show;
+    if (!show) { stopAsk = null; return; }
+    $('th-stop-btn').hidden = !!stopAsk;
+    $('th-stop-btn').disabled = !!acting;
+    $('th-stop-confirm').hidden = !stopAsk;
+    $('th-stop-yes').disabled = !stopAsk || !!acting || !ready(stopAsk.armedUntil);
+    $('th-stop-note').textContent = stopNote;
+  }
+  async function stopNow() {
+    if (!stopAsk || acting || Date.now() < stopAsk.armedUntil) return;
+    stopAsk = null; acting = 'stop'; stopNote = '';
+    renderStop(); renderCards(); renderReply();
+    let r = null;
+    try { r = await api.act(rowId, { action: 'stop', confirmed: true }); } catch { r = null; }
+    acting = null;
+    rearmAll();
+    stopNote = r && r.ok === true ? 'Stopping…' : ((r && r.text) || 'That wasn’t sent. Try again.');
+    renderStop(); renderCards(); renderReply();
   }
 
   // ── the reply box (R2b-1) ────────────────────────────────────────────────
@@ -112,6 +303,10 @@
     if (kind !== 'task' || gone || !detail) return null;
     const state = chatState(), ai = headView().ai, draft = !!$('th-reply-text').value.trim();
     if (state === 'ended') return null;
+    // R4-1a (plan-r4 §11.4): an open question owns the box, bound to its askId, whatever else is open.
+    const reqs = requestsOf(detail), approvals = reqs.filter((r) => r.kind === 'approval').length;
+    if (reqs.some((r) => r.kind === 'ask' && r.answer)) return { state: 'answer', placeholder: approvals ? 'Type your answer to the question above' : 'Pick an option above, or type an answer' };
+    if (approvals) return draft ? { state: 'wait', placeholder: approvals > 1 ? 'Allow or deny the requests above to continue' : 'Allow or deny the request above to continue' } : null;
     if (waitingOf(detail)) return draft ? { state: 'wait', placeholder: 'Allow or deny the request above to continue' } : null;
     if (state === 'in-terminal') return { state: 'off', placeholder: 'This chat is in your terminal. Reply there.' };
     if (Array.isArray(detail.actions) && detail.actions.includes('message')) return { state: 'on', placeholder: `Reply to ${ai}…` };
@@ -126,15 +321,18 @@
     if (!v) return;
     form.dataset.state = v.state;
     text.placeholder = v.placeholder;
-    $('th-reply-label').textContent = v.state === 'on' ? v.placeholder.replace(/…$/, '') : 'Reply';
-    text.disabled = v.state !== 'on';
-    $('th-send').disabled = v.state !== 'on' || sending || !text.value.trim();
-    $('th-send').textContent = sending ? 'Sending…' : 'Send';
+    const answering = v.state === 'answer';
+    $('th-reply-label').textContent = v.state === 'on' ? v.placeholder.replace(/…$/, '') : answering ? 'Your answer' : 'Reply';
+    const live = v.state === 'on' || answering;
+    text.disabled = !live || !!acting;
+    $('th-send').disabled = !live || sending || !!acting || !text.value.trim() || (answering && (!bound || !ready(bound.armedUntil)));
+    $('th-send').textContent = sending || (answering && acting && acting.startsWith('ask:')) ? 'Sending…' : answering ? 'Send answer' : 'Send';
   }
   function note(text, tone) { const n = $('th-reply-note'); n.textContent = text || ''; if (tone) n.dataset.tone = tone; else delete n.dataset.tone; }
   async function send() {
     const v = replyView(), text = $('th-reply-text'), body = text.value;
-    if (sending || !v || v.state !== 'on' || !body.trim()) return;
+    if (v && v.state === 'answer') return sendAnswer(body);
+    if (sending || acting || !v || v.state !== 'on' || !body.trim()) return;
     sending = true; note(''); renderReply();
     let r = null;
     try { r = await api.message(rowId, body); } catch { r = null; }
@@ -142,6 +340,20 @@
     if (r && r.ok === true) { if (text.value === body) text.value = ''; note(''); }
     else if (r && r.code === 'ILLEGAL_TRANSITION' && waitingOf(detail)) note('Allow or deny the request above to continue.', 'error');
     else note((r && r.text) || 'That message wasn’t sent. Try again.', 'error');
+    renderReply();
+    text.focus();
+  }
+
+  // The box as the open question's answer: sent with the askId it was bound to, never another.
+  async function sendAnswer(body) {
+    const text = $('th-reply-text');
+    if (!bound || acting || sending || !body.trim() || Date.now() < bound.armedUntil) return;
+    const key = `ask:${bound.askId}`, req = { action: 'answer', askId: bound.askId, answer: body };
+    if (asksTwice('answer')) { choose(key, req); return; }
+    note('');
+    const r = await runAct(key, req);
+    if (r && r.ok === true) { if (text.value === body) text.value = ''; note(''); }
+    else note((r && r.text) || 'That answer wasn’t sent. Try again.', 'error');
     renderReply();
     text.focus();
   }
@@ -198,6 +410,8 @@
     kind = null;
     $('th-tx').hidden = true;
     $('th-waiting').hidden = true;
+    $('th-cards').hidden = true;
+    $('th-stop').hidden = true;
     $('th-banner').hidden = true;
     $('th-primary').hidden = true;
     $('th-reply').hidden = true;
@@ -208,7 +422,7 @@
     showEmpty('This chat has ended or moved', `It is no longer listed on this ${MACHINE}. Your Board still has everything that was saved.`, true);
   }
 
-  function renderAll() { renderHead(); renderBanner(); renderWaiting(); renderReply(); renderTranscript(); $('th').setAttribute('aria-busy', 'false'); }
+  function renderAll() { renderHead(); renderBanner(); renderCards(); renderWaiting(); renderReply(); renderStop(); renderTranscript(); $('th').setAttribute('aria-busy', 'false'); }
 
   // ── reads ────────────────────────────────────────────────────────────────
   function apply(r) {
@@ -252,7 +466,8 @@
     const e = m.event;
     if (!e || typeof e !== 'object') return;
     if (e.type === 'reset') { load(); return; }
-    if (e.type === 'detail' && e.detail) { detail = e.detail; renderHead(); renderWaiting(); renderReply(); renderTranscript(); return; }
+    // Cards are built only from a detail (sent after main relayed it, S5); a state event never shows one.
+    if (e.type === 'detail' && e.detail) { detail = e.detail; renderHead(); renderCards(); renderWaiting(); renderReply(); renderStop(); renderTranscript(); return; }
     if (e.type === 'transcript' || e.type === 'tool' || e.type === 'error') { if (TV.addEvent(tx, e)) renderSoon(); return; }
     if ((e.type === 'message' || e.type === 'message-state') && detail) { if (TV.mergeMessage(detail.messages || (detail.messages = []), e)) renderSoon(); }
   });
@@ -265,12 +480,15 @@
       $('th-status').textContent = r && r.ok === false && r.note ? r.note : '';
     }
   });
-  // Provisional, awaiting Callum (plan-r2.md §7 item 1): "Open to answer" hands a decision to the Tasks page.
+  // A request this chat can't act on (R2a's card): "Open to answer" hands it to the Tasks page.
   $('th-answer').addEventListener('click', () => api.openInTasks(rowId));
   $('th-board').addEventListener('click', () => api.board());
   // Provisional, awaiting Callum (plan-r2b-auth §7 item 3): Resume goes to the chat in Tasks.
   $('th-resume').addEventListener('click', () => api.openInTasks(rowId));
   $('th-reply').addEventListener('submit', (e) => { e.preventDefault(); send(); });
+  $('th-stop-btn').addEventListener('click', () => { if (acting) return; stopNote = ''; stopAsk = { armedUntil: Date.now() + ARM_MS }; renderStop(); $('th-stop-no').focus(); });
+  $('th-stop-yes').addEventListener('click', stopNow);
+  $('th-stop-no').addEventListener('click', () => { stopAsk = null; renderStop(); $('th-stop-btn').focus(); });
   $('th-reply-text').addEventListener('input', renderReply);
   // Provisional, awaiting Callum (plan-r2b-auth §7 item 2): ⌘↩ sends, Enter is a newline.
   $('th-reply-text').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) { e.preventDefault(); send(); } });
@@ -294,7 +512,8 @@
     $('th-status').textContent = ok ? 'Link copied' : 'Could not copy the link';
   });
 
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  // Coming back into view re-arms every choice (R3.4), then refreshes.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { rearmAll(); renderCards(); renderReply(); renderStop(); refresh(); } });
   window.addEventListener('pagehide', () => { stopPoll(); if (rowId) api.close(rowId); });
 
   $('th-tx').addEventListener('load', () => { wireFrame(); renderTranscript(); });

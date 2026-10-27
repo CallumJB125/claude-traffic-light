@@ -1,8 +1,9 @@
 // Thread page bridge (chat-first preview, redesign R2a). The page reads the one
 // row main opened it for and can ask for two navigation effects. Every call
 // names that row; main refuses any other (src/thread-main.js guard T).
-// R2b-1: one act, a reply to the bound chat ({id, body}; main fixes the task
-// and the action). Approve, deny, answer and stop are not here (Tasks page).
+// R2b-1: a reply to the bound chat ({id, body}; main fixes the task and the
+// action). R4-1a: thread:act, a choice on a request main showed this chat
+// (approve once, deny, answer, choose, stop); main checks every key.
 const { contextBridge, ipcRenderer } = require('electron');
 
 const ROW_ID = /^[0-9a-f]{64}$/;
@@ -21,6 +22,13 @@ contextBridge.exposeInMainWorld('threadApi', {
   copyLink: (row) => ipcRenderer.invoke('thread:copy-link', id(row)),
   // Reply to the bound chat. Only the two keys main accepts.
   message: (row, body) => ipcRenderer.invoke('thread:message', { id: id(row), body: typeof body === 'string' ? body : '' }),
+  // A choice on a request in this chat. Only the keys main accepts, as strings or true; main refuses any other shape.
+  act: (row, r) => {
+    const o = r && typeof r === 'object' ? r : {}, out = { id: id(row) };
+    for (const k of ['action', 'approvalId', 'scope', 'askId', 'answer', 'choiceId']) if (typeof o[k] === 'string') out[k] = o[k];
+    if (o.confirmed === true) out.confirmed = true;
+    return ipcRenderer.invoke('thread:act', out);
+  },
   // Back to Board from an ended chat.
   board: () => ipcRenderer.send('thread:board'),
 });

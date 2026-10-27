@@ -1,0 +1,15 @@
+# R4-1a: five new baselines and two changed ones, all from test-visual/thread.spec.js (chat-first preview gate on). No accent flip, so no classifier run. thread-waiting (R2a's read-only card, kept for a request the chat can't act on) is unchanged.
+test-visual/__screenshots__/thread.spec.js/thread-approval-stacked-light-darwin.png
+# reason: new. Callum's "all stacked": two approvals (Allow once / Deny) and a question (options, "Or type your answer in the box below"), each its own card, after the 600 ms arm; the reply box as the question's answer ("Type your answer to the question above"); Stop below.
+test-visual/__screenshots__/thread.spec.js/thread-approval-stacked-dark-darwin.png
+# reason: new. The same stack in dark.
+test-visual/__screenshots__/thread.spec.js/thread-question-darwin.png
+# reason: new. A question alone: its options, and the box with "Pick an option above, or type an answer".
+test-visual/__screenshots__/thread.spec.js/thread-choices-darwin.png
+# reason: new. A parked task's supervisor choice ("Wait for the reset"), answered in the chat under D-R4.
+test-visual/__screenshots__/thread.spec.js/thread-stop-confirm-darwin.png
+# reason: new. Stop's second step: "Stop this chat?" [Stop] [Keep going], armed for 600 ms.
+test-visual/__screenshots__/thread.spec.js/thread-reply-light-darwin.png
+# reason: changed. The R2b-1 reply fixture's task offers stop (actions: message, stop), so R4's Stop button now shows below the box. Nothing else in the shot moves.
+test-visual/__screenshots__/thread.spec.js/thread-reply-dark-darwin.png
+# reason: changed. The same Stop button in dark.
