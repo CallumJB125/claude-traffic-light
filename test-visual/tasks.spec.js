@@ -26,7 +26,7 @@ test.describe('with a supervisor', () => {
     // A finished tool call prints its run time (" · 0.0s"), which the mock measures in real ms (toolEnd: now() − at,
     // after it clears task.tool). Under load one ran past 50 ms and read 0.1s (detail-needs-you, 59 px). Once a call
     // has ended its start reads as "now", so it always ends at 0.0s; a call still in flight ages normally.
-    const endsAtOnce = (t, v) => { if (v) { const at = v.at; Object.defineProperty(v, 'at', { get: () => (t.tool === v ? at : performance.now()) }); } return v; };
+    const endsAtOnce = (t, v) => { if (v) { const at = v.at; Object.defineProperty(v, 'at', { enumerable: true, get: () => (t.tool === v ? at : performance.now()) }); } return v; };
     for (const t of demo) {
       let cur = endsAtOnce(t, t.tool);
       Object.defineProperty(t, 'tool', { configurable: true, enumerable: true, get: () => cur, set: (v) => { cur = endsAtOnce(t, v); } });
