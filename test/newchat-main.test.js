@@ -150,6 +150,20 @@ test('note 2: a document change during the one refresh: STARTED_ELSEWHERE, no na
   assert.equal(h.api.busy(), false);
 });
 
+test("review nit: a record left by an earlier document never stops a later document's retire from closing its slot", async () => {
+  const h = harness();
+  // The document moves during the one refresh, after the record was made: STARTED_ELSEWHERE leaves the record for 51.
+  h.st.onRefresh = () => { h.st.listed.add('t1'); h.st.document++; };
+  assert.equal((await h.call('newchat:create', draft())).code, 'STARTED_ELSEWHERE');
+  assert.equal(h.api._started()?.wcId, 51, 'the earlier document (51) still has its record');
+  h.api.retire(77); // the next new-chat document, a different webContents
+  assert.deepEqual(h.calls.closeTask, [77], 'closed for the document that retired');
+  assert.equal(h.api._started()?.wcId, 51, "only that document's own record is cleared");
+  h.api.retire(51);
+  assert.deepEqual(h.calls.closeTask, [77, 51]);
+  assert.equal(h.api._started(), null);
+});
+
 test('S3: a second newchat:create while one is in flight is refused in main, and nothing extra is created', async () => {
   const h = harness();
   let release;

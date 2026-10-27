@@ -202,9 +202,9 @@ function createCompose(deps, params = {}) {
   /** The document retired (navigation, crash, destroyed, or the S3 handoff): its slot and its started set go with it (finding 3). */
   function retire(wcId) {
     if (keepAlive === 'create') {
-      // The new chat: closeTask even with nothing started, so no slot of this document's outlives it.
-      if (started && started.wcId !== wcId) return;
-      started = null;
+      // The new chat: closeTask always, even with nothing started or with `started` left by an earlier document
+      // (one that died mid-create), so no slot of this document's outlives it. Only this document's record is cleared.
+      if (started && started.wcId === wcId) started = null;
       try { deps.service().closeTask(wcId); } catch { /* nothing open */ }
       return;
     }
