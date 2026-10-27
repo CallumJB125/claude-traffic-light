@@ -158,10 +158,10 @@ test('finding 2: confirmDialog sends Home’s create to homeConfirm and refuses 
   const start = mainSrc.indexOf('    confirmDialog: async (info, wcId) => {', mainSrc.indexOf('function getTasks()'));
   const finish = mainSrc.indexOf('    seen: {', start);
   const shown = []; const homeAsks = []; const tasksAsks = [];
-  const homeWc = { id: 41 }, tasksWc = { id: 42 };
+  const homeWc = { id: 41 }, tasksWc = { id: 42 }, otherWc = { id: 43 }; // 43: a live page that is neither Tasks nor Home
   const ctx = {
     tasksPages: () => [tasksWc], BrowserWindow: { fromWebContents: () => null },
-    buddyWin: { pageWebContents: (id) => (id === 'home' ? homeWc : null), homeConfirm: async (show) => { homeAsks.push(1); return show('home-window'); }, tasksConfirm: async (show) => { tasksAsks.push(1); return show('tasks-window'); } },
+    buddyWin: { pageWebContents: (id) => (id === 'home' ? homeWc : id === 'overview' ? otherWc : null), homeConfirm: async (show) => { homeAsks.push(1); return show('home-window'); }, tasksConfirm: async (show) => { tasksAsks.push(1); return show('tasks-window'); } },
     dialog: { showMessageBox: async (owner, o) => { shown.push([owner, o.buttons]); return { response: ctx.answer }; } }, answer: 1,
   };
   vm.runInNewContext(`globalThis.confirm=({${mainSrc.slice(start, finish)}}).confirmDialog;`, ctx);
@@ -176,6 +176,14 @@ test('finding 2: confirmDialog sends Home’s create to homeConfirm and refuses 
   ctx.answer = 1;
   assert.equal(await ctx.confirm({ action: 'create', label: 'Start anyway', title: 't' }, 42), true, 'Tasks keeps its own ticket');
   assert.equal(tasksAsks.length, 1);
-  assert.equal(await ctx.confirm({ action: 'create', label: 'Start anyway', title: 't' }, 0), true, 'main’s own callers (wcId 0) keep today’s path');
-  assert.equal(shown.at(-1)[0], undefined);
+  // Only a Tasks page (and Home's create) may raise a dialog: an unknown, absent, destroyed or other-document sender is
+  // refused with no dialog and no ticket, never an unparented one. 43 is a live webContents that is neither Tasks nor Home.
+  const before = { shown: shown.length, home: homeAsks.length, tasks: tasksAsks.length };
+  for (const wcId of [999, 43, 0, undefined, null]) {
+    for (const info of [{ action: 'create' }, { action: 'discard' }, { action: 'merge' }, { action: 'openTerminal' }, { action: 'approve', payload: { scope: 'task' } }]) {
+      assert.equal(await ctx.confirm({ ...info, label: 'x', title: 't' }, wcId), false, `${info.action} from wcId ${wcId}`);
+    }
+  }
+  assert.equal(shown.length, before.shown, 'no dialog for an unknown sender');
+  assert.equal(homeAsks.length, before.home); assert.equal(tasksAsks.length, before.tasks);
 });

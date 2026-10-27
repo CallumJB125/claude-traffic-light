@@ -83,3 +83,11 @@ test('local preflight is fresh, bounded, advisory, and bound with create to the 
   assert.equal((await api.create(draft)).ok, true); assert.equal(writes, 1);
   assert.equal((await svc.create(draft)).ok, true, 'non-UI main callers remain compatible'); assert.equal(writes, 2);
 });
+
+test('the native confirmation refuses a sender that is not the Tasks page, with no dialog', async () => {
+  const authority = createTasksWindowAuthority({ service: () => ({}), confirm: async () => true });
+  assert.equal(await authority.confirmDialog({ action: 'merge', label: 'Integrate', title: 't' }, authority.wc.id), true, 'the Tasks page still gets its dialog');
+  const shown = authority.dialogs.length;
+  for (const wcId of [authority.wc.id + 1, 0, undefined]) assert.equal(await authority.confirmDialog({ action: 'merge', label: 'Integrate', title: 't' }, wcId), false);
+  assert.equal(authority.dialogs.length, shown);
+});
