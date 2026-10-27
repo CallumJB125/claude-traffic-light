@@ -1,6 +1,6 @@
 // main.js must read Node's lazy web globals before any other statement: a first read
-// inside the startup whenReady microtask can crash main with a V8 SIGTRAP
-// (outputs/boot-sigtrap-diag-report.md). Guards against a refactor moving the read down.
+// inside the startup whenReady microtask can crash main with a V8 SIGTRAP (see the comment
+// at the top of main.js). Guards against a refactor moving the read down.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

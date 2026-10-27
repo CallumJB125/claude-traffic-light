@@ -1,6 +1,8 @@
-// Node defines these web globals as V8 lazy data properties. A first read inside the startup
-// whenReady microtask can trip V8's CHECK in Accessors::ReplaceAccessorWithDataProperty and kill
-// main with SIGTRAP (outputs/boot-sigtrap-diag-report.md), so they are read here, before anything else.
+// Node defines these web globals as V8 lazy data properties. The first read of AbortSignal inside the
+// startup whenReady microtask (local model detection's AbortSignal.timeout) intermittently tripped
+// V8's CHECK in Accessors::ReplaceAccessorWithDataProperty and killed main with SIGTRAP (Electron
+// 44.3.0 and 44.9.3). Reading them here, before anything else, stops it. AbortSignal/AbortController
+// are the observed trigger; the rest are read as a precaution because main also uses them.
 void [globalThis.AbortSignal, globalThis.AbortController, globalThis.TextEncoder, globalThis.TextDecoder, globalThis.structuredClone, globalThis.atob, globalThis.btoa];
 // Only a private stdio crypto service, before normal app startup touches data.
 if (process.argv.includes('--plexiform-account-storage-worker')) {
