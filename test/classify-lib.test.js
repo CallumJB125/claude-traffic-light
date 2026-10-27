@@ -262,3 +262,24 @@ test('classifier controls: every negative control fails the gate and every posit
     assert.equal(failed, c.expect === 'fail', `${c.name}: expected the gate to ${c.expect} (unexpected ${result.unexpected} of ${result.changed})`);
   }
 });
+
+test('classifier (iii): an unresolved color-mix fails closed: it builds no member, and its pixels stay unexpected', () => {
+  // a file-local var the tokens can't resolve (like burst-theme's --border), and a space the classifier doesn't model
+  const sheet = 'x{c:color-mix(in srgb, var(--accent) 45%, var(--local-only))} y{c:color-mix(in oklch, var(--accent) 45%, var(--panel))}';
+  const fam = lib.familiesOf(TOKENS, GRAPHITE, { old: [sheet], new: [sheet] });
+  assert.equal(fam.mixes.parsed, 2);
+  assert.deepEqual(fam.mixes.unresolved.sort(), ['color-mix(in oklch, var(--accent) 45%, var(--panel))', 'color-mix(in srgb, var(--accent) 45%, var(--local-only))']);
+  assert.ok(!fam.dark.members.some((m) => m.key.startsWith('mix ')), 'no member from an unresolved mix');
+  // A fill drawn only in that mix, with --local-only a mid grey that appears nowhere else (so no neighbour or
+  // surface supplies it as N): only the mix itself could explain the change, and unresolved it stays unexpected.
+  // (Where the grey IS a neighbour, rest × local N explains the blend on its own, rightly: that is rule 1.)
+  const g = hex('#6b6f78');
+  const o = hex('#e49a78').map((v, i) => Math.round(v * 0.45 + g[i] * 0.55));
+  const n = hex('#e6e8eb').map((v, i) => Math.round(v * 0.45 + g[i] * 0.55));
+  const fill = (c) => image(12, 12, () => c);
+  assert.equal(lib.classifyImage(fill(o), fill(n), fam.dark).unexpected, 144);
+  // the same pixels pass once the var resolves to that grey: the mix member is what lets them through
+  const known = sheet.replace('var(--local-only)', '#6b6f78');
+  const resolved = lib.familiesOf(TOKENS, GRAPHITE, { old: [known], new: [known] });
+  assert.equal(lib.classifyImage(fill(o), fill(n), resolved.dark).unexpected, 0);
+});
