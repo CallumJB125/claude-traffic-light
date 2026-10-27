@@ -1340,12 +1340,13 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // T1: a teammate's shared row opens Overview › Team sessions on it. Main arms a one-shot hint
   // (the row's route, this viewer only) and does a plain select: route() would send overview to
   // the sidebar's All filter under the preview. The page reads the hint through its own fences.
-  if (chatFirst === true) ipcMain.on('buddy:open-team-row', (e, ...args) => {
+  function openTeamRowFromSidebar(e, ...args) {
     if (!fromSidebar(e) || e.senderFrame !== sidebar.webContents.mainFrame || args.length !== 1 || typeof args[0] !== 'string' || !ROW_ID.test(args[0])) return;
     let armed = false;
     try { armed = openTeamRow(args[0]) === true; } catch { armed = false; }
     if (armed) select('overview');
-  });
+  }
+  if (chatFirst === true) ipcMain.on('buddy:open-team-row', openTeamRowFromSidebar);
   if (chatFirst === true) ipcMain.on('buddy:sidebar-groups', (e, ids) => {
     if (!fromSidebar(e)) return;
     const clean = sidebarCollapsed(ids);

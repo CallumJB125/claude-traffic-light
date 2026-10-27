@@ -394,8 +394,11 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
    teams.push({key,name,fake,label:fake?clean(hub.label,80)||'Fake team hub':''});
    const hubEntries=Array.isArray(t.entries)?t.entries:[];
    const model=directoryModel.team({team:{key,name,id:t.id},viewer,member:true,personal:[],hubEntries});
+   // Main-only beside each entry (never projected; SidebarRows.teamRows takes a fixed shape): the hub ref, team id and
+   // card id, so a later step (T2) re-resolves a row through this same read rather than a second path.
    for(const e of model.entries){if(entries.length>=200)break;if(e.owner?.self)continue;const ref=model.refs.get(e.id);if(!ref)continue;
-    entries.push({rowId:stable(['shared',e.id]),entryId:e.id,teamKey:key,teamName:name,fake,label:fake?clean(hub.label,80)||'Fake team hub':'',scope:ref.scope,entry:e});}
+    const x=hubEntries.find(h=>object(h)&&h.ref===ref.ref),cardId=typeof x?.card?.id==='string'&&x.card.id&&x.card.id.length<=128?x.card.id:null;
+    entries.push({rowId:stable(['shared',e.id]),entryId:e.id,teamKey:key,teamId:t.id,teamName:name,fake,label:fake?clean(hub.label,80)||'Fake team hub':'',scope:ref.scope,ref:ref.ref,cardId,entry:e});}
   }
   return{viewerScope:scope,teams,teamsTotal:Number.isSafeInteger(got.teamsTotal)&&got.teamsTotal>=teams.length?got.teamsTotal:teams.length,entries,partial:got.partial===true};
  }

@@ -239,13 +239,14 @@ test('a sidebar read leaves Overview alone: an open team selection still sends a
 
 test('buddy:open-team-row: sidebar main frame only, one 64-hex id; arms the hint, then a plain select of Overview (not route())', () => {
   const src = fs.readFileSync(path.join(__dirname, '../buddy-window/index.js'), 'utf8');
-  const at = src.indexOf("ipcMain.on('buddy:open-team-row'");
-  const body = src.slice(at, src.indexOf('});', at));
+  // A small named handler (T2 swaps its body for openThread with this as the fallback).
+  assert.match(src, /if \(chatFirst === true\) ipcMain\.on\('buddy:open-team-row', openTeamRowFromSidebar\);/);
+  const at = src.indexOf('function openTeamRowFromSidebar(');
+  const body = src.slice(at, src.indexOf('\n  }\n', at));
   assert.match(body, /!fromSidebar\(e\) \|\| e\.senderFrame !== sidebar\.webContents\.mainFrame \|\| args\.length !== 1 \|\| typeof args\[0\] !== 'string' \|\| !ROW_ID\.test\(args\[0\]\)/);
   assert.match(body, /armed = openTeamRow\(args\[0\]\) === true/);
   assert.match(body, /if \(armed\) select\('overview'\);/);
   assert.doesNotMatch(body, /route\(/);
-  assert.match(src.slice(src.lastIndexOf("if (chatFirst === true) ipcMain.on('buddy:open-team-row'", at), at), /^if \(chatFirst === true\) /, 'chat-first only');
   assert.match(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), /openTeamRow: \(id\) => OverviewMain\.armTeamHint\(id\),/);
 });
 
