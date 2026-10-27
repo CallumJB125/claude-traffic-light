@@ -17,7 +17,7 @@ const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage, dialog, clipboard } = require('electron'); // privacy-flow: team-hub-account
-const { PAGES, GROUPS, SECTIONS, FOOTER, sectionsFor, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
+const { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, sectionsFor, pageById, resolve, sectionTarget, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
 const { createHubSupervisor } = require('./hub-process');
 const { MAIN_WINDOW } = require('../src/widget-placement.js');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
@@ -125,7 +125,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, homeBusy = () => false, onHomeRetired = () => {}, loginEnv = () => null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, homeBusy = () => false, onHomeRetired = () => {}, loginEnv = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -490,6 +490,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
         : [...vaults.values()].some(v => v.state() === 'locked') ? 'locked' : 'ready',
       accountStorageHelp: storageHelp(),
       runners: flow.runningTeams(),
+      ...(chatFirst === true ? { chat: { focus: sidebarFocus } } : {}),
       hub: team
         ? { state: viewError ? 'failed' : 'ready', error: viewError, mode: 'team', name: team.name }
         : { state: viewError ? 'failed' : hubStatus.state, error: viewError ?? hubStatus.error ?? null, mode },
@@ -990,6 +991,22 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
 
   // ── selection ───────────────────────────────────────────────────────────
 
+  // Chat-first preview only (redesign R1): which sidebar filter a redirect asked for.
+  // `seq` counts requests so the sidebar refocuses even when the filter is unchanged.
+  let sidebarFocus = { filter: 'all', seq: 0 };
+
+  // Every navigation by id (openBuddy via goTo, and the sidebar) comes through
+  // here. Preview off, it is select(). Preview on, a section id opens its
+  // default and the redirect table applies. `from` is derived in main from the
+  // sender (onSelect), never from a payload; a select from the sidebar itself
+  // is never redirected.
+  function route(id, from = null) {
+    if (chatFirst !== true) { select(id); return; }
+    const target = sectionTarget(id) ?? id;
+    const r = resolve(target, { chatFirst: true, from });
+    if (r.sidebar) focusSidebar(r.sidebar); else select(r.page);
+  }
+
   function select(id) {
     const page = pageById(id);
     if (!page) return;
@@ -1014,8 +1031,17 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
 
   function onSelect(e, id) {
     if (!fromSidebar(e)) return;
-    if (typeof id !== 'string' || !pageById(id)) return;
-    select(id);
+    if (typeof id !== 'string' || !(pageById(id) || (chatFirst === true && sectionTarget(id)))) return;
+    route(id, 'sidebar');
+  }
+
+  // A redirect to the sidebar: focus its tree on that filter and keep the
+  // content area as it is (Board when nothing is showing yet).
+  function focusSidebar(filter) {
+    sidebarFocus = { filter, seq: sidebarFocus.seq + 1 };
+    if (!content) select('board');
+    else pushState();
+    if (sidebar && !sidebar.webContents.isDestroyed()) sidebar.webContents.focus();
   }
 
   function onRetry(e) {
@@ -1056,8 +1082,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
 
   // The three account flows are not pages: open('signin') (tray, Settings, the widget) must start
   // the flow the same way the sidebar's workspace switcher does, not just show the window.
-  const FLOW_IDS = ['signin', 'join', 'create-team'];
-  const goTo = (id) => (FLOW_IDS.includes(id) ? flow.startFlow(id) : select(id));
+  const goTo = (id) => (FLOW_IDS.includes(id) ? flow.startFlow(id) : route(id));
 
   ipcMain.on('buddy:workspace', (e, id) => {
     if (!fromSidebar(e) || typeof id !== 'string') return;
@@ -1083,7 +1108,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   ipcMain.on('optimiser:link', (e, id) => { const url = Object.hasOwn(OptimiserTools.LINKS, id) ? OptimiserTools.LINKS[id] : null; if (fromOptimiser(e) && url) shell.openExternal(url); }); // privacy-flow: burst-dashboard-links
   ipcMain.on('optimiser:open-page', (e, id) => { if (fromOptimiser(e) && OptimiserTools.PAGES.includes(id) && pageById(id)) select(id); });
   ipcMain.on('buddy:optimiser-section', (e, id) => { if (fromSidebar(e) && typeof id === 'string') optimiser.section(id); });
-  ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS, sections: require('../src/simple-mode.js').sidebarSections(sectionsFor(), simpleMode() === true), footer: FOOTER, brand: { name: BRAND.NAME, hubText: BRAND.HUB_TEXT } } : null));
+  ipcMain.handle('buddy:pages', (e) => (fromSidebar(e) ? { pages: PAGES, groups: GROUPS, sections: require('../src/simple-mode.js').sidebarSections(sectionsFor(), simpleMode() === true), footer: FOOTER, brand: { name: BRAND.NAME, hubText: BRAND.HUB_TEXT }, ...(chatFirst === true ? { chatFirst: true } : {}) } : null));
   for (const [op, fn] of Object.entries(flow.ACCT)) {
     ipcMain.handle(`buddy:acct:${op}`, async (e, ...args) => {
       if (!fromAccount(e)) return { ok: false, error: 'Not allowed.' };

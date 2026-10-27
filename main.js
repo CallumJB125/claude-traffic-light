@@ -587,6 +587,8 @@ try { WorkScope = require('./src/work-scope.js'); } catch (e) { if (!(e.code ===
 // Specs inject scope states through a mock that is never packaged.
 if (IS_DEV_RUN && !app.isPackaged && process.env.CLAUDE_TRAFFIC_LIGHT_WORK_SCOPE_MOCK) WorkScope = require('./test-visual/work-scope-mock.js').create(process.env.CLAUDE_TRAFFIC_LIGHT_WORK_SCOPE_MOCK);
 const WorkScopeView = require('./src/work-scope-view.js');
+// Redesign preview (plan-redesign §R3.8): dev runs of an unpackaged app only; read once, here.
+const CHAT_PREVIEW = require('./src/chat-preview.js').chatPreviewOn({ isDevRun: IS_DEV_RUN, isPackaged: app.isPackaged, env: process.env });
 // O3: the Tasks helper's wrapped tasks that did real work, as session-shaped records with the scope a session in
 // that folder gets, handed to Buddy's automatic cards only.
 let wrappedWorkRows = [];
@@ -1606,6 +1608,7 @@ function getBuddy() {
   if (!buddyWin) {
     buddyWin = createBuddyWindow({
       isConstrained: () => lowPowerOn,
+      chatFirst: CHAT_PREVIEW,
       simpleMode: () => loadConfig().simpleMode === true,
       // O4: Home stays alive while a task its box started is live; its retired document drops that task's slot.
       homeBusy: () => Compose.busy(),
