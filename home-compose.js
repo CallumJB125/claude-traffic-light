@@ -221,9 +221,25 @@
     if (!s.folder || !folders.some((f) => f.handle === s.folder.handle)) s.folder = info.folder || null;
     if (info.task && (!s.task || s.task.id !== info.task.id)) s.task = { id: info.task.id, title: info.task.title, row: info.task.row, lines: [] };
     if (!built) { try { s.text = sessionStorage.getItem(DRAFT_KEY) || ''; } catch { s.text = ''; } }
+    // A prompt from Sessions: fills an empty box only. A box with text or a task card is never overwritten, and Run is still the person's.
+    const incoming = info.draft && typeof info.draft.text === 'string' && info.draft.folder?.handle ? info.draft : null;
+    let note = '';
+    if (incoming) {
+      if (s.task) note = 'Sessions sent a prompt, but Home is showing a task. Start a new task here, then send it again from Sessions.';
+      else if (s.text.trim()) note = 'Sessions sent a prompt, but this box already has one, so it was not replaced. Clear the box, then send it again from Sessions.';
+      else {
+        s.text = incoming.text; s.folder = incoming.folder; s.ai = typeof incoming.ai === 'string' ? incoming.ai : 'auto';
+        if (!folders.some((f) => f.handle === incoming.folder.handle)) folders.unshift(incoming.folder);
+        keepDraft();
+        const name = CV.AI_NAME?.[incoming.wanted];
+        note = `Your prompt from Sessions is ready. Press Run to start it.${typeof incoming.wanted === 'string' ? ` ${name || 'That AI'} isn’t available here, so it is set to Choose for me.` : ''}`;
+      }
+    }
     $('compose-hint').textContent = info.shortcut?.state === 'on' && info.shortcut.accelerator ? `${info.shortcut.accelerator} from anywhere` : '';
     if (!built) build(); else { fillFolders(); fillWho(); fillPerms(); }
     render();
+    if (note) status(note);
+    if (note && !s.task) $('compose-text')?.focus();
     void checkFolder();
     scheduleRoute(true);
   }

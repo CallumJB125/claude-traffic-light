@@ -23,7 +23,7 @@ const providerOf = (row) => (row.source == null || row.source === 'claude' || ro
 const isLocal = (r) => r && typeof r === 'object' && !r.remote && !r.device && typeof r.sessionId === 'string' && !r.sessionId.startsWith('remote:');
 const leaf = (p) => path.basename(String(p || '')).slice(0, 80) || 'folder';
 
-function create({ sessions, repoOf, rootOf, boards, capture, links, tickets = null, captured = () => [], tasks, clipboard, pickFolder, openPage, pageExists = () => false, wait = 800 }) {
+function create({ sessions, repoOf, rootOf, boards, capture, links, tickets = null, captured = () => [], tasks, clipboard, pickFolder, openPage, offerDraft = null, pageExists = () => false, wait = 800 }) {
   const salt = crypto.randomBytes(8).toString('hex');
   const handleOf = (row) => crypto.createHash('sha256').update(`${salt}|${providerOf(row)}|${row.sessionId}`).digest('hex').slice(0, 20);
   const folders = new Map(); // handle -> absolute path
@@ -124,12 +124,17 @@ function create({ sessions, repoOf, rootOf, boards, capture, links, tickets = nu
       return { ok: true, copied: true, text: `${why} The command is copied: paste it in a terminal. It appears here once its hooks report.` };
     };
     if (!text) return copy('Plexiform starts a session when it has a first prompt.');
-    try {
-      const svc = tasks();
-      const r = await svc.create({ text, folder: svc.registerFolder(dir).handle, ai, surface: 'tab' });
-      if (r?.ok) return { ok: true, text: `Started ${ai} in a terminal tab in ${leaf(dir)}. It is tracked from the start.` };
-    } catch { /* fall through to the command */ }
-    return copy('Plexiform could not start it itself.');
+    // Nothing is created here. The prompt goes to Home's task box and the person presses Run, so every check Run makes
+    // (the focused window, other work in the folder, the spend cap, the confirmation) still applies. The command is
+    // copied only when Plexiform cannot do that, and always before anything has been attempted.
+    let ais = [];
+    try { ais = (await tasks().composerInfo()).ais; } catch (err) { console.warn('[session-actions] could not read the task runner:', err?.message); }
+    const info = ais.find((a) => a.id === ai);
+    if (!info || info.capabilities?.background !== true) return copy(`Plexiform can’t run ${COMMANDS[ai]} as a task here.`);
+    const r = offerDraft ? offerDraft({ dir, ai, text }) : { ok: false, why: 'off' };
+    if (!r?.ok) return copy({ busy: 'Home is already showing a task.', gate: 'Home’s task box is not in this view.' }[r?.why] || 'Home’s task box is not available.');
+    openPage('home');
+    return { ok: true, text: `Opened Home with your prompt in the box for ${leaf(dir)}. Press Run to start it as a background task. You can follow it in Tasks.` };
   }
 
   async function makeCard(handle, board) {

@@ -70,6 +70,7 @@ function createCompose(deps, params = {}) {
   const hidden = params.hidden || (() => deps.config()?.homeComposer === false);
   let started = null; // {wcId, doc, ids: Set, last, title}: the tasks this document started
   let creating = 0; // runs in flight (keepAlive 'create', oneAtATime)
+  let pending = null; // {dir, ai, text, at, account, workspace}: one prompt another page (Sessions) left for the box; never runs
 
   const homeWc = params.pageWc ? () => { const wc = params.pageWc(); return wc && !wc.isDestroyed() ? wc : null; }
     : () => { const wc = deps.buddy()?.pageWebContents?.('home'); return wc && !wc.isDestroyed() ? wc : null; };
@@ -101,6 +102,31 @@ function createCompose(deps, params = {}) {
 
   function usable(a) { return !TV.aiOption(a).disabled; }
 
+  const DRAFT_TTL_MS = 60_000;
+  async function takeDraft(s, ais) {
+    const d = pending; pending = null;
+    const c = context();
+    if (!d || now() - d.at > DRAFT_TTL_MS || !c || c.account !== d.account || c.workspace !== d.workspace || !(await deps.isDir(d.dir).catch(() => false))) return null;
+    const ai = ais.some((a) => a.id === d.ai && a.usable) ? d.ai : 'auto';
+    return { text: d.text, folder: s.registerFolder(d.dir), ai, ...(ai !== d.ai ? { wanted: d.ai } : {}) };
+  }
+
+  /**
+   * Sessions' "Start": leave one prompt for the box and tell Home to look. Never overwrites a task card Home is showing, and
+   * never starts anything. {ok:true} or {ok:false, why: 'off'|'busy'|'closed'} (the caller then copies the command instead).
+   */
+  function offerDraft({ dir, ai, text }) {
+    if (params.draftable === false || hidden()) return { ok: false, why: 'off' };
+    const c = context();
+    const d = docNow();
+    if (!c) return { ok: false, why: 'closed' };
+    if (started && d && started.wcId === d.wcId && started.doc === d.doc) return { ok: false, why: 'busy' };
+    pending = { dir, ai, text, at: now(), account: c.account, workspace: c.workspace };
+    const wc = homeWc();
+    if (wc) { try { send(wc, push.changed); } catch { /* the page asks again when it loads */ } }
+    return { ok: true };
+  }
+
   ipcMain.handle(channels.info, async (e, ...args) => {
     if (!fromHome(e) || args.length) return null;
     if (hidden()) return { hidden: true };
@@ -116,8 +142,11 @@ function createCompose(deps, params = {}) {
     const ais = (Array.isArray(info?.ais) ? info.ais : []).filter((a) => a && CV.AI_NAME[a.id]).map((a) => ({ id: a.id, label: CV.AI_NAME[a.id], usable: usable(a) }));
     const d = docNow();
     const own = started && d && started.wcId === e.sender.id && started.doc === d.doc ? started : null;
+    // A prompt Sessions left for the box: handed over once, only to this authorised Home call, only while fresh and in the
+    // same account and workspace. It fills the box; nothing starts until the person presses Run.
+    const draft = await takeDraft(s, ais);
     const row = own ? (snap.tasks || []).find((t) => t.id === own.last) : null;
-    return { hidden: false, connected, ais, folder, recent, shortcut: deps.shortcut?.() ?? null,
+    return { hidden: false, connected, ais, folder, recent, draft, shortcut: deps.shortcut?.() ?? null,
       task: own ? { id: own.last, title: own.title, row: cardRow(row, own.activityAt) } : null };
   });
 
@@ -253,7 +282,7 @@ function createCompose(deps, params = {}) {
     send(wc, push.task, msg);
   }
 
-  return { retire, busy, onEvent, onChange, isHomeWc: (wcId) => homeWc()?.id === wcId, defaultFolder, _started: () => started, _now: now };
+  return { retire, busy, onEvent, onChange, offerDraft, isHomeWc: (wcId) => homeWc()?.id === wcId, defaultFolder, _started: () => started, _now: now };
 }
 
 /**
