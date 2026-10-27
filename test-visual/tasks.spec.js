@@ -16,14 +16,28 @@ const openTasks = (app) => embedded(app, 'tasks', 'tasks.html');
 const row = (page, text) => page.locator('#list .row', { hasText: text });
 
 test.describe('with a supervisor', () => {
-  let mock; let h; let page; let work;
+  let mock; let h; let page; let work; let pin;
   test.beforeAll(async () => {
     mock = await startTasksMock();
+    // The demo tasks are created back to back, so main's createdAtMs (now − rounded age, tasks-guard.js) could tie and
+    // newest-first would order them by chance. 1 s apart, in creation order, the list order is fixed.
+    const demo = [...mock.srv.tasks.values()];
+    demo.forEach((t, i) => { t.createdAt -= (demo.length - 1 - i) * 1000; });
+    // Two rows print a clock the mock reads whenever it builds a face (liveOf/listTasks), and the page keeps the text
+    // of its last fetch: the stalled task's heartbeat age and the paused task's limit reset. Held still from the
+    // start until the list is shot, so every fetch says "last seen 0s ago" and "resets in 2h 4m".
+    const byTitle = (s) => demo.find((t) => t.title.startsWith(s));
+    const stalled = byTitle('Migrate the test fixtures'); const paused = byTitle('Refactor the payment parser');
+    const hold = () => {
+      stalled.hbAt = performance.now();
+      if (paused.limitResetAt != null) paused.limitResetAt = performance.now() + (2 * 3600 + 4 * 60 + 10) * 1000;
+    };
+    pin = setInterval(hold, 20);
     work = shortTmp();
-    h = await launchApp({ env: { CLAUDE_TRAFFIC_LIGHT_TASKS_HOME: mock.dir, CLAUDE_TRAFFIC_LIGHT_TASKS_PICK: work } });
+    h = await launchApp({ env: { CLAUDE_TRAFFIC_LIGHT_TASKS_HOME: mock.dir, CLAUDE_TRAFFIC_LIGHT_TASKS_PICK: work }, homeFiles: { 'acme-sync/.keep': '' } });
     page = await openTasks(h.app);
   });
-  test.afterAll(async () => { await h?.cleanup(); await mock?.close(); fs.rmSync(work, { recursive: true, force: true }); });
+  test.afterAll(async () => { clearInterval(pin); await h?.cleanup(); await mock?.close(); fs.rmSync(work, { recursive: true, force: true }); });
 
   test('the list shows every task with its state, AI and folder, and nothing dead looks alive', async () => {
     await expect(page.locator('#list .row')).toHaveCount(5, { timeout: 15000 });
@@ -37,12 +51,12 @@ test.describe('with a supervisor', () => {
     await expect(page.locator('#list .row').first()).toContainText(/Needs you|Stalled/, { timeout: 5000 });
     await page.waitForTimeout(2500);
     await page.mouse.move(0, 0);
-    // Allowance measured, not guessed: the mock creates its tasks back to back, so pairs that land in the same
-    // millisecond come in either order. Across 8 renders, 'Add retry with backoff' / 'Update the API client' swapped
-    // (0.28% of pixels, with 'last seen Ns ago' on the stalled row, which the .age mask misses), and so did the
-    // stalled 'Migrate the test fixtures' / 'Add a dark mode toggle' (0.62%; orphaned and blocked share rank 0 in
-    // tasks-view.js, so newest first decides). Both at once is about 0.9%.
-    await expect(page).toHaveScreenshot('list-empty-detail.png', { ...SHOT, mask: [page.locator('.age')], maxDiffPixelRatio: 0.01 });
+    try {
+      await expect(row(page, 'Migrate the test fixtures')).toContainText('last seen 0s ago');
+      await expect(row(page, 'Refactor the payment parser')).toContainText('resets in 2h 4m');
+      await expect(page.locator('#list .row > .t')).toHaveText([/^Migrate/, /^Add a dark mode/, /^Update the API/, /^Add retry/, /^Refactor/]);
+      await expect(page).toHaveScreenshot('list-empty-detail.png', { ...SHOT, mask: [page.locator('.age')] });
+    } finally { clearInterval(pin); }
   });
 
   test('open a task: the transcript appears and the approval is answerable; an action round-trips', async () => {
@@ -55,8 +69,9 @@ test.describe('with a supervisor', () => {
     await expect(page.locator('#d-banners .ask')).toContainText('Wants to use Bash');
     expect(await page.evaluate(() => document.body.innerHTML.includes('btk_'))).toBe(false);
     await page.waitForTimeout(500);
-    // One render in 8 was 31 px off (0.004%; its images were not kept, so the cause is not known yet); the rest were exact.
-    await expect(page.locator('#main')).toHaveScreenshot('detail-needs-you.png', { ...SHOT, mask: [page.locator('.age'), page.locator('.d-meta')], maxDiffPixelRatio: 0.0001 });
+    // Exact. One render in 8 was once 31 px off (images not kept); none since in 16 lone renders (byte-identical) and
+    // 10 exact compare runs, so a recurrence fails here with its actual and diff kept instead of passing an allowance.
+    await expect(page.locator('#main')).toHaveScreenshot('detail-needs-you.png', { ...SHOT, mask: [page.locator('.age'), page.locator('.d-meta')] });
     await confirmFocused(h.app, page.getByRole('button', { name: 'Allow once' }), {
       alert: page.locator('#d-head .err[role=alert]'),
       done: () => expect(page.locator('#d-head .d-state')).not.toContainText('Needs you', { timeout: 15000 }),
@@ -89,6 +104,14 @@ test.describe('with a supervisor', () => {
   });
 
   test('composer: ⌥⌘T opens it, it validates, and a new task starts, shows up and takes a message', async () => {
+    // The page scrolls to the folder row and #main's overlay scrollbar then fades on its own timer, so a shot caught
+    // the thumb solid or gone. Applied only at capture (stylePath) it does not reach an element scroller, so it is in
+    // place before the composer opens and removed after the shot. A constructed sheet (CSSOM), since the page's CSP
+    // refuses an inline <style>.
+    const scrollbars = (on) => page.evaluate(([css, add]) => {
+      if (add) { const s = new CSSStyleSheet(); s.replaceSync(css); window.__noScrollbar = s; document.adoptedStyleSheets = [...document.adoptedStyleSheets, s]; } else document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== window.__noScrollbar);
+    }, [fs.readFileSync(path.join(__dirname, 'no-scrollbar.css'), 'utf8'), on]);
+    await scrollbars(true);
     await focusMainWindow(h.app);
     await page.keyboard.press('Alt+Meta+T');
     await expect(page.locator('.composer h2')).toHaveText('New task');
@@ -97,13 +120,15 @@ test.describe('with a supervisor', () => {
     await page.fill('#c-text', 'Add a cache to the sync job');
     await page.locator('#c-go').click();
     await expect(page.locator('#c-err')).toHaveText('Choose the folder it should work in.');
+    // main reads the picker variable at pick time; a folder in the app's own HOME is labelled ~/acme-sync every run,
+    // where the per-run temp folder printed a random /tmp/ptm-XXXXXX.
+    await h.app.evaluate((_, dir) => { process.env.CLAUDE_TRAFFIC_LIGHT_TASKS_PICK = dir; }, path.join(h.userHome, 'acme-sync'));
     await page.locator('#c-folder-btn').click();
-    await expect(page.locator('#c-folder')).toContainText(path.basename(work));
+    await expect(page.locator('#c-folder')).toHaveText('~/acme-sync');
     await expect(page.locator('#c-ai option')).not.toHaveCount(1, { timeout: 10000 });
     await page.mouse.move(0, 0);
-    // Allowance measured, not guessed: the chosen folder is a fresh temp dir (/tmp/ptm-XXXXXX), whose random name
-    // is shown unmasked, and the scrollbar thumb differed with it. In 3 renders that cost at most 0.65% of pixels.
-    await expect(page.locator('#main')).toHaveScreenshot('composer.png', { ...SHOT, maxDiffPixelRatio: 0.007 });
+    await expect(page.locator('#main')).toHaveScreenshot('composer.png', SHOT);
+    await scrollbars(false);
     await confirmFocused(h.app, page.locator('#c-go'), {
       alert: page.locator('#c-err'),
       done: () => expect(page.locator('#d-head .d-title')).toContainText('Add a cache', { timeout: 15000 }),

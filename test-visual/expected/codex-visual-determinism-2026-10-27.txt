@@ -1,0 +1,22 @@
+# Determinism follow-up after R0b. No classifier header: these are determinism re-baselines, not an accent flip.
+# Each PNG is byte-identical across ≥ 4 lone renders at this head; evidence in outputs/determinism/.
+# backups-diff: the scroll offset is now snapped and the overlay scrollbar hidden at capture. The stale accent (909 px)
+# passed the classifier against a step-1 base (ec578744 + these spec changes, old accent): 0 unexpected.
+test-visual/__screenshots__/backups.spec.js/backups-diff-darwin.png
+# composer: the folder label is ~/acme-sync (was a random /tmp/ptm-XXXXXX) and the #main overlay scrollbar is hidden.
+# No accent pixels (step 1 and head are byte-identical).
+test-visual/__screenshots__/tasks.spec.js/composer-darwin.png
+# list-empty-detail: the demo tasks are created 1 s apart (Update the API client now sorts above Add retry with
+# backoff), and the stalled heartbeat and limit reset are held. Stale accent (3,057 px): classifier 0 unexpected.
+test-visual/__screenshots__/tasks.spec.js/list-empty-detail-darwin.png
+# revoke-armed: stale since #24; the text sits half a pixel differently (maxΔ 6). Tokens were ruled out (E2a/E2b);
+# the cause is unattributed. Classifier: 0 accent pass pixels.
+test-visual/__screenshots__/remote-devices.spec.js/settings-remote-revoke-armed-darwin.png
+# sessions-grouped one and routing-ask: stale since #64; the card bottom edges are a 1-step AA shift (maxΔ 4–5).
+# Tokens were ruled out; the cause is unattributed. Classifier: 0 accent pass pixels.
+test-visual/__screenshots__/sessions-grouped.spec.js/sessions-grouped-one-darwin.png
+test-visual/__screenshots__/sessions-grouped.spec.js/sessions-grouped-routing-ask-darwin.png
+# usage-04/06: stale since #83's card move (its caveats went behind "About these numbers"); #83 re-rendered the
+# other usage shots but not these two. Reverting #83's usage-view.js alone renders both at 0 px against the old PNGs.
+test-visual/__screenshots__/usage.spec.js/usage-04-cache-hit-rate-dark-darwin.png
+test-visual/__screenshots__/usage.spec.js/usage-06-busiest-hours-dark-darwin.png
