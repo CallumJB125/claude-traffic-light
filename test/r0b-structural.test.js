@@ -17,6 +17,14 @@
 //      Anything unresolvable fails.
 // Scope note: app.css and phone.css are whole app stylesheets, so "colour tokens only" means "colour declarations
 // only" there. A non-accent component colour change is structurally allowed and left to the pixel classifier.
+//   3. the terracotta-literal fix (UI accent literals → the accent, at their original alpha) also touches
+//      LITERAL_FIX. In those files, and in app.css/phone.css, a changed line may also be a whole rule or a value
+//      list, provided it differs from the line it replaces ONLY in colour tokens: replace every colour (#hex,
+//      rgb(), transparent, color-mix() of colours, var() resolving to colours, var(--colour, colour)) by a
+//      placeholder and the two lines must be identical. Dropping a page-local override of a custom property that
+//      the token stylesheets declare as a colour is also allowed (the page falls back to the token). In .html
+//      files only <style> content is compared; everything outside <style> must be byte-identical.
+//      tokens.css and burst-theme.css keep the strict one-declaration-per-line rule.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -27,8 +35,12 @@ const { wantsClassify, expectedFileFor } = require('../test-visual/classify-lib'
 
 const ROOT = path.join(__dirname, '..');
 const TOKEN_CSS = ['tokens.css', 'buddy-window/burst-theme.css', 'board/web/app.css', 'board/web/phone.css'];
+// Files the terracotta-literal fix touches, beyond the token stylesheets (inventory in the PR body).
+const LITERAL_FIX = ['input-bubble.css', 'lights.html', 'optimiser.html', 'widget-page.html', 'feedback.html'];
+// Where a colour-only change inside a whole rule line is accepted (rule 3). The two token sheets stay strict.
+const RULE_LINES = new Set(['board/web/app.css', 'board/web/phone.css', ...LITERAL_FIX]);
 const ALLOWED = new Set([
-  ...TOKEN_CSS,
+  ...TOKEN_CSS, ...LITERAL_FIX,
   'test/tokens-contrast.test.js', 'test/burst-theme.test.js', 'test/classify-lib.test.js',
   'test/fixtures/tokens-terracotta-r0a.css', 'test/r0b-structural.test.js',
   'test-visual/classify-lib.js', 'test-visual/classify-controls.js', 'test-visual/classify.spec.js', 'test-visual/classify.config.json',
@@ -113,26 +125,78 @@ function badNewTokenUses(names, files, headMap) {
   return bad;
 }
 
+// End index (exclusive) of the parenthesised call starting at s[i] === '('.
+function closeParen(s, i) {
+  let depth = 0;
+  for (let k = i; k < s.length; k += 1) {
+    if (s[k] === '(') depth += 1;
+    else if (s[k] === ')') { depth -= 1; if (depth === 0) return k + 1; }
+  }
+  return -1;
+}
+
+// `line` with every colour token replaced by a placeholder. A token that is not a colour stays as written, so
+// any non-colour edit shows up as a difference.
+function colourSkeleton(line, map) {
+  let out = ''; let i = 0;
+  const start = /color-mix\(|rgba?\(|var\(|#[0-9a-fA-F]{3,8}(?![\w-])|\btransparent\b/g;
+  for (let m = start.exec(line); m; m = start.exec(line)) {
+    const end = m[0].endsWith('(') ? closeParen(line, m.index + m[0].length - 1) : m.index + m[0].length;
+    if (end < 0) break;
+    const tok = line.slice(m.index, end);
+    const fb = tok.match(/^var\(\s*(--[\w-]+)\s*,(.*)\)$/s);
+    const colour = isColour(tok, map) || Boolean(fb && isColour(`var(${fb[1]})`, map) && isColour(fb[2], map));
+    out += line.slice(i, m.index) + (colour ? '\u0000' : tok);
+    i = end; start.lastIndex = end;
+  }
+  return (out + line.slice(i)).replace(/\s+/g, ' ').trim();
+}
+
+// Rule 3: `minus` → `plus` changes only colours, or drops overrides of token-sheet colour properties.
+function colourOnlyPair(minus, plus, maps) {
+  // only declarations the new line no longer has
+  const kept = new Set([...plus.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
+  const dropped = minus.replace(/(--[\w-]+)\s*:\s*([^;{}]+?)\s*;/g, (all, name, value) =>
+    (!kept.has(name) && maps.head.has(name) && isColour(`var(${name})`, maps.head) && isColour(value, maps.base) ? '' : all));
+  const head = colourSkeleton(plus, maps.head);
+  return colourSkeleton(minus, maps.base) === head || colourSkeleton(dropped, maps.base) === head;
+}
+
+// <style> content of an HTML file, and the rest (which must not change).
+const styleOf = (html) => [...html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n');
+const outsideStyle = (html) => html.replace(/(<style\b[^>]*>)[\s\S]*?(<\/style>)/gi, '$1$2');
+
 // Changed lines (comments stripped, blank lines ignored) that are not a lone colour declaration.
 // `maps` = { head, base }: token maps used to resolve var() (head) and to check a custom property's base value.
-function badCssLines(baseText, headText, maps = { head: tokenMap([headText]), base: tokenMap([baseText]) }) {
+// `rules`: also accept a changed line that pairs with the line it replaces under rule 3.
+function badCssLines(baseText, headText, maps = { head: tokenMap([headText]), base: tokenMap([baseText]) }, { rules = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r0b-structural-'));
   const a = path.join(dir, 'base.css'); const b = path.join(dir, 'head.css');
   fs.writeFileSync(a, stripComments(baseText)); fs.writeFileSync(b, stripComments(headText));
   const r = spawnSync('git', ['diff', '--no-index', '--no-color', '-U0', a, b], { encoding: 'utf8' });
   fs.rmSync(dir, { recursive: true, force: true });
   if (r.status !== 0 && r.status !== 1) throw new Error(`git diff --no-index failed: ${r.stderr}`);
-  const bad = [];
-  for (const line of r.stdout.split('\n')) {
-    if (!/^[+-]/.test(line) || /^(\+\+\+|---) /.test(line)) continue;
-    const body = line.slice(1);
-    if (!body.trim()) continue;
-    const m = body.match(/^\s*(--[\w-]+|[a-z-]+)\s*:\s*([^;{}]+?)\s*;?\s*$/);
-    const ok = m && (m[1].startsWith('--') || COLOUR_PROPS.has(m[1]))
+  const lone = (line) => {
+    const m = line.slice(1).match(/^\s*(--[\w-]+|[a-z-]+)\s*:\s*([^;{}]+?)\s*;?\s*$/);
+    return Boolean(m && (m[1].startsWith('--') || COLOUR_PROPS.has(m[1]))
       // a removed line is judged against the base tokens, an added one against the head tokens
       && isColour(m[2], line[0] === '-' ? maps.base : maps.head)
-      && (!m[1].startsWith('--') || !maps.base.has(m[1]) || isColour(`var(${m[1]})`, maps.base));
-    if (!ok) bad.push(line);
+      && (!m[1].startsWith('--') || !maps.base.has(m[1]) || isColour(`var(${m[1]})`, maps.base)));
+  };
+  const bad = [];
+  // hunk by hunk: with `rules`, the i-th removed line pairs with the i-th added one when the counts match
+  for (const hunk of r.stdout.split(/^@@[^\n]*\n/m).slice(1)) {
+    const lines = hunk.split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---) /.test(l) && l.slice(1).trim());
+    const minus = lines.filter((l) => l[0] === '-'); const plus = lines.filter((l) => l[0] === '+');
+    const paired = rules && minus.length === plus.length;
+    lines.forEach((line) => {
+      if (lone(line)) return;
+      if (paired) {
+        const k = (line[0] === '-' ? minus : plus).indexOf(line);
+        if (colourOnlyPair(minus[k].slice(1), plus[k].slice(1), maps)) return;
+      }
+      bad.push(line);
+    });
   }
   return bad;
 }
@@ -247,15 +311,17 @@ test('R0b structural gate: only colour declarations change', { skip: !ACTIVE.siz
     base: tokenMap(TOKEN_CSS.map(baseText).filter((t) => t !== null)),
   };
   const bad = {};
-  for (const f of TOKEN_CSS) {
+  for (const f of [...TOKEN_CSS, ...LITERAL_FIX]) {
     if (!CHANGED.has(f)) continue;
     const b = baseText(f); const h = readHead(f);
-    if (b === null) { bad[f] = ['(new file: a token stylesheet must exist at base)']; continue; }
+    if (b === null) { bad[f] = ['(new file: an allowed stylesheet must exist at base)']; continue; }
     if (h === null) { bad[f] = ['(deleted)']; continue; }
-    const lines = badCssLines(b, h, maps);
+    const html = f.endsWith('.html');
+    if (html && outsideStyle(b) !== outsideStyle(h)) { bad[f] = ['(changed outside <style>)']; continue; }
+    const lines = badCssLines(html ? styleOf(b) : b, html ? styleOf(h) : h, maps, { rules: RULE_LINES.has(f) });
     if (lines.length) bad[f] = lines;
   }
-  assert.deepEqual(bad, {}, 'token stylesheet lines that are not a lone colour declaration');
+  assert.deepEqual(bad, {}, 'stylesheet lines that are not a colour-only change');
   // new at head, and removed at head (removing a colour declaration flips `var(--old, fallback)` readers to their
   // fallback): both may only be read as a colour
   const fresh = [...maps.head.keys()].filter((n) => !maps.base.has(n));
@@ -263,4 +329,40 @@ test('R0b structural gate: only colour declarations change', { skip: !ACTIVE.siz
   assert.deepEqual(badNewTokenUses([...fresh, ...gone], trackedSources(), maps.head), [], 'new or removed custom properties read by a non-colour declaration');
 });
 
-module.exports = { badCssLines, badNewTokenUses, isColour, tokenMap };
+test('structural gate rule 3: in a rule line only colours may change; layout, selectors and markup still fail', () => {
+  // --bg is a token-sheet colour too: the page keeps its own --bg, so it must not be dropped with the accent pair
+  const maps = { head: tokenMap([':root { --bg: #17191d; --accent: #24292f; --accent-ink: #fff; --accent-hover: #3a4048; }']),
+    base: tokenMap([':root { --bg: #17191d; --accent: #a34425; --accent-ink: #fff; --accent-hover: #a34425; }']) };
+  const base = '.ib-item { padding: 4px; }\n.ib-scope.tone-count { background: rgba(218, 119, 86, 0.18); color: var(--accent); }\n'
+    + '.btn.primary:hover { background: #e5866a; border-color: #e5866a; }\n'
+    + '.bg { background: radial-gradient(ellipse 60% 80% at 34% 100%, rgba(218, 119, 86, 0.08), transparent 70%); }\n'
+    + ':root { --bg: #eceaf0; --accent: #b4532f; --accent-ink: #ffffff; }\n.p { background: var(--accent, #3b82f6); color: #fff; }\n';
+  const fixed = base.replace('rgba(218, 119, 86, 0.18)', 'color-mix(in srgb, var(--accent) 18%, transparent)')
+    .replace('#e5866a; border-color: #e5866a', 'var(--accent-hover); border-color: var(--accent-hover)')
+    .replace('rgba(218, 119, 86, 0.08)', 'color-mix(in srgb, var(--accent) 8%, transparent)')
+    .replace(' --accent: #b4532f; --accent-ink: #ffffff; }', ' }')
+    .replace('var(--accent, #3b82f6); color: #fff', 'var(--accent); color: var(--accent-ink)');
+  assert.deepEqual(badCssLines(base, fixed, maps, { rules: true }), []);
+  // without rule 3 (tokens.css, burst-theme.css) the same one-line rules fail
+  assert.notDeepEqual(badCssLines(base, fixed, maps), []);
+  for (const [what, head] of [
+    ['a layout change in the pill rule', fixed.replace('color: var(--accent); }', 'color: var(--accent); padding: 2px; }')],
+    ['a layout value inside the rule', fixed.replace('.ib-scope.tone-count { background:', '.ib-scope.tone-count { margin: 1px; background:')],
+    ['a changed selector', fixed.replace('.ib-scope.tone-count {', '.ib-scope.tone-count, .ib-row {')],
+    ['a gradient geometry change', fixed.replace('ellipse 60% 80%', 'ellipse 70% 80%')],
+    ['a colour into a non-colour slot', fixed.replace('at 34% 100%', 'at var(--accent) 100%')],
+    ['changing a kept page token while dropping the accent', fixed.replace('--bg: #eceaf0;', '--bg: 4px;')],
+    ['a colour-mix over a non-colour', fixed.replace('var(--accent) 18%, transparent', 'var(--nowhere) 18%, transparent')],
+    ['a fallback that is not a colour', base.replace('var(--accent, #3b82f6)', 'var(--accent, 4px)')],
+  ]) assert.notDeepEqual(badCssLines(base, head, maps, { rules: true }), [], `${what} must fail`);
+  // dropping a page-local override is allowed only for a token-sheet colour property, never a size
+  const withGap = base.replace(':root { --bg', ':root { --gap: 4px; --bg');
+  assert.notDeepEqual(badCssLines(withGap, withGap.replace(' --gap: 4px;', ''), maps, { rules: true }), [], 'dropping a size override must fail');
+  // in HTML only <style> content is compared; markup must not change
+  const page = '<style>\n.x { color: #e5866a; }\n</style>\n<div class="a">hi</div>';
+  assert.equal(outsideStyle(page), outsideStyle(page.replace('#e5866a', 'var(--accent)')));
+  assert.notEqual(outsideStyle(page), outsideStyle(page.replace('class="a"', 'class="b"')));
+  assert.equal(styleOf(page).includes('#e5866a'), true);
+});
+
+module.exports = { badCssLines, badNewTokenUses, isColour, tokenMap, colourSkeleton };
