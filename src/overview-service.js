@@ -427,7 +427,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   let got;try{got=await hub.sharedEntries(viewer);}catch{got=null;}
   if(!still()||!object(got)||!Array.isArray(got.teams))return false;
   const origin=passiveOrigin(hub);
-  for(const t of got.teams.filter(t=>object(t)&&typeof t.id==='string').slice(0,4)){
+  for(const t of got.teams.filter(t=>object(t)&&typeof t.id==='string').slice(0,64)){
    const hubEntries=Array.isArray(t.entries)?t.entries:[];
    const model=directoryModel.team({team:{key:teamKey(origin,t.id),name:clean(t.name,80)||'Team',id:t.id},viewer,member:true,personal:[],hubEntries});
    for(const e of model.entries){
@@ -453,7 +453,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   if(!still())return null;
   if(!object(out))return{unavailable:true};
   if(out.ok!==true){
-   if(out.status==='forbidden'||out.status==='stale'){sharedRoutes.delete(rowId);return{gone:true,reason:out.status==='forbidden'?'removed':'ended'};}
+   if(out.status==='forbidden'||out.status==='stale'){sharedRoutes.delete(rowId);return{gone:true,reason:'removed'};}
    return{unavailable:true};
   }
   if(!object(out.state))return{unavailable:true};

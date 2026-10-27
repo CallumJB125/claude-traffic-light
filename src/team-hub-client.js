@@ -672,8 +672,9 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     const result = { teams: [] };
     if (!sameViewer(viewerArg)) return result;
     const all = await listShared();
+    // Every listed team: a sidebar row's team is chosen by teamsOf's order, and the row id doesn't depend on order.
     const ids = [];
-    for (const r of all) if (!ids.includes(r.team.id) && ids.length < PASSIVE_TEAMS) ids.push(r.team.id);
+    for (const r of all) if (!ids.includes(r.team.id)) ids.push(r.team.id);
     for (const id of ids) {
       const mine = all.filter((r) => r.team.id === id).slice(0, MAX_PER_TEAM);
       result.teams.push({ id, name: mine[0].team.name, entries: mine.map(baseEntry) });

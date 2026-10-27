@@ -62,7 +62,7 @@
     const foot = root.querySelector('.th-shared-foot');
     if (h.scope === 'interact') {
       const b = el('button', 'th-btn', 'Open in Team sessions'); b.type = 'button'; b.addEventListener('click', () => { void api.openTeam(rowId); });
-      foot.replaceChildren(el('p', 'th-shared-note', 'You can send from here soon. For now, send, steer or interrupt from Team sessions.'), b);
+      foot.replaceChildren(el('p', 'th-shared-note', 'To send, steer or interrupt, use Team sessions.'), b);
     } else foot.replaceChildren(el('p', 'th-shared-note', `Shared with you to watch only. Ask ${h.owner} to allow sending.`));
   }
 

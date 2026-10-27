@@ -112,7 +112,7 @@ test('read outcomes: forbidden/stale/ended end the thread and drop the route; un
   assert.equal(x.svc.threadTarget(id), null, 'unbound: no polling forever');
   assert.deepEqual(await x.svc.sharedThreadRead(id), { gone: true, reason: 'unavailable' });
   await x.svc.sharedThreadBind(id); x.setInspect({ ok: false, status: 'stale', error: 'x' });
-  assert.deepEqual(await x.svc.sharedThreadRead(id), { gone: true, reason: 'ended' });
+  assert.deepEqual(await x.svc.sharedThreadRead(id), { gone: true, reason: 'removed' }, 'gone from the list or expired is not "ended"');
   await x.svc.sharedThreadBind(id); x.setInspect({ ok: true, status: 'ok', state: state({ status: 'ended' }), share: null });
   assert.deepEqual(await x.svc.sharedThreadRead(id), { gone: true, reason: 'ended' });
 });
@@ -271,7 +271,7 @@ test('a hub change reaches the thread\'s slot too: clearAll sends the null on th
 test('wiring: no new authority; main passes the presence owner and the bind; the window opens a thread first and falls back to Overview', () => {
   const main = read('main.js'), win = read('buddy-window/index.js'), tm = read('src/thread-main.js');
   assert.match(main, /sharedRead: \(id, alive\) => OverviewMain\.sharedThreadRead\(id, alive\),\n    openTeam: \(id\) => buddyWin\?\.openTeamRow\?\.\(id\) \?\? false,\n    presence: PresenceOwner,/);
-  assert.match(main, /threadBindShared: \(id\) => OverviewMain\.sharedThreadBind\(id\),/);
+  assert.match(main, /threadBindShared: \(id, alive\) => OverviewMain\.sharedThreadBind\(id, alive\),/);
   assert.match(win, /openTeamRow\(id\) \{ if \(typeof id !== 'string' \|\| !ROW_ID\.test\(id\)\) return false;/);
   const body = tm.slice(tm.indexOf('async function sharedState'), tm.indexOf('// "Team overview"'));
   for (const word of ['controls', 'selection', 'token', 'presenceView', 'presence.', 'setPresence', 'clearPresence']) assert.ok(!body.includes(word) || word === 'clearPresence', `${word} is not part of the read channel`);
@@ -330,7 +330,7 @@ test('renderer: an interact share still has no prompt box; the footer points to 
   assert.match(p.$('th-meta').textContent, /^Bob's Claude Code session · Watch and send · until \d\d:\d\d( [AP]M)?$/);
   assert.equal(p.$('th-reply').hidden, true);
   const foot = p.$('th-shared').querySelector('.th-shared-foot');
-  assert.match(foot.textContent, /^You can send from here soon\. For now, send, steer or interrupt from Team sessions\.Open in Team sessions$/);
+  assert.match(foot.textContent, /^To send, steer or interrupt, use Team sessions\.Open in Team sessions$/);
   foot.querySelector('button').click(); await tick();
   assert.deepEqual(p.calls.at(-1), ['team', ID]);
 });
@@ -392,4 +392,54 @@ test('hub client: sharedEntries is one list read (no state, account or board rea
   assert.equal((await hub.inspect(hub.viewer(), 'team-1', UUID1)).share.scope, 'interact', 'each read carries the current scope');
   assert.equal((await hub.inspect(hub.viewer(), 'team-9', UUID1)).ok, false);
   assert.equal((await hub.inspect(hub.viewer(), 'team-9', UUID1)).share, undefined);
+});
+
+test('bind: a share in any listed team binds, not only the first 4 by list order (the sidebar picks teams in its own order)', async () => {
+  const teams = Array.from({ length: 6 }, (_, i) => ({ id: `team${i}`, name: `T${i}`, entries: [entry(`${i + 1}`.repeat(8) + '-1111-4111-8111-111111111111', { team: { id: `team${i}`, name: `T${i}` } })] }));
+  const hub = { origin: 'https://hub.example', viewer: () => ({ id: 'alice', name: 'Alice' }), inspect: async () => null,
+    sharedEntries: async () => ({ teams }), // listed order: team0..team5
+    passiveSessions: async () => ({ teamsTotal: 6, teams: [teams[5], ...teams.slice(0, 5)], partial: false }) }; // the sidebar's order differs
+  const svc = createOverviewService({ sessions: () => [], work: async () => ({ sources: [], capture: [] }), current: () => true, teamHub: () => hub, now: () => 5000 });
+  // the real client lists every team's rows too
+  const { createTeamHubClient } = require('../src/team-hub-client');
+  const shared = teams.map((t, i) => ({ id: t.entries[0].ref, session: `${i + 1}`.repeat(8) + '-2222-4222-8222-222222222222', scope: 'watch', team: { id: t.id, name: t.name }, owner: { id: 'u-bob', name: 'Bob' }, online: true, expires_at: null }));
+  const real = createTeamHubClient({ baseUrl: 'https://hub.test', viewerId: 'u-ana', token: () => 'tok', fetch: async () => ({ status: 200, headers: { get: () => null }, body: null, text: async () => JSON.stringify({ shared }) }) }, { now: () => 1, pollMs: 100000, timeoutMs: 500, deadlineMs: 1000 });
+  assert.equal((await real.sharedEntries(real.viewer())).teams.length, 6, 'no 4-team cap');
+  const rows = (await svc.passiveTeamRows(() => true)).entries;
+  const sixth = rows.find((r) => r.teamId === 'team5');
+  assert.ok(sixth, 'the sidebar shows team5 first');
+  assert.equal(await svc.sharedThreadBind(sixth.rowId), true, 'team5 is 6th in the shared list but still binds');
+});
+
+test('a click that binds late opens nothing: a second click, a navigation or a hidden window drops it, and arms no hint', async () => {
+  const vm = require('node:vm');
+  const src = read('buddy-window/index.js');
+  const from = src.indexOf('  let teamClick = 0;'), to = src.indexOf("  if (chatFirst === true) ipcMain.on('buddy:open-team-row'");
+  assert.ok(from > 0 && to > from);
+  const ID1 = 'a'.repeat(64), ID2 = 'b'.repeat(64);
+  const build = () => {
+    const log = []; const holds = [];
+    const ctx = { log, holds, homeGeneration: 0, win: { isDestroyed: () => false, isVisible: () => ctx.visible, isMinimized: () => false }, visible: true,
+      ROW_ID: /^[0-9a-f]{64}$/, fromSidebar: () => true, sidebar: { webContents: { mainFrame: 'F' } },
+      threadBindShared: (id, alive) => new Promise((r) => holds.push(() => r(true))).then((v) => { log.push(['bound', id]); return v; }),
+      openThread: (id) => { log.push(['thread', id]); return true; }, openTeamRow: (id) => { log.push(['hint', id]); return true; }, select: (id) => log.push(['select', id]) };
+    vm.createContext(ctx); vm.runInContext(src.slice(from, to) + '\nthis.click = openTeamRowFromSidebar;', ctx);
+    return ctx;
+  };
+  const e = { senderFrame: 'F' };
+  const settle = async () => { for (let i = 0; i < 5; i++) await tick(); };
+  // one click, nothing moves: the thread opens
+  let c = build(); c.click(e, ID1); c.holds[0](); await settle();
+  assert.deepEqual(JSON.parse(JSON.stringify(c.log)), [['bound', ID1], ['thread', ID1]]);
+  // a second click: only the latest opens
+  c = build(); c.click(e, ID1); c.click(e, ID2); c.holds[0](); c.holds[1](); await settle();
+  assert.deepEqual(JSON.parse(JSON.stringify(c.log.filter(([k]) => k !== 'bound'))), [['thread', ID2]]);
+  // a navigation (select / openThread bump homeGeneration) during the bind
+  c = build(); c.click(e, ID1); c.homeGeneration++; c.holds[0](); await settle();
+  assert.deepEqual(JSON.parse(JSON.stringify(c.log.filter(([k]) => k !== 'bound'))), [], 'no thread, no hint, no select');
+  // a hidden window
+  c = build(); c.click(e, ID1); c.visible = false; c.holds[0](); await settle();
+  assert.deepEqual(JSON.parse(JSON.stringify(c.log.filter(([k]) => k !== 'bound'))), []);
+  const body = src.slice(from, to);
+  assert.match(body, /threadBindShared\(id, current\)/);
 });

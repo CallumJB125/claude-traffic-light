@@ -1342,13 +1342,19 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // T1: a teammate's shared row opens Overview › Team sessions on it. Main arms a one-shot hint
   // (the row's route, this viewer only) and does a plain select: route() would send overview to
   // the sidebar's All filter under the preview. The page reads the hint through its own fences.
+  let teamClick = 0;
   function openTeamRowFromSidebar(e, ...args) {
     if (!fromSidebar(e) || e.senderFrame !== sidebar.webContents.mainFrame || args.length !== 1 || typeof args[0] !== 'string' || !ROW_ID.test(args[0])) return;
     const id = args[0];
     // T2: a bindable share opens as a thread; anything else (a board task, a fake hub, a read that fails) keeps T1's Overview hint.
+    // The bind awaits the hub, so it only counts while this is still the latest click, no navigation happened (select and
+    // openThread both bump homeGeneration) and the window is still there (labfix-review M1).
+    const mine = ++teamClick, stamp = homeGeneration;
+    const current = () => mine === teamClick && stamp === homeGeneration && !!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
     void (async () => {
       let bound = false;
-      try { bound = (await threadBindShared(id)) === true; } catch { bound = false; }
+      try { bound = (await threadBindShared(id, current)) === true; } catch { bound = false; }
+      if (!current()) return;
       if (bound && openThread(id)) return;
       let armed = false;
       try { armed = openTeamRow(id) === true; } catch { armed = false; }

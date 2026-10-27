@@ -248,7 +248,7 @@ test('buddy:open-team-row: sidebar main frame only, one 64-hex id; arms the hint
   const body = src.slice(at, src.indexOf('\n  }\n', at));
   assert.match(body, /!fromSidebar\(e\) \|\| e\.senderFrame !== sidebar\.webContents\.mainFrame \|\| args\.length !== 1 \|\| typeof args\[0\] !== 'string' \|\| !ROW_ID\.test\(args\[0\]\)/);
   // T2: a bindable share opens the thread; otherwise T1's hint and plain select stay the fallback.
-  assert.match(body, /bound = \(await threadBindShared\(id\)\) === true/);
+  assert.match(body, /bound = \(await threadBindShared\(id, current\)\) === true/);
   assert.match(body, /if \(bound && openThread\(id\)\) return;/);
   assert.match(body, /armed = openTeamRow\(id\) === true/);
   assert.match(body, /if \(armed\) select\('overview'\);/);
