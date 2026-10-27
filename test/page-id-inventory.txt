@@ -77,7 +77,7 @@ sessions	test-visual/handoff.spec.js	select	1
 sessions	test/account-hub-routing.test.js	select	1
 settings	buddy-window/pages.js	PAGES	1
 settings	buddy-window/pages.js	SECTIONS	1
-settings	main.js	openBuddy	3
+settings	main.js	openBuddy	2
 settings	test-visual/utility-consolidation.spec.js	select	1
 settings	test/sidebar-account-storage.test.js	data-page	1
 setups	buddy-window/pages.js	PAGES	1

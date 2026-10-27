@@ -1901,7 +1901,7 @@ InteractionMain.register(ipcMain);
 app.whenReady().then(()=>InteractionMain.detectLocalModels()).catch(()=>{});
 onQuit(app,()=>InteractionMain.close());
 onQuit(app,retireClaudeChannels);
-ipcMain.handle('compaction-stats',async e=>settingsPane('advanced')(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction,burstNote:BurstIpc.compactionNote(),burstLearned:BurstSpend.learnedThresholds(await BurstIpc.read('intelligentCompaction'))}:null);
+ipcMain.handle('compaction-stats',async e=>settingsPane('aitools')(e)?{...CompactionLedger.summary(),settings:loadConfig().compaction,burstNote:BurstIpc.compactionNote(),burstLearned:BurstSpend.learnedThresholds(await BurstIpc.read('intelligentCompaction'))}:null);
 // Remote interaction host (src/remote-interaction.js): OFF unless the
 // "Let my other devices use sessions Plexiform started on this Mac"
 // preference is ticked. Uses the active team hub's own device sign-in (via
@@ -2045,7 +2045,7 @@ setInterval(()=>{InteractionMain.reportHooks(aggregateState().sessions||[]);if(l
 onQuit(app,()=>TeamSessionSharing.stop());
 const INTERACTION_HOST_LINES={connecting:'Connecting…',connected:'On: your other signed-in devices can use sessions started from them on this Mac.',retrying:'Can\'t reach your team hub; retrying.','signed-out':'Stopped: this Mac is signed out or was removed from your account.',replaced:'Stopped: another connection took over this Mac\'s sign-in. If that wasn\'t you, remove this device in Account and sign in again.',refused:'Stopped: the hub named a different account.',held:'Stopped: another connection is using this Mac\'s sign-in, so your devices can\'t reach it. If that wasn\'t you, remove this Mac from your account (Account → Devices) and sign in again.'};
 ipcMain.handle('interaction-host-status',e=>{
-  if(!settingsPane('privacy')(e))return null;
+  if(!settingsPane('phone')(e))return null;
   if(loadConfig().remoteInteractionHost!==true&&loadConfig().teamSessionSharing===false)return 'Off.';
   const host=hostSync.host();
   if(!host)return 'Sign in to a team hub to turn this on.';
@@ -2181,11 +2181,17 @@ ipcMain.handle('team-hint-done', (e, open) => {
   return true;
 });
 
-// Preferences scrolled to its Health section, rechecked.
-function showHealth() {
+// Preferences at one of its sections. Dev chat preview: the pane that holds the section (a closed table, so a
+// caller can only name a pane through it). Otherwise exactly the old page and its show-section push.
+const SECTION_PANE = Object.freeze({ widget: 'widget', health: 'advanced' });
+function openSettingsAt(section) {
+  const pane = CHAT_PREVIEW === true && Object.prototype.hasOwnProperty.call(SECTION_PANE, section) ? SECTION_PANE[section] : null;
+  if (pane) { openBuddy(`settings:${pane}`); if (section === 'health') buddyWin?.sendToPage(`settings:${pane}`, 'show-section', section); return; }
   openBuddy('settings');
-  buddyWin?.sendToPage('settings', 'show-section', 'health');
+  buddyWin?.sendToPage('settings', 'show-section', section);
 }
+// Preferences scrolled to its Health section, rechecked.
+function showHealth() { openSettingsAt('health'); }
 
 // Invite deep links (plexiform://invite/<token>, plexiform://join?hub=…&t=…, and the same under claudebuddy://).
 // macOS delivers open-url before `ready` on a cold start, so links wait until
@@ -4827,7 +4833,7 @@ if (typeof WorkScope?.setSessionScope === 'function' && typeof WorkScope?.setRep
 ipcMain.handle('open-waiting', (e) => { if (!inputSenderOk(e)) return false; createWaitingWindow(); return true; });
 // "Turn it on": Preferences at the Widget tab, where the answering setting lives.
 ipcMain.handle('dismiss-ask-notice', (e) => { if (!inputSenderOk(e)) return false; if (loadConfig().askNotice === 'pending') saveConfig({ askNotice: 'seen' }); stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); return true; });
-ipcMain.handle('open-widget-settings', (e) => { if (!inputSenderOk(e)) return false; openBuddy('settings'); buddyWin?.sendToPage('settings', 'show-section', 'widget'); return true; });
+ipcMain.handle('open-widget-settings', (e) => { if (!inputSenderOk(e)) return false; openSettingsAt('widget'); return true; });
 ipcMain.handle('nudge-mute', (e, key) => (inputSenderOk(e) ? nudger.mute(String(key)) : false));
 
 // Lights → Auto-answer, prefilled. From a nudge the rule is the one main
@@ -5037,7 +5043,7 @@ function getNativeBoard() {
   }
   return nativeBoardService;
 }
-const fromNativeBoardSettings = settingsPane('advanced');
+const fromNativeBoardSettings = settingsPane('aitools');
 const nativeBoardAction = (fn) => async (e, ...args) => {
   if (!fromNativeBoardSettings(e)) return { ok: false, error: 'Not allowed.' };
   try { return await fn(getNativeBoard(), ...args); } catch (err) { return { ok: false, error: err.message }; }
@@ -5191,7 +5197,7 @@ ipcMain.handle('connect-agent', async (e, which) => {
   return { ok: aiToolsOpen(`aitools:${which}`), opened: true };
 });
 ipcMain.handle('git-status', (e) => settingsPane('advanced')(e) ? ({ ...git.status(), enabled: loadConfig().gitSignals !== false }) : null);
-utilityHandle('signal-endpoint', e => settingsPane('advanced')(e) || widgetConfigSender(e), () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));
+utilityHandle('signal-endpoint', e => settingsPane('aitools')(e) || widgetConfigSender(e), () => ({ port: SIGNAL_PORT, emit: EMIT_SCRIPT, token: path.join(ROOT_DIR, 'token') }));
 // Preferences / Health → "Install Ghostty Dock…" (src/ghostty-dock-install.js): Settings or Home only, an action name and nothing else.
 const GhosttyDockInstall = require('./src/ghostty-dock-install.js');
 const dockNotes = new Set();
@@ -5213,8 +5219,8 @@ const ghosttyDockInstaller = GhosttyDockInstall.createController({
   },
   changed: (s) => sendToSettings('ghostty-dock-changed', s),
 });
-GhosttyDockInstall.register({ utilityHandle, allowed: (e) => settingsPane('advanced')(e) || fromUtilityPage(e, 'home'), controller: ghosttyDockInstaller });
-require('./src/cli-install.js').register({ utilityHandle, allowed: settingsPane('advanced'), dialog, BrowserWindow, home: os.homedir(), packaged: app.isPackaged, resourcesPath: process.resourcesPath, appDir: __dirname });
+GhosttyDockInstall.register({ utilityHandle, allowed: (e) => settingsPane('aitools')(e) || fromUtilityPage(e, 'home'), controller: ghosttyDockInstaller });
+require('./src/cli-install.js').register({ utilityHandle, allowed: settingsPane('general'), dialog, BrowserWindow, home: os.homedir(), packaged: app.isPackaged, resourcesPath: process.resourcesPath, appDir: __dirname });
 // Not the signal server's port: an ssh -R tunnel makes this one reachable to
 // every user of the far host, so it serves only the signed device route.
 // A bad override is reported in Settings, never thrown at startup.
@@ -5229,22 +5235,22 @@ function remoteDevicesView() {
   for (const s of readRemoteSessions(loadConfig())) live[s.device] = (live[s.device] || 0) + 1;
   return { devices: RemoteDevices.list(live), port: REMOTE_PORT, loopback: RemoteDevices.loopbackStatus(), tailnet: { enabled: !!loadConfig().remoteTailscale, ...RemoteDevices.tailnetStatus() } };
 }
-utilityHandle('remote-devices', settingsPane('advanced'), () => remoteDevicesView());
+utilityHandle('remote-devices', settingsPane('phone'), () => remoteDevicesView());
 // The pairing code goes to the window that asked, once; nothing else keeps it.
-utilityHandle('remote-pair', settingsPane('advanced'), (_e, name) => {
+utilityHandle('remote-pair', settingsPane('phone'), (_e, name) => {
   const r = RemoteDevices.pair(String(name || ''));
   return r.error ? { error: r.error } : { ...remoteDevicesView(), paired: r.device, code: r.code };
 });
 // The clipboard forgets the code after a minute, unless something else has
 // been copied since.
-utilityHandle('remote-copy-code', settingsPane('advanced'), (_e, code) => {
+utilityHandle('remote-copy-code', settingsPane('phone'), (_e, code) => {
   const text = String(code || '');
   if (!/^buddy-pair-v1\./.test(text)) return false;
   clipboard.writeText(text);
   setTimeout(() => { if (clipboard.readText() === text) clipboard.writeText(''); }, 60000);
   return true;
 });
-utilityHandle('remote-revoke', settingsPane('advanced'), (_e, id) => {
+utilityHandle('remote-revoke', settingsPane('phone'), (_e, id) => {
   const revoked = RemoteDevices.revoke(String(id || ''));
   return { ...remoteDevicesView(), revoked };
 });
@@ -5289,7 +5295,7 @@ function healthReport() {
 }
 utilityHandle('health-report', settingsPane('advanced'), () => healthReport());
 ipcMain.handle('health-fix', (e, id) => {
-  if (!fromNativeBoardSettings(e)) return { error: 'Not allowed.' };
+  if (!settingsPane('advanced')(e)) return { error: 'Not allowed.' };
   // Enabling goes through Hermes' own CLI, so this one fix answers asynchronously.
   if (id === 'connect-hermes' && app.isPackaged && AUTO_INSTALL_HOOKS) {
     return require('./adapters/hermes-activity').connect({ home: os.homedir(), runtime: HOOK_RUNTIME })
@@ -5317,7 +5323,7 @@ ipcMain.handle('health-fix', (e, id) => {
       if (!AUTO_INSTALL_HOOKS) error = EPHEMERAL ? 'Plexiform is running from a temporary copy or a disk image; move it to Applications first' : 'dev runs never install hooks';
       else { error = installHooks(); createTray(); }
     } else if (id === 'connect-codex') {
-      if (!fromNativeBoardSettings(e)) error = 'Not allowed.';
+      if (!settingsPane('advanced')(e)) error = 'Not allowed.';
       else if (!app.isPackaged || !AUTO_INSTALL_HOOKS) error = 'Open the installed app to connect Codex.';
       else {
         const r = Adapters.get('codex').installActivity({ home: os.homedir(), runtime: HOOK_RUNTIME });

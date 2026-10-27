@@ -8,9 +8,10 @@
   if (typeof module === 'object' && module.exports) module.exports = factory(null);
   else root.SettingsPanes = factory(root);
 }(typeof self !== 'undefined' ? self : this, (root) => {
-  // R8-1: the six panes settings.html already has (div.pane[data-section]), one to one. Re-splitting them into the
-  // redesign's eleven panes is R8-2/3.
-  const PANES = Object.freeze(['general', 'notifications', 'spend', 'widget', 'privacy', 'advanced']);
+  // R8-1/2: the panes settings.html's sections are shown in. Every top-level element of settings.html carries data-pane
+  // (R8-2a); the old page ignores it and keeps its six div.pane. Projects, Terminal, Agent messages, Account and the
+  // separate widget/hatch/phone/aitools pages come in R8-3.
+  const PANES = Object.freeze(['general', 'notifications', 'aitools', 'widget', 'spend', 'privacy', 'phone', 'advanced']);
 
   // Every channel settings-preload.js exposes, with the one pane whose section uses it. 'none' = no pane may call
   // it (the old Settings page still can); get-config / save-config are filtered by KEY_OWNER instead.
@@ -23,12 +24,12 @@
     'policy:state': 'privacy', 'policy:preview': 'privacy', 'policy:apply': 'privacy', 'policy:pick-folder': 'privacy',
     'data:inventory': 'privacy', 'data:export': 'privacy', 'data:export-activity': 'privacy', 'data:delete': 'privacy',
     'backups-list': 'privacy', 'backups-now': 'privacy', 'backups-diff': 'privacy', 'backups-restore': 'privacy', 'backups-open-folder': 'privacy',
-    'interaction-host-status': 'privacy', 'open-feedback': 'privacy',
-    'cli-install-status': 'advanced', 'cli-install': 'advanced', 'ghostty-dock-install': 'advanced', 'signal-endpoint': 'advanced',
-    'native-board-status': 'advanced', 'native-board-boards': 'advanced', 'native-board-connect': 'advanced', 'native-board-disconnect': 'advanced',
+    'interaction-host-status': 'phone', 'open-feedback': 'privacy',
+    'cli-install-status': 'general', 'cli-install': 'general', 'ghostty-dock-install': 'aitools', 'signal-endpoint': 'aitools',
+    'native-board-status': 'aitools', 'native-board-boards': 'aitools', 'native-board-connect': 'aitools', 'native-board-disconnect': 'aitools',
     'git-status': 'advanced', 'deploy:settings': 'advanced', 'deploy:set-enabled': 'advanced', 'deploy:token-save': 'advanced', 'deploy:token-remove': 'advanced',
-    'remote-devices': 'advanced', 'remote-pair': 'advanced', 'remote-revoke': 'advanced', 'remote-copy-code': 'advanced',
-    'health-report': 'advanced', 'health-fix': 'advanced', 'health-copy-diagnostics': 'advanced', 'compaction-stats': 'advanced',
+    'remote-devices': 'phone', 'remote-pair': 'phone', 'remote-revoke': 'phone', 'remote-copy-code': 'phone',
+    'health-report': 'advanced', 'health-fix': 'advanced', 'health-copy-diagnostics': 'advanced', 'compaction-stats': 'aitools',
     'connect-agent': 'none', 'account-view': 'none', 'account-open': 'none',
     'burst:status': 'none', 'burst:consent-text': 'none', 'burst:action': 'none', 'burst:test': 'none', 'burst:set-compaction': 'none',
     'get-config': 'config', 'save-config': 'config',
@@ -42,13 +43,15 @@
     oneKeyApprove: 'notifications', busyHold: 'notifications', slackPresence: 'notifications', busyCalendar: 'notifications', busyCalendarTitles: 'notifications',
     busyFocus: 'notifications', busyIcsUrl: 'notifications', busyFocusShortcut: 'notifications', agentMailInbox: 'notifications',
     spend: 'spend',
-    showWidget: 'widget', menuBarMode: 'widget', lowPower: 'widget', seasonal: 'widget', askFromWidget: 'widget', showTasks: 'widget', showAgents: 'widget',
-    agentRoster: 'widget', agentKinds: 'widget', agentChipSize: 'widget', roam: 'widget', randomEvents: 'widget', simpleMode: 'widget', homeComposer: 'widget',
-    teamSessionSharing: 'privacy', teamBrief: 'privacy', explainMode: 'privacy', remoteInteractionHost: 'privacy', codexDaemonMessaging: 'privacy',
-    integrations: 'advanced', gitSignals: 'advanced', gitRepos: 'advanced', gitDeployWorkflows: 'advanced', remoteTailscale: 'advanced', agentBus: 'advanced', compaction: 'advanced',
+    showWidget: 'widget', menuBarMode: 'widget', lowPower: 'widget', seasonal: 'widget', askFromWidget: 'notifications', showTasks: 'widget', showAgents: 'aitools',
+    agentRoster: 'aitools', agentKinds: 'aitools', agentChipSize: 'aitools', roam: 'widget', randomEvents: 'widget', simpleMode: 'general', homeComposer: 'general',
+    teamSessionSharing: 'phone', teamBrief: 'phone', explainMode: 'phone', remoteInteractionHost: 'phone', codexDaemonMessaging: 'phone',
+    integrations: 'aitools', gitSignals: 'advanced', gitRepos: 'advanced', gitDeployWorkflows: 'advanced', remoteTailscale: 'phone', agentBus: 'advanced', compaction: 'aitools',
     character: 'none', snoozeUntil: 'none', fastHook: 'none', keepAwake: 'none', paceTooltip: 'none', agentAwareness: 'none', mcpBusUserOff: 'none', mcpUserOff: 'none',
     remoteInteractionResetPending: 'none', autoAnswer: 'none', persona: 'none',
   });
+
+  const TITLE = Object.freeze({ general: 'General', notifications: 'Notifications', aitools: 'AI tools', widget: 'Widget', spend: 'Spend and limits', privacy: 'Privacy and data', phone: 'Phone', advanced: 'Advanced' });
 
   // Keys every pane may READ (never write): simpleMode decides which developer sections the page shows at all.
   const SHARED_READS = Object.freeze(['simpleMode']);
@@ -76,5 +79,5 @@
   const current = root && root.location && typeof root.location.search === 'string' ? paneFromSearch(root.location.search) : null;
   const inPane = (...panes) => current === null || panes.includes(current);
 
-  return { current, inPane, PANES, CHANNEL_PANE, KEY_OWNER, SHARED_READS, isPane, ownedKeys, readKeys, paneOfChannel, writesAllowed, pick, readView, paneFromSearch };
+  return { current, inPane, TITLE, PANES, CHANNEL_PANE, KEY_OWNER, SHARED_READS, isPane, ownedKeys, readKeys, paneOfChannel, writesAllowed, pick, readView, paneFromSearch };
 }));
