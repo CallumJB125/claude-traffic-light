@@ -374,7 +374,45 @@ test('classifier mixes: base and head are never pooled, and the unmodelled cases
     .n{c:color-mix(in srgb, color-mix(in srgb, var(--accent) 50%, white) 40%, black)}`;
   const js = "el.style.background = 'color-mix(in srgb, var(--accent) 20%, transparent)';";
   const listed = lib.familiesOf(TOKENS, GRAPHITE, { old: [sheet], new: [sheet], js: [js] }).mixes.skipped.map((x) => x.why).sort();
-  assert.deepEqual(listed, ['alias', 'fallback', 'js', 'nested']);
+  assert.deepEqual(listed, ['fallback', 'js', 'nested']);
+});
+
+test('classifier config: scrim-tile pairs are the alias tile under the drawer scrim, derived from the CSS', () => {
+  const fs = require('node:fs'); const path = require('node:path'); const { execFileSync } = require('node:child_process');
+  const root = path.join(__dirname, '..');
+  const config = JSON.parse(fs.readFileSync(path.join(root, 'test-visual', 'classify.config.json'), 'utf8'));
+  const css = fs.readFileSync(path.join(root, 'agents-find-view.css'), 'utf8');
+  // the two declarations the pairs are derived from must still be what renders
+  assert.match(css, /\.af-tile \{[^}]*background: color-mix\(in oklab, var\(--tint\) 16%, var\(--panel\)\)/);
+  assert.match(css, /\.cat-engineering[^{]*\{ --tint: var\(--accent\); \}/);
+  assert.match(css, /\.af-backdrop \{[^}]*background: color-mix\(in oklab, var\(--bg\) 55%, transparent\)/);
+  const base = lib.tokensOf(execFileSync('git', ['show', '47ad8ac1:tokens.css'], { cwd: root }).toString());
+  const head = lib.tokensOf(fs.readFileSync(path.join(root, 'tokens.css'), 'utf8'));
+  const tile = { space: 'oklab', args: [{ colour: 'var(--accent)', pct: 16 }, { colour: 'var(--panel)', pct: null }] };
+  const scrim = (tokens) => { const t = lib.computeMix(tile, tokens).slice(0, 3).map(Math.round); const bg = lib.parseColour(tokens['--bg']); return t.map((x, i) => Math.round(x * 0.45 + bg[i] * 0.55)); };
+  const de = (a, b) => lib.deltaE00(lib.lab(a), lib.lab(lib.parseColour(b).slice(0, 3)));
+  const scrims = config.exceptions.filter((e) => e.name.startsWith('scrim-tile-'));
+  assert.deepEqual(scrims.map((e) => e.theme).sort(), ['dark', 'light']);
+  for (const e of scrims) {
+    assert.equal(e.pairs.length, 1);
+    assert.ok(e.baselines.every((b) => /find-agents-(detail|confirm)-(dark|light)-darwin\.png$/.test(b) && b.includes(`-${e.theme}-`)), e.name);
+    const [o, n] = e.pairs[0];
+    assert.ok(de(scrim(base[e.theme]), o) <= 1, `${e.name}: old ${o} is the base tile under the scrim`);
+    assert.ok(de(scrim(head[e.theme]), n) <= 1, `${e.name}: new ${n} is the head tile under the scrim`);
+  }
+});
+
+test('classifier mixes: an alias of an accent var is modelled through its target, per side', () => {
+  const sheet = `.cat-a { --tint: var(--accent); } .cat-b { --tint: var(--muted); }
+    .tile { color: color-mix(in oklab, var(--tint) 70%, var(--text)); }`;
+  const fam = lib.familiesOf(TOKENS, GRAPHITE, { old: [sheet], new: [sheet] });
+  const m = fam.dark.members.find((x) => x.key.includes('var(--accent) 70%, var(--text)) via --tint'));
+  assert.ok(m, 'the alias mix builds a member');
+  const want = lib.computeMix({ space: 'oklab', args: [{ colour: 'var(--accent)', pct: 70 }, { colour: 'var(--text)', pct: null }] }, lib.tokensOf(GRAPHITE).dark);
+  assert.ok(lib.deltaE00(lib.lab(m.new), lib.lab(want)) < 0.5, 'head colour is the Graphite mix');
+  // an alias assigned on one side only builds no member (it was never rendered on the other)
+  const headOnly = lib.familiesOf(TOKENS, GRAPHITE, { old: ['.tile { color: color-mix(in oklab, var(--tint) 70%, var(--text)); }'], new: [sheet] });
+  assert.ok(!headOnly.dark.members.some((x) => x.key.includes('via --tint')));
 });
 
 test('classifier (iii): an unresolved color-mix fails closed in the light theme too', () => {
@@ -512,7 +550,7 @@ test('classifier: widget baselines take dark from index.html, which must still p
 test('classifier: the pale-tint exceptions are exact pairs, scoped to their baselines', () => {
   const config = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'test-visual', 'classify.config.json'), 'utf8'));
   const tints = config.exceptions.filter((e) => e.name.startsWith('tint-'));
-  assert.deepEqual(tints.map((e) => e.baselines.length), [1, 1, 1]);
+  assert.deepEqual(tints.map((e) => e.baselines.length), [1, 1, 1, 1]);
   for (const e of tints) {
     assert.match(e.reason, /terracotta 0\.08 → Graphite 0\.14/);
     const ex = lib.exceptionsFor(e.baselines[0], config, 'light');
@@ -548,7 +586,7 @@ test('classifier: exception guards — no old colour near a surface or text toke
   catch { base = lib.tokensOf(fs.readFileSync(path.join(__dirname, 'fixtures', 'tokens-terracotta-r0a.css'), 'utf8')); }
   const over = (soft, g) => { const s = lib.parseColour(soft); const G = lib.parseColour(g); return s.slice(0, 3).map((v, i) => v * s[3] + G[i] * (1 - s[3])); };
   const tints = config.exceptions.filter((e) => e.name.startsWith('tint-'));
-  assert.equal(tints.length, 3);
+  assert.equal(tints.length, 4);
   for (const e of tints) {
     assert.equal(e.theme, 'light');
     assert.equal(e.baselines.length, 1);
@@ -562,7 +600,7 @@ test('classifier: exception guards — no old colour near a surface or text toke
       assert.ok(lib.deltaE00(lib.lab(pn), lib.lab(lib.parseColour(n).slice(0, 3))) <= 1, `${e.name}: ${n} is not head soft over ${g}`);
     }
   }
-  assert.deepEqual(tints.map((e) => e.baselines[0].split('/').pop()).sort(), ['lights-template-minimal-darwin.png', 'lights-templates-menu-darwin.png', 'lights-window-darwin.png']);
+  assert.deepEqual(tints.map((e) => e.baselines[0].split('/').pop()).sort(), ['lights-auto-rules-darwin.png', 'lights-template-minimal-darwin.png', 'lights-templates-menu-darwin.png', 'lights-window-darwin.png']);
   // inverse (labfix-review round 4): un-blend old with the base soft and new with the head soft; the two surfaces
   // they imply must agree within ΔE 1.5, whatever `over` says
   const under = (c, soft) => { const v = lib.parseColour(c); const sf = lib.parseColour(soft); return v.slice(0, 3).map((x, i) => Math.min(255, Math.max(0, (x - sf[i] * sf[3]) / (1 - sf[3])))); };

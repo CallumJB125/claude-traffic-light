@@ -114,6 +114,46 @@ const SURFACE_TOKENS = ['--bg', '--panel', '--panel-2'];
 // Members drawn over each other: a label on a filled state, the ring against its halo or a filled button.
 const PAIRS = [['ink', 'rest'], ['ink', 'hover'], ['ink', 'pressed'], ['ring', 'halo'], ['rest', 'halo'], ['ring', 'rest']];
 
+// Round 5: a stylesheet that declares its own tokens (buddy-window/burst-theme.css: `:root:root { --border … }`
+// and `@media (prefers-color-scheme: light) { :root:root { … } }`) is resolved against them, so a mix such as
+// color-mix(in srgb, var(--accent) 45%, var(--border)) uses that sheet's --accent and --border. Only top-level
+// :root blocks (default = dark) and :root blocks directly inside a light media query count; values are kept
+// as written and resolved later over tokens.css.
+function sheetTokensOf(text) {
+  const src = String(text).replace(/\/\*[\s\S]*?\*\//g, '');
+  const dark = {}; const light = {};
+  const blocks = (body, cb) => {
+    let i = 0;
+    while (i < body.length) {
+      const open = body.indexOf('{', i); if (open < 0) break;
+      const sel = body.slice(i, open).replace(/^[\s\S]*[;}]/, '').trim();
+      let depth = 1; let j = open + 1;
+      while (depth && j < body.length) { if (body[j] === '{') depth += 1; else if (body[j] === '}') depth -= 1; j += 1; }
+      cb(sel, body.slice(open + 1, j - 1)); i = j;
+    }
+  };
+  const decls = (b, into) => { if (b.includes('{')) return; for (const m of b.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) into[m[1]] = m[2].trim(); };
+  const lightOnly = {};
+  let hasLight = false;
+  const LIGHT_IN_MEDIA = /^:root(:root|:not\(\[data-theme(="dark")?\]\))?$/;
+  blocks(src, (sel, body) => {
+    if (/^:root(:root)?$/.test(sel)) decls(body, dark);
+    else if (sel === ':root[data-theme="light"]') { decls(body, lightOnly); hasLight = true; }
+    else if (/^@media\s*\(prefers-color-scheme:\s*light\)$/.test(sel)) blocks(body, (s2, b2) => { if (LIGHT_IN_MEDIA.test(s2)) { decls(b2, lightOnly); hasLight = true; } });
+  });
+  Object.assign(light, dark, lightOnly);
+  // local tokens with no light block: the light theme of that sheet is unknown, so its mixes fail closed there
+  return Object.keys(dark).length || Object.keys(lightOnly).length ? { dark, light: hasLight ? light : undefined } : null;
+}
+// A theme map with a sheet's own tokens laid over tokens.css, var() resolved through the result.
+function withLocal(theme, local) {
+  if (!local) return theme;
+  const merged = { ...theme, ...local };
+  const get = (name, depth = 0) => (depth > 20 || merged[name] === undefined ? undefined
+    : String(merged[name]).replace(/var\((--[\w-]+)\)/g, (_, n) => get(n, depth + 1) ?? `var(${n})`));
+  return Object.fromEntries(Object.keys(merged).map((k) => [k, get(k)]));
+}
+
 // Resolves tokens.css text into { dark: {name: value}, light: {name: value} } with var() substituted.
 function tokensOf(css) {
   const src = css.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -176,7 +216,7 @@ function aliasesOf(texts) {
   return out;
 }
 // The accent color-mixes the classifier does NOT model, so the report can list them (review): a var() with a
-// fallback, an alias token, a nested color-mix, and any mix in JS (styles set from script). They build no member,
+// fallback, a nested color-mix (an alias token is modelled since round 5; see familiesOf), and any mix in JS (styles set from script). They build no member,
 // so their pixels fail closed; this only makes them visible.
 function skippedMixesOf(text, { js = false, aliases = new Set() } = {}) {
   const out = [];
@@ -194,7 +234,6 @@ function skippedMixesOf(text, { js = false, aliases = new Set() } = {}) {
     if (js) why = 'js';
     else if (inner.includes('color-mix(')) why = 'nested';
     else if (/var\(\s*--(accent|focus-ring)[\w-]*\s*,/.test(inner)) why = 'fallback';
-    else if ([...aliases].some((a) => inner.includes(`var(${a})`))) why = 'alias';
     if (why) out.push({ raw, why });
   }
   return out;
@@ -267,10 +306,13 @@ function computeMix(spec, theme) {
 
 // Members for one theme from the parsed mixes. An opaque mix is a solid member; a translucent one is matched
 // over each surface, like the soft tint.
-function mixMembers(specs, oldTheme, newTheme, surfaces) {
+function mixMembers(specs, oldTheme, newTheme, surfaces, themeName) {
   const members = []; const unresolved = [];
   for (const spec of specs) {
-    const o = computeMix(spec, oldTheme); const n = computeMix(spec, newTheme);
+    const lo = spec.baseLocal && themeName ? spec.baseLocal[themeName] : null;
+    const ln = spec.local && themeName ? spec.local[themeName] : null;
+    if ((spec.baseLocal && !lo) || (spec.local && !ln)) { unresolved.push(`${spec.raw} (${themeName}: no theme block in its sheet)`); continue; }
+    const o = computeMix(spec, withLocal(oldTheme, lo)); const n = computeMix(spec, withLocal(newTheme, ln));
     if (!o || !n) { unresolved.push(spec.raw); continue; }
     if (o[3] >= 0.999 && n[3] >= 0.999) members.push({ key: `mix ${spec.raw}`, old: o.slice(0, 3), new: n.slice(0, 3) });
     else for (const s of surfaces) members.push({ key: `mix ${spec.raw}/${s.name}`, old: over(o, s.rgb), new: over(n, s.rgb) });
@@ -296,7 +338,7 @@ const deOf = (p, q) => deltaE00(lab(p), lab(q));
 // soft tint, and the accent color-mixes. Each member has an old and a new colour; `pair` members carry their own
 // second end instead of using N; `n` members carry a fixed neutral (the text colour) that the near-N rule uses.
 // A member that does not change at all can't explain a changed pixel, so it is dropped.
-function membersOf(oldTheme, newTheme, mixSpecs = []) {
+function membersOf(oldTheme, newTheme, mixSpecs = [], themeName = null) {
   const members = [];
   const solid = {};
   for (const [key, token] of Object.entries(FAMILY_TOKENS)) {
@@ -329,7 +371,7 @@ function membersOf(oldTheme, newTheme, mixSpecs = []) {
   for (const [a, b] of PAIRS) {
     if (solid[a] && solid[b]) members.push({ key: `${a}~${b}`, old: solid[a].old, new: solid[a].new, pairOld: solid[b].old, pairNew: solid[b].new });
   }
-  const mixes = mixMembers(mixSpecs, oldTheme, newTheme, surfaces);
+  const mixes = mixMembers(mixSpecs, oldTheme, newTheme, surfaces, themeName);
   members.push(...mixes.members);
   const kept = members.filter((m) => !same(m.old, m.new) || (m.pairOld && !same(m.pairOld, m.pairNew)));
   for (const m of kept) {
@@ -347,9 +389,36 @@ function familiesOf(oldCss, newCss, mixTexts = { old: [], new: [] }) {
   const o = tokensOf(oldCss); const n = tokensOf(newCss);
   // Review: base mixes come from the base CSS and head mixes from the head CSS, never pooled. A mix that exists
   // on only one side was never rendered on the other, so it builds no member (fail closed) and is listed.
-  const side = (texts) => { const m = new Map(); for (const t of texts || []) for (const spec of colourMixesOf(t)) m.set(spec.raw, spec); return m; };
+  // Round 5: a mix that reads an alias of an accent var (`.cat-x { --tint: var(--accent) }` with
+  // `color-mix(in oklab, var(--tint) 70%, var(--text))`) is modelled by substituting the alias's accent target(s),
+  // one spec per target that side assigns. Where the alias holds a non-accent value, that mix doesn't change.
+  const side = (texts) => {
+    const m = new Map(); const all = texts || [];
+    const targets = new Map();
+    for (const t of all) for (const d of String(t).replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/(--[\w-]+)\s*:\s*var\((--[\w-]+)\)\s*[;}]/g)) {
+      if (ACCENT_VARS.has(d[2]) && !ACCENT_VARS.has(d[1])) { if (!targets.has(d[1])) targets.set(d[1], new Set()); targets.get(d[1]).add(d[2]); }
+    }
+    const put = (spec, local) => {
+      const reads = local ? [...spec.raw.matchAll(/var\((--[\w-]+)\)/g)].map((x) => x[1]).filter((v) => v in local.dark || (local.light && v in local.light)) : [];
+      const key = reads.length ? `${spec.raw} [sheet ${reads.join(' ')}]` : spec.raw;
+      if (!m.has(key)) m.set(key, reads.length ? { ...spec, raw: key, local } : spec);
+    };
+    for (const t of all) {
+      const local = sheetTokensOf(t);
+      for (const spec of colourMixesOf(t)) put(spec, local);
+      for (const [alias, tos] of targets) {
+        if (!String(t).includes(`var(${alias})`)) continue;
+        for (const to of tos) {
+          const sub = String(t).split(`var(${alias})`).join(`var(${to})`);
+          const before = new Set(colourMixesOf(String(t).split(`var(${alias})`).join('var(--x-none)')).map((x) => x.raw));
+          for (const spec of colourMixesOf(sub)) if (!before.has(spec.raw)) put({ ...spec, raw: `${spec.raw} via ${alias}` }, local);
+        }
+      }
+    }
+    return m;
+  };
   const base = side(mixTexts.old); const head = side(mixTexts.new);
-  const specs = new Map([...head].filter(([raw]) => base.has(raw)));
+  const specs = new Map([...head].filter(([raw]) => base.has(raw)).map(([raw, spec]) => [raw, base.get(raw).local ? { ...spec, baseLocal: base.get(raw).local } : spec]));
   const skipped = [];
   for (const t of [...(mixTexts.old || []), ...(mixTexts.new || []), ...(mixTexts.js || []).map((x) => ({ js: x }))]) {
     for (const sk of skippedMixesOf(typeof t === 'string' ? t : t.js, { js: typeof t !== 'string', aliases: aliasesOf([...(mixTexts.old || []), ...(mixTexts.new || [])]) })) {
@@ -361,7 +430,7 @@ function familiesOf(oldCss, newCss, mixTexts = { old: [], new: [] }) {
   for (const theme of ['light', 'dark']) {
     const surfaces = [];
     for (const s of SURFACE_TOKENS) { try { surfaces.push(parseColour(n[theme][s]).slice(0, 3)); } catch { /* none */ } }
-    const built = membersOf(o[theme], n[theme], [...specs.values()]);
+    const built = membersOf(o[theme], n[theme], [...specs.values()], theme);
     out[theme] = { members: built.members, surfaces };
     for (const u of built.unresolved) if (!out.mixes.unresolved.includes(u)) out.mixes.unresolved.push(u);
   }
@@ -658,4 +727,4 @@ function verdictOf(results, config) {
   return { failures, crops };
 }
 
-module.exports = { aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, themeFromConfig, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, noiseCapFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };
+module.exports = { sheetTokensOf, aliasesOf, skippedMixesOf, NOISE_TILE_SHARE, EVIDENCE_RADIUS, T_NONE, parseColour, lab, deltaE00, onSegment, tokensOf, familiesOf, themeOf, themeFor, themeFromConfig, lightnessVotes, THEME_DOMINANCE, familiesFor, expectedFileFor, wantsClassify, colourMixesOf, computeMix, explainPixel, classifyPixel, classifyImage, WEAK_DE, exceptionsFor, noiseCapFor, verdictOf, CAPS, DE_MAX, DE_NOISE, T_AGREE };

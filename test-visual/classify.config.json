@@ -86,6 +86,54 @@
         ]
       ],
       "//": "Measured: #f7f1ef → #e0e1e2 14,622 px; siblings over the native menu's near-white greys (model ΔE ≤ 0.78): #f2ecea → #dcddde 131, #f0eae8 → #dadbdc 76, #eee8e7 → #d8d9da 69 (neighbouring pairs within ΔE 1 of these fall in their core)."
+    },
+    {
+      "name": "tint-lights-auto-rules",
+      "reason": "selected-row tint, terracotta 0.08 → Graphite 0.14 over white (§R2.2); too pale for the M1 discriminability rule",
+      "theme": "light",
+      "baselines": [
+        "test-visual/__screenshots__/inputs.spec.js/lights-auto-rules-darwin.png"
+      ],
+      "pairs": [
+        [
+          "#f7f1ef",
+          "#e0e1e2",
+          "#ffffff"
+        ]
+      ],
+      "//": "Measured (base 47ad8ac1): #f7f1ef → #e0e1e2 536 px (the selected row, x 144–232, y 384–432) over #ffffff; model as tint-lights-window."
+    },
+    {
+      "name": "scrim-tile-dark",
+      "reason": "category tile (agents-find-view.css .af-tile: color-mix(in oklab, var(--tint) 16%, var(--panel)), --tint: var(--accent)) seen through the drawer scrim .af-backdrop (color-mix(in oklab, var(--bg) 55%, transparent)); the scrim leaves a 0.45 × change, too pale for the M1 discriminability rule, and no strong pixel within 2 px",
+      "theme": "dark",
+      "baselines": [
+        "test-visual/__screenshots__/find-agents.spec.js/find-agents-detail-dark-darwin.png",
+        "test-visual/__screenshots__/find-agents.spec.js/find-agents-confirm-dark-darwin.png"
+      ],
+      "pairs": [
+        [
+          "#282628",
+          "#282a2f"
+        ]
+      ],
+      "//": "Core pair (base 47ad8ac1): #282628 → #282a2f; the gate-decoded (sRGB) core #282628 → #272a2f is within ΔE 0.6. Derived in test/classify-lib.test.js as --bg at 55% over the 8-bit 16% tile mix, ΔE ≤ 1 at each end."
+    },
+    {
+      "name": "scrim-tile-light",
+      "reason": "category tile (agents-find-view.css .af-tile: color-mix(in oklab, var(--tint) 16%, var(--panel)), --tint: var(--accent)) seen through the drawer scrim .af-backdrop (color-mix(in oklab, var(--bg) 55%, transparent)); the scrim leaves a 0.45 × change, too pale for the M1 discriminability rule, and no strong pixel within 2 px",
+      "theme": "light",
+      "baselines": [
+        "test-visual/__screenshots__/find-agents.spec.js/find-agents-detail-light-darwin.png",
+        "test-visual/__screenshots__/find-agents.spec.js/find-agents-confirm-light-darwin.png"
+      ],
+      "pairs": [
+        [
+          "#f2eceb",
+          "#e7e9ea"
+        ]
+      ],
+      "//": "Core pair (base 47ad8ac1): #f2eceb → #e7e9ea; the gate-decoded (sRGB) core #f3eceb → #e6e9ea is within ΔE 1. Derived in test/classify-lib.test.js as --bg at 55% over the 8-bit 16% tile mix, ΔE ≤ 1 at each end."
     }
   ],
   "noise": [
