@@ -125,57 +125,117 @@ function badNewTokenUses(names, files, headMap) {
   return bad;
 }
 
-// End index (exclusive) of the parenthesised call starting at s[i] === '('.
+// End index (exclusive) of the parenthesised call starting at s[i] === '('; strings inside are skipped.
 function closeParen(s, i) {
   let depth = 0;
   for (let k = i; k < s.length; k += 1) {
+    if (s[k] === '"' || s[k] === "'") { k = closeString(s, k) - 1; continue; }
     if (s[k] === '(') depth += 1;
     else if (s[k] === ')') { depth -= 1; if (depth === 0) return k + 1; }
   }
   return -1;
 }
+// End index (exclusive) of the string literal starting at s[i] (a quote). A CSS string cannot hold a raw
+// newline, so an unclosed quote ends at the line end instead of swallowing the rest of the file.
+function closeString(s, i) {
+  for (let k = i + 1; k < s.length; k += 1) {
+    if (s[k] === '\\') k += 1;
+    else if (s[k] === s[i]) return k + 1;
+    else if (s[k] === '\n') return k;
+  }
+  return s.length;
+}
 
-// `line` with every colour token replaced by a placeholder. A token that is not a colour stays as written, so
-// any non-colour edit shows up as a difference.
-function colourSkeleton(line, map) {
+// Per character of a stylesheet: 1 inside a declaration value, 2 inside a string or url() (opaque: never a colour
+// placeholder), 0 elsewhere (selectors, property names, at-rule preludes). Scanned over the whole file, so a
+// continuation line knows whether it is a value (a gradient's next stop) or a selector (`#fade,` before `{`).
+function valueMask(text) {
+  const mask = new Uint8Array(text.length);
+  let state = 'sel'; let depth = 0;
+  // from a ':' in a block: a declaration if `;` or `}` comes before `{`, else a nested selector's pseudo-class
+  const declColon = (i) => {
+    for (let k = i + 1; k < text.length; k += 1) {
+      const ch = text[k];
+      if (ch === '"' || ch === "'") { k = closeString(text, k) - 1; continue; }
+      if (ch === '(') { const e = closeParen(text, k); if (e < 0) return true; k = e - 1; continue; }
+      if (ch === ';' || ch === '}') return true;
+      if (ch === '{') return false;
+    }
+    return true;
+  };
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '"' || ch === "'" || /^url\(/i.test(text.slice(i, i + 4))) {
+      const end = ch === '"' || ch === "'" ? closeString(text, i) : closeParen(text, i + 3);
+      const stop = end < 0 ? text.length : end;
+      mask.fill(2, i, stop); i = stop - 1; continue;
+    }
+    if (state === 'val') {
+      if (ch === ';') { state = 'decl'; continue; }
+      if (ch === '}') { depth -= 1; state = depth > 0 ? 'decl' : 'sel'; continue; }
+      mask[i] = 1;
+      continue;
+    }
+    if (ch === '{') { depth += 1; state = 'decl'; continue; }
+    if (ch === '}') { depth = Math.max(0, depth - 1); state = depth > 0 ? 'decl' : 'sel'; continue; }
+    if (state === 'decl' && ch === ':' && declColon(i)) state = 'val';
+  }
+  return mask;
+}
+
+// Each line of `text` with its slice of valueMask(text).
+function maskedLines(text) {
+  const mask = valueMask(text); const out = []; let at = 0;
+  for (const line of text.split('\n')) { out.push({ line, mask: mask.subarray(at, at + line.length) }); at += line.length + 1; }
+  return out;
+}
+
+// `line` with every colour token in a declaration value replaced by a placeholder. Tokens outside values
+// (selectors), inside strings or url(), or not colours stay as written, so any non-colour edit shows up.
+function colourSkeleton(line, map, mask) {
   let out = ''; let i = 0;
   const start = /color-mix\(|rgba?\(|var\(|#[0-9a-fA-F]{3,8}(?![\w-])|\btransparent\b/g;
   for (let m = start.exec(line); m; m = start.exec(line)) {
     const end = m[0].endsWith('(') ? closeParen(line, m.index + m[0].length - 1) : m.index + m[0].length;
     if (end < 0) break;
     const tok = line.slice(m.index, end);
+    const inValue = mask[m.index] === 1;
     const fb = tok.match(/^var\(\s*(--[\w-]+)\s*,(.*)\)$/s);
-    const colour = isColour(tok, map) || Boolean(fb && isColour(`var(${fb[1]})`, map) && isColour(fb[2], map));
+    const colour = inValue && (isColour(tok, map) || Boolean(fb && isColour(`var(${fb[1]})`, map) && isColour(fb[2], map)));
     out += line.slice(i, m.index) + (colour ? '\u0000' : tok);
     i = end; start.lastIndex = end;
   }
   return (out + line.slice(i)).replace(/\s+/g, ' ').trim();
 }
 
-// Rule 3: `minus` → `plus` changes only colours, or drops overrides of token-sheet colour properties.
+// Rule 3: `minus` → `plus` changes only colours in values, or drops overrides of token-sheet colour properties
+// (a dropped declaration's value must have been a colour placeholder).
 function colourOnlyPair(minus, plus, maps) {
-  // only declarations the new line no longer has
-  const kept = new Set([...plus.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
-  const dropped = minus.replace(/(--[\w-]+)\s*:\s*([^;{}]+?)\s*;/g, (all, name, value) =>
-    (!kept.has(name) && maps.head.has(name) && isColour(`var(${name})`, maps.head) && isColour(value, maps.base) ? '' : all));
-  const head = colourSkeleton(plus, maps.head);
-  return colourSkeleton(minus, maps.base) === head || colourSkeleton(dropped, maps.base) === head;
+  const head = colourSkeleton(plus.line, maps.head, plus.mask);
+  const base = colourSkeleton(minus.line, maps.base, minus.mask);
+  if (base === head) return true;
+  const kept = new Set([...plus.line.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
+  const dropped = base.replace(/(--[\w-]+)\s*:\s*\u0000\s*;\s*/g, (all, name) =>
+    (!kept.has(name) && maps.head.has(name) && isColour(`var(${name})`, maps.head) ? '' : all));
+  return dropped.replace(/\s+/g, ' ').trim() === head;
 }
 
 // <style> content of an HTML file, and the rest (which must not change).
-const styleOf = (html) => [...html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n');
+const styleOf = (html) => [...html.replace(/<!--[\s\S]*?-->/g, '').matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n');
 const outsideStyle = (html) => html.replace(/(<style\b[^>]*>)[\s\S]*?(<\/style>)/gi, '$1$2');
 
 // Changed lines (comments stripped, blank lines ignored) that are not a lone colour declaration.
 // `maps` = { head, base }: token maps used to resolve var() (head) and to check a custom property's base value.
 // `rules`: also accept a changed line that pairs with the line it replaces under rule 3.
 function badCssLines(baseText, headText, maps = { head: tokenMap([headText]), base: tokenMap([baseText]) }, { rules = false } = {}) {
+  const baseCss = stripComments(baseText); const headCss = stripComments(headText);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r0b-structural-'));
   const a = path.join(dir, 'base.css'); const b = path.join(dir, 'head.css');
-  fs.writeFileSync(a, stripComments(baseText)); fs.writeFileSync(b, stripComments(headText));
+  fs.writeFileSync(a, baseCss); fs.writeFileSync(b, headCss);
   const r = spawnSync('git', ['diff', '--no-index', '--no-color', '-U0', a, b], { encoding: 'utf8' });
   fs.rmSync(dir, { recursive: true, force: true });
   if (r.status !== 0 && r.status !== 1) throw new Error(`git diff --no-index failed: ${r.stderr}`);
+  const lines = { '-': maskedLines(baseCss), '+': maskedLines(headCss) };
   const lone = (line) => {
     const m = line.slice(1).match(/^\s*(--[\w-]+|[a-z-]+)\s*:\s*([^;{}]+?)\s*;?\s*$/);
     return Boolean(m && (m[1].startsWith('--') || COLOUR_PROPS.has(m[1]))
@@ -184,19 +244,25 @@ function badCssLines(baseText, headText, maps = { head: tokenMap([headText]), ba
       && (!m[1].startsWith('--') || !maps.base.has(m[1]) || isColour(`var(${m[1]})`, maps.base)));
   };
   const bad = [];
-  // hunk by hunk: with `rules`, the i-th removed line pairs with the i-th added one when the counts match
-  for (const hunk of r.stdout.split(/^@@[^\n]*\n/m).slice(1)) {
-    const lines = hunk.split('\n').filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---) /.test(l) && l.slice(1).trim());
-    const minus = lines.filter((l) => l[0] === '-'); const plus = lines.filter((l) => l[0] === '+');
+  // hunk by hunk, with each line's number from the header (so it gets its file context); with `rules`, the i-th
+  // removed line pairs with the i-th added one when the counts match
+  for (const m of r.stdout.matchAll(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@[^\n]*\n((?:[-+\\][^\n]*\n?)*)/gm)) {
+    const at = { '-': Number(m[1]) - 1, '+': Number(m[2]) - 1 };
+    const side = { '-': [], '+': [] };
+    for (const l of m[3].split('\n')) {
+      if (l[0] !== '-' && l[0] !== '+') continue;
+      side[l[0]].push({ text: l, ...lines[l[0]][at[l[0]]] });
+      at[l[0]] += 1;
+    }
+    const minus = side['-'].filter((x) => x.text.slice(1).trim()); const plus = side['+'].filter((x) => x.text.slice(1).trim());
     const paired = rules && minus.length === plus.length;
-    lines.forEach((line) => {
-      if (lone(line)) return;
-      if (paired) {
-        const k = (line[0] === '-' ? minus : plus).indexOf(line);
-        if (colourOnlyPair(minus[k].slice(1), plus[k].slice(1), maps)) return;
-      }
-      bad.push(line);
-    });
+    for (const [list, other] of [[minus, plus], [plus, minus]]) {
+      list.forEach((x, k) => {
+        if (lone(x.text)) return;
+        if (paired && colourOnlyPair(list === minus ? x : other[k], list === minus ? other[k] : x, maps)) return;
+        bad.push(x.text);
+      });
+    }
   }
   return bad;
 }
@@ -318,7 +384,13 @@ test('R0b structural gate: only colour declarations change', { skip: !ACTIVE.siz
     if (h === null) { bad[f] = ['(deleted)']; continue; }
     const html = f.endsWith('.html');
     if (html && outsideStyle(b) !== outsideStyle(h)) { bad[f] = ['(changed outside <style>)']; continue; }
-    const lines = badCssLines(html ? styleOf(b) : b, html ? styleOf(h) : h, maps, { rules: RULE_LINES.has(f) });
+    const css = { base: html ? styleOf(b) : b, head: html ? styleOf(h) : h };
+    // the file's own custom properties resolve too (a page-local --panel), on top of the token stylesheets
+    const fileMaps = TOKEN_CSS.includes(f) ? maps : {
+      head: tokenMap([...TOKEN_CSS.map(readHead).filter((t) => t !== null), css.head]),
+      base: tokenMap([...TOKEN_CSS.map(baseText).filter((t) => t !== null), css.base]),
+    };
+    const lines = badCssLines(css.base, css.head, fileMaps, { rules: RULE_LINES.has(f) });
     if (lines.length) bad[f] = lines;
   }
   assert.deepEqual(bad, {}, 'stylesheet lines that are not a colour-only change');
@@ -358,6 +430,23 @@ test('structural gate rule 3: in a rule line only colours may change; layout, se
   // dropping a page-local override is allowed only for a token-sheet colour property, never a size
   const withGap = base.replace(':root { --bg', ':root { --gap: 4px; --bg');
   assert.notDeepEqual(badCssLines(withGap, withGap.replace(' --gap: 4px;', ''), maps, { rules: true }), [], 'dropping a size override must fail');
+  // round 8a: a #hex is a colour only inside a declaration value; strings and url() are opaque
+  const sheet = '#fade { color: #fff; }\n.q { background: url(#abc); }\n.r::before { content: "#fff"; }\n'
+    + '#fade,\n.s { color: #fff; }\n.t {\n  background-image:\n    radial-gradient(circle, #e5866a, transparent 70%);\n}\n';
+  const rule3 = (head) => badCssLines(sheet, head, maps, { rules: true });
+  assert.deepEqual(rule3(sheet.replace('#fade { color: #fff; }', '#fade { color: #000; }')), [], 'a colour value in a hex-ID rule may change');
+  assert.deepEqual(rule3(sheet.replace('circle, #e5866a,', 'circle, var(--accent),')), [], 'a colour stop on a continuation line may change');
+  for (const [what, head] of [
+    ['a hex-digit ID selector (#fade → #face)', sheet.replace('#fade { color', '#face { color')],
+    ['a url() fragment', sheet.replace('url(#abc)', 'url(#abd)')],
+    ['a string that looks like a colour', sheet.replace('content: "#fff"', 'content: "#000"')],
+    ['a selector continuation line (#fade, → #face,)', sheet.replace('#fade,\n', '#face,\n')],
+    ['gradient geometry on a continuation line', sheet.replace('radial-gradient(circle,', 'radial-gradient(ellipse,')],
+  ]) assert.notDeepEqual(rule3(head), [], `${what} must fail`);
+  // an unclosed apostrophe (in an HTML comment that mentions <style>) must not blind the rest of the sheet
+  const page2 = '<!-- the editor\'s inline <style> note -->\n<style>\n.a { padding: 4px; }\n</style>';
+  assert.notDeepEqual(badCssLines(styleOf(page2), styleOf(page2.replace('padding: 4px', 'padding: 6px')), maps, { rules: true }), []);
+  assert.equal(styleOf(page2).includes('editor'), false);
   // in HTML only <style> content is compared; markup must not change
   const page = '<style>\n.x { color: #e5866a; }\n</style>\n<div class="a">hi</div>';
   assert.equal(outsideStyle(page), outsideStyle(page.replace('#e5866a', 'var(--accent)')));
@@ -365,4 +454,4 @@ test('structural gate rule 3: in a rule line only colours may change; layout, se
   assert.equal(styleOf(page).includes('#e5866a'), true);
 });
 
-module.exports = { badCssLines, badNewTokenUses, isColour, tokenMap, colourSkeleton };
+module.exports = { badCssLines, badNewTokenUses, isColour, tokenMap, colourSkeleton, valueMask };
