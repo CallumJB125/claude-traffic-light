@@ -7,6 +7,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createOverviewMain } = require('../src/overview-main');
 const { sidebarRows, KEYS } = require('../src/overview-sidebar-rows');
+const { sessionRow } = require('../src/session-row');
+// R2b-1: main projects SessionRowVMs (passiveRows().vms), so the unit tests build them the same way.
+const withVms = (out, refs = new Map()) => ({ ...out, vms: new Map((out.rows || []).map((r) => [r.id, sessionRow(r, { origin: out.origins?.get(r.id) ?? null, ref: refs.get(r.id) ?? null })])) });
 const { originOf } = require('../src/focus/ids');
 
 const now = () => new Date().toISOString();
@@ -185,17 +188,27 @@ test('sidebarRows: pinned keys, clamped values, path-like labels dropped, at mos
     { id: id(2), bucket: 'weird', task: { status: 'tracked', title: '/Users/me/secret/file.txt' }, project: '~/code/beta', age_ms: -1 },
     { id: id(3), bucket: 'working', provider: { id: 'claude' }, task: { status: 'unknown', title: 'Task not reported' }, project: 'billing' },
     { id: id(4), bucket: 'idle', provider: { id: 'mystery' }, project: 'Local project' },
+    { id: id(5), bucket: 'working', provider: { id: 'codex' }, project: 'gamma', label: 'Managed task' },
+    { id: id(6), bucket: 'idle', provider: { id: 'claude' }, project: 'delta' },
     { id: 'not-an-id', bucket: 'needs' },
   ];
-  const out = sidebarRows({ status: 'complete', rows, origins: new Map([[id(1), 'iTerm'], [id(2), '/Applications/Evil.app']]) });
+  const refs = new Map([
+    [id(5), { provider: 'codex', sessionId: 't-5', taskId: 't-5', origin: 'chat', driver: 'chat' }],
+    [id(6), { provider: 'claude', sessionId: 's-6', origin: 'external', driver: 'external', hostApp: 'Ghostty Dock' }],
+  ]);
+  const out = sidebarRows(withVms({ status: 'complete', rows, origins: new Map([[id(1), 'iTerm'], [id(2), '/Applications/Evil.app'], [id(6), 'Ghostty Dock']]) }, refs));
   assert.deepEqual(out, { schema: 1, status: 'complete', sessions: [
     { id: id(1), bucket: 'needs', title: 'Ship it', project: 'alpha', origin: 'iTerm', age_ms: 1200, team: true, terminal: true, chat: false, thread: false },
     { id: id(2), bucket: 'idle', title: 'AI session', project: '', origin: null, age_ms: null, team: false, terminal: true, chat: false, thread: false },
     { id: id(3), bucket: 'working', title: 'Claude session in billing', project: 'billing', origin: null, age_ms: null, team: false, terminal: false, chat: false, thread: false },
     { id: id(4), bucket: 'idle', title: 'AI session', project: '', origin: null, age_ms: null, team: false, terminal: false, chat: false, thread: false },
+    { id: id(5), bucket: 'working', title: 'Codex session in gamma', project: 'gamma', origin: null, age_ms: null, team: false, terminal: false, chat: true, thread: true },
+    { id: id(6), bucket: 'idle', title: 'Claude session in delta', project: 'delta', origin: null, age_ms: null, team: false, terminal: true, chat: false, thread: true },
   ] });
+  assert.ok(!JSON.stringify(out).includes('t-5') && !JSON.stringify(out).includes('s-6'), 'no ref field reaches the sidebar');
+  assert.deepEqual(sidebarRows({ status: 'complete', rows }), { schema: 1, status: 'unavailable', sessions: [] }, 'no vms, no rows');
   const many = Array.from({ length: 250 }, (_, i) => ({ id: id(i + 10), bucket: 'idle' }));
-  assert.equal(sidebarRows({ status: 'partial', rows: many }).sessions.length, 200);
+  assert.equal(sidebarRows(withVms({ status: 'partial', rows: many })).sessions.length, 200);
   assert.deepEqual(sidebarRows(null), { schema: 1, status: 'unavailable', sessions: [] });
 });
 

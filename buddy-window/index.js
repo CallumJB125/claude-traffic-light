@@ -1357,7 +1357,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       if(!win||win.isDestroyed()||!wc||wc.isDestroyed()||selected!=='thread'||content!==v||!win.contentView.children.includes(v)||!win.isVisible()||win.isMinimized())return null;
       const expected=threadUrl();
       if(wc.getURL()!==expected||wc.mainFrame?.url!==expected||wc.isLoading())return null;
-      return {window:win,contents:wc,frame:wc.mainFrame,generation:threadDocument,boundId:threadId,foreground:win.isFocused()};
+      return {window:win,contents:wc,frame:wc.mainFrame,generation:threadDocument,boundId:threadId,account:setupSourcesGeneration,workspace:store.active()?.id,foreground:win.isFocused()};
     },
     openThread,
     // Chat-first preview: a deep link main parsed (src/chat-links.js); navigation only.

@@ -2267,7 +2267,6 @@ function getTasks() {
     // The confirmation for the risky actions is main's: a native dialog, Cancel the default, the page's click never counts.
     confirmDialog: async (info, wcId) => {
       const wc = tasksPages().find((w) => w.id === wcId);
-      const parent = (wc && BrowserWindow.fromWebContents(wc)) || undefined;
       const show = async owner => dialog.showMessageBox(owner, {
         type: 'warning', buttons: ['Cancel', info.label], defaultId: 0, cancelId: 0, noLink: true,
         message: `${info.label}?`,
@@ -2278,7 +2277,9 @@ function getTasks() {
       if (homeWc && homeWc.id === wcId) return info.action === 'create' ? (await buddyWin?.homeConfirm?.(show))?.response === 1 : false;
       // Only a Tasks page (above: Home's create) may raise a dialog; any other sender, registered or not, is refused, never an unparented one.
       if (!wc) return false;
-      const r = ['merge', 'switchAi', 'openPr', 'takeover', 'openTerminal'].includes(info.action) || info.action === 'create' && wc ? await buddyWin?.tasksConfirm?.(show) : await show(parent);
+      // Every Tasks dialog, native approve (StartTask, scope 'task') and discard included, takes the Tasks window's
+      // modal ticket: focused, one dialog at a time, and the same document after it (ledger 11).
+      const r = await buddyWin?.tasksConfirm?.(show);
       return r?.response === 1;
     },
     seen: {

@@ -191,6 +191,14 @@ test('finding 2: confirmDialog sends Home’s create to homeConfirm and refuses 
   ctx.answer = 1;
   assert.equal(await ctx.confirm({ action: 'create', label: 'Start anyway', title: 't' }, 42), true, 'Tasks keeps its own ticket');
   assert.equal(tasksAsks.length, 1);
+  // Ledger 11 (R2b-1): every native Tasks dialog, approve (StartTask / scope 'task') and discard included, goes
+  // through the Tasks window's modal ticket, never a bare dialog.
+  for (const info of [{ action: 'discard' }, { action: 'approve', payload: { scope: 'task' } }, { action: 'takeover' }, { action: 'openPr' }, { action: 'merge' }, { action: 'switchAi' }, { action: 'openTerminal' }]) {
+    const asks = tasksAsks.length;
+    assert.equal(await ctx.confirm({ ...info, label: 'x', title: 't' }, 42), true, info.action);
+    assert.equal(tasksAsks.length, asks + 1, `${info.action} takes the Tasks ticket`);
+    assert.equal(shown.at(-1)[0], 'tasks-window', `${info.action} is parented by the ticket's window`);
+  }
   // Only a Tasks page (and Home's create) may raise a dialog: an unknown, absent, destroyed or other-document sender is
   // refused with no dialog and no ticket, never an unparented one. 43 is a live webContents that is neither Tasks nor Home.
   const before = { shown: shown.length, home: homeAsks.length, tasks: tasksAsks.length };
@@ -201,4 +209,32 @@ test('finding 2: confirmDialog sends Home’s create to homeConfirm and refuses 
   }
   assert.equal(shown.length, before.shown, 'no dialog for an unknown sender');
   assert.equal(homeAsks.length, before.home); assert.equal(tasksAsks.length, before.tasks);
+});
+
+// R2b-1, ledger 11 and 14: main's own confirmDialog, run against the shipped tasksConfirm/setupsConfirm. A native
+// approve (StartTask / scope 'task') or discard from the Tasks page holds the Tasks ticket while its dialog is open,
+// so a Setups confirmation in that time is refused (null) and shows nothing; once it is answered, Setups asks again.
+test('native approve or discard open, then a Setups confirmation: null, no second dialog (ledger 11 + 14)', async () => {
+  const start = mainSrc.indexOf('    confirmDialog: async (info, wcId) => {', mainSrc.indexOf('function getTasks()'));
+  const finish = mainSrc.indexOf('    seen: {', start);
+  for (const info of [{ action: 'approve', payload: { scope: 'task' } }, { action: 'discard' }]) {
+    const w = world(); w.ctx.show('tasks');
+    const tasksWc = w.views.tasks.webContents;
+    let release; const owners = [];
+    const ctx = {
+      tasksPages: () => [tasksWc], BrowserWindow: { fromWebContents: () => w.win }, buddyWin: w.api,
+      dialog: { showMessageBox: (owner) => { owners.push(owner); return new Promise((r) => { release = r; }); } },
+    };
+    vm.runInNewContext(`globalThis.confirm=({${mainSrc.slice(start, finish)}}).confirmDialog;`, ctx);
+    const pending = ctx.confirm({ ...info, label: 'Allow', title: 't' }, tasksWc.id);
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(owners, [w.win], `${info.action}: one dialog, parented by the Tasks window`);
+    w.ctx.show('setups');
+    let asked = 0;
+    assert.equal(await w.api.setupsConfirm(async () => { asked++; return { response: 1 }; }), null, `${info.action}: Setups refuses while it is open`);
+    assert.equal(asked, 0);
+    release({ response: 0 });
+    assert.equal(await pending, false, 'answered Cancel (and the page moved): false');
+    assert.deepEqual(await w.api.setupsConfirm(async () => ({ response: 1 })), { response: 1 }, `${info.action}: Setups asks again once it is answered`);
+  }
 });

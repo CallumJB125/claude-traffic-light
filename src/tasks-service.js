@@ -65,7 +65,10 @@ function createTasksService(opts) {
   const integrationReviews = new Map(); // opaque page handle -> exact helper review and selected document
   const providerReviews = new Map(); // reviewed source snapshot and exact next AI
   const pullRequestReviews = new Map(); // exact GitHub destination, text and source; opaque renderer handle
-  const relayed = new Map();       // taskId → { approvals: Map(id → {tool, inputSummary, hash}), asks: Set }
+  // (wcId, taskId) → { approvals: Map(id → {tool, inputSummary, hash}), asks: Set }. Per document: what one
+  // page was shown never makes an id answerable from another (labfix-review R2a nit 2).
+  const relayed = new Map();
+  const relayKey = (wcId, taskId) => `${wcId}\0${taskId}`;
   const slots = new Map();         // webContents id → { id, sub, gen }: one open task per page
   let gen = 0;
   const isDir = opts.isDir || isDirDefault;
@@ -273,8 +276,8 @@ function createTasksService(opts) {
 
   const hashOf = (a) => crypto.createHash('sha256').update(`${a.tool}\0${a.inputSummary}`).digest('hex');
   // What the page was shown as answerable: act() refuses an approval or ask id main did not relay.
-  function remember(detail) {
-    relayed.set(detail.id, {
+  function remember(detail, wcId) {
+    relayed.set(relayKey(wcId, detail.id), {
       approvals: new Map(detail.openApprovals.map((a) => [a.approvalId, { tool: a.tool, inputSummary: a.inputSummary, hash: hashOf(a) }])),
       asks: new Set(detail.openAsk ? [detail.openAsk.askId] : []),
     });
@@ -292,7 +295,7 @@ function createTasksService(opts) {
       const detail = guard.sanitizeDetail(raw, { now: now(), homeDir });
       if (!detail) { slots.delete(wcId); return failure({ code: 'NOT_FOUND' }); }
       if (typeof raw.repo?.root === 'string') roots.set(id, raw.repo.root);
-      remember(detail);
+      remember(detail, wcId);
       const replay = [];
       let live = false;
       const sub = await client.subscribe(id, { fromSeq: 1, onReset: () => { if (!stale()) opts.onEvent?.(wcId, id, { type: 'reset' }); } }, (ev) => {
@@ -321,7 +324,7 @@ function createTasksService(opts) {
       if (slots.get(wcId) !== mine) return;
       const detail = guard.sanitizeDetail(raw, { now: now(), homeDir });
       if (!detail) return;
-      remember(detail);
+      remember(detail, wcId);
       opts.onEvent?.(wcId, mine.id, { type: 'detail', detail });
     } catch { /* the next event retries */ } finally {
       refreshingOpen.delete(mine);
@@ -350,6 +353,7 @@ function createTasksService(opts) {
     for (const [key, value] of pullRequestReviews) if (value.wcId === wcId) pullRequestReviews.delete(key);
     for (const [key, value] of integrationReviews) if (value.wcId === wcId) integrationReviews.delete(key);
     for (const [key, value] of providerReviews) if (value.wcId === wcId) providerReviews.delete(key);
+    for (const key of relayed.keys()) if (key.startsWith(`${wcId}\0`)) relayed.delete(key);
     const o = slots.get(wcId);
     slots.delete(wcId);
     if (o?.sub) await o.sub.unsubscribe();
@@ -379,14 +383,14 @@ function createTasksService(opts) {
     if (!connected()) return failure({ code: 'SUPERVISOR_UNREACHABLE' });
     if (['handback', 'discard'].includes(req?.action) && terminalLaunching.has(req.id)) return failure({ code: 'SESSION_BUSY' });
     const row = tasks.get(req?.id);
-    const ctx = relayed.get(req?.id) || { approvals: new Map(), asks: new Set() };
+    const ctx = relayed.get(relayKey(wcId, req?.id)) || { approvals: new Map(), asks: new Set() };
     let v = guard.validateAct(req, row, ctx);
     if (!v.ok && v.native) {
       let yes = false;
       try { yes = !!(await opts.confirmDialog?.(dialogInfo(req, row, ctx), wcId)); } catch { yes = false; }
       if (!yes) return { ok: false, code: 'CONFIRM_REQUIRED', text: '', cancelled: true };
       if (!connected()) return failure({ code: 'SUPERVISOR_UNREACHABLE' });
-      v = guard.validateAct(req, tasks.get(req.id), { ...(relayed.get(req.id) || ctx), nativeConfirmed: true });
+      v = guard.validateAct(req, tasks.get(req.id), { ...(relayed.get(relayKey(wcId, req.id)) || ctx), nativeConfirmed: true });
     }
     if (!v.ok) {
       if (v.code === 'ILLEGAL_TRANSITION') refresh().catch(() => {});

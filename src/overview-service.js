@@ -10,6 +10,8 @@ const AgentReports=require('./agent-self-report');
 const {clean}=require('./work-capture');
 const Directory=require('./session-directory');
 const Ids=require('./focus/ids');
+const Surface=require('./session-surface');
+const {sessionRow}=require('./session-row');
 const {createTeamSessionControls}=require('./team-session-controls');
 const {personHandoffs}=require('./handoff-people');
 const FollowupSchedules=require('./recipe-schedules');
@@ -39,7 +41,16 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
  let epoch=0,directoryEpoch=0,routeEpoch=0,teamView=null,handles=new Map(),teamRefs=new Map();const secret=crypto.randomBytes(32);
  // Chat-first preview (redesign R2a): row id → what a thread may show, main-only,
  // from the latest build. Temporary: replaced by SessionRowVM.ref in R2b.
- let lastTargets=new Map();
+ // Redesign R2b-1: each row's SessionRef (PR 0s), main-only, beside the cwd the
+ // activity loader needs (a ref is path-free by contract). Replaces R2a's
+ // temporary targets map. Never sent to a renderer; projections drop it.
+ let lastRefs=new Map();
+ // A SessionRef for this computer's own terminal session, or null (an id the
+ // contract refuses gets no ref, so no thread).
+ const localRef=(raw,label)=>{try{const tab=label==='Plexiform Terminal';return Surface.sessionRef({provider:raw.source,sessionId:raw.sessionId,taskId:null,origin:tab?'plexiform-tab':'external',driver:tab?'terminal':'external',hostApp:Surface.HOST_APPS.includes(label)?label:null});}catch{return null;}};
+ // A managed task's ref. The tasks snapshot carries no session id, so the
+ // chat's session is named by its task id (the engine's own fallback, engine.js:497).
+ const taskRef=(t)=>{try{return Surface.sessionRef({provider:t.ai?.id||'unknown',sessionId:t.id,taskId:t.id,origin:'chat',driver:Surface.driverOfTaskState(t.state)});}catch{return null;}};
  const directoryModel=Directory.createSessionDirectory({now});
  const stable=parts=>crypto.createHmac('sha256',secret).update(JSON.stringify(parts)).digest('hex');
  const teamKey=(origin,teamId)=>stable(['team',origin,teamId]).slice(0,32);
@@ -100,7 +111,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
  async function build(time,alive){
   let all;try{all=await sourcesData();}catch{all={sources:[],capture:[],partial:true};}
   if(!alive())return null;
-  const next=new Map(),rows=[],usedCards=new Set(),meta=new Map(),origins=new Map(),targets=new Map();let partial=all.partial,omitted=0;
+  const next=new Map(),rows=[],usedCards=new Set(),meta=new Map(),origins=new Map(),refs=new Map();let partial=all.partial,omitted=0;
   const teamMeta=(source,row)=>source.kind==='team'&&id(row.team_id)?{teamKey:teamKey(source.key,row.team_id),teamName:clean(row.team_name,80)||'Team'}:{};
   const good=all.sources.filter(({source,data})=>{try{const ok=validData(source,data);if(!ok||data.status!=='complete')partial=true;return ok;}catch{partial=true;return false;}});
   const binding=(raw)=>{if(raw.remote||raw.device)return null;const capture=all.capture.find(c=>c.provider===raw.source&&c.session_id===raw.sessionId&&c.task_id===(raw.taskId??'session')&&!c.untracked&&id(c.card_id));if(!capture)return null;
@@ -116,7 +127,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
    // The terminal it runs in, for the chat-first sidebar only: main-side, a closed label set (focus/ids originOf).
    // Only this computer's own sessions: a paired device's session is not "in a terminal" here.
    if(!raw.remote&&!raw.device)origins.set(identity,Ids.originOf(raw));
-   if(!raw.remote&&!raw.device&&!parentId)targets.set(identity,{kind:'session',source:raw.source,sessionId:raw.sessionId,row:dto});
+   if(!raw.remote&&!raw.device&&!parentId){const ref=localRef(raw,origins.get(identity));if(ref)refs.set(identity,{ref,cwd:typeof raw.cwd==='string'?raw.cwd:''});}
    if(bound){usedCards.add(cardIdentity(bound.source,bound.data,bound.row));register(dto,{kind:'board',bound,pin:keyOf(bound.row)},next);meta.set(identity,{kind:'board',boardRunId:card.run?.id,...teamMeta(bound.source,bound.row)});}else{register(dto,{kind:'reported'},next);meta.set(identity,{kind:'reported',nativeSessionId:raw.sessionId,nativeTurnId:raw.codexTurnId??null});}
    const children=Array.isArray(raw.source==='codex'?raw.codexAgents:raw.agents)?(raw.source==='codex'?raw.codexAgents:raw.agents):[];
    for(const child of children.slice(0,64)){
@@ -147,32 +158,36 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
    const connected=t.stale!==true,live=connected&&t.green===true;
    const dto={id:stable(['task',t.id]),handle:null,label:'Managed task',provider:provider(t.ai?.id,t.ai?.model),device:{label:'This device',local:true},board:{label:'Personal tasks',kind:'personal'},project:clean(t.repo?.name,100)||'Local project',...placed(clean(t.label,40)||'Unknown',managedBucket(t)),freshness:live?'recent':connected?'unknown':'stale',age_ms:live?0:null,task:task(t),children:[],capabilities:{open:capability(typeof openManaged==='function','Open Tasks','The Tasks page is unavailable.'),message:capability(live&&Array.isArray(t.actions)&&t.actions.includes('message')&&typeof messageManaged==='function','Message','This task cannot receive messages in its current state.')}};
    if(rows.some(r=>r.id===dto.id))continue;
-   register(dto,{kind:'managed',id:t.id,state:t.state,provider:t.ai?.id},next);rows.push(dto);meta.set(dto.id,{kind:'task'});targets.set(dto.id,{kind:'task',taskId:t.id,row:dto});
+   register(dto,{kind:'managed',id:t.id,state:t.state,provider:t.ai?.id},next);rows.push(dto);meta.set(dto.id,{kind:'task'});const ref=taskRef(t);if(ref)refs.set(dto.id,{ref,task:t});
   }
   if(!alive())return null;
   rows.sort((a,b)=>(a.age_ms??Infinity)-(b.age_ms??Infinity));
-  lastTargets=targets;
-  return{rows,next,partial,omitted,meta,origins,targets};
+  // One SessionRowVM per row (PR 0s). A vm with a ref stays in main.
+  const vms=new Map();for(const row of rows){const r=refs.get(row.id);const vm=sessionRow(row,{origin:origins.get(row.id)??null,task:r?.task??null,ref:r?.ref??null});if(vm){vms.set(row.id,vm);if(r)r.vm=vm;}}
+  lastRefs=refs;
+  return{rows,next,partial,omitted,meta,origins,refs,vms};
  }
- // A thread's target (redesign R2a), resolved without a build: the latest
- // build's map names the candidate, and it is re-checked against the in-memory
- // tasks snapshot or reported sessions on every call. A managed task's id is
- // also recomputed from the snapshot when no build has seen it yet (a link).
- // Only this computer's own work: a paired device's session has no target.
+ // A thread's target, resolved without a build: the latest build's ref names
+ // the candidate, and it is re-checked against the in-memory tasks snapshot or
+ // reported sessions on every call. A managed task's id is also recomputed
+ // from the snapshot when no build has seen it yet (a link). Only this
+ // computer's own work: a paired device's session has no ref, so no target.
+ // The returned vm is main-side (it carries the ref); headerOf picks from it.
  function threadTarget(rowId){
   if(typeof rowId!=='string'||!/^[0-9a-f]{64}$/.test(rowId))return null;
-  const known=lastTargets.get(rowId)??null;
-  if(!known||known.kind==='task'){
+  const known=lastRefs.get(rowId)??null;
+  if(!known||known.ref.origin==='chat'){
    let snap=null;try{snap=managed();}catch{snap=null;}
    if(snap?.conn?.status==='connected'&&Array.isArray(snap.tasks)){
-    const t=known?snap.tasks.find(x=>object(x)&&x.id===known.taskId):snap.tasks.slice(0,200).find(x=>object(x)&&id(x.id)&&stable(['task',x.id])===rowId);
-    if(t&&!t.hub&&stable(['task',t.id])===rowId)return{kind:'task',taskId:t.id,row:known?.row??null};
+    const t=known?snap.tasks.find(x=>object(x)&&x.id===known.ref.taskId):snap.tasks.slice(0,200).find(x=>object(x)&&id(x.id)&&stable(['task',x.id])===rowId);
+    if(t&&!t.hub&&stable(['task',t.id])===rowId&&taskRef(t))return{kind:'task',taskId:t.id,vm:known?.vm??null};
    }
    return null;
   }
   let input=[];try{input=sessions();}catch{input=[];}
-  const raw=(Array.isArray(input)?input:[]).find(x=>object(x)&&!x.remote&&!x.device&&(x.source??'claude')===known.source&&x.sessionId===known.sessionId);
-  return raw?{kind:'session',source:known.source,sessionId:raw.sessionId,cwd:typeof raw.cwd==='string'?raw.cwd:'',origin:Ids.originOf(raw),row:known.row}:null;
+  const {ref}=known;
+  const raw=(Array.isArray(input)?input:[]).find(x=>object(x)&&!x.remote&&!x.device&&(x.source??'claude')===ref.provider&&x.sessionId===ref.sessionId);
+  return raw?{kind:'session',source:ref.provider,sessionId:raw.sessionId,cwd:typeof raw.cwd==='string'?raw.cwd:'',origin:Ids.originOf(raw),vm:known.vm??null}:null;
  }
  // Read-only rows for another document (the chat-first sidebar). The same
  // build, but it never touches this service's epochs, action handles, team
@@ -183,7 +198,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   const time=now(),built=await build(time,alive);
   if(!built||!alive())return null;
   for(const row of built.rows)row.handle=null;
-  return{status:built.partial||built.omitted?'partial':'complete',observed_at:time,omitted:built.omitted,rows:built.rows,origins:built.origins,threads:new Set(built.targets.keys())};
+  return{status:built.partial||built.omitted?'partial':'complete',observed_at:time,omitted:built.omitted,rows:built.rows,origins:built.origins,vms:built.vms};
  }
  async function action(request,message=false){
   if(!closed(request,message?['handle','text']:['handle'])||typeof request.handle!=='string'||!UUID.test(request.handle)||message&&(typeof request.text!=='string'||!request.text.trim()||request.text.includes('\0')||request.text.trim().length>4000||Buffer.byteLength(request.text.trim())>8192))return response('invalid');

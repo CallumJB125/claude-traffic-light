@@ -1,8 +1,12 @@
 'use strict';
 // The chat-first thread document's main side (redesign R2a, plan-r2.md §2).
-// Read-only: it shows one row's chat or session activity and offers two
-// navigation effects. It adds no act authority; the Tasks page's G1/G2 and
-// tasks:* stay exactly as they are.
+// It shows one row's chat or session activity and offers two navigation
+// effects. R2b-1 adds exactly one act: thread:message, a reply to the bound
+// task only (plan-r2b-auth.md §2.1), through tasksService.act and
+// guard.validateAct unchanged. Approve, deny, answer, stop and every other
+// Tasks act stay on tasks-main.js owner() (the Tasks page) until R6a.
+// Provisional, awaiting Callum (plan-r2b-auth §7 item 1): no Stop from the chat
+// before R6a (the alternative is a thread:stop shaped like compose:stop).
 //
 // Guard T, for every channel: the exact thread webContents and its main frame,
 // the document generation, the request's row id === the row the document was
@@ -14,7 +18,17 @@
 
 const ROW_ID = /^[0-9a-f]{64}$/;
 const EFFECT_MS = 500;
-const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link']);
+const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message']);
+// The reply's own bound: guard's (TV.LIMITS.message), checked before any await.
+const MESSAGE_BYTES = 8192;
+const REPLY_TEXT = Object.freeze({
+  FOCUS: 'Focus this chat and send again.',
+  BUSY: 'Still sending your last message.',
+  CONFLICT: 'Your message may have been sent. Check the chat before sending again.',
+  NOT_FOUND: 'This chat has ended or moved.',
+  VALIDATION: 'That message could not be sent. Check it and try again.',
+  CONFIRM_REQUIRED: 'This needs the Tasks page. Use Open in Tasks.',
+});
 // Provisional, awaiting Callum (plan-r2.md §7 item 3): the link form may change.
 const LINK = (id) => `plexiform://thread/${id}`;
 
@@ -34,7 +48,8 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     if (!Number.isSafeInteger(c.generation) || typeof c.boundId !== 'string' || !ROW_ID.test(c.boundId)) return null;
     return c;
   }
-  const equal = (a, b) => !!a && !!b && a.window === b.window && a.contents === b.contents && a.frame === b.frame && a.generation === b.generation && a.boundId === b.boundId;
+  // account and workspace (R2b-1): a reply sent across a sign-in or workspace switch is refused.
+  const equal = (a, b) => !!a && !!b && a.window === b.window && a.contents === b.contents && a.frame === b.frame && a.generation === b.generation && a.boundId === b.boundId && a.account === b.account && a.workspace === b.workspace;
   // The sender is the thread document, asking about its own row.
   function guard(e, args, { effect = false } = {}) {
     const c = ctx();
@@ -128,6 +143,42 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     return r && typeof r === 'object' ? { ok: r.ok === true, ...(typeof r.note === 'string' ? { note: r.note.slice(0, 300) } : {}) } : { ok: false };
   }
 
+  // Reply (R2b-1, plan-r2b-auth §2.1): {id, body} only; main resolves the task and fixes the action.
+  const sending = new Set(); // `${wcId}:${generation}` with a reply in flight
+  const refuse = (code, text = REPLY_TEXT[code] ?? '') => ({ ok: false, code, text });
+  const plain = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
+  async function message(e, args) {
+    // 1. Sender and frame first, so no other document learns this thread's focus state.
+    const before = ctx();
+    if (!before || !e || e.sender !== before.contents || e.senderFrame !== before.frame || args.length !== 1) return null;
+    // 2. Foreground (S1).
+    if (before.foreground !== true) return refuse('ILLEGAL_TRANSITION', REPLY_TEXT.FOCUS);
+    // 3. Exact keys, the bound id, a bounded body: all before any await.
+    const req = args[0];
+    if (!plain(req) || Object.keys(req).sort().join(',') !== 'body,id' || req.id !== before.boundId) return refuse('VALIDATION');
+    if (typeof req.body !== 'string' || !req.body.trim() || Buffer.byteLength(req.body.trim()) > MESSAGE_BYTES) return refuse('VALIDATION');
+    // 6. One in flight per document, and S1's per-document rate.
+    const key = `${before.contents.id}:${before.generation}`;
+    if (sending.has(key) || !rateOk(before, 'message')) return refuse('BUSY');
+    // 4. Main resolves the task; a session's thread, a paired device's row or a gone task has none.
+    const t = resolve(before.boundId);
+    if (!t || t.kind !== 'task' || typeof t.taskId !== 'string') return refuse('NOT_FOUND');
+    const taskId = t.taskId;
+    // 7. Checked by tasks-service immediately before client.act, the point of no return.
+    const current = () => chatPreview === true && !stopped && still(before, true) && resolve(before.boundId)?.taskId === taskId;
+    sending.add(key);
+    let r = null;
+    try {
+      // 5. The action is main's.
+      try { r = await tasks().act({ id: taskId, action: 'message', payload: { body: req.body } }, before.contents.id, current); } catch { r = null; }
+    } finally { sending.delete(key); }
+    if (!current()) return refuse('CONFLICT');
+    if (r && r.ok === true) return { ok: true };
+    const code = typeof r?.code === 'string' ? r.code : 'INTERNAL';
+    // validateAct unchanged: a task that can't take a message now is ILLEGAL_TRANSITION, and the page shows why.
+    return refuse(code, REPLY_TEXT[code] ?? (typeof r?.text === 'string' ? r.text.slice(0, 300) : ''));
+  }
+
   // Copy link: the clipboard gets this row's link, nothing else.
   function copyLink(e, args) {
     const c = guard(e, args, { effect: true });
@@ -145,6 +196,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       ipc.handle('thread:open-in-tasks', (e, ...a) => toTasks(e, a));
       ipc.handle('thread:go-to-terminal', (e, ...a) => toTerminal(e, a));
       ipc.handle('thread:copy-link', (e, ...a) => copyLink(e, a));
+      ipc.handle('thread:message', (e, ...a) => message(e, a));
     },
     // tasks-service onEvent, before the Tasks pages: true when the event is the thread slot's.
     onEvent(wcId, taskId, event) {
@@ -162,4 +214,4 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
   };
 }
 
-module.exports = { createThreadMain, CHANNELS, EFFECT_MS, LINK };
+module.exports = { createThreadMain, CHANNELS, EFFECT_MS, LINK, REPLY_TEXT, MESSAGE_BYTES };

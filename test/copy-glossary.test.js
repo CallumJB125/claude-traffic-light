@@ -149,3 +149,12 @@ test('new copy is held to the glossary now: the chat-first sidebar is clean', ()
   const rows = literals(fs.readFileSync(path.join(ROOT, 'src/overview-sidebar-rows.js'), 'utf8')).filter((s) => !NO_PROJECT.has(s));
   assert.deepEqual(scan(rows.map((s) => ['src/overview-sidebar-rows.js', s])), []);
 });
+
+test('new copy is held to the glossary now: the thread page and its reply box (R2a/R2b-1) are clean', () => {
+  for (const f of ['thread.js', 'src/thread-main.js']) {
+    const strings = literals(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+    assert.ok(strings.length > 10, f);
+    assert.deepEqual(scan(strings.map((s) => [f, s])), [], f);
+  }
+  assert.ok(literals(fs.readFileSync(path.join(ROOT, 'src/thread-main.js'), 'utf8')).includes('Your message may have been sent. Check the chat before sending again.'));
+});

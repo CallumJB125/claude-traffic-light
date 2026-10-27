@@ -57,6 +57,19 @@ const NATIVE = {
   ] } },
 };
 
+// R2b-1: a chat that takes replies, and one that has ended.
+const REPLY = {
+  ...CHAT,
+  header: { ...CHAT.header, chatState: 'working', openInTerminal: { available: false, reason: 'in-place' } },
+  detail: { ...CHAT.detail, actions: ['message', 'stop'] },
+};
+const ENDED = {
+  ...CHAT,
+  header: { ...CHAT.header, bucket: 'check', chatState: 'ended', openInTerminal: { available: true, reason: null } },
+  detail: { ...CHAT.detail, state: 'done', actions: [] },
+  replay: CHAT.replay.slice(0, 12),
+};
+
 async function open({ fixture = null, theme = 'light', env = GATE } = {}) {
   const h = await launchApp({ env, files: { 'sessions/thread-fixture.json': session() } });
   if (fixture) {
@@ -183,5 +196,50 @@ test('200% zoom: nothing scrolls sideways, header or transcript', async () => {
     });
     expect(overflow[0]).toBeLessThanOrEqual(0);
     expect(overflow[1]).toBeLessThanOrEqual(0);
+  } finally { await h.cleanup(); }
+});
+
+// ── R2b-1: the reply box ─────────────────────────────────────────────────
+for (const theme of ['light', 'dark']) {
+  test(`reply (${theme}): the box under the chat, a draft, ⌘↩ sends the row and the text only`, async () => {
+    const { h, side } = await open({ fixture: REPLY, theme });
+    try {
+      // Main's thread:message is replaced with a recorder that answers the thread document only.
+      await h.app.evaluate(({ ipcMain }) => {
+        globalThis.__replies = [];
+        ipcMain.removeHandler('thread:message');
+        ipcMain.handle('thread:message', (e, ...a) => { if (!new URL(e.sender.getURL()).pathname.endsWith('/thread.html')) return null; globalThis.__replies.push(a); return { ok: true }; });
+      });
+      const page = await openThread(h, side, theme);
+      await expect(page.locator('#th-reply')).toBeVisible();
+      await expect(page.locator('#th-reply-text')).toHaveAttribute('placeholder', 'Reply to Claude…');
+      await expect(page.locator('#th-send')).toBeDisabled();
+      await page.locator('#th-reply-text').fill('Use the staging database for the upload test, not a temp folder.');
+      await expect(page.locator('#th-send')).toBeEnabled();
+      await page.locator('#th-reply-text').blur();
+      await shot(page, `thread-reply-${theme}.png`);
+      if (theme === 'light') {
+        await page.locator('#th-reply-text').press('Enter');
+        expect(await h.app.evaluate(() => globalThis.__replies.length)).toBe(0);
+        await page.locator('#th-reply-text').press('Meta+Enter');
+        await expect(page.locator('#th-reply-text')).toHaveValue('');
+        const sent = await h.app.evaluate(() => globalThis.__replies);
+        expect(sent.length).toBe(1);
+        expect(Object.keys(sent[0][0]).sort()).toEqual(['body', 'id']);
+        expect(sent[0][0].body).toBe('Use the staging database for the upload test, not a temp folder.\n');
+        expect(sent[0][0].id).toMatch(/^[0-9a-f]{64}$/);
+      }
+    } finally { await h.cleanup(); }
+  });
+}
+
+test('ended: no reply box, Resume in Tasks', async () => {
+  const { h, side } = await open({ fixture: ENDED });
+  try {
+    const page = await openThread(h, side);
+    await expect(page.locator('#th-reply')).toBeHidden();
+    await expect(page.locator('#th-ended-title')).toHaveText('This chat has ended');
+    await expect(page.locator('#th-resume')).toHaveText('Resume in Tasks');
+    await shot(page, 'thread-ended.png');
   } finally { await h.cleanup(); }
 });

@@ -1,7 +1,8 @@
-// Thread page bridge (chat-first preview, redesign R2a). Read-only: the page
-// reads the one row main opened it for and can ask for two navigation effects.
-// Every call names that row; main refuses any other (src/thread-main.js guard T).
-// Nothing that acts on a chat (approve, answer, send, stop) is here.
+// Thread page bridge (chat-first preview, redesign R2a). The page reads the one
+// row main opened it for and can ask for two navigation effects. Every call
+// names that row; main refuses any other (src/thread-main.js guard T).
+// R2b-1: one act, a reply to the bound chat ({id, body}; main fixes the task
+// and the action). Approve, deny, answer and stop are not here (Tasks page).
 const { contextBridge, ipcRenderer } = require('electron');
 
 const ROW_ID = /^[0-9a-f]{64}$/;
@@ -18,6 +19,8 @@ contextBridge.exposeInMainWorld('threadApi', {
   onEvent: (cb) => ipcRenderer.on('thread:event', (_e, m) => cb(m && typeof m === 'object' ? { id: id(m.id), event: m.event } : null)),
   // Copy link (provisional deep-link form, awaiting Callum): plexiform://thread/<id>.
   copyLink: (row) => ipcRenderer.invoke('thread:copy-link', id(row)),
+  // Reply to the bound chat. Only the two keys main accepts.
+  message: (row, body) => ipcRenderer.invoke('thread:message', { id: id(row), body: typeof body === 'string' ? body : '' }),
   // Back to Board from an ended chat.
   board: () => ipcRenderer.send('thread:board'),
 });
