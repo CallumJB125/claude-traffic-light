@@ -1,0 +1,70 @@
+/* The chat-first thread page (redesign R2a). Tokens only; see tokens.css. */
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: var(--text-base)/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+.th { display: flex; flex-direction: column; height: 100%; min-width: 0; }
+.th-col { width: 100%; max-width: 760px; margin: 0 auto; padding: 0 var(--space-6); }
+
+/* ── header ── */
+.th-head { flex: none; border-bottom: 1px solid var(--line); background: var(--bg); }
+.th-head-in { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title actions" "meta actions"; column-gap: var(--space-4); row-gap: var(--space-1); padding-top: var(--space-5); padding-bottom: var(--space-4); }
+.th-title-row { grid-area: title; display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.th-title { margin: 0; font: var(--t-title); font-size: var(--text-lg); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.th-meta { grid-area: meta; color: var(--muted); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; padding-left: 18px; }
+.th-meta:empty { display: none; }
+.th-actions { grid-area: actions; display: flex; align-items: center; gap: var(--space-2); align-self: center; }
+
+/* The bucket's shape dot: the same shapes as the sidebar, never colour alone. */
+.th-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; position: relative; }
+.th-dot[data-bucket="needs"] { background: var(--st-needs); }
+.th-dot[data-bucket="working"] { border: 2px solid var(--st-working); background: linear-gradient(to top, var(--st-working) 50%, transparent 50%); }
+.th-dot[data-bucket="check"] { border: 1.5px solid var(--st-check); }
+.th-dot[data-bucket="check"]::after { content: ""; position: absolute; left: 2.5px; top: 1px; width: 2px; height: 4px; border: solid var(--st-check); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+.th-dot[data-bucket="stuck"] { border-radius: 0; background: var(--st-stuck); clip-path: polygon(50% 5%, 100% 95%, 0 95%); }
+.th-dot[data-bucket="idle"] { border: 1.5px solid var(--st-idle); }
+.th-pill { flex: none; font-size: var(--text-xs); color: var(--muted); border: 1px solid var(--line); border-radius: var(--radius-pill); padding: 1px var(--space-2); white-space: nowrap; }
+.th-pill:empty { display: none; }
+
+/* ── buttons and the ⋯ menu ── */
+.th-btn { font: inherit; font-size: var(--text-sm); color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 5px var(--space-3); cursor: pointer; white-space: nowrap; }
+.th-btn:hover { background: var(--panel-2); }
+.th-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.th-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.th-more { padding: 5px var(--space-2); min-width: 32px; }
+.th-btn:focus-visible, .th-menu-item:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; box-shadow: var(--focus); }
+.th-more-wrap { position: relative; }
+.th-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 2; min-width: 160px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow-2); padding: var(--space-1); }
+.th-menu-item { display: block; width: 100%; text-align: left; font: inherit; font-size: var(--text-sm); color: var(--text); background: none; border: 0; border-radius: var(--radius-sm); padding: 6px var(--space-2); cursor: pointer; }
+.th-menu-item:hover { background: var(--panel-2); }
+
+/* ── body: transcript, the waiting card, empty states ── */
+.th-body { flex: 1; min-height: 0; display: flex; }
+.th-body-in { display: flex; flex-direction: column; min-height: 0; padding-top: var(--space-4); padding-bottom: var(--space-4); gap: var(--space-3); }
+.th-banner { flex: none; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); align-items: baseline; font-size: var(--text-sm); color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-2) var(--space-3); }
+.th-status { margin: 0; font-size: var(--text-sm); color: var(--muted); }
+.th-status:empty { display: none; }
+.th-tx { flex: 1; min-height: 120px; width: 100%; border: 0; background: transparent; color-scheme: light dark; }
+
+.th-waiting { flex: none; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--panel); padding: var(--space-3) var(--space-4); display: grid; gap: var(--space-1); justify-items: start; }
+.th-waiting-title { margin: 0; font-size: var(--text-base); font-weight: 600; display: flex; align-items: center; gap: var(--space-2); }
+/* The waiting status rides on the title: the header's needs dot, not a side stripe. */
+.th-waiting-title::before { content: ""; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--st-needs); }
+.th-waiting-what { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--text-sm); overflow-wrap: anywhere; }
+.th-waiting-where { margin: 0 0 var(--space-2); color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
+
+.th-empty { margin: auto 0; padding: var(--space-8) 0; text-align: center; display: grid; gap: var(--space-2); justify-items: center; }
+.th-empty-title { margin: 0; font-size: var(--text-lg); font-weight: 600; }
+.th-empty-text { margin: 0; color: var(--muted); max-width: 46ch; }
+
+@media (max-width: 560px) {
+  .th-col { padding: 0 var(--space-4); }
+  .th-head-in { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "meta" "actions"; }
+  .th-actions { justify-self: start; }
+}
+
+@media (forced-colors: active) {
+  .th-dot { border-color: CanvasText; }
+  .th-dot[data-bucket="needs"], .th-dot[data-bucket="stuck"] { background: CanvasText; }
+  .th-waiting-title::before { background: CanvasText; }
+}

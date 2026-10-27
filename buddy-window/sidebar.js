@@ -190,8 +190,9 @@ let chatFirst = false;
 function startChatFirst(r) {
   chatFirst = true;
   const add = (src) => new Promise((resolve, reject) => { const s = el('script', { src }); s.onload = resolve; s.onerror = reject; document.head.append(s); });
-  // State pushed before these scripts loaded landed in `state`; hand over the current page so the footer starts right.
-  add('../src/work-organise.js').then(() => add('sidebar-chat.js')).then(() => window.SidebarChat.start({ ...r, selected: state.selected })).catch(() => {});
+  // State pushed before these scripts loaded landed in `state` and is the newest; without one, main's
+  // own selection from buddy:pages (never this file's 'board' default), so the footer starts right.
+  add('../src/work-organise.js').then(() => add('sidebar-chat.js')).then(() => window.SidebarChat.start({ ...r, selected: statePushed ? state.selected : (r.chat?.selected ?? null) })).catch(() => {});
 }
 
 // Workspace switcher: the board on this Mac, every team on each signed-in
@@ -235,7 +236,8 @@ function paintWorkspaces() {
   }
 }
 
-window.buddy.onState((s) => { Object.assign(state, s); paintWorkspaces(); paint(); });
+let statePushed = false;
+window.buddy.onState((s) => { statePushed = true; Object.assign(state, s); paintWorkspaces(); paint(); });
 window.buddy.pages().then((r) => {
   if (!r) return;
   pages = r.pages;

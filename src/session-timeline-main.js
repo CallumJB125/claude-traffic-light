@@ -89,6 +89,8 @@ function register({ ipcMain, rootDir, home, user = null, hostname = null, writer
     return show(rowFor(key) || { adapter: s.adapter, sessionId: s.sessionId, cwd: '', lastActiveMs: 0, state: null });
   }
 
+  // What a page may see of a timeline: paths made relative and the home folder masked (Timeline.forDisplay).
+  const displayOf = (tl) => { const view = Timeline.forDisplay(tl, { home }); return { ...view, events: view.events.map((ev) => ({ at: ev.at, kind: ev.kind, ...Timeline.describe(ev) })) }; };
   const label = (r) => `${PROVIDER[r.adapter] || r.adapter} · ${r.cwd ? path.basename(r.cwd) : r.sessionId.slice(0, 8)}`;
   const exportOf = async (row, includePrompts) => {
     const tl = await timelineOf(row);
@@ -114,8 +116,7 @@ function register({ ipcMain, rootDir, home, user = null, hostname = null, writer
     const tl = await timelineOf(row);
     if (!valid() || (tl && isExcluded(tl.cwd))) return null;
     if (!tl) return { empty: 'This project is muted, so it has no timeline.' };
-    const view = Timeline.forDisplay(tl, { home });
-    return { key: keyOf(row), title: label(row), view: { ...view, events: view.events.map((ev) => ({ at: ev.at, kind: ev.kind, ...Timeline.describe(ev) })) } };
+    return { key: keyOf(row), title: label(row), view: displayOf(tl) };
   });
   ipcMain.handle('timeline:preview', async (e, key, includePrompts) => {
     if (!pageAllowed(e)) return null;
@@ -155,7 +156,19 @@ function register({ ipcMain, rootDir, home, user = null, hostname = null, writer
   // The Discover page's build log (src/build-log-main.js) names listed sessions by key, like this page.
   const listedRows = () => listed().map((r) => ({ key: keyOf(r), label: label(r), cwd: r.cwd || '' }));
   const timelineFor = async (key) => { const r = typeof key === 'string' && KEY.test(key) ? listed().find((x) => keyOf(x) === key) : null; return r ? timelineOf(r) : null; };
-  return { openSession, timelineOf, current: () => current, listedRows, timelineFor };
+  // The chat-first thread (redesign R2a) for one local session main resolved: the same
+  // listed rows and the same display sanitising as timeline:load, and it never
+  // changes this page's current selection.
+  const threadActivity = async (s) => {
+    if (!s || typeof s.sessionId !== 'string' || !KEY.test(s.sessionId) || typeof s.source !== 'string') return null;
+    const key = SessionHandover.keyOf(SessionHandover.adapterOf(s.source), s.sessionId);
+    const row = listed().find((x) => keyOf(x) === key);
+    if (!row) return { empty: 'Nothing to show for this session yet.' };
+    const tl = await timelineOf(row);
+    if (!tl || isExcluded(tl.cwd)) return { empty: 'This project is muted, so it has no activity here.' };
+    return { title: label(row), view: displayOf(tl) };
+  };
+  return { openSession, timelineOf, current: () => current, listedRows, timelineFor, threadActivity };
 }
 
 module.exports = { register };

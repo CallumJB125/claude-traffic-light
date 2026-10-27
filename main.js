@@ -1615,6 +1615,9 @@ function getBuddy() {
       // O4: Home stays alive while a task its box started is live; its retired document drops that task's slot.
       homeBusy: () => Compose.busy(),
       onHomeRetired: (wcId) => Compose.retire(wcId),
+      // Chat-first preview (redesign R2a): which row a thread may show, and its document ending.
+      threadTarget: (id) => OverviewMain.threadTarget(id),
+      onThreadRetired: (wcId) => ThreadMain?.retire(wcId),
       onOverviewRetired: () => { InteractionMain.retireDocuments().catch(() => {}); retireClaudeChannels(); },
       openWindow: (which) => {
         if (which === 'lights') createLightsWindow();
@@ -2171,11 +2174,18 @@ function showHealth() {
 // then. The link is never logged: it carries an invite token.
 const pendingLinks = [];
 let linksReady = false;
+const ChatLinks = require('./src/chat-links.js');
+const chatLinkFresh = ChatLinks.coalescer();
 function handleDeepLink(url) {
   if (typeof url !== 'string' || url.length > 2048 || !DEEP_LINK_RE.test(url)) return;
   if (!linksReady) { if (pendingLinks.length < 5) pendingLinks.push(url); return; }
   try {
-    getBuddy().openInvite(url);
+    const invited = getBuddy().openInvite(url);
+    // Chat-first preview: a page or thread link (src/chat-links.js). Never an account flow.
+    if (CHAT_PREVIEW && !invited) {
+      const target = ChatLinks.parse(url);
+      if (target) { if (chatLinkFresh(target)) buddyWin.openLink(target); return; }
+    }
     openBuddy();
   } catch (err) {
     console.error(`[deep-link] could not open ${BRAND.NAME}:`, err.message);
@@ -2206,6 +2216,8 @@ function createWaitingWindow() { openBuddy('waiting'); }
 // socket or token: this process does (src/tasks-service.js) and hands it
 // sanitised tasks over the IPC below, every one checked for its sender.
 // Dev runs point at the mock supervisor through an env var, never in a package.
+// The chat-first thread document (src/thread-main.js), created below with the gate on.
+let ThreadMain = null;
 let tasksSvc = null;
 let tasksProcess = null;
 const tasksPages = () => [buddyWin?.pageWebContents('tasks')].filter((w) => w && !w.isDestroyed());
@@ -2251,7 +2263,7 @@ function getTasks() {
       for (const id of AgentMail.acceptedTasks()) { const t = (snap?.tasks || []).find((x) => x && String(x.id) === id); if (t && ['done', 'in_review', 'failed'].includes(t.state)) AgentMail.taskEnded(id, t.state, t.state === 'failed' ? '' : t.reason || '').catch(() => {}); }
       try { keepAwakeMain?.hold(require('./src/morning-report.js').queueActive(snap)); } catch { /* the blocker is best-effort */ }
     },
-    onEvent: (wcId, id, event) => { if (Compose.onEvent(wcId, id, event)) return; const wc = tasksPages().find((w) => w.id === wcId); if (wc) wc.send('tasks:event', { id, event }); },
+    onEvent: (wcId, id, event) => { if (Compose.onEvent(wcId, id, event)) return; if (ThreadMain?.onEvent(wcId, id, event)) return; const wc = tasksPages().find((w) => w.id === wcId); if (wc) wc.send('tasks:event', { id, event }); },
     // The confirmation for the risky actions is main's: a native dialog, Cancel the default, the page's click never counts.
     confirmDialog: async (info, wcId) => {
       const wc = tasksPages().find((w) => w.id === wcId);
@@ -2313,6 +2325,31 @@ const Compose = require('./src/compose-main.js').register({
   openInTasks: (id) => { if (!devMockReady) return false; openBuddy('tasks'); return buddyWin?.tasksReveal?.(id) ?? false; },
   shortcut: () => ComposeShortcut.view(),
 });
+// Redesign R2a: the read-only thread. Registered only with the chat-first preview on.
+// The thread page's "Go to it" click; thread-main only calls it for the bound
+// local session, from a focused, shown thread, once per 500 ms (S1).
+async function threadGoToTerminal({ source, sessionId }) {
+  const session = localSessions(aggregateState().sessions).find((s) => s && !s.device && s.sessionId === sessionId && (s.source ?? 'claude') === source);
+  if (!session) return { ok: false };
+  const r = await jumpToSession(session, String(session.cwd || '').split('/').filter(Boolean).pop() || '', session.hostApp);
+  return { ok: !!r && !r.cant, ...(r && r.cant ? { note: r.cant } : {}) };
+}
+if (CHAT_PREVIEW) {
+  const SidebarRows = require('./src/overview-sidebar-rows');
+  ThreadMain = require('./src/thread-main').createThreadMain({
+    buddy: () => buddyWin, chatPreview: CHAT_PREVIEW,
+    target: (id) => OverviewMain.threadTarget(id),
+    header: (t, id) => SidebarRows.headerOf(t, id),
+    tasks: () => getTasks(),
+    copy: (text) => clipboard.writeText(text),
+    activity: (s) => SessionTimelineMain.threadActivity(s),
+    // The same path as the Tasks page's own "Open in Tasks": the bound task only.
+    openInTasks: (taskId) => { if (!devMockReady) return false; openBuddy('tasks'); return buddyWin?.tasksReveal?.(taskId) ?? false; },
+    // This computer's own session only; a paired device's session never resolves to a target.
+    goToTerminal: threadGoToTerminal,
+  });
+  ThreadMain.register(ipcMain);
+}
 // Tray and shortcut: focus Home's box, or with the box hidden ("Show the task box on Home" off) the Tasks composer.
 // Either only focuses an empty or kept draft; nothing starts until Run.
 function openCompose() {

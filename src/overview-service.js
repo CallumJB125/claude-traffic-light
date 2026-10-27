@@ -37,6 +37,9 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
  // Burst's loose ends (src/burst-loose-ends-view.js) matched to a session's working directory here in main: the page gets counts, never a path.
  const looseBadge=cwd=>{let v=null;try{v=looseEnds();}catch{v=null;}const m=v?LooseEnds.forPath(v,cwd):null;return m?{uncommitted:m.uncommitted,unpushed:m.unpushed,stashes:m.stashes,stale:m.stale===true,text:LooseEnds.badgeText(m)}:null;};
  let epoch=0,directoryEpoch=0,routeEpoch=0,teamView=null,handles=new Map(),teamRefs=new Map();const secret=crypto.randomBytes(32);
+ // Chat-first preview (redesign R2a): row id → what a thread may show, main-only,
+ // from the latest build. Temporary: replaced by SessionRowVM.ref in R2b.
+ let lastTargets=new Map();
  const directoryModel=Directory.createSessionDirectory({now});
  const stable=parts=>crypto.createHmac('sha256',secret).update(JSON.stringify(parts)).digest('hex');
  const teamKey=(origin,teamId)=>stable(['team',origin,teamId]).slice(0,32);
@@ -97,7 +100,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
  async function build(time,alive){
   let all;try{all=await sourcesData();}catch{all={sources:[],capture:[],partial:true};}
   if(!alive())return null;
-  const next=new Map(),rows=[],usedCards=new Set(),meta=new Map(),origins=new Map();let partial=all.partial,omitted=0;
+  const next=new Map(),rows=[],usedCards=new Set(),meta=new Map(),origins=new Map(),targets=new Map();let partial=all.partial,omitted=0;
   const teamMeta=(source,row)=>source.kind==='team'&&id(row.team_id)?{teamKey:teamKey(source.key,row.team_id),teamName:clean(row.team_name,80)||'Team'}:{};
   const good=all.sources.filter(({source,data})=>{try{const ok=validData(source,data);if(!ok||data.status!=='complete')partial=true;return ok;}catch{partial=true;return false;}});
   const binding=(raw)=>{if(raw.remote||raw.device)return null;const capture=all.capture.find(c=>c.provider===raw.source&&c.session_id===raw.sessionId&&c.task_id===(raw.taskId??'session')&&!c.untracked&&id(c.card_id));if(!capture)return null;
@@ -113,6 +116,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
    // The terminal it runs in, for the chat-first sidebar only: main-side, a closed label set (focus/ids originOf).
    // Only this computer's own sessions: a paired device's session is not "in a terminal" here.
    if(!raw.remote&&!raw.device)origins.set(identity,Ids.originOf(raw));
+   if(!raw.remote&&!raw.device&&!parentId)targets.set(identity,{kind:'session',source:raw.source,sessionId:raw.sessionId,row:dto});
    if(bound){usedCards.add(cardIdentity(bound.source,bound.data,bound.row));register(dto,{kind:'board',bound,pin:keyOf(bound.row)},next);meta.set(identity,{kind:'board',boardRunId:card.run?.id,...teamMeta(bound.source,bound.row)});}else{register(dto,{kind:'reported'},next);meta.set(identity,{kind:'reported',nativeSessionId:raw.sessionId,nativeTurnId:raw.codexTurnId??null});}
    const children=Array.isArray(raw.source==='codex'?raw.codexAgents:raw.agents)?(raw.source==='codex'?raw.codexAgents:raw.agents):[];
    for(const child of children.slice(0,64)){
@@ -143,11 +147,32 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
    const connected=t.stale!==true,live=connected&&t.green===true;
    const dto={id:stable(['task',t.id]),handle:null,label:'Managed task',provider:provider(t.ai?.id,t.ai?.model),device:{label:'This device',local:true},board:{label:'Personal tasks',kind:'personal'},project:clean(t.repo?.name,100)||'Local project',...placed(clean(t.label,40)||'Unknown',managedBucket(t)),freshness:live?'recent':connected?'unknown':'stale',age_ms:live?0:null,task:task(t),children:[],capabilities:{open:capability(typeof openManaged==='function','Open Tasks','The Tasks page is unavailable.'),message:capability(live&&Array.isArray(t.actions)&&t.actions.includes('message')&&typeof messageManaged==='function','Message','This task cannot receive messages in its current state.')}};
    if(rows.some(r=>r.id===dto.id))continue;
-   register(dto,{kind:'managed',id:t.id,state:t.state,provider:t.ai?.id},next);rows.push(dto);meta.set(dto.id,{kind:'task'});
+   register(dto,{kind:'managed',id:t.id,state:t.state,provider:t.ai?.id},next);rows.push(dto);meta.set(dto.id,{kind:'task'});targets.set(dto.id,{kind:'task',taskId:t.id,row:dto});
   }
   if(!alive())return null;
   rows.sort((a,b)=>(a.age_ms??Infinity)-(b.age_ms??Infinity));
-  return{rows,next,partial,omitted,meta,origins};
+  lastTargets=targets;
+  return{rows,next,partial,omitted,meta,origins,targets};
+ }
+ // A thread's target (redesign R2a), resolved without a build: the latest
+ // build's map names the candidate, and it is re-checked against the in-memory
+ // tasks snapshot or reported sessions on every call. A managed task's id is
+ // also recomputed from the snapshot when no build has seen it yet (a link).
+ // Only this computer's own work: a paired device's session has no target.
+ function threadTarget(rowId){
+  if(typeof rowId!=='string'||!/^[0-9a-f]{64}$/.test(rowId))return null;
+  const known=lastTargets.get(rowId)??null;
+  if(!known||known.kind==='task'){
+   let snap=null;try{snap=managed();}catch{snap=null;}
+   if(snap?.conn?.status==='connected'&&Array.isArray(snap.tasks)){
+    const t=known?snap.tasks.find(x=>object(x)&&x.id===known.taskId):snap.tasks.slice(0,200).find(x=>object(x)&&id(x.id)&&stable(['task',x.id])===rowId);
+    if(t&&!t.hub&&stable(['task',t.id])===rowId)return{kind:'task',taskId:t.id,row:known?.row??null};
+   }
+   return null;
+  }
+  let input=[];try{input=sessions();}catch{input=[];}
+  const raw=(Array.isArray(input)?input:[]).find(x=>object(x)&&!x.remote&&!x.device&&(x.source??'claude')===known.source&&x.sessionId===known.sessionId);
+  return raw?{kind:'session',source:known.source,sessionId:raw.sessionId,cwd:typeof raw.cwd==='string'?raw.cwd:'',origin:Ids.originOf(raw),row:known.row}:null;
  }
  // Read-only rows for another document (the chat-first sidebar). The same
  // build, but it never touches this service's epochs, action handles, team
@@ -158,7 +183,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   const time=now(),built=await build(time,alive);
   if(!built||!alive())return null;
   for(const row of built.rows)row.handle=null;
-  return{status:built.partial||built.omitted?'partial':'complete',observed_at:time,omitted:built.omitted,rows:built.rows,origins:built.origins};
+  return{status:built.partial||built.omitted?'partial':'complete',observed_at:time,omitted:built.omitted,rows:built.rows,origins:built.origins,threads:new Set(built.targets.keys())};
  }
  async function action(request,message=false){
   if(!closed(request,message?['handle','text']:['handle'])||typeof request.handle!=='string'||!UUID.test(request.handle)||message&&(typeof request.text!=='string'||!request.text.trim()||request.text.includes('\0')||request.text.trim().length>4000||Buffer.byteLength(request.text.trim())>8192))return response('invalid');
@@ -344,7 +369,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,sessions=()
   if(!alive())return{ok:false,status:'unconfirmed',error:'The view changed. Inspect the receipt before sending again.'};
   return out?.ok===true?out:{ok:false,status:['forbidden','stale','busy','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
- return{snapshot,passiveRows,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
+ return{snapshot,passiveRows,threadTarget,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
   followupReview,followupEnqueue,
   coordinatorRequestOwner:coordinator.requestOwner,coordinatorRemoteList:coordinator.remoteList,coordinatorRemoteSend:coordinator.remoteSend,coordinatorRemoteCancel:coordinator.remoteCancel,coordinatorRemoteReplace:coordinator.remoteReplace,
   coordinatorInventory:coordinator.inventory,coordinatorPropose:coordinator.propose,coordinatorConfirm:coordinator.confirm,coordinatorResults:coordinator.results,coordinatorCancel:coordinator.cancel,

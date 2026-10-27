@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; frame-src 'self' about:; base-uri 'none'; form-action 'none'">
+<title>Chat</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="thread.css">
+</head>
+<body>
+  <div class="th" id="th" aria-busy="true">
+    <header class="th-head">
+      <div class="th-col th-head-in">
+        <div class="th-title-row">
+          <span class="th-dot" id="th-dot" aria-hidden="true"></span>
+          <h1 class="th-title" id="th-title">Loading…</h1>
+          <span class="th-pill" id="th-bucket"></span>
+        </div>
+        <div class="th-meta" id="th-meta"></div>
+        <div class="th-actions">
+          <button type="button" class="th-btn th-primary" id="th-primary" hidden></button>
+          <div class="th-more-wrap">
+            <button type="button" class="th-btn th-more" id="th-more" aria-haspopup="menu" aria-expanded="false" aria-controls="th-menu" aria-label="More">⋯</button>
+            <div class="th-menu" id="th-menu" role="menu" hidden>
+              <button type="button" role="menuitem" class="th-menu-item" id="th-copy">Copy link</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+    <main class="th-body">
+      <div class="th-col th-body-in">
+        <div class="th-banner" id="th-banner" hidden></div>
+        <p class="th-status" id="th-status" role="status" aria-live="polite"></p>
+        <!-- The transcript: script-less, same-origin srcdoc, styled by a linked sheet only. -->
+        <iframe class="th-tx" id="th-tx" title="Conversation" sandbox="allow-same-origin"
+          srcdoc="<!doctype html><html lang=&quot;en&quot;><head><meta charset=&quot;utf-8&quot;><meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src 'none'; style-src 'self'&quot;><link rel=&quot;stylesheet&quot; href=&quot;tokens.css&quot;><link rel=&quot;stylesheet&quot; href=&quot;thread-transcript.css&quot;></head><body><main class=&quot;tx&quot; id=&quot;tx&quot;></main></body></html>"></iframe>
+        <section class="th-waiting" id="th-waiting" hidden aria-labelledby="th-waiting-title">
+          <h2 class="th-waiting-title" id="th-waiting-title"></h2>
+          <p class="th-waiting-what" id="th-waiting-what"></p>
+          <p class="th-waiting-where" id="th-waiting-where"></p>
+          <button type="button" class="th-btn th-primary" id="th-answer">Open to answer</button>
+        </section>
+        <section class="th-empty" id="th-empty" hidden>
+          <h2 class="th-empty-title" id="th-empty-title"></h2>
+          <p class="th-empty-text" id="th-empty-text"></p>
+          <button type="button" class="th-btn" id="th-board" hidden>Back to Board</button>
+        </section>
+      </div>
+    </main>
+  </div>
+  <script src="brand.js"></script>
+  <script src="src/tasks-view.js"></script>
+  <script src="src/transcript-md.js"></script>
+  <script src="src/transcript-dom.js"></script>
+  <script src="thread.js"></script>
+</body>
+</html>

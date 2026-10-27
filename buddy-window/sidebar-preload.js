@@ -4,6 +4,10 @@
 // Nothing else crosses; main validates every id.
 const { contextBridge, ipcRenderer } = require('electron');
 
+// The chat-first channels are in the bridge only when main started this
+// document with the preview on (index.js additionalArguments).
+const chatFirst = typeof process === 'object' && Array.isArray(process?.argv) && process.argv.includes('--plexiform-chat-preview');
+
 contextBridge.exposeInMainWorld('buddy', {
   pages: () => ipcRenderer.invoke('buddy:pages'),
   select: (id) => ipcRenderer.send('buddy:select', String(id)),
@@ -13,8 +17,11 @@ contextBridge.exposeInMainWorld('buddy', {
   optimiserSection: (id) => ipcRenderer.send('buddy:optimiser-section', String(id)),
   signOut: (id) => ipcRenderer.send('buddy:signout', String(id)),
   onState: (fn) => ipcRenderer.on('buddy:state', (_e, s) => fn(s)),
-  // Chat-first preview only (main refuses both while it is off): the
-  // read-only session rows, and which bucket groups are collapsed.
-  sessions: () => ipcRenderer.invoke('overview:state'),
-  setGroups: (ids) => ipcRenderer.send('buddy:sidebar-groups', Array.isArray(ids) ? ids.slice(0, 8).map(String) : []),
+  // Chat-first preview only (main refuses them while it is off): the
+  // read-only session rows, which bucket groups are collapsed, and opening a row's thread.
+  ...(chatFirst ? {
+    sessions: () => ipcRenderer.invoke('overview:state'),
+    setGroups: (ids) => ipcRenderer.send('buddy:sidebar-groups', Array.isArray(ids) ? ids.slice(0, 8).map(String) : []),
+    openThread: (id) => ipcRenderer.send('buddy:open-thread', String(id)),
+  } : {}),
 });

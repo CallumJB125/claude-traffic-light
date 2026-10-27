@@ -13,11 +13,13 @@ aitools	buddy-window/pages.js	PAGES	1
 aitools	buddy-window/sidebar-chat.js	select	1
 aitools	main.js	openBuddy	1
 board	buddy-window/account-flow.js	select	5
-board	buddy-window/index.js	select	3
+board	buddy-window/index.js	select	7
 board	buddy-window/pages.js	PAGES	1
 board	buddy-window/pages.js	SECTIONS	1
 board	test-visual/ownership.spec.js	select	1
+board	test-visual/thread.spec.js	data-page	1
 board	test/account-hub-routing.test.js	select	5
+board	test/thread-authority.test.js	select	1
 board:calendar	buddy-window/pages.js	PAGES	1
 board:calendar	test-visual/planner.spec.js	select	2
 board:dashboard	buddy-window/pages.js	PAGES	1
@@ -84,7 +86,7 @@ stats	main.js	openBuddy	1
 sync	buddy-window/pages.js	PAGES	1
 tasks	buddy-window/pages.js	PAGES	1
 tasks	home-compose.js	navigate	2
-tasks	main.js	openBuddy	4
+tasks	main.js	openBuddy	5
 tasks	test-visual/gallery.spec.js	select	2
 tasks	test-visual/tasks-engine.spec.js	data-page	2
 team	buddy-window/index.js	select	1

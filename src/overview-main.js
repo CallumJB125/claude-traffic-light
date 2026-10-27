@@ -67,6 +67,8 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
   },
   // A push carries no data: the page re-reads through its own fenced channel.
   directoryChanged(){if(stopped||!authority||!same(authority,true))return;try{authority.contents.send('overview:directory-changed');}catch{}},
+  // Redesign R2a: main-only, for the thread document's guard (src/thread-main.js).
+  threadTarget:id=>stopped?null:service.threadTarget(id),
   invalidate(){authority=null;sidebarRead=null;service.invalidate();},close(){stopped=true;authority=null;sidebarRead=null;if(pump)clearInterval(pump);service.invalidate();},
  };
 }

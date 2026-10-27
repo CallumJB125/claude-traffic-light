@@ -27,18 +27,19 @@ const ROWS = [
 const open = [];
 test.afterEach(() => { while (open.length) open.pop().close(); });
 
-async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus = { filter: 'all', seq: 0 }, early = null } = {}) {
+async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus = { filter: 'all', seq: 0 }, early = null, selected = undefined } = {}) {
   const dom = new JSDOM(HTML, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'file:///app/buddy-window/sidebar.html' });
   const w = dom.window;
   open.push(w);
-  const calls = { select: [], groups: [], sessions: 0 };
+  const calls = { select: [], groups: [], sessions: 0, thread: [] };
   let onState = [];
   w.buddy = {
     pages: async () => ({ pages: Pages.PAGES, groups: Pages.GROUPS, sections: Pages.SECTIONS, footer: Pages.FOOTER, brand: { name: 'Plexiform', hubText: {} },
-      ...(chatFirst ? { chatFirst: true, chat: { collapsed, focus } } : {}) }),
+      ...(chatFirst ? { chatFirst: true, chat: { collapsed, focus, ...(selected !== undefined ? { selected } : {}) } } : {}) }),
     select: (x) => calls.select.push(x), retry() {}, retryAccountStorage() {}, workspace() {}, optimiserSection() {}, signOut() {},
     onState: (fn) => onState.push(fn),
-    sessions: async () => { calls.sessions++; return { schema: 1, status: 'complete', sessions: rows }; },
+    sessions: async () => { calls.sessions++; return { schema: 1, status: 'complete', sessions: typeof rows === 'function' ? rows() : rows }; },
+    openThread: (x) => calls.thread.push(x),
     setGroups: (ids) => calls.groups.push([...ids]),
   };
   w.CSS = w.CSS || {};
@@ -244,4 +245,88 @@ test('every sidebar-chat rule is scoped under .sidebar[data-chat-first]', () => 
   const selectors = block.replace(/\/\*[^]*?\*\//g, '').replace(/@media[^{]+\{/g, '').match(/[^{}]+(?=\{)/g).map((s) => s.trim()).filter(Boolean);
   for (const sel of selectors) for (const part of sel.split(',')) assert.match(part.trim(), /^\.sidebar\[data-chat-first\] /, part);
   assert.match(block, /\.sidebar-row:focus-visible \{ outline: 2px solid var\(--focus-ring, var\(--accent\)\); outline-offset: -4px; box-shadow: inset 0 0 0 2px var\(--focus-halo\); \}/);
+});
+
+
+// ── Redesign R2a ─────────────────────────────────────────────────────────
+const THREAD_ROWS = [
+  { ...ROWS[0], thread: true, chat: false },
+  { ...ROWS[1], thread: false, chat: false }, // a paired device's session: no thread
+  { ...ROWS[2], thread: true, chat: true },
+];
+
+test('R2a: a row with a thread opens it; one without (a paired device) opens Overview as before', async () => {
+  const s = await boot({ rows: THREAD_ROWS });
+  s.q(`[data-key="r:${id(1)}"]`).click();
+  assert.deepEqual(s.calls.thread, [id(1)]);
+  assert.deepEqual(s.calls.select, []);
+  s.q(`[data-key="r:${id(2)}"]`).click();
+  assert.deepEqual(s.calls.select, ['overview']);
+  s.q(`[data-key="r:${id(3)}"]`).focus();
+  s.key('Enter');
+  assert.deepEqual(s.calls.thread, [id(1), id(3)]);
+});
+
+test('R2a: the Chats filter lists Plexiform chats', async () => {
+  const s = await boot({ rows: THREAD_ROWS });
+  s.q('.sb-filter-opt[data-filter="chats"]').click();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(s.qa('.sidebar-row').map((n) => n.dataset.key), [`r:${id(3)}`]);
+});
+
+test('R2a: the thread on screen is the selected row; any other page selects none', async () => {
+  const s = await boot({ rows: THREAD_ROWS });
+  await s.push({ selected: 'thread', chat: { focus: { filter: 'all', seq: 0 }, thread: id(3) } });
+  assert.deepEqual(s.qa('.sidebar-row[aria-selected="true"]').map((n) => n.dataset.key), [`r:${id(3)}`]);
+  await s.push({ selected: 'board', chat: { focus: { filter: 'all', seq: 0 }, thread: null } });
+  assert.equal(s.qa('.sidebar-row[aria-selected="true"]').length, 0);
+});
+
+test('R2a: a row with no thread opens Overview and stays selected through its state push', async () => {
+  const s = await boot({ rows: THREAD_ROWS });
+  s.q(`[data-key="r:${id(2)}"]`).focus();
+  s.key('Enter');
+  assert.deepEqual(s.calls.select, ['overview']);
+  await s.push({ selected: 'overview', chat: { focus: { filter: 'all', seq: 0 }, thread: null } });
+  assert.deepEqual(s.qa('.sidebar-row[aria-selected="true"]').map((n) => n.dataset.key), [`r:${id(2)}`]);
+  await s.push({ selected: 'board', chat: { focus: { filter: 'all', seq: 0 }, thread: null } });
+  assert.equal(s.qa('.sidebar-row[aria-selected="true"]').length, 0);
+});
+
+test('R1 follow-up 8c: a read that changes only ages keeps every node and updates the age in place', async () => {
+  let n = 0;
+  const s = await boot({ rows: () => THREAD_ROWS.map((r) => ({ ...r, age_ms: r.age_ms + n * 60000 })) });
+  const before = s.q(`[data-key="r:${id(1)}"]`);
+  assert.equal(before.querySelector('.sb-age').textContent, '2 min');
+  n = 3;
+  await s.push({ selected: 'board' });
+  const after = s.q(`[data-key="r:${id(1)}"]`);
+  assert.equal(after, before, 'the same node');
+  assert.equal(after.querySelector('.sb-age').textContent, '5 min');
+  assert.equal(s.q(`[data-key="r:${id(5)}"]`), null);
+});
+
+test('R1 follow-up 8d: the footer starts from buddy:pages\' selection, and with none marks nothing', async () => {
+  const s = await boot({ selected: 'usage' });
+  assert.deepEqual(s.qa('.sb-foot[aria-current="page"]').map((b) => b.dataset.page), ['usage']);
+  const t = await boot({ selected: null });
+  assert.equal(t.qa('.sb-foot').length, 3);
+  assert.deepEqual(t.qa('.sb-foot[aria-current="page"]'), [], 'not Board by default');
+});
+
+test('R1 follow-up 8b: the sidebar bridge has the chat-first channels only when main starts it with the flag', () => {
+  const vm = require('node:vm');
+  const src = read('buddy-window/sidebar-preload.js');
+  const exposed = (argv) => {
+    let api = null;
+    const electron = { contextBridge: { exposeInMainWorld: (_n, v) => { api = v; } }, ipcRenderer: { invoke() {}, send() {}, on() {} } };
+    vm.runInNewContext(src, { require: (m) => (m === 'electron' ? electron : null), process: { argv } });
+    return Object.keys(api).sort();
+  };
+  const off = exposed(['electron', '--type=renderer']);
+  const on = exposed(['electron', '--type=renderer', '--plexiform-chat-preview']);
+  assert.ok(!off.includes('sessions') && !off.includes('setGroups') && !off.includes('openThread'));
+  assert.deepEqual(on.filter((k) => !off.includes(k)), ['openThread', 'sessions', 'setGroups']);
+  const index = read('buddy-window/index.js');
+  assert.match(index, /preload: path\.join\(DIR, 'sidebar-preload\.js'\), \.\.\.\(chatFirst === true \? \{ additionalArguments: \['--plexiform-chat-preview'\] \} : \{\}\) \} \}\);/);
 });
