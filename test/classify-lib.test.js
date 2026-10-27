@@ -353,6 +353,22 @@ test('classifier round 5: Δα ≤ 2 on a transparent edge is classified on colo
   const grey = (c, a) => rgba(12, 8, (x) => (x < 8 ? [...O, 255] : x === 8 ? [...c, a] : [...bg, 255]));
   assert.equal(lib.classifyImage(grey([90, 90, 90], 200), grey([70, 70, 70], 201), ALL.dark, { alphaEdge: true }).unexpected >= 8, true);
   assert.equal(lib.ALPHA_EDGE_MAX, 2);
+  // (labfix-review) colour is compared un-premultiplied on both sides. The gate decodes with premultiplyAlpha
+  // 'none' and reads getImageData (straight RGBA by the canvas spec); the classifier then uses the RGB channels
+  // as they are, so an alpha-moved edge gets exactly the colour verdict of the same RGB at unchanged alpha.
+  const spec = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'test-visual', 'classify.spec.js'), 'utf8');
+  assert.match(spec, /premultiplyAlpha: 'none'/); assert.match(spec, /getImageData\(/);
+  const verdicts = (aOld, aNew) => { const v = []; lib.classifyImage(pic(O, mix(O, bg, 0.4), aOld), pic(N, mix(N, bg, 0.4), aNew), ALL.dark, { alphaEdge: true, onPixel: (x, y, o, n, e) => { if (x === 8) v.push(`${e.verdict}:${e.key}`); } }); return v; };
+  assert.deepEqual(verdicts(200, 202), verdicts(200, 200));
+  // (labfix-review) never noise: a colour within ΔE 1 whose alpha moved is unexpected, and the noise count is 0
+  const still = (a) => rgba(12, 8, (x) => (x === 8 ? [120, 120, 120, a] : [...bg, 255]));
+  const n = lib.classifyImage(still(200), still(201), ALL.dark, { alphaEdge: true });
+  assert.equal(n.noise, 0); assert.equal(n.unexpected, 8);
+  // (labfix-review) when the colour fails, the pixels are unexpected AND cropped
+  assert.ok(n.tiles.length > 0, 'a failing alpha-edge pixel lands in a crop');
+  // (labfix-review) never the theme vote: translucent pixels don't vote, however many
+  const edges = rgba(10, 10, () => [244, 245, 247, 200]);
+  assert.deepEqual(lib.lightnessVotes(edges, edges), { light: 0, dark: 0 });
 });
 
 test('classifier M1: a pass whose old pixel already fits the new segment is weak, so a non-token grey shift fails', () => {
@@ -448,6 +464,15 @@ test('classifier mixes: an alias of an accent var is modelled through its target
   // an alias assigned on one side only builds no member (it was never rendered on the other)
   const headOnly = lib.familiesOf(TOKENS, GRAPHITE, { old: ['.tile { color: color-mix(in oklab, var(--tint) 70%, var(--text)); }'], new: [sheet] });
   assert.ok(!headOnly.dark.members.some((x) => x.key.includes('via --tint')));
+});
+
+test('classifier mixes: an alias is scoped to the sheet that declares it', () => {
+  const accentSheet = '.cat-a { --tint: var(--accent); } .tile { color: color-mix(in oklab, var(--tint) 70%, var(--text)); }';
+  const greenSheet = '.b { --tint: var(--green); } .chip { background: color-mix(in oklab, var(--tint) 12%, var(--panel)); }';
+  const fam = lib.familiesOf(TOKENS, GRAPHITE, { old: [accentSheet, greenSheet], new: [accentSheet, greenSheet] });
+  assert.ok(fam.dark.members.some((x) => x.key.includes('70%, var(--text)) via --tint')), 'the declaring sheet keeps its alias');
+  assert.equal(fam.dark.members.filter((x) => x.key.includes('12%')).length, 0, 'the green sheet gets 0 accent members');
+  assert.equal(fam.light.members.filter((x) => x.key.includes('12%')).length, 0);
 });
 
 test('classifier (iii): an unresolved color-mix fails closed in the light theme too', () => {

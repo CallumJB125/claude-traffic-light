@@ -394,10 +394,15 @@ function familiesOf(oldCss, newCss, mixTexts = { old: [], new: [] }) {
   // one spec per target that side assigns. Where the alias holds a non-accent value, that mix doesn't change.
   const side = (texts) => {
     const m = new Map(); const all = texts || [];
-    const targets = new Map();
-    for (const t of all) for (const d of String(t).replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/(--[\w-]+)\s*:\s*var\((--[\w-]+)\)\s*[;}]/g)) {
-      if (ACCENT_VARS.has(d[2]) && !ACCENT_VARS.has(d[1])) { if (!targets.has(d[1])) targets.set(d[1], new Set()); targets.get(d[1]).add(d[2]); }
-    }
+    // Review round 5: an alias's targets are scoped to the sheet that declares it. A var(--tint) mix in another
+    // sheet (where --tint may be green) gets nothing from this sheet's `--tint: var(--accent)`.
+    const targetsIn = (t) => {
+      const targets = new Map();
+      for (const d of String(t).replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/(--[\w-]+)\s*:\s*var\((--[\w-]+)\)\s*[;}]/g)) {
+        if (ACCENT_VARS.has(d[2]) && !ACCENT_VARS.has(d[1])) { if (!targets.has(d[1])) targets.set(d[1], new Set()); targets.get(d[1]).add(d[2]); }
+      }
+      return targets;
+    };
     const put = (spec, local) => {
       const reads = local ? [...spec.raw.matchAll(/var\((--[\w-]+)\)/g)].map((x) => x[1]).filter((v) => v in local.dark || (local.light && v in local.light)) : [];
       const key = reads.length ? `${spec.raw} [sheet ${reads.join(' ')}]` : spec.raw;
@@ -406,7 +411,7 @@ function familiesOf(oldCss, newCss, mixTexts = { old: [], new: [] }) {
     for (const t of all) {
       const local = sheetTokensOf(t);
       for (const spec of colourMixesOf(t)) put(spec, local);
-      for (const [alias, tos] of targets) {
+      for (const [alias, tos] of targetsIn(t)) {
         if (!String(t).includes(`var(${alias})`)) continue;
         for (const to of tos) {
           const sub = String(t).split(`var(${alias})`).join(`var(${to})`);
