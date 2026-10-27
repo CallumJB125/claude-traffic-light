@@ -320,7 +320,7 @@
     align-items: center;
     padding: 0 18px 0 26px;
     background:
-      radial-gradient(ellipse 60% 80% at 34% 100%, rgba(218, 119, 86, 0.08), transparent 70%),
+      radial-gradient(ellipse 60% 80% at 34% 100%, color-mix(in srgb, var(--accent) 6%, transparent), transparent 70%),
       var(--bg);
     overflow: hidden;
   }
@@ -794,7 +794,7 @@
   #presets .menu-choice .btn.primary { background: var(--accent); color: var(--accent-ink); }
   #presets .menu-choice .btn.primary:hover { background: var(--accent-hover); }
   #setup-summary, #rules-summary { font-size: 12px; line-height: 1.4; }
-  #setup-summary code, #rules-summary code { display: block; font-size: 11px; color: #ffb4a8; white-space: pre-wrap; word-break: break-all; }
+  #setup-summary code, #rules-summary code { display: block; font-size: 11px; color: var(--danger-text); white-space: pre-wrap; word-break: break-all; }
   #presets .menu-form .btn:disabled { opacity: 0.4; }
   #presets .empty-small { padding: 4px 8px 6px; color: var(--faint); font-size: 11px; }
 

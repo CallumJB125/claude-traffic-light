@@ -1650,7 +1650,7 @@
       d.hours.forEach((ms, h) => {
         const cell = document.createElement('div');
         cell.className = 'cellbox';
-        if (ms > 0) cell.style.background = `rgba(218, 119, 86, ${(0.18 + 0.82 * (ms / hMax)).toFixed(3)})`;
+        if (ms > 0) cell.style.background = `color-mix(in srgb, var(--accent) ${((0.18 + 0.82 * (ms / hMax)) * 100).toFixed(1)}%, var(--line))`;
         attachTip(cell, heat.parentElement, htip, `${d.date} ${String(h).padStart(2, '0')}:00 · ${S.fmt(ms)} working`);
         row.appendChild(cell);
       });
