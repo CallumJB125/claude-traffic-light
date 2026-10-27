@@ -1292,17 +1292,19 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     sidebar.webContents.once('did-finish-load', () => { pushState(); win?.show(); });
     if (chatFirst === true) sidebar.webContents.on('did-start-navigation', () => { sidebarGeneration++; });
     win.on('resize', layout);
-    win.on('blur',()=>{if(!setupModalTicket)setupLocalGeneration++;});
-    win.on('blur',()=>{if(!tasksModalTicket)tasksGeneration++;});
-    win.on('blur',()=>{if(!homeModalTicket)homeGeneration++;});
-    win.on('hide',()=>{tasksGeneration++;homeGeneration++;});
-    win.on('minimize',()=>{tasksGeneration++;homeGeneration++;});
+    // The thread is never kept alive while hidden (labfix-review S2). Outside the
+    // blur…closed span that the Tasks/Compose authority tests evaluate.
     if (chatFirst === true) {
       win.on('hide', () => retireThread({ resume: true }));
       win.on('minimize', () => retireThread({ resume: true }));
       win.on('show', resumeThread);
       win.on('restore', resumeThread);
     }
+    win.on('blur',()=>{if(!setupModalTicket)setupLocalGeneration++;});
+    win.on('blur',()=>{if(!tasksModalTicket)tasksGeneration++;});
+    win.on('blur',()=>{if(!homeModalTicket)homeGeneration++;});
+    win.on('hide',()=>{tasksGeneration++;homeGeneration++;});
+    win.on('minimize',()=>{tasksGeneration++;homeGeneration++;});
     win.on('closed', () => {
       retireThread();
       if (selected === 'thread') selected = 'board';

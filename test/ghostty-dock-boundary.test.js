@@ -131,6 +131,7 @@ test('jumpToSession is only called from click, hotkey and page handlers in main.
     "ipcMain.handle('open-input'", // Open session in the Waiting list / inbox
     "note.on('click'", // a notification click
     "require('./src/home-alerts.js').wire(", // Home's Open session button (IPC from the Home page)
+    'async function threadGoToTerminal(', // the thread page's Go to it (thread:go-to-terminal; gate on, foreground, bound session only)
   ].sort());
 });
 

@@ -2326,6 +2326,14 @@ const Compose = require('./src/compose-main.js').register({
   shortcut: () => ComposeShortcut.view(),
 });
 // Redesign R2a: the read-only thread. Registered only with the chat-first preview on.
+// The thread page's "Go to it" click; thread-main only calls it for the bound
+// local session, from a focused, shown thread, once per 500 ms (S1).
+async function threadGoToTerminal({ source, sessionId }) {
+  const session = localSessions(aggregateState().sessions).find((s) => s && !s.device && s.sessionId === sessionId && (s.source ?? 'claude') === source);
+  if (!session) return { ok: false };
+  const r = await jumpToSession(session, String(session.cwd || '').split('/').filter(Boolean).pop() || '', session.hostApp);
+  return { ok: !!r && !r.cant, ...(r && r.cant ? { note: r.cant } : {}) };
+}
 if (CHAT_PREVIEW) {
   const SidebarRows = require('./src/overview-sidebar-rows');
   ThreadMain = require('./src/thread-main').createThreadMain({
@@ -2338,12 +2346,7 @@ if (CHAT_PREVIEW) {
     // The same path as the Tasks page's own "Open in Tasks": the bound task only.
     openInTasks: (taskId) => { if (!devMockReady) return false; openBuddy('tasks'); return buddyWin?.tasksReveal?.(taskId) ?? false; },
     // This computer's own session only; a paired device's session never resolves to a target.
-    goToTerminal: async ({ source, sessionId }) => {
-      const session = localSessions(aggregateState().sessions).find((s) => s && !s.device && s.sessionId === sessionId && (s.source ?? 'claude') === source);
-      if (!session) return { ok: false };
-      const r = await jumpToSession(session, String(session.cwd || '').split('/').filter(Boolean).pop() || '', session.hostApp);
-      return { ok: !!r && !r.cant, ...(r && r.cant ? { note: r.cant } : {}) };
-    },
+    goToTerminal: threadGoToTerminal,
   });
   ThreadMain.register(ipcMain);
 }
