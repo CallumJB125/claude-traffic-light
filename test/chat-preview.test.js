@@ -63,6 +63,7 @@ function world(chatFirst) {
     showLocal: (p) => { calls.push(['local', p.id]); ctx.content = {}; },
     showInfo: (p) => calls.push(['info', p.id]),
     fromSidebarOk: true,
+    newChatOk: true, openNewChat: () => { calls.push(['newchat']); return ctx.newChatOk; },
   };
   const code = between(src, '  // Chat-first preview only (redesign R1)', '  const fromSidebar = ')
     + "const fromSidebar = () => fromSidebarOk;\n"
@@ -103,6 +104,26 @@ test('gate on: overview, waiting and sessions focus the sidebar filter and keep 
   assert.equal(w.api.focus.filter, 'terminals');
   assert.equal(w.api.focus.seq, 3);
   assert.equal(w.selected, 'board');
+});
+
+test('R7-1: gate on, Home and My day open the new chat (never select of a non-page); its failure falls back to the page; gate off and the sidebar are unchanged', () => {
+  for (const id of ['home', 'myday']) {
+    const w = world(true);
+    w.api.route(id);
+    assert.deepEqual(w.calls, [['newchat']], id);
+    const f = world(true); f.newChatOk = false;
+    f.api.route(id);
+    assert.deepEqual(f.calls, [['newchat'], ['state'], ['local', id]], `${id}: no new chat → the page itself`);
+    const off = world(false);
+    off.api.route(id);
+    assert.deepEqual(off.calls, [['state'], ['local', id]], `${id}: gate off is select()`);
+    const side = world(true);
+    side.api.onSelect({}, id);
+    assert.deepEqual(side.calls, [['state'], ['local', id]], `${id}: a select from the sidebar is never redirected`);
+  }
+  const t = world(true);
+  t.api.route('tasks');
+  assert.deepEqual(t.calls, [['state'], ['local', 'tasks']], 'tasks (otherwise → new chat, until R2) is unbuilt and stays put');
 });
 
 test('gate on: a select from the sidebar is terminal; `from` comes from the sender, never the payload', () => {

@@ -14,6 +14,11 @@
         <h1 class="nc-title" id="nc-title">New chat</h1>
         <p class="nc-hint" id="nc-hint">Say what you want done. Nothing starts until you press Send.</p>
       </header>
+      <p class="nc-summary" id="nc-summary" hidden></p>
+      <section class="nc-needs" id="nc-needs" hidden aria-label="Needs you">
+        <ul class="nc-needs-list" id="nc-needs-list"></ul>
+        <p class="nc-more" id="nc-more" hidden></p>
+      </section>
       <form class="nc-box" id="nc-box" aria-labelledby="nc-title">
         <label class="nc-sr" for="nc-text">What should it do?</label>
         <textarea class="nc-text" id="nc-text" rows="5" placeholder="What should it do?" aria-describedby="nc-note"></textarea>
@@ -31,6 +36,7 @@
           <button type="submit" class="nc-btn nc-primary" id="nc-send">Send</button>
         </div>
       </form>
+      <section class="nc-starters" id="nc-starters" hidden aria-label="Ideas to start with"></section>
       <section class="nc-started" id="nc-started" hidden aria-labelledby="nc-started-title">
         <h2 class="nc-started-title" id="nc-started-title">Started.</h2>
         <p class="nc-started-text" id="nc-started-text"></p>

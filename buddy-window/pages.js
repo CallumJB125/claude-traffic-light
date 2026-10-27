@@ -433,10 +433,10 @@ function sidebarCollapsed(v) {
 const R8 = 'R8', R7 = 'R7', R2 = 'R2';
 const settings = (pane) => Object.freeze({ to: 'settings', pane, until: R8 });
 const REDIRECTS = Object.freeze({
-  home: { to: 'newchat', until: R7 },
+  home: { to: 'newchat' },
   overview: { sidebar: 'all' },
   waiting: { sidebar: 'needs' },
-  myday: { to: 'newchat', until: R7 },
+  myday: { to: 'newchat' },
   sessions: { sidebar: 'terminals' },
   timeline: { to: 'thread', bySession: true, otherwise: { sidebar: 'terminals' }, until: R2 },
   checkpoints: { to: 'thread', pane: 'changes', bySession: true, otherwise: { to: 'palette', query: 'changes in' }, until: R2 },
@@ -476,8 +476,9 @@ const REDIRECTS = Object.freeze({
 });
 
 /**
- * Where a select() of `id` goes. Returns { page } (open that page id) or
- * { sidebar } (focus the sidebar with that filter); never more than one hop.
+ * Where a select() of `id` goes. Returns { page } (open that page id),
+ * { sidebar } (focus the sidebar with that filter) or { newchat: true } (the
+ * new-chat screen, R7-1); never more than one hop.
  * Gate off, or a select that came from the sidebar itself, is the identity.
  * Anything whose destination is not built yet (it has `until`) stays put.
  */
@@ -487,6 +488,7 @@ function resolve(id, { chatFirst = false, from = null } = {}) {
   const r = REDIRECTS[id];
   if (!r || r.keep || r.until) return stay;
   if (r.sidebar) return { sidebar: r.sidebar };
+  if (r.to === 'newchat') return { newchat: true }; // R7-1: Home and My day
   return stay;
 }
 

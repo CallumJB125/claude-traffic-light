@@ -2467,6 +2467,16 @@ if (CHAT_PREVIEW) {
     rowForTask: (id) => OverviewMain.threadForTask(id),
     refreshTasks: () => getTasks().refresh(),
   });
+  // Redesign R7-1: what replaces Home on the new chat (summary, Needs-you rows with Open, starters); src/newchat-home-main.js.
+  const ncGit = require('./src/checkpoint-git.js').createGit();
+  require('./src/newchat-home-main.js').createNewChatHome({
+    ipcMain, buddy: () => buddyWin,
+    rows: (alive) => OverviewMain.passiveSidebarRows(alive),
+    folderOf: (handle) => getTasks().folderOf(handle),
+    git: (cwd, args, opts) => ncGit.run(cwd, args, opts),
+    ciFailedRepos: () => gitEvents(loadConfig()).filter((ev) => ev && ev.signal === 'ci-failed').map((ev) => ev.repo),
+    repoOf: (url) => GitSignals.normalizeRemote(url),
+  }).register(ipcMain);
 }
 // Tray and shortcut: focus Home's box, or with the box hidden ("Show the task box on Home" off) the Tasks composer.
 // Either only focuses an empty or kept draft; nothing starts until Run.

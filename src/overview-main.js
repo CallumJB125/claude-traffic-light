@@ -71,6 +71,8 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
   threadTarget:id=>stopped?null:service.threadTarget(id),
   // R2b-2: main-only, for the new chat's handoff (src/newchat-main.js).
   threadForTask:id=>stopped?null:service.threadForTask(id),
+  // R7-1: main-only, for the new chat's Needs-you rows (src/newchat-home-main.js): the sidebar's projection, read with the caller's liveness.
+  passiveSidebarRows:alive=>stopped||chatPreview!==true?Promise.resolve(null):service.passiveRows(alive).then(out=>out?SidebarRows.sidebarRows(out):null,()=>null),
   invalidate(){authority=null;sidebarRead=null;service.invalidate();},close(){stopped=true;authority=null;sidebarRead=null;if(pump)clearInterval(pump);service.invalidate();},
  };
 }

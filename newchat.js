@@ -21,6 +21,14 @@
     checkFailed: 'Could not check other work in this project.',
   };
 
+  // R7-1 (plan-r7 §1): the new chat stands in for Home. A summary line and up to 3 Needs-you rows (Open only), or on
+  // a first run a greeting and starters. A starter only fills an empty box; Send still sends. Main (src/newchat-home-main.js)
+  // gives the rows and starters and opens a row itself; this page sends back only a row id it was given.
+  const HOME_POLL_MS = 5000;
+  const GREETING = 'What should your AI work on?';
+  const plural = (n, one, many) => (n === 1 ? one : many);
+  let home = null, starters = [], startersFor = null, homeTimer = null;
+
   let s = CV.initial();
   let folders = [];
   let seq = 0, routeTimer = null, started = null; // started: {id} while the "Started." fallback shows
@@ -71,7 +79,7 @@
     s.busy = false;
     const clear = () => { s.text = ''; s.held = null; s.route = null; s.pick = null; s.preflight = null; s.ackPeers = false; s.error = ''; keepDraft(); $('nc-text').value = ''; };
     if (r?.ok && r.opened) { clear(); return; } // main has opened the chat's thread; this document is on its way out
-    if (r?.ok) { clear(); showStarted(r.id, TEXT.startedHere); return; }
+    if (r?.ok) { clear(); showStarted(r.id, TEXT.startedHere); renderStarters(); return; }
     if (r?.cancelled) { note(TEXT.cancelled); return update(); }
     if (r?.code === 'STARTED_ELSEWHERE') { clear(); update(); note(r.text); void checkFolder(); return; }
     if (r?.code === 'BUDGET_HELD') { s.held = { text: r.text || 'Your spend cap is reached.' }; return update(); }
@@ -124,6 +132,73 @@
     sel.value = s.perm;
   }
 
+  // ── R7-1: summary, Needs-you rows, starters ──
+  function renderHome() {
+    const first = home?.firstEver === true;
+    $('nc-title').textContent = first ? GREETING : 'New chat';
+    const sum = $('nc-summary'), n = home?.summary?.needs ?? 0, c = home?.summary?.check ?? 0;
+    const parts = [];
+    if (n > 0) parts.push(`${n} ${plural(n, 'needs', 'need')} you`);
+    if (c > 0) parts.push(`${c} to check`);
+    sum.textContent = parts.join(' · ');
+    sum.hidden = !home || parts.length === 0;
+    const rows = Array.isArray(home?.rows) ? home.rows : [];
+    $('nc-needs-list').replaceChildren(...rows.map((r) => {
+      const li = node('li', null, 'nc-need');
+      const text = node('span', null, 'nc-need-text');
+      text.append(node('span', r.title));
+      if (r.project) text.append(node('span', ` · ${r.project}`, 'nc-need-project'));
+      const open = button('Open', async () => { open.disabled = true; const out = await api.openRow(r.id).catch(() => null); if (!out?.ok) { open.disabled = false; void loadHome(); } }, 'nc-btn');
+      open.setAttribute('aria-label', `Open ${r.title}`);
+      li.append(node('span', null, 'nc-need-dot'), text, open);
+      return li;
+    }));
+    const more = $('nc-more'), m = home?.more ?? 0;
+    more.textContent = m > 0 ? `+ ${m} more in the sidebar` : '';
+    more.hidden = m <= 0;
+    $('nc-needs').hidden = rows.length === 0;
+    renderStarters();
+  }
+  function renderStarters() {
+    const box = $('nc-starters');
+    const show = home?.firstEver === true && !started && !s.text.trim() && starters.length > 0;
+    box.replaceChildren(...(show ? starters.map((st) => {
+      const b = button(st.label, () => fillFrom(st), 'nc-starter');
+      b.dataset.starter = st.id;
+      return b;
+    }) : []));
+    box.hidden = !show;
+  }
+  function fillFrom(st) {
+    if (s.text.trim() || typeof st?.text !== 'string') return;
+    const t = $('nc-text');
+    t.value = st.text; // .value, never markup (review nit)
+    s.text = st.text; s.error = ''; s.held = null; keepDraft();
+    renderStarters(); scheduleRoute(); t.focus();
+  }
+  async function loadStarters() {
+    const handle = s.folder?.handle || null;
+    if (home?.firstEver !== true || !handle) { starters = []; startersFor = handle; return renderStarters(); }
+    if (startersFor === handle && starters.length) return renderStarters();
+    startersFor = handle;
+    let r;
+    try { r = await api.starters(handle); } catch { r = null; }
+    if (s.folder?.handle !== handle) return;
+    starters = Array.isArray(r?.starters) ? r.starters.slice(0, 3) : [];
+    renderStarters();
+  }
+  async function loadHome() {
+    let r;
+    try { r = await api.home(); } catch { r = null; }
+    if (r) home = r;
+    renderHome();
+    void loadStarters();
+  }
+  function pollHome() {
+    clearTimeout(homeTimer);
+    homeTimer = setTimeout(async () => { if (document.visibilityState === 'visible') await loadHome(); pollHome(); }, HOME_POLL_MS);
+  }
+
   function update() {
     const v = CV.routeView(s);
     const line = $('nc-route');
@@ -163,21 +238,21 @@
     for (const id of ['nc-text', 'nc-folder', 'nc-who', 'nc-perm']) $(id).disabled = s.busy || !s.connected;
   }
 
-  $('nc-text').addEventListener('input', (e) => { s.text = e.target.value; s.error = ''; s.held = null; keepDraft(); scheduleRoute(); });
+  $('nc-text').addEventListener('input', (e) => { s.text = e.target.value; s.error = ''; s.held = null; keepDraft(); renderStarters(); scheduleRoute(); });
   $('nc-text').addEventListener('keydown', (e) => { if (CV.isSubmitKey(e)) { e.preventDefault(); if (CV.canRun(s)) void send(); } });
   $('nc-box').addEventListener('submit', (e) => { e.preventDefault(); if (CV.canRun(s)) void send(); });
   $('nc-folder').addEventListener('change', async (e) => {
     if (e.target.value === '__pick') {
       const f = await api.pickFolder().catch(() => null);
       if (f) { if (!folders.some((x) => x.handle === f.handle)) folders.unshift(f); s.folder = f; }
-      fillFolders(); void checkFolder(); scheduleRoute(); return;
+      fillFolders(); void checkFolder(); void loadStarters(); scheduleRoute(); return;
     }
-    s.folder = folders.find((x) => x.handle === e.target.value) || null; void checkFolder(); scheduleRoute();
+    s.folder = folders.find((x) => x.handle === e.target.value) || null; void checkFolder(); void loadStarters(); scheduleRoute();
   });
   $('nc-who').addEventListener('change', (e) => { s.ai = e.target.value; s.pick = null; fillPerms(); scheduleRoute(); });
   $('nc-perm').addEventListener('change', (e) => { s.perm = e.target.value; scheduleRoute(); });
   $('nc-open').addEventListener('click', () => { if (started) void api.openInTasks(started.id); });
-  $('nc-again').addEventListener('click', newChat);
+  $('nc-again').addEventListener('click', () => { newChat(); renderStarters(); });
 
   async function load() {
     let info;
@@ -190,6 +265,7 @@
     fillFolders(); fillWho(); fillPerms();
     $('nc').setAttribute('aria-busy', 'false');
     void checkFolder();
+    void loadStarters();
     scheduleRoute(true);
   }
 
@@ -197,4 +273,6 @@
   $('nc-text').value = s.text;
   api.onChanged(() => { void load(); });
   void load().then(() => { if (!started) $('nc-text').focus(); });
+  void loadHome().then(pollHome);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void loadHome(); });
 })();

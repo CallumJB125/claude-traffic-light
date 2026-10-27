@@ -15,5 +15,9 @@ contextBridge.exposeInMainWorld('newChatApi', {
   preflight: (folder) => ipcRenderer.invoke('newchat:preflight', { folder: typeof folder === 'string' ? folder : '' }),
   create: (draft) => { const d = plain(draft); const out = {}; for (const k of RUN_KEYS) if (d[k] !== undefined) out[k] = d[k]; return ipcRenderer.invoke('newchat:create', out); },
   openInTasks: (id) => ipcRenderer.invoke('newchat:open-in-tasks', String(id)),
+  // R7-1: the new chat's own content. Reads, and one effect that opens a row main gave this page.
+  home: () => ipcRenderer.invoke('newchat:home'),
+  starters: (handle) => ipcRenderer.invoke('newchat:starters', { handle: typeof handle === 'string' ? handle : '' }),
+  openRow: (id) => ipcRenderer.invoke('newchat:open-row', { id: typeof id === 'string' ? id : '' }),
   onChanged: (cb) => ipcRenderer.on('newchat:changed', () => cb()),
 });

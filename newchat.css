@@ -45,9 +45,24 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .nc-started-text { margin: 0; color: var(--muted); }
 .nc-started-actions { display: flex; gap: var(--space-2); }
 
+/* R7-1: the summary line, Needs-you rows (Open only) and first-run starters. */
+.nc-summary { margin: 0; font-size: var(--text-sm); color: var(--muted); }
+.nc-needs { display: grid; gap: var(--space-1); }
+.nc-needs-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
+.nc-need { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.nc-need-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--st-needs); }
+.nc-need-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nc-need-project { color: var(--muted); }
+.nc-more { margin: 0; padding-left: var(--space-1); font-size: var(--text-sm); color: var(--muted); }
+.nc-starters { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.nc-starter { font: inherit; font-size: var(--text-sm); color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius-pill); padding: 5px var(--space-3); cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nc-starter:hover { background: var(--panel-2); }
+.nc-starter:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; box-shadow: var(--focus); }
+
 @media (max-width: 560px) {
   .nc-col { padding: var(--space-6) var(--space-4); }
 }
 @media (forced-colors: active) {
-  .nc-box, .nc-chip, .nc-btn { border-color: CanvasText; }
+  .nc-box, .nc-chip, .nc-btn, .nc-need, .nc-starter { border-color: CanvasText; }
+  .nc-need-dot { background: CanvasText; }
 }
