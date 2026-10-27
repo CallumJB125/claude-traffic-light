@@ -1,5 +1,6 @@
 'use strict';
 document.addEventListener('DOMContentLoaded', () => {
+  if (window.SettingsPanes && !window.SettingsPanes.inPane('advanced')) return; // R8-1: another pane owns this block
   const api = window.settingsApi;
   const el = (id) => document.getElementById(`native-board-${id}`);
   const app = el('app'), workspace = el('workspace'), mode = el('mode'), choices = el('choices'), hint = el('hint');

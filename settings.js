@@ -1,3 +1,5 @@
+    const inPane = (...p) => !window.SettingsPanes || window.SettingsPanes.inPane(...p); // R8-1: a pane document runs only its own sections' loaders
+    const PANE = window.SettingsPanes ? window.SettingsPanes.current : null;
     const workingInput = document.getElementById('workingStaleMinutes');
     const waitingInput = document.getElementById('waitingStaleHours');
     const soundInput = document.getElementById('sounds');
@@ -101,6 +103,7 @@
     };
     const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     async function showBusy() {
+      if (!inPane('notifications')) return;
       let st;
       try { st = await window.settingsApi.busyStatus(); } catch { return; }
       const cal = document.getElementById('busy-calendar-state');
@@ -170,7 +173,7 @@
         notifyBudgetExceeded: spendEl('notify-budget-exceeded').checked,
       };
     }
-    window.settingsApi.spend().then((sp) => {
+    if (inPane('spend')) window.settingsApi.spend().then((sp) => {
       if (!sp) { spendEl('now').textContent = 'Reading your transcripts…'; return; }
       const eq = sp.mode === 'subscription' ? ' (API-price equivalent)' : '';
       const n = sp.budget.week.unpriced;
@@ -180,7 +183,7 @@
 
     async function saveAll() {
       try {
-      await window.settingsApi.saveConfig({
+      const payload = {
         workingStaleMinutes: Math.max(1, Math.min(60, Number(workingInput.value) || 6)),
         stuckMinutes: Math.max(0, Math.min(60, Math.round(Number(document.getElementById('stuckMinutes').value) || 0))),
         waitingStaleHours: Math.max(1, Math.min(24, Number(waitingInput.value) || 4)),
@@ -242,10 +245,12 @@
         codexDaemonMessaging: document.getElementById('codexDaemonMessaging').checked,
         simpleMode: document.getElementById('simpleMode').checked,
         homeComposer: document.getElementById('homeComposer').checked,
-      });
-      setTimeout(showInteractionHost, 1500);
-      setTimeout(showBusy, 1500);
-      showRemote(await window.settingsApi.remoteDevices());
+      };
+      // R8-1: a pane document saves only the keys its pane owns (main refuses a write with any other key, whole).
+      await window.settingsApi.saveConfig(PANE ? window.SettingsPanes.pick(payload, window.SettingsPanes.ownedKeys(PANE)) : payload);
+      if (inPane('privacy')) setTimeout(showInteractionHost, 1500);
+      if (inPane('notifications')) setTimeout(showBusy, 1500);
+      if (inPane('advanced')) showRemote(await window.settingsApi.remoteDevices());
       flash();
       } catch (err) { flash(err); }
     }
@@ -274,6 +279,8 @@
     const SECTIONS = ['general', 'notifications', 'spend', 'widget', 'privacy', 'advanced'];
     function showSection(id) {
       if (!SECTIONS.includes(id)) id = 'general';
+      // R8-1: a pane document never swaps panes in place; another pane is another document (main opens it, pane senders only).
+      if (PANE && id !== PANE) { window.settingsApi.goPane?.(id); return; }
       for (const p of document.querySelectorAll('.pane')) p.hidden = p.dataset.section !== id;
       for (const b of document.querySelectorAll('#section-nav button')) { if (b.dataset.go === id) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); }
       try { history.replaceState(null, '', `?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), section: id })}`); } catch { /* embedded pages may refuse */ }
@@ -281,7 +288,7 @@
     window.showSettingsSection = showSection;
     document.getElementById('go-widget-answering')?.addEventListener('click', () => { showSection('widget'); document.getElementById('askFromWidget')?.focus(); });
     for (const b of document.querySelectorAll('#section-nav button')) b.addEventListener('click', () => { showSection(b.dataset.go); document.body.scrollTop = 0; });
-    showSection(new URLSearchParams(location.search).get('section') || location.hash.slice(1));
+    showSection(PANE || new URLSearchParams(location.search).get('section') || location.hash.slice(1));
 
 
     const showCli = (r) => {
@@ -293,7 +300,7 @@
       else if (r.blocked) el.textContent = `Something else is already at ${r.link}; Plexiform won't replace it.`;
       else el.textContent = `Creates a link at ${r.link}. You'll be asked to confirm first.`;
     };
-    window.settingsApi.cliStatus().then(showCli);
+    if (inPane('advanced')) window.settingsApi.cliStatus().then(showCli);
     document.getElementById('cli-install').addEventListener('click', async () => showCli(await window.settingsApi.cliInstall()));
     // Ghostty Dock: Install only where it can be installed and isn't yet; Check again when installed but not usable.
     const showDock = (r, note) => {
@@ -310,6 +317,7 @@
         || (r.show === 'recheck' ? `Installed, but not used yet: ${r.reason}.` : r.reason === 'ready' ? 'Installed and in use.' : '');
     };
     const dockAct = async (action) => {
+      if (!inPane('advanced')) return;
       try { showDock(await window.settingsApi.ghosttyDock(action)); } catch (err) { showDock({}, err.message); }
     };
     dockAct('status');
@@ -318,7 +326,7 @@
     document.getElementById('ghostty-dock-github').addEventListener('click', () => dockAct('github'));
     document.getElementById('ghosttyDock').addEventListener('change', () => setTimeout(() => dockAct('status'), 300));
     window.settingsApi.onGhosttyDockChanged((r) => { showDock(r); document.getElementById('health-recheck')?.click(); });
-    window.settingsApi.signalEndpoint().then((e) => { document.getElementById('endpoint').textContent = `http://127.0.0.1:${e.port}/signal`; document.getElementById('emit-path').textContent = e.emit; if (e.token) document.getElementById('token-path').textContent = e.token; });
+    if (inPane('advanced')) window.settingsApi.signalEndpoint().then((e) => { document.getElementById('endpoint').textContent = `http://127.0.0.1:${e.port}/signal`; document.getElementById('emit-path').textContent = e.emit; if (e.token) document.getElementById('token-path').textContent = e.token; });
     const showGit = (g) => {
       if (!g) return;
       const n = g.repos.length;
@@ -328,7 +336,7 @@
         : g.state === 'rate-limited' || g.state === 'backoff' ? `GitHub didn't answer (${g.error}); trying again later.`
         : '';
     };
-    window.settingsApi.gitStatus().then(showGit);
+    if (inPane('advanced')) window.settingsApi.gitStatus().then(showGit);
 
     const remoteEl = (id) => document.getElementById(`remote-${id}`);
     const ago = (iso) => {
@@ -394,15 +402,15 @@
     });
     remoteEl('copy').addEventListener('click', async () => { if (await window.settingsApi.remoteCopyCode(remoteEl('code-text').textContent)) remoteEl('pair-status').textContent = 'Code copied; the clipboard forgets it in a minute.'; });
     remoteEl('done').addEventListener('click', () => { remoteEl('code-text').textContent = ''; remoteEl('code').hidden = true; });
-    window.settingsApi.remoteDevices().then(showRemote);
+    if (inPane('advanced')) window.settingsApi.remoteDevices().then(showRemote);
     async function showInteractionHost() { document.getElementById('interaction-host-status').textContent = (await window.settingsApi.interactionHostStatus().catch(() => null)) ?? ''; }
-    showInteractionHost();
+    if (inPane('privacy')) showInteractionHost();
     const pvStatus = document.getElementById('privacy-status');
     const pvDone = (r) => { pvStatus.textContent = !r ? '' : r.error ? r.error : (r.file || r.path) ? `Saved ${r.file || r.path}` : typeof r === 'string' && r ? `Could not open the folder: ${r}` : ''; };
     document.getElementById('privacy-export-stats').addEventListener('click', async () => pvDone(await window.settingsApi.exportStats('json', 60)));
     document.getElementById('privacy-export-setup').addEventListener('click', async () => pvDone(await window.settingsApi.exportSetup()));
     document.getElementById('privacy-folder').addEventListener('click', async () => pvDone(await window.settingsApi.showDataFolder()));
-    window.settingsApi.privacyText().then((t) => {
+    if (inPane('privacy')) window.settingsApi.privacyText().then((t) => {
       document.getElementById('privacy-body').innerHTML = t ? window.renderPrivacy(t) : '<p>The privacy notice could not be loaded.</p>';
     });
     // ── Health ──
@@ -469,6 +477,7 @@
     }
     let healthRanAt = 0;
     const refreshHealth = () => {
+      if (!inPane('advanced')) return Promise.resolve();
       healthRanAt = Date.now();
       if (!healthSummary.textContent) showSummary('', 'Checking…');
       return window.settingsApi.health().then((r) => showHealth(r)).catch((err) => showSummary('err', `Couldn't run the checks: ${err.message}`));
@@ -498,9 +507,12 @@
     load();
     // The Widget page and the tray change some of these keys too: re-read on return so a later save keeps them.
     document.addEventListener('visibilitychange', () => { if (!document.hidden) load().catch(() => {}); });
+    // A kept-alive pane gets no visibilitychange when it is shown again: main says so, and it re-reads (R8-1).
+    window.settingsApi.onShown?.(() => { load().catch(() => {}); });
 
     // ── Voice (F7) ── its own saves, kept out of the page-wide list.
     (async () => {
+      if (!inPane('general')) return;
       const hotkey = document.getElementById('voice-hotkey');
       const longPress = document.getElementById('voice-longPress');
       const askClaude = document.getElementById('voice-askClaude');
@@ -551,6 +563,7 @@
 
     // ── Compactor ── its own saves. Numbers come only from recorded before/after counts.
     (async () => {
+      if (!inPane('advanced')) return;
       const $ = (id) => document.getElementById(`compact-${id}`);
       const NAMES = { codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini', local: 'Local model' };
       const fmt = (n) => Math.abs(n).toLocaleString();

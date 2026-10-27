@@ -76,7 +76,7 @@ test('the lab-reported strings say "this computer" on Linux (A2)', () => {
   assert.match(read('onboarding.js'), /your board stays on this \$\{MACHINE\} until you do/);
   assert.match(read('buddy-window/sidebar.js'), /w\.kind === 'local' \? state\.localBoard/);
   assert.match(read('board/tasks-engine/bus/dispatcher.js'), /: `This \$\{machine\(\)\}`, provider/);
-  assert.match(read('main.js'), /page\.id === 'settings' && !IS_MAC\) wc\.insertCSS\('[^']*\.field:has\(#roam\)/, 'the Dock-icon setting is macOS only, so it is hidden elsewhere');
+  assert.match(read('main.js'), /\(page\.id === 'settings' \|\| page\.pane\) && !IS_MAC\) wc\.insertCSS\('[^']*\.field:has\(#roam\)/, 'the Dock-icon setting is macOS only, so it is hidden elsewhere');
 });
 
 // ── Lint: no new literal "this Mac" in renderer files ─────────────────────

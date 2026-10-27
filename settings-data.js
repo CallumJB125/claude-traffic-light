@@ -5,6 +5,7 @@
   const api = window.settingsApi;
   const $ = (id) => document.getElementById(id);
   const block = $('data-rights');
+  if (window.SettingsPanes && !window.SettingsPanes.inPane('privacy')) return; // R8-1: another pane owns this block
   if (!block || !api || !api.dataInventory) return;
   const say = (text, err) => { $('data-status').textContent = text; $('data-status').dataset.state = err ? 'err' : ''; };
 

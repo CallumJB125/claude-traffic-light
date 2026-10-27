@@ -3,6 +3,7 @@
 (function () {
   const api = window.settingsApi;
   const $ = (id) => document.getElementById(id);
+  if (window.SettingsPanes && !window.SettingsPanes.inPane('privacy')) return; // R8-1: another pane owns this block
   if (!$('crash-reports') || !api || !api.crashReportsState) return;
   const toggle = $('crash-opt-in');
   const say = (text) => { $('crash-status').textContent = text; };

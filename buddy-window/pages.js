@@ -15,6 +15,7 @@
 
 const { NAME, MACHINE } = require('./brand');
 const { isPrivateHost } = require('./workspaces');
+const SettingsPanes = require('../src/settings-panes');
 
 const PAGES = [
   { id: 'overview', title: 'Overview', icon: 'layers', kind: 'local', file: 'overview.html', preload: 'overview-preload.js', group: 'work' },
@@ -70,6 +71,16 @@ const PAGES = [
   { id: 'feedback', title: 'Feedback', icon: 'info', kind: 'local', file: 'feedback.html', preload: 'feedback-preload.js', query: { embedded: '1' }, group: 'you' },
   { id: 'updates', title: "What's new", icon: 'info', kind: 'local', file: 'updates.html', preload: 'updates-preload.js', group: 'you' },
 ];
+
+// Redesign R8-1: the Settings sheet's panes. NOT in PAGES (so with the dev chat preview off no such id exists, and
+// pageById() stays null); index.js consults paneById() only when chatFirst is on. Each pane is its own document
+// (own webContents, own guard); the ?pane= query only chooses what it renders (main builds it from this closed list).
+const PANE_TITLE = Object.freeze({ general: 'General', notifications: 'Notifications', spend: 'Spend and limits', widget: 'Widget', privacy: 'Privacy and data', advanced: 'Advanced' });
+const SETTINGS_PANES = Object.freeze(SettingsPanes.PANES.map((pane) => Object.freeze({
+  id: `settings:${pane}`, title: PANE_TITLE[pane], icon: 'gear', kind: 'local', file: 'settings.html', preload: 'settings-preload.js',
+  query: Object.freeze({ embedded: '1', pane }), group: 'you', unlisted: true, pane,
+})));
+function paneById(id) { return typeof id === 'string' ? SETTINGS_PANES.find((p) => p.id === id) ?? null : null; }
 
 const GROUPS = [
   { id: 'work', title: null },
@@ -497,4 +508,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, FUTURE_IDS, DESTINATIONS, SIDEBAR_FILTERS, COLLAPSIBLE, DEFAULT_COLLAPSED, sidebarCollapsed, REDIRECTS, resolve, sectionTarget, sectionAddress, sectionsFor, sectionOf, flat, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
+module.exports = { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, FUTURE_IDS, DESTINATIONS, SIDEBAR_FILTERS, COLLAPSIBLE, DEFAULT_COLLAPSED, sidebarCollapsed, REDIRECTS, resolve, sectionTarget, sectionAddress, sectionsFor, sectionOf, flat, pageById, SETTINGS_PANES, paneById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };

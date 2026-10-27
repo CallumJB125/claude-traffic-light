@@ -3,6 +3,7 @@
 (() => {
   const api = window.settingsApi && window.settingsApi.spendSafety;
   const $ = (id) => document.getElementById(id);
+  if (window.SettingsPanes && !window.SettingsPanes.inPane('spend')) return; // R8-1: another pane owns this block
   if (!api || !$('safety-plan')) return;
   const capsText = (caps) => Object.entries(caps || {}).map(([k, v]) => `${k} = ${v}`).join('\n');
   function parseCaps(text) {

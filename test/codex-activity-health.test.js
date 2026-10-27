@@ -74,7 +74,7 @@ function connectHandler({ allow = true } = {}) {
   const opened = [];
   vm.runInNewContext(source.slice(start, end), {
     ipcMain: { handle: (_name, fn) => { handler = fn; } },
-    fromNativeBoardSettings: e => allow && e === 'settings-main',
+    settingsPane: () => e => allow && e === 'settings-main',
     aiToolsOpen: (destination) => { opened.push(destination); return true; },
   });
   return { run: (sender = 'settings-main', id = 'codex') => handler(sender, id), opened };

@@ -5,6 +5,7 @@
   const api = window.settingsApi;
   const $ = (id) => document.getElementById(id);
   const block = $('policies');
+  if (window.SettingsPanes && !window.SettingsPanes.inPane('privacy')) return; // R8-1: another pane owns this block
   if (!block || !api || !api.policyState) return;
   const repo = $('policy-repo');
   const pack = $('policy-pack');

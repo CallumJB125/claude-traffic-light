@@ -279,7 +279,8 @@ function register(ctx) {
   if (typeof ctx.afterStartup === 'function') ctx.afterStartup(begin); else begin();
   ctx.onQuit?.(() => { quitting = true; clearInterval(timer); try { writeSpendGate(rootDir, {}); } catch { /* lapses by TTL */ } });
 
-  const settings = (e) => { try { return !!fromPage(e, 'settings'); } catch { return false; } };
+  // Settings page, or (R8-1, preview) the Privacy pane: main passes the guard bound to that pane.
+  const settings = (e) => { try { return typeof ctx.settingsAllowed === 'function' ? !!ctx.settingsAllowed(e) : !!fromPage(e, 'settings'); } catch { return false; } };
   const handle = (channel, fn) => ipcMain.handle(channel, async (e, ...args) => {
     if (!settings(e)) return null;
     try { return await fn(e, ...args); } catch (err) { log(`[policy] ${channel}: ${err?.message ?? err}`); return { error: err?.message ?? String(err) }; }

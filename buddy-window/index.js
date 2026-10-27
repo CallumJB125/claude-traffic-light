@@ -17,7 +17,8 @@ const http = require('node:http'); // privacy-flow: local-board-hub
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { BaseWindow, BrowserWindow, WebContentsView, ipcMain, session, shell, utilityProcess, app, nativeTheme, net, safeStorage, dialog, clipboard } = require('electron'); // privacy-flow: team-hub-account
-const { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, DEFAULT_COLLAPSED, sidebarCollapsed, sectionsFor, pageById, resolve, sectionTarget, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
+const { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, DEFAULT_COLLAPSED, sidebarCollapsed, sectionsFor, pageById, paneById, resolve, sectionTarget, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl } = require('./pages');
+const SettingsPanes = require('../src/settings-panes');
 const { createHubSupervisor } = require('./hub-process');
 const { MAIN_WINDOW } = require('../src/widget-placement.js');
 const { createWorkspaceStore, normalizeHubUrl, normalizeLinkHub, accessTeamFromLocation, partitionFor: teamPartition, integrationPartitionFor, hubKey, hostOf } = require('./workspaces');
@@ -579,6 +580,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     // A kept-alive page gets no visibilitychange when it is attached again, so Setups is told
     // (it pulls a setup added from the community gallery on every show).
     if (page.id === 'setups' && shownAgain) { try { v.webContents.send('setups:shown'); } catch { /* closed */ } }
+    // Same for a Settings pane (R8-1): it re-reads config on show, so a value another pane or page changed is not saved back over.
+    if (page.pane && shownAgain) { try { v.webContents.send('settings:shown'); } catch { /* closed */ } }
   }
 
   // Local pages load our own files only; nothing navigates them anywhere else.
@@ -1012,11 +1015,15 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     if (chatFirst !== true) { select(id); return; }
     const target = sectionTarget(id) ?? id;
     const r = resolve(target, { chatFirst: true, from });
-    if (r.sidebar) focusSidebar(r.sidebar); else select(r.page);
+    // R8-1: with the preview on, Settings is the sheet (its first pane); the old page stays reachable by its own id elsewhere.
+    if (r.sidebar) focusSidebar(r.sidebar); else select(r.page === 'settings' ? 'settings:general' : r.page);
   }
 
+  // A page, or with the dev chat preview on a Settings pane (R8-1: not in PAGES, so the ids do not exist with it off).
+  const pageOf = (id) => pageById(id) ?? (chatFirst === true ? paneById(id) : null);
+
   function select(id) {
-    const page = pageById(id);
+    const page = pageOf(id);
     if (!page) return;
     if (page.kind === 'window') { openWindow(page.window); return; }
     setupLocalGeneration++;
@@ -1239,6 +1246,9 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   const fromThread = (e) => !!threadView && e.sender === threadView.webContents && e.senderFrame === threadView.webContents.mainFrame && e.sender.getURL() === threadUrl();
   if (chatFirst === true) ipcMain.on('thread:board', (e) => { if (fromThread(e)) select('board'); });
   // The sidebar's New chat (navigation only; nothing is sent or started).
+  // R8-1: a Settings pane opens another pane. Navigation only: pane documents only, a closed id list, nothing else opens.
+  const fromSettingsPane = (e) => SettingsPanes.PANES.some((p) => { const wc = localViews.get(`settings:${p}`)?.webContents; return !!wc && e.sender === wc && e.senderFrame === wc.mainFrame && isLocalPage(e.senderFrame?.url ?? ''); });
+  if (chatFirst === true) ipcMain.on('settings:go-pane', (e, pane) => { if (fromSettingsPane(e) && SettingsPanes.isPane(pane)) select(`settings:${pane}`); });
   if (chatFirst === true) ipcMain.on('buddy:open-newchat', (e) => { if (fromSidebar(e)) openNewChat(); });
   // A sidebar row opens its thread (navigation only; main resolves the row).
   if (chatFirst === true) ipcMain.on('buddy:open-thread', (e, id) => {

@@ -52,7 +52,13 @@ function handlers({ gitInfo, policy } = {}) {
   const start = source.indexOf("const { fromPage } =");
   const end = source.indexOf('// plexiform://', start);
   vm.runInNewContext(source.slice(start, end), context);
-  vm.runInNewContext("const settingsOnly = e => fromUtilityPage(e, 'settings'); const widgetOnly = e => fromPage(e, win?.webContents);", context);
+  // The Settings pane guards (R8-1) sit before this slice in main.js: run that block as written, gate off.
+  const guardsStart = source.indexOf('/** A push to the old Settings page');
+  const guardsEnd = source.indexOf('\n', source.indexOf('const settingsAnyPane =', guardsStart)) + 1;
+  assert.ok(guardsStart > 0 && guardsEnd > guardsStart);
+  context.SettingsPanes = require('../src/settings-panes.js'); context.CHAT_PREVIEW = false;
+  vm.runInNewContext(source.slice(guardsStart, guardsEnd), context);
+  vm.runInNewContext("const widgetOnly = e => fromPage(e, win?.webContents);", context);
   for (const channel of ['get-config', 'get-stats']) {
     const line = source.split('\n').find(s => s.startsWith(`utilityHandle('${channel}',`));
     vm.runInNewContext(line, context);

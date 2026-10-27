@@ -60,7 +60,7 @@ test('app menu: every page is there, soon ones disabled, actions open the page',
 
 test('IPC: the account handlers answer Settings only, the hint handlers the widget only, and the page is never the renderer\'s', () => {
   for (const ch of ['account-view', 'account-open']) {
-    assert.match(main, new RegExp(`ipcMain\\.handle\\('${ch}', \\(e[^)]*\\) => \\{\\n\\s+if \\(!settingsOnly\\(e\\)\\)`), ch);
+    assert.match(main, new RegExp(`ipcMain\\.handle\\('${ch}', \\(e[^)]*\\) => \\{\\n\\s+if \\(!settingsPane\\('none'\\)\\(e\\)\\)`), ch);
   }
   assert.match(main, /ipcMain\.handle\('team-hint', \(e\) => widgetOnly\(e\) \?/);
   assert.match(main, /ipcMain\.handle\('team-hint-done', \(e, open\) => \{\n\s+if \(!widgetOnly\(e\)\) return false;/);

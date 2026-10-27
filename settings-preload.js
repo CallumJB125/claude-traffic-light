@@ -68,4 +68,7 @@ contextBridge.exposeInMainWorld('settingsApi', {
   burstSetCompaction: (req) => ipcRenderer.invoke('burst:set-compaction', req),
   openFeedback: () => ipcRenderer.invoke('open-feedback'),
   onShowSection: (cb) => ipcRenderer.on('show-section', (e, id) => cb(id)),
+  // Settings sheet (R8-1, preview): open another pane's document; main shows a pane again with 'settings:shown'.
+  goPane: (pane) => ipcRenderer.send('settings:go-pane', typeof pane === 'string' ? pane : ''),
+  onShown: (cb) => ipcRenderer.on('settings:shown', () => cb()),
 });
