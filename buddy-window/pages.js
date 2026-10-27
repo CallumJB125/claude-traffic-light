@@ -380,6 +380,105 @@ function connectNavOk(url, hubOrigin) {
   return connectUrlOk(url) || isConnectCallback(url, hubOrigin);
 }
 
+// ── Chat-first redirects (redesign R1; plan-redesign §R2.5) ─────────────────
+// Everything below is consulted only when the dev-only chat preview is on
+// (index.js passes chatFirst). With it off, ids resolve exactly as before:
+// none of these lists is read by select(), the sidebar or the menus.
+
+// The account flows open through goTo(), not select(); they are not pages.
+const FLOW_IDS = Object.freeze(['signin', 'join', 'create-team']);
+
+// Documents the redesign adds later (§R4.5.9). They are deliberately not in
+// PAGES: pageById() stays null for them, so selecting one is still a no-op.
+// Each moves into PAGES in the PR that builds it.
+const FUTURE_IDS = Object.freeze(['sidebar', 'newchat', 'thread', 'settings:projects', 'settings:agent-messages']);
+
+// Destinations that are not page ids at all: the ⌘K palette document and the
+// Library sheet (R14). Named so the redirect table can say where an id goes.
+const DESTINATIONS = Object.freeze(['palette', 'library']);
+
+// The sidebar filters a redirect can land on (focus the tree, set the filter).
+const SIDEBAR_FILTERS = Object.freeze(['all', 'needs', 'terminals', 'chats', 'team']);
+
+// Where every page id goes once the redesign is on, from the §R2.5 table.
+//   { keep: true }            the page stays.
+//   { sidebar: <filter> }     focus the sidebar with that filter (built in R1).
+//   { to, pane|tab, until }   a destination that `until` names the PR for; not built yet.
+//   bySession                 with a session the id opens that thread (R2); without one, `otherwise`.
+const R8 = 'R8', R7 = 'R7', R2 = 'R2';
+const settings = (pane) => Object.freeze({ to: 'settings', pane, until: R8 });
+const REDIRECTS = Object.freeze({
+  home: { to: 'newchat', until: R7 },
+  overview: { sidebar: 'all' },
+  waiting: { sidebar: 'needs' },
+  myday: { to: 'newchat', until: R7 },
+  sessions: { sidebar: 'terminals' },
+  timeline: { to: 'thread', bySession: true, otherwise: { sidebar: 'terminals' }, until: R2 },
+  checkpoints: { to: 'thread', pane: 'changes', bySession: true, otherwise: { to: 'palette', query: 'changes in' }, until: R2 },
+  memory: { to: 'palette', until: 'palette' },
+  tasks: { to: 'thread', bySession: true, otherwise: { to: 'newchat' }, until: R2 },
+  discover: { to: 'library', until: 'R14' },
+  'agents-find': { to: 'library', until: 'R14' },
+  board: { keep: true },
+  'board:table': { keep: true },
+  'board:history': { keep: true },
+  'board:dashboard': { keep: true },
+  'board:calendar': { keep: true },
+  'board:timeline': { keep: true },
+  integrations: settings('account-team/integrations'),
+  team: { keep: true },
+  usage: { keep: true },
+  stats: { to: 'usage', tab: 'stats', until: R7 },
+  optimiser: { to: 'usage', tab: 'burst', until: R7 },
+  clients: { to: 'usage', tab: 'clients', until: R7 },
+  setups: settings('advanced/setups'),
+  thismac: settings('general'),
+  phone: settings('phone'),
+  account: settings('account-team'),
+  upgrade: settings('account-team/plan'),
+  sync: settings('account-team/sync'),
+  widget: settings('widget'),
+  lights: settings('widget/when-to-light-up'),
+  aitools: settings('ai-tools'),
+  settings: settings('general'),
+  hatch: settings('widget/character'),
+  help: { keep: true },
+  feedback: { keep: true },
+  updates: { keep: true },
+  signin: { keep: true },
+  join: { keep: true },
+  'create-team': { keep: true },
+});
+
+/**
+ * Where a select() of `id` goes. Returns { page } (open that page id) or
+ * { sidebar } (focus the sidebar with that filter); never more than one hop.
+ * Gate off, or a select that came from the sidebar itself, is the identity.
+ * Anything whose destination is not built yet (it has `until`) stays put.
+ */
+function resolve(id, { chatFirst = false, from = null } = {}) {
+  const stay = { page: id };
+  if (!chatFirst || from === 'sidebar') return stay;
+  const r = REDIRECTS[id];
+  if (!r || r.keep || r.until) return stay;
+  if (r.sidebar) return { sidebar: r.sidebar };
+  return stay;
+}
+
+// A section is a valid target with the preview on: it opens its default.
+// Page ids win the bare name, so the one section whose id is also a page with
+// a different default (`sessions`, default overview) is addressed internally
+// as `section:sessions`.
+const SECTION_PREFIX = 'section:';
+function sectionTarget(id, sections = SECTIONS) {
+  const bare = typeof id === 'string' && id.startsWith(SECTION_PREFIX) ? id.slice(SECTION_PREFIX.length) : null;
+  if (bare === null && pageById(id)) return null; // a page id: not a section target
+  const s = sections.find((x) => x.id === (bare ?? id));
+  return s ? s.default : null;
+}
+/** The id a section is addressed by: its own id, or `section:<id>` when a page owns that name with another default. */
+const sectionAddress = (s) => (pageById(s.id) && s.default !== s.id ? SECTION_PREFIX + s.id : s.id);
+
 /** Which sidebar entry does a hub URL correspond to (for in-page view switches)? */
 function pageForHubUrl(url) {
   let v = null;
@@ -388,4 +487,4 @@ function pageForHubUrl(url) {
   return hit?.id ?? 'board';
 }
 
-module.exports = { PAGES, GROUPS, SECTIONS, FOOTER, sectionsFor, sectionOf, flat, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
+module.exports = { PAGES, GROUPS, SECTIONS, FOOTER, FLOW_IDS, FUTURE_IDS, DESTINATIONS, SIDEBAR_FILTERS, REDIRECTS, resolve, sectionTarget, sectionAddress, sectionsFor, sectionOf, flat, pageById, hubPageUrl, fragmentOk, navDecision, openDecision, connectDecision, manifestPost, parseConnectName, connectUrlOk, connectNavOk, bindCookie, appUserAgent, isConnectCallback, pageForHubUrl, orgOfUrl, GESTURE_MS };
