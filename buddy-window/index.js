@@ -1441,7 +1441,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     },
     async setupsConfirm(show) {
       const before=this.setupsContext();
-      if(typeof show!=='function' || !before?.foreground || setupModalTicket || homeModalTicket)return null;
+      if(typeof show!=='function' || !before?.foreground || setupModalTicket || homeModalTicket || tasksModalTicket)return null;
       const ticket={window:before.window,contents:before.contents,generation:before.generation};setupModalTicket=ticket;
       try {
         const answer=await show(before.window);
