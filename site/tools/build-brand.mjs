@@ -37,7 +37,7 @@ await png(path.join(assets, 'favicon.svg'), 48, path.join(tmp, 'f48.png'));
 execFileSync('magick', [path.join(tmp, 'f16.png'), path.join(assets, 'favicon-32.png'), path.join(tmp, 'f48.png'), path.join(assets, 'favicon.ico')]);
 await png(square, 180, path.join(assets, 'apple-touch-icon.png'));
 
-// OG image, 1200x630. The glow is the app icon's coral (brand art), not the in-app accent (Graphite since redesign R0b).
+// OG image, 1200x630
 const font = `file://${path.join(assets, 'fonts', 'schibsted-grotesk.woff2')}`;
 const og = `<!doctype html><meta charset="utf-8"><style>
 @font-face{font-family:SG;src:url('${font}');font-weight:400 900}

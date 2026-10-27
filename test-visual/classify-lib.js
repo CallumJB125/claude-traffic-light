@@ -579,10 +579,14 @@ function classifyImage(oldImg, newImg, families, { exceptions = [], tile = 24, o
 }
 
 // Exception entries from classify.config.json → members, for one baseline.
-function exceptionsFor(baseline, config) {
+// A named exception applies to the baselines it lists, or to every baseline with "baselines": "*". An optional
+// "theme" ('light' | 'dark') scopes it to baselines classified in that theme (themeFor's result), so a dark-only
+// token fix can't explain a light pixel. Each entry is still only its exact old→new colour pairs.
+function exceptionsFor(baseline, config, theme) {
   const out = [];
   for (const e of (config && config.exceptions) || []) {
-    if (!(e.baselines || []).includes(baseline)) continue;
+    if (!(e.baselines === '*' || (Array.isArray(e.baselines) && e.baselines.includes(baseline)))) continue;
+    if (e.theme && e.theme !== theme) continue;
     for (const o of e.old || []) for (const n of e.new || []) out.push({ key: `exception:${e.name}`, old: parseColour(o).slice(0, 3), new: parseColour(n).slice(0, 3) });
   }
   return out;

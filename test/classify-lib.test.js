@@ -390,3 +390,24 @@ test('classifier (iii): an unresolved color-mix fails closed in the light theme 
   const known = sheet.replace('var(--local-only)', '#9aa0a8');
   assert.equal(lib.classifyImage(fill(o), fill(n), lib.familiesOf(TOKENS, GRAPHITE, { old: [known], new: [known] }).light).unexpected, 0);
 });
+
+test('classifier: the idle exception is the dark #726c62 → #7c766b pair only', () => {
+  const config = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'test-visual', 'classify.config.json'), 'utf8'));
+  const idle = config.exceptions.find((e) => e.name === 'idle');
+  assert.deepEqual([idle.old, idle.new, idle.theme, idle.baselines], [['#726c62'], ['#7c766b'], 'dark', '*']);
+  assert.match(idle.reason, /R0b contrast fix, §R2\.2/);
+  const dark = lib.exceptionsFor('x/any-darwin.png', config, 'dark');
+  assert.deepEqual(dark.map((e) => e.key), ['exception:idle']);
+  assert.deepEqual(lib.exceptionsFor('x/any-darwin.png', config, 'light'), []);
+  assert.deepEqual(lib.exceptionsFor('x/any-darwin.png', config, 'none'), []);
+  const fill = (c) => image(6, 6, () => c);
+  const ok = lib.classifyImage(fill(hex('#726c62')), fill(hex('#7c766b')), ALL.dark, { exceptions: dark });
+  assert.equal(ok.exception, 36);
+  assert.equal(ok.unexpected, 0);
+  // any other grey change stays unexpected
+  const other = lib.classifyImage(fill(hex('#726c62')), fill(hex('#8a8478')), ALL.dark, { exceptions: dark });
+  assert.equal(other.unexpected, 36);
+  // listed baselines still work
+  assert.equal(lib.exceptionsFor('a.png', { exceptions: [{ name: 'n', baselines: ['a.png'], old: ['#000'], new: ['#111'] }] }).length, 1);
+  assert.equal(lib.exceptionsFor('b.png', { exceptions: [{ name: 'n', baselines: ['a.png'], old: ['#000'], new: ['#111'] }] }).length, 0);
+});

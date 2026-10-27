@@ -162,7 +162,7 @@ test('classifier: every changed baseline changed only by the accent swap', async
       if (oldPng.equals(newPng)) continue;
       const oldImg = await decode(page, oldPng); const newImg = await decode(page, newPng);
       const th = lib.themeFor(families, rel, oldImg, newImg);
-      const r = lib.classifyImage(oldImg, newImg, th.families, { exceptions: lib.exceptionsFor(rel, config) });
+      const r = lib.classifyImage(oldImg, newImg, th.families, { exceptions: lib.exceptionsFor(rel, config, th.theme) });
       const row = { baseline: rel, theme: th.theme, themeSource: th.source, themeShare: th.share, ...r, unexpectedPct: +(100 * r.unexpected / r.total).toFixed(4) };
       report.baselines.push(row);
       if (r.tiles.length) {
