@@ -161,7 +161,7 @@ test('send: invalid text and missing/mismatched team fail closed before any op c
 });
 
 test('send: the SEND op own non-200 mapping with state ok; error and reason both set; no hub text echoed', async () => {
-  for (const [status, want] of [[404, 'stale'], [403, 'forbidden'], [429, 'unavailable'], [500, 'unconfirmed'], [503, 'unconfirmed']]) {
+  for (const [status, want] of [[404, 'unavailable'], [403, 'forbidden'], [429, 'unavailable'], [500, 'unconfirmed'], [503, 'unconfirmed']]) {
     const r = rig({ shared: [share()], callBody: { result: { ok: true, state: { session: SESSION, generation: 1, status: 'ready' } } } });
     const base = r.fetch;
     let n = 0;
@@ -569,4 +569,59 @@ test('standalone deadline: failed request clears its timer', () => {
 test('standalone deadline: background poll scheduling does not keep the process alive', () => {
   hubDeadlineChild(`const hub = createTeamHubClient({baseUrl: 'https://hub.test', token: () => 'fixture', fetch: async () => json({shared: []})}, {pollMs: 30000});
     hub.onChange(() => {}); return 'listener registered';`, 'listener registered');
+});
+
+// Ledger 35: the hub answers 404 for a listed share whose owner's computer is offline (interaction-shares.js: no live host).
+test('L35: a listed share whose call answers 404 is "offline" (unavailable), not "no longer shared"; delisted or expired is still stale; it recovers', async () => {
+  for (const online of [false, true]) {
+    const { r, hub } = mk({ shared: [share({ online })], callStatus: 404, callBody: { error: { message: 'HUB-SECRET-TEXT' } } });
+    await hub.teams({ id: 'u-me' });
+    const off = await hub.inspect({ id: 'u-me' }, 't1', SHARED);
+    assert.deepEqual([off.ok, off.status, off.offline], [false, 'unavailable', true], `online:${online}`);
+    assert.equal(off.reason, "The owner's computer is offline.");
+    assert.equal(JSON.stringify(off).includes('HUB-SECRET'), false);
+    r.state.callStatus = 200; r.state.callBody = stateOk();
+    const back = await hub.inspect({ id: 'u-me' }, 't1', SHARED);
+    assert.equal(back.ok, true, 'recovers when the owner is back');
+  }
+  const gone = mk({ shared: [], callStatus: 404 });
+  await gone.hub.teams({ id: 'u-me' });
+  const out = await gone.hub.inspect({ id: 'u-me' }, 't1', SHARED);
+  assert.deepEqual([out.ok, out.status, out.offline], [false, 'stale', undefined], 'delisted: no longer shared');
+  const expired = mk({ shared: [share({ expires_at: new Date(T0 - 1000).toISOString() })], callStatus: 404 });
+  await expired.hub.teams({ id: 'u-me' });
+  assert.equal((await expired.hub.inspect({ id: 'u-me' }, 't1', SHARED)).status, 'stale', 'expired: no longer shared');
+  const gone410 = mk({ shared: [share()], callStatus: 410 });
+  await gone410.hub.teams({ id: 'u-me' });
+  assert.equal((await gone410.hub.inspect({ id: 'u-me' }, 't1', SHARED)).status, 'stale', '410 is still gone');
+});
+
+test('L35: a 401 on a shared call is "sign in again" (unavailable), never forbidden; 403 stays forbidden; it recovers', async () => {
+  const { r, hub } = mk({ shared: [share()], callStatus: 401, callBody: { error: { message: 'HUB-SECRET-TEXT' } } });
+  await hub.teams({ id: 'u-me' });
+  const out = await hub.inspect({ id: 'u-me' }, 't1', SHARED);
+  assert.deepEqual([out.ok, out.status, out.signIn], [false, 'unavailable', true]);
+  assert.equal(out.reason, 'Sign in again to continue.');
+  assert.equal(JSON.stringify(out).includes('HUB-SECRET'), false);
+  const act = await hub.act({ id: 'u-me' }, 't1', SHARED, { operation: 'send', generation: 3, turn: null, text: 'hi' });
+  assert.notEqual(act.status, 'forbidden', 'an expired token never reads as a changed share');
+  r.state.callStatus = 403;
+  assert.equal((await hub.inspect({ id: 'u-me' }, 't1', SHARED)).status, 'forbidden');
+  r.state.callStatus = 200; r.state.callBody = stateOk();
+  assert.equal((await hub.inspect({ id: 'u-me' }, 't1', SHARED)).ok, true, 'recovers after signing in again');
+});
+
+test('L35: proposals() for an offline owner say offline before any proposal call, and a relay 404 on the send pre-read does too', async () => {
+  const off = mk({ shared: [share({ online: false })], callBody: stateOk() });
+  await off.hub.teams({ id: 'u-me' });
+  const id = '22222222-2222-4222-8222-222222222222', input = { id, version: 1, digest: 'a'.repeat(64), generation: 3 };
+  for (const op of ['list', 'cancel', 'send']) {
+    const out = await off.hub.proposals({ id: 'u-me' }, 't1', SHARED, op, op === 'list' ? null : input);
+    assert.deepEqual([out.ok, out.status, out.offline], [false, 'unavailable', true], op);
+  }
+  assert.equal(off.r.state.calls.filter((c) => c.url.includes('/proposals') || c.body?.op).length, 0, 'no proposal or relay call was made');
+  const listed = mk({ shared: [share({ online: true })], callStatus: 404 });
+  await listed.hub.teams({ id: 'u-me' });
+  const send = await listed.hub.proposals({ id: 'u-me' }, 't1', SHARED, 'send', input);
+  assert.deepEqual([send.ok, send.status, send.offline], [false, 'unavailable', true], 'a relay 404 on the pre-read is offline, not "busy, ended or changed"');
 });

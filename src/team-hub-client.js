@@ -21,6 +21,8 @@ const REASONS = Object.freeze({
   stale: 'This session is no longer shared with you.',
   forbidden: 'This session is not shared with you to send.',
   unavailable: 'The team hub did not accept the request just now.',
+  offline: "The owner's computer is offline.",
+  signIn: 'Sign in again to continue.',
   unreadable: 'The team hub sent an unreadable answer.',
   invalid: 'Check the message and try again.',
 });
@@ -137,13 +139,18 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     request(`${base}/api/interaction/v1/shared/${encodeURIComponent(shareId)}/call`, { method: 'POST', body: { request_id: requestId, op, args }, deadline });
 
   const mapStatus = (code) => (code === 404 || code === 410 ? 'stale' : code === 401 || code === 403 ? 'forbidden' : 'unavailable');
+  // A shared call is made only for a share the hub just listed. The hub answers 404 for a listed share whose owner's computer is offline
+  // (interaction-shares.js: no live host), so 404 here is "offline", not "revoked": a share that is really gone is delisted or expired (sharedTarget).
+  const offlineFailure = () => ({ ...failed('unavailable', REASONS.offline), offline: true });
+  // A 401 is an expired or rotated sign-in, not a change to the share: unavailable, never a tombstone.
+  const sharedFailure = (code) => (code === 404 ? offlineFailure() : code === 401 ? { ...failed('unavailable', REASONS.signIn), signIn: true } : failed(mapStatus(code), reasonFor(mapStatus(code))));
   const reasonFor = (status) => REASONS[status] ?? REASONS.unavailable;
   const CHANGED = 'The session changed; try again.';
   // send() only: a generation race or any other named refusal means the session moved on, which is retryable.
   const movedOn = (res) => res.status === 'stale' || /generation[_ -]?(mismatch|race|changed|stale)/i.test(`${res.status ?? ''} ${res.error ?? ''} ${res.code ?? ''}`);
   function hubResult(r, send = false) {
     if (!object(r) || typeof r.status !== 'number') return failed('unavailable', REASONS.unavailable);
-    if (r.status !== 200) return failed(mapStatus(r.status), reasonFor(mapStatus(r.status)));
+    if (r.status !== 200) return sharedFailure(r.status);
     const res = object(r.body) && object(r.body.result) ? r.body.result : null;
     if (!res) return failed('unavailable', REASONS.unreadable);
     if (res.ok !== true) {
@@ -214,6 +221,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     if (!object(r) || typeof r.status !== 'number') return mutating ? uncertain() : failed('unavailable', REASONS.unavailable);
     if (r.status !== 200) {
       if (mutating && (r.status >= 500 || r.status <= 0)) return uncertain();
+      if (r.status === 404 || r.status === 401) return sharedFailure(r.status);
       const status = r.status === 409 ? 'stale' : mapStatus(r.status);
       return failed(status, status === 'stale' ? CHANGED : reasonFor(status));
     }
@@ -315,6 +323,8 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     if (!current()) return failed('forbidden', REASONS.forbidden);
     const row = target.row;
     if (row.scope !== 'interact') return failed('forbidden', 'Owner-reviewed requests require an existing Watch and send share.');
+    // An offline owner answers 404 on every proposal route, which cannot be told from a missing proposal: say offline first.
+    if (row.online === false) return offlineFailure();
     let endpoint = `${base}/api/interaction/v1/shared/${encodeURIComponent(ref)}/proposals`, method = operation === 'list' ? 'GET' : operation === 'cancel' ? 'DELETE' : 'POST', body;
     if (operation === 'request') {
       if (!object(input) || !UUID.test(input.id) || !UUID.test(input.decision) || !Number.isSafeInteger(input.version) || !Number.isSafeInteger(input.generation) || typeof input.title !== 'string' || typeof input.text !== 'string') return failed('invalid', REASONS.invalid);
@@ -325,6 +335,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
       if (operation === 'send') {
         const before = await readShared(row, viewerArg);
         if (!current()) return failed('forbidden', REASONS.forbidden);
+        if (before.offline) return before;
         if (!before.ok || before.state.generation !== input.generation || before.state.status !== 'ready' || before.state.activeTurn !== null) return failed('stale', 'The reviewed session is busy, ended or changed.');
         body = { version: input.version, digest: input.digest, request_id: crypto.randomUUID() };
       }

@@ -106,6 +106,16 @@ test('read outcomes: forbidden/stale/ended end the thread and drop the route; un
   x.setInspect({ ok: false, status: 'unavailable', error: 'x' });
   assert.deepEqual(await x.svc.sharedThreadRead(id), { unavailable: true });
   assert.equal(x.svc.threadTarget(id).kind, 'shared', 'kept');
+  x.setInspect({ ok: false, status: 'unavailable', offline: true, error: 'x' });
+  const off = await x.svc.sharedThreadRead(id);
+  assert.deepEqual([off.unavailable, off.offline, typeof off.owner], [true, true, 'string'], 'L35: owner offline keeps the route and names the owner');
+  assert.equal(x.svc.threadTarget(id).kind, 'shared', 'L35: offline never unbinds');
+  x.setInspect({ ok: false, status: 'unavailable', signIn: true, error: 'x' });
+  assert.deepEqual(await x.svc.sharedThreadRead(id), { unavailable: true, signIn: true }, 'L35: an expired sign-in keeps the route');
+  assert.equal(x.svc.threadTarget(id).kind, 'shared');
+  x.setInspect({ ok: true, status: 'ok', state: state({ observed_at: 1 }), share: { scope: 'watch', expiresAt: null } });
+  assert.equal((await x.svc.sharedThreadRead(id)).header.scope, 'watch', 'L35: recovers on the same route');
+  x.setInspect({ ok: false, status: 'unavailable', error: 'x' });
   assert.equal(await x.svc.sharedThreadRead(id, () => false), null, 'a read whose document moved on sends nothing');
   x.setInspect({ ok: false, status: 'forbidden', error: 'x' });
   assert.deepEqual(await x.svc.sharedThreadRead(id), { gone: true, reason: 'removed' });
@@ -345,6 +355,26 @@ test('renderer: no messages yet says so; a tombstone drops the body, stops readi
   const e = page({ gone: true, reason: 'ended' });
   e.ready(); await tick(); await tick();
   assert.equal(e.$('th-title').textContent, 'This session has ended.');
+});
+test('L35 renderer: owner offline names the owner, with or without a last view, and the next good read clears it', async () => {
+  const off = { unavailable: true, offline: true, owner: 'Bob' };
+  const first = page(off, view());
+  first.ready(); await tick(); await tick();
+  assert.equal(first.$('th-shared').querySelector('.th-activity').textContent, "Bob's computer is offline. This will update when they are back.");
+  first.w.document.dispatchEvent(new first.w.Event('visibilitychange')); await tick(); await tick();
+  assert.match(first.$('th-shared').querySelector('.th-activity').textContent, /^Now: /, 'recovers without reopening');
+  const kept = page(view(), off);
+  kept.ready(); await tick(); await tick();
+  kept.w.document.dispatchEvent(new kept.w.Event('visibilitychange')); await tick(); await tick();
+  assert.equal(kept.$('th-shared').querySelector('.th-activity').textContent, "Bob's computer is offline. Showing the last known state.");
+  assert.equal(kept.$('th-shared').querySelectorAll('.th-msg').length, 1);
+});
+test('L35 renderer: an expired sign-in asks to sign in again and recovers', async () => {
+  const p = page({ unavailable: true, signIn: true }, view());
+  p.ready(); await tick(); await tick();
+  assert.equal(p.$('th-shared').querySelector('.th-activity').textContent, 'Sign in again to see this session.');
+  p.w.document.dispatchEvent(new p.w.Event('visibilitychange')); await tick(); await tick();
+  assert.match(p.$('th-shared').querySelector('.th-activity').textContent, /^Now: /);
 });
 test('renderer: an unavailable read keeps the last view and says so; thread.js stops its own reads for a shared row', async () => {
   const p = page(view(), { unavailable: true });

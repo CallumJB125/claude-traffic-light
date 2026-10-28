@@ -27,14 +27,16 @@ async function rig({ accountName = null, adapterCaps = {} } = {}) {
   };
   const hub = createInteractionHub({ adapters: { codex: adapter }, boardCurrent: () => true });
   const launched = await hub.launch({ provider: 'codex', board: 'private-board' }, actor), session = launched.state.session;
-  let shared = true, scope = 'interact', hold = null, failSend = false;
+  let shared = true, scope = 'interact', hold = null, failSend = false, offline = false, expired = false;
   const proposals = [], net = [];
   const json = (body, status = 200) => ({ status, headers: { get: () => null }, body: null, text: async () => JSON.stringify(body) });
   const client = createTeamHubClient({ baseUrl: 'https://synthetic.invalid', token: () => 'test-only-token', viewer: { id: 'viewer', name: 'You' }, fetch: async (url, init) => {
     const u = new URL(url), method = init?.method ?? 'GET';
     net.push([method, u.pathname]);
-    if (u.pathname.endsWith('/shared')) return json({ shared: shared ? [{ id: share, session, scope, team: { id: 'team', name: 'Team' }, owner: { id: 'owner', name: 'Bob' }, online: true, expires_at: null }] : [] });
+    if (u.pathname.endsWith('/shared')) return json({ shared: shared ? [{ id: share, session, scope, team: { id: 'team', name: 'Team' }, owner: { id: 'owner', name: 'Bob' }, online: !offline, expires_at: null }] : [] });
     if (!shared) return json({}, 404);
+    if (expired) return json({}, 401);
+    if (offline) return json({}, 404); // the hub answers 404 for a listed share whose owner's computer is offline
     const m = u.pathname.match(/\/proposals(?:\/([^/]+))?(\/send)?$/);
     if (m) {
       if (!m[1] && method === 'GET') return json({ ok: true, proposals: proposals.map((p) => ({ ...p })) });
@@ -91,7 +93,7 @@ async function rig({ accountName = null, adapterCaps = {} } = {}) {
     // Review, wait out the arm, confirm.
     async send(op, text) { const r = await x.review(op, text); assert.equal(r?.ok, true, JSON.stringify(r)); x.later(); return x.confirm(r.selection, op === 'stop' ? '' : text); },
     emit: (event) => ee.emit('event', { target: 'private-native-thread', ...event }),
-    watch: () => { scope = 'watch'; }, interact: () => { scope = 'interact'; }, revoke: () => { shared = false; },
+    watch: () => { scope = 'watch'; }, interact: () => { scope = 'interact'; }, revoke: () => { shared = false; }, setOffline: (v = true) => { offline = v; }, setExpired: (v = true) => { expired = v; },
     blur: () => { foreground = false; }, focus: () => { foreground = true; }, overviewBlur: () => { overviewFocus = false; },
     reopen: () => { generation++; tm.retire(wc.id); },
     hold: (fn) => { hold = fn; }, failSend: (v = true) => { failSend = v; },
@@ -582,4 +584,81 @@ test('one use at the thread level: a second confirm never reaches the subsystem'
   const [one, two] = await Promise.all([a.confirm(c, { selection: r.selection, text: 'x' }, still), a.confirm(c, { selection: r.selection, text: 'x' }, still)]);
   assert.deepEqual([one.ok, two.status], [true, 'stale']);
   assert.equal(acted, 1);
+});
+
+test('L35: an offline owner is not a moved-on session: review and confirm say offline, dispatch nothing, and recover', async () => {
+  const x = await rig();
+  try {
+    const r = await x.review('send', 'hello');
+    assert.equal(r.ok, true);
+    x.later();
+    x.setOffline();
+    const c = await x.confirm(r.selection, 'hello');
+    assert.equal(c.status, 'unavailable');
+    assert.match(c.error, /offline/i);
+    assert.doesNotMatch(c.error, /moved on/);
+    assert.equal(x.calls.length, 0, 'nothing reached the provider');
+    const again = await x.review('send', 'hello');
+    assert.equal(again.status, 'unavailable');
+    assert.match(again.error, /offline/i);
+    assert.equal((await x.review('propose', 'hello')).status, 'unavailable');
+    assert.equal(x.calls.length, 0);
+    x.setOffline(false);
+    const ok = await x.send('send', 'hello');
+    assert.equal(ok.ok, true, 'recovers when the owner is back');
+    assert.equal(x.calls.length, 1);
+  } finally { x.close(); }
+});
+
+test('L35: an expired sign-in (401) at confirm says sign in again, is not "forbidden", dispatches nothing and does not retire the thread', async () => {
+  const x = await rig();
+  try {
+    const r = await x.review('send', 'hello');
+    x.later();
+    x.setExpired();
+    const c = await x.confirm(r.selection, 'hello');
+    assert.equal(c.status, 'unavailable');
+    assert.match(c.error, /sign in again/i);
+    assert.equal(x.calls.length, 0);
+    assert.equal((await x.state()).unavailable, true, 'the read says unavailable, not gone');
+    x.setExpired(false);
+    assert.equal((await x.send('send', 'hello')).ok, true, 'recovers');
+  } finally { x.close(); }
+});
+
+test('L35: with the owner offline the proposal paths say offline too (list, request, withdraw, send-approved) and change nothing', async () => {
+  const x = await rig();
+  try {
+    // request
+    const r = await x.review('propose', 'Run it');
+    assert.equal(r.ok, true); x.later();
+    x.setOffline();
+    const req = await x.confirm(r.selection, 'Run it');
+    assert.equal(req.status, 'refused'); assert.match(req.error, /offline/i);
+    assert.equal(x.proposals.length, 0, 'no proposal was created');
+    x.setOffline(false);
+    assert.equal((await x.send('propose', 'Run it')).status, 'awaiting');
+    x.later(10_000);
+    // withdraw
+    let l = await x.list();
+    const withdraw = l.proposals[0].action.selection; x.later();
+    x.setOffline();
+    const w = await x.confirm(withdraw, '');
+    assert.equal(w.status, 'unavailable'); assert.match(w.error, /offline/i); assert.doesNotMatch(w.error, /already acted/);
+    assert.equal(x.proposals[0].status, 'pending', 'not cancelled');
+    // list
+    x.later(10_000);
+    const off = await x.list();
+    assert.equal(off.status, 'unavailable'); assert.match(off.error, /offline/i);
+    // send-approved
+    x.setOffline(false); x.approve(); x.later(10_000);
+    l = await x.list();
+    const send = l.proposals[0].action.selection; x.later();
+    x.setOffline();
+    const s = await x.confirm(send, '');
+    assert.equal(s.status, 'unavailable'); assert.match(s.error, /offline/i); assert.doesNotMatch(s.error, /busy, ended or changed/);
+    assert.equal(x.calls.length, 0, 'nothing sent');
+    x.setOffline(false); x.later(10_000);
+    assert.equal((await x.list()).ok, true, 'recovers');
+  } finally { x.close(); }
 });

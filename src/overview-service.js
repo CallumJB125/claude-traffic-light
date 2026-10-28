@@ -455,7 +455,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   if(!object(out))return{unavailable:true};
   if(out.ok!==true){
    if(out.status==='forbidden'||out.status==='stale'){sharedRoutes.delete(rowId);return{gone:true,reason:'removed'};}
-   return{unavailable:true};
+   return out.offline===true?{unavailable:true,offline:true,owner:clean(r.ownerName,80)||'The owner'}:out.signIn===true?{unavailable:true,signIn:true}:{unavailable:true};
   }
   if(!object(out.state))return{unavailable:true};
   if(out.state.status==='ended'){sharedRoutes.delete(rowId);return{gone:true,reason:'ended'};}
@@ -502,10 +502,12 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   }
   // One inspect of the bound ref writes its state slot; sharedEntry projects the listed row with it; the same
   // directory model makes the entry Overview would (equal id). Nothing else is read or written.
+  let offlineSeen=null;
   async function oneEntry({team}){
    if(team!==key||!live())return null;
    const viewer=viewerOf(hub);
    let out;try{out=await hub.inspect(viewer,r.team,r.ref);}catch{out=null;}
+   offlineSeen=out?.offline===true?clean(out.error,300):null;
    if(!live()||out?.ok!==true||typeof hub.sharedEntry!=='function')return null;
    let x;try{x=hub.sharedEntry(viewer,r.team,r.ref);}catch{x=null;}
    if(!object(x))return null;
@@ -520,7 +522,8 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
    resolve:()=>threadResolve(r.entryId,true),
    inspect:()=>controls.inspect({id:r.entryId}),
    act:(selection,operation,text)=>controls.action({selection,operation,text},{current:acting}),
-   propose:text=>coordinator.propose({team:key,title:'Thread proposal',assignments:[{id:r.entryId,name:`From ${proposerName(hub,r.viewerId)}`,text}]}),
+   // An offline owner (L35) reads as offline, not as a stale directory.
+   propose:async text=>{offlineSeen=null;const p=await coordinator.propose({team:key,title:'Thread proposal',assignments:[{id:r.entryId,name:`From ${proposerName(hub,r.viewerId)}`,text}]});return p?.ok!==true&&offlineSeen?{ok:false,status:'unavailable',error:offlineSeen}:p;},
    requestOwner:proposal=>coordinator.requestOwner({proposal}),
    remoteList:()=>coordinator.remoteList({id:r.entryId}),
    remoteSend:selection=>coordinator.remoteSend({selection}),
