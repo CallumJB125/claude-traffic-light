@@ -120,4 +120,4 @@ function createTeamSessionControls({ resolve, current = () => true, actionCurren
   return { inspect, action, invalidate() { epoch++; selections.clear(); } };
 }
 
-module.exports = { createTeamSessionControls, withTargetLock, capabilitiesOf };
+module.exports = { createTeamSessionControls, withTargetLock, takeLock, capabilitiesOf };

@@ -14,7 +14,7 @@ function fixture(t,{shared=false,clock=null}={}){
  const ctx={generation:1,document:1,foreground:true,contents:{id:9,mainFrame:{},isDestroyed:()=>false,send(){}}};
  const ix=createInteractionMain({context:()=>focused?ctx:null,readContext:()=>ctx,adapters:{codex:adapter},owned:null,localModels:null,currentBoard:()=>board,accountScope:()=>scope,now});
  const handlers={};ix.register({handle:(ch,fn)=>handlers[ch]=fn});const event={sender:ctx.contents,senderFrame:ctx.contents.mainFrame};
- const hub={origin:'https://hub.example',viewer:()=>({id:viewer,name:'Alice'}),teams:async()=>[{id:'team1',name:'Team one'}],sessions:async()=>[{ref:'share1',team:{id:'team1'},owner:{id:'bob',name:'Bob'},provider:{id:'claude',label:'Claude'},device:{label:'Bob Mac'},share:{explicit:true,scope:shareScope,revoked:false},state:working?'working':'idle',online:true,observed_at:Date.now(),capabilities:{steer:false},task_title:'Fix tests'}],inspect:async()=>({ok:true,state:{generation,provider:{id:'claude',label:'Claude'},status:working?'working':'ready',activeTurn:working?'10000000-0000-4000-8000-000000000001':null,capabilities:{newTurn:true},deliveries:[]}}),act:async(_v,_team,_ref,action,id,fresh)=>{if(shareScope!=='interact')return{ok:false,status:'forbidden'};if(!fresh())return{ok:false,status:'stale'};calls.push({action,id});working=true;return{ok:true,status:'acknowledged',delivery:{state:'acknowledged'}};}};
+ const hub={origin:'https://hub.example',viewer:()=>({id:viewer,name:'Alice'}),teams:async()=>[{id:'team1',name:'Team one'}],sessions:async()=>[{ref:'share1',team:{id:'team1'},owner:{id:'bob',name:'Bob'},provider:{id:'claude',label:'Claude'},device:{label:'Bob Mac'},share:{explicit:true,scope:shareScope,revoked:false},state:working?'working':'idle',online:true,observed_at:Date.now(),capabilities:{steer:false},task_title:'Fix tests'}],inspect:async()=>({ok:true,share:{scope:shareScope,expiresAt:null},state:{generation,provider:{id:'claude',label:'Claude'},status:working?'working':'ready',activeTurn:working?'10000000-0000-4000-8000-000000000001':null,capabilities:{newTurn:true},deliveries:[]}}),act:async(_v,_team,_ref,action,id,fresh)=>{if(shareScope!=='interact')return{ok:false,status:'forbidden'};if(!fresh())return{ok:false,status:'stale'};calls.push({action,id});working=true;return{ok:true,status:'acknowledged',delivery:{state:'acknowledged'}};}};
  const opts={now,sessions:()=>[],work:async()=>({sources:[],capture:[]}),owned:()=>ix.listOwned(),current:()=>true,actionCurrent:()=>focused,followups:q,followupScope:()=>scope,followupLocal:{target:s=>ix.followupTarget(s),resolve:(target,fresh)=>ix.resolveFollowup(target,fresh)},teamHub:()=>shared?hub:null};
  const service=createOverviewService(opts);
  t.after(()=>{q.close();ix.close();fs.rmSync(tmp,{recursive:true,force:true});});
@@ -76,4 +76,14 @@ test('main binds the reviewed exact message; a changed confirmation consumes the
  assert.equal((await x.service.followupEnqueue({selection:r.selection,requestId:crypto.randomUUID(),text:'Substituted message'})).ok,false);
  assert.equal((await x.service.followupEnqueue({selection:r.selection,requestId:crypto.randomUUID(),text:'Reviewed exact message'})).ok,false);
  assert.deepEqual((await x.q.list()).items,[]);assert.equal(x.calls.length,0);
+});
+test('queueing through Overview review and add never leaves the session locked: a later action is not busy and the item is delivered',async t=>{
+ const {takeLock}=require('../src/team-session-controls');
+ const x=fixture(t,{shared:true});x.setWorking(false);
+ const d=await x.service.directory({view:'team',team:null}),r=await x.service.followupReview({text:'Follow up only this selected session',id:d.entries[0].id});
+ assert.equal(r.ok,true);assert.equal((await enqueue(x,r)).ok,true);
+ const free=takeLock({hub:x.hub,viewer:{id:'alice'},team:'team1',ref:'share1'});
+ assert.equal(typeof free,'function','review and add left the session lock held (a send would be refused as busy)');free();
+ await x.service.pumpFollowups();assert.equal(x.calls.length,1);assert.equal((await x.q.list()).items[0].status,'acknowledged');
+ assert.equal(typeof takeLock({hub:x.hub,viewer:{id:'alice'},team:'team1',ref:'share1'}),'function','released after the send');
 });

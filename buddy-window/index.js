@@ -127,7 +127,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, onPresenceLeave = () => {}, onOverviewLeft = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, chatsOn = () => true, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, threadBindShared = async () => false, openTeamRow = () => false, onThreadRetired = () => {}, newChatBusy = () => false, onNewChatRetired = () => {}, loginEnv = () => null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, onHubAccountEnded = () => {}, onPresenceLeave = () => {}, onOverviewLeft = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, chatsOn = () => true, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, threadBindShared = async () => false, openTeamRow = () => false, onThreadRetired = () => {}, newChatBusy = () => false, onNewChatRetired = () => {}, loginEnv = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -220,7 +220,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   function clientFor(origin) {
     let c = clients.get(origin);
     if (!c) {
-      c = createAccountClient({ origin, store: vault(origin), pin: (o) => pinnedTransport(o), onSignedOut: () => { flow.signedOutOf(origin, { tell: true }).catch((e) => log('sign-out cleanup failed', e.message)); } });
+      c = createAccountClient({ origin, store: vault(origin), onEnded: (who) => onHubAccountEnded(who), pin: (o) => pinnedTransport(o), onSignedOut: () => { flow.signedOutOf(origin, { tell: true }).catch((e) => log('sign-out cleanup failed', e.message)); } });
       clients.set(origin, c);
     }
     return c;

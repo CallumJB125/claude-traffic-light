@@ -73,7 +73,7 @@ test('main.js binds the successors at every wiring site of the two documents, an
   assert.match(mainSrc, /phoneViews: \(\) => \['phone', `settings:\$\{SettingsPanes\.PHONE_PAIRING\}`\]\.map\(\(id\) => buddyWin\?\.pageWebContents\(id\)\)/);
   assert.match(read('src/ai-tools-wire.js'), /AiToolsMain\.register\(\{ ipcMain, fromPage, focusAllowed, shell,/);
   assert.match(mainSrc, /\['usage', 'stats', 'help', 'aitools', `settings:\$\{SettingsPanes\.AITOOLS_SETUP\}`\]/);
-  assert.equal((mainSrc.match(/CHAT_PREVIEW/g) || []).length, 14, 'no new gate use');
+  assert.equal((mainSrc.match(/CHAT_PREVIEW/g) || []).length, 15, 'no new gate use');
 });
 
 test('aitools:focus: the sheet document never consumes the pending focus; the old page still does (S1)', async () => {

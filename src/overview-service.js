@@ -8,6 +8,7 @@ const Organise=require('./work-organise');
 const Machine=require('../hooks/session-machine');
 const AgentReports=require('./agent-self-report');
 const {clean}=require('./work-capture');
+const {resolveFollowup:resolveSharedFollowup}=require('./followup-resolve');
 const Directory=require('./session-directory');
 const Ids=require('./focus/ids');
 const Surface=require('./session-surface');
@@ -38,7 +39,7 @@ const provider=(source,model)=>{const known=typeof source==='string'&&Object.has
 // Mac's live session shares; hubTeams() → {origin, teams} the signed-in
 // user's teams on the sharing hub; teamHub() → the team directory adapter
 // (src/session-directory.js interface) or null.
-function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwner=null,sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,actionCurrent=current,navigationCurrent=()=>false,owned=()=>[],shares=()=>null,hubTeams=async()=>null,teamHub=()=>null,followups=null,followupScope=()=>null,followupLocal=null,looseEnds=()=>null,accountName=()=>null,ownedThreads=null}){
+function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwner=null,sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,actionCurrent=current,navigationCurrent=()=>false,owned=()=>[],shares=()=>null,hubTeams=async()=>null,teamHub=()=>null,followups=null,followupScope=()=>null,followupLocal=null,backgroundFollowups=false,looseEnds=()=>null,accountName=()=>null,ownedThreads=null}){
  // Burst's loose ends (src/burst-loose-ends-view.js) matched to a session's working directory here in main: the page gets counts, never a path.
  const looseBadge=cwd=>{let v=null;try{v=looseEnds();}catch{v=null;}const m=v?LooseEnds.forPath(v,cwd):null;return m?{uncommitted:m.uncommitted,unpushed:m.unpushed,stashes:m.stashes,stale:m.stale===true,text:LooseEnds.badgeText(m)}:null;};
  let epoch=0,directoryEpoch=0,routeEpoch=0,teamView=null,handles=new Map(),teamRefs=new Map();const secret=crypto.randomBytes(32);
@@ -287,7 +288,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   const selection=crypto.randomUUID();followupSelections.set(selection,{target,label:label.slice(0,240),epoch,owner,expires:now()+45000,schedule,text});
   for(const[k,v]of followupSelections)if(v.expires<now())followupSelections.delete(k);
   while(followupSelections.size>64)followupSelections.delete(followupSelections.keys().next().value);
-  return{ok:true,status:'review',selection,label:label.slice(0,240),schedule:{kind:schedule.kind,atMs:schedule.atMs??null,label:scheduleLabel},notice:`${scheduleLabel}. One attempt only, in queue order. Keep Plexiform open and Overview focused on this account and board; a missed time waits for that view and the original session to be ready. A provider reset report predicts availability, not successful completion. May use AI credits. Saved encrypted for at most seven days; restart cannot restore an ended session. Requires OS encryption and durable filesystem sync.`};
+  return{ok:true,status:'review',selection,label:label.slice(0,240),schedule:{kind:schedule.kind,atMs:schedule.atMs??null,label:scheduleLabel},notice:`${scheduleLabel}. One attempt only, in queue order. ${backgroundFollowups?'Sent once, when the session is idle, while Plexiform is running and you are signed in as you. If the share ends, becomes watch-only or you sign in as someone else, it is dropped and not sent.':'Keep Plexiform open and Overview focused on this account and board; a missed time waits for that view and the original session to be ready.'} A provider reset report predicts availability, not successful completion. May use AI credits. Saved encrypted for at most seven days; restart cannot restore an ended session. Requires OS encryption and durable filesystem sync.`};
  }
  async function followupEnqueue(request){
   if(!followups||!closed(request,['selection','requestId','text'])||!UUID.test(request.selection)||!UUID.test(request.requestId)||typeof request.text!=='string')return followupUnavailable();
@@ -302,23 +303,10 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
  }
  async function resolveFollowup(t){
   if(!exactTarget(t)||!actionPermitted())return{ok:false,error:'Focus this account and board in Overview to continue.'};
-  const owner=followupScope(),epoch=routeEpoch;
-  const fresh=()=>actionPermitted()&&owner===followupScope()&&epoch===routeEpoch;
-  if(t.kind==='owned')return followupLocal?.resolve?.(t,fresh)??{ok:false,terminal:true,error:'The original session is no longer held by Plexiform.'};
-  const hub=safe(teamHub,null),viewer=viewerOf(hub),r=t.route;
-  if(!hub||hub.origin!==r.origin||viewer?.id!==r.viewer)return{ok:false,error:'Return to the original signed-in hub account.'};
-  if(teamView!==teamKey(r.origin,r.team))return{ok:false,error:'Open the original team in Team sessions to continue.'};
-  const current=()=>fresh()&&safe(teamHub,null)===hub&&viewerOf(hub)?.id===r.viewer;
-  let out;try{out=await hub.inspect(viewer,r.team,r.ref);}catch{return{ok:false,error:'The shared session is temporarily unavailable.'};}
-  if(!current())return{ok:false,error:'The view or account changed.'};
-  if(!out?.ok)return{ok:false,terminal:['forbidden','stale'].includes(out?.status),error:clean(out?.error,400)||'The original share is unavailable.'};
-  const s=out.state;
-  if(!s||s.generation!==t.generation||s.provider?.id!==t.provider||s.status==='ended')return{ok:false,terminal:true,error:'The original shared session ended or changed. Nothing will be sent.'};
-  // The client/host reauthorize interact scope for every act. inspect alone
-  // does not confer sending rights; no cached share grant is resurrected.
-  if(s.capabilities?.newTurn!==true||typeof hub.act!=='function')return{ok:false,terminal:true,error:'This connection does not support a new-turn follow-up.'};
-  return{ok:true,ready:s.status==='ready'&&s.activeTurn===null,current,
-   send:(text,id,keep)=>hub.act(viewer,r.team,r.ref,{operation:'send',generation:t.generation,turn:null,text},id,()=>current()&&keep())};
+  const epoch=routeEpoch;
+  if(t.kind==='team'){const r=t.route;if(teamView!==teamKey(r.origin,r.team))return{ok:false,error:'Open the original team in Team sessions to continue.'};}
+  // The shared resolver owns the account, share, scope and idle checks; Overview adds only its focus and route epoch.
+  return resolveSharedFollowup(t,{teamHub,local:followupLocal,scope:followupScope,gate:()=>actionPermitted()&&epoch===routeEpoch,now});
  }
  async function resolveTeam(entryId,effect=false){
   const e=teamRefs.get(entryId),generation=routeEpoch;
