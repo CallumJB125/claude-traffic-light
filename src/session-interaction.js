@@ -159,7 +159,9 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     let state = d.state;
     if (state === 'acknowledged' && t) state = FINAL.includes(t.status) ? t.status : response ? 'responding' : recorded ? 'recorded' : 'acknowledged';
     if (state === 'acknowledged' && r.ended) state = 'failed';
-    return { id: d.id, text: d.text, by: d.by ?? null, mode: d.mode, state, recorded, turn: t?.tag ?? null, response, error: t?.error ?? null, notices: t ? [...t.notices] : [], sentAt: d.sentAt, finishedAt: t?.finishedAt ?? null };
+    // T4b: who stopped this turn, on its new-turn delivery only, and only once the provider says it was interrupted.
+    const stoppedBy = d.mode === 'new-turn' && t && t.status === 'interrupted' && typeof t.stopBy === 'string' ? t.stopBy : null;
+    return { id: d.id, text: d.text, by: d.by ?? null, mode: d.mode, stoppedBy, state, recorded, turn: t?.tag ?? null, response, error: t?.error ?? null, notices: t ? [...t.notices] : [], sentAt: d.sentAt, finishedAt: t?.finishedAt ?? null };
   }
   function dto(r) {
     const active = r.activeTurn ? r.turns.get(r.activeTurn) : null;
@@ -411,14 +413,20 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     return { ok: true, status: 'acknowledged', delivery: publicDelivery(r, d), state: dto(r) };
   }
 
-  async function interrupt(req, actor) {
+  // T4b: `by` (main-only, never from a request) is the teammate who asked for the stop (src/remote-interaction.js).
+  // It is stamped on the turn this call captured, never the one active after the await (B-S1), before the provider
+  // answers: the turn's 'interrupted' can arrive first. A failed request puts back what was there. A request can't
+  // start on a turn that already ended (refused stale above), so a late no-op stop never erases an effective one.
+  async function interrupt(req, actor, { by = null } = {}) {
     if (!closed(req, ['session', 'generation', 'turn']) || typeof req.turn !== 'string' || !UUID.test(req.turn)) return refuse('invalid', ERRORS.invalid);
     const { r, error } = lookup(req, actor, { board: false });
     if (error) return error;
     const active = r.activeTurn ? r.turns.get(r.activeTurn) : null;
     if (r.existing && ((r.activeTurn && !r.own.has(r.activeTurn)) || (!r.activeTurn && r.foreignBusy) || [...r.turns].some(([id, t]) => t.tag === req.turn && !r.own.has(id)))) return refuse('busy', ERRORS.foreignTurn);
     if (!active || active.tag !== req.turn || !r.adapter.capabilities.interrupt) return refuse('stale', ERRORS.stale);
-    try { await r.adapter.interrupt({ target: r.target, turnId: r.activeTurn }); } catch { return refuse('unavailable', ERRORS.unavailable); }
+    const prev = active.stopBy, stamp = typeof by === 'string' && by && by.length <= 80 ? by : null;
+    active.stopBy = stamp;
+    try { await r.adapter.interrupt({ target: r.target, turnId: r.activeTurn }); } catch { if (active.stopBy === stamp) active.stopBy = prev; return refuse('unavailable', ERRORS.unavailable); }
     return { ok: true, status: 'interrupt-requested', state: dto(r) };
   }
 

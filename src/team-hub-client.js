@@ -180,6 +180,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     return {
       id: d.id, text: safeProse(d.text, MAX_TEXT), by: str(d.by, 80) || null,
       mode: d.mode === 'steer' ? 'steer' : d.mode === 'new-turn' ? 'new-turn' : null,
+      stoppedBy: str(d.stoppedBy, 80) || null, // T4b: an older host sends none
       state: DELIVERY_STATES.includes(d.state) ? d.state : 'unknown', recorded: d.recorded === true,
       turn: typeof d.turn === 'string' && UUID.test(d.turn) ? d.turn : null,
       response: safeProse(d.response, 16_000), error: safeProse(d.error, 1000) || null,

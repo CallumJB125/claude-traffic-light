@@ -301,7 +301,8 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
       return projectResult(result, sh);
     }
     if (!closed(args, ['session', 'generation', 'turn'])) return REFUSED.invalid;
-    const result = await t.hub.interrupt(args, t.actor);
+    // T4b: stamped with the same label as a send, from this host's own share record.
+    const result = await t.hub.interrupt(args, t.actor, { by: member.name });
     return projectResult(result, sh);
   }
 
