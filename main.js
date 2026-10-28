@@ -2475,10 +2475,10 @@ if (CHAT_PREVIEW) {
   const SidebarRows = require('./src/overview-sidebar-rows');
   ThreadMain = require('./src/thread-main').createThreadMain({
     buddy: () => buddyWin, chatPreview: CHAT_PREVIEW,
+    askEach: { get: () => loadConfig().threadAskEach === true, set: (on) => saveConfig({ threadAskEach: on === true }) },
     target: (id) => OverviewMain.threadTarget(id),
     sharedRead: (id, alive) => OverviewMain.sharedThreadRead(id, alive),
     sharedAuthority: (id, live) => OverviewMain.sharedThreadAuthority(id, live),
-    askEach: { get: () => loadConfig().threadAskEach === true, set: (on) => saveConfig({ threadAskEach: on === true }) },
     openTeam: (id) => buddyWin?.openTeamRow?.(id) ?? false,
     // T4a: my own Plexiform-held session's thread: a read, and the way to Overview (navigation only).
     ownedRead: (id) => OverviewMain.ownedThreadRead(id),
