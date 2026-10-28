@@ -467,8 +467,9 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
       const a = r?.body?.allowance, until = typeof a?.expires_at === 'string' ? Date.parse(a.expires_at) : NaN;
       if (r?.status !== 200 || !object(a) || a.user_id !== user || !Number.isFinite(until) || until <= clock() || until > clock() + seconds * 1000 + 600_000) return hubError(r, 'The hub did not accept that.');
       if (!liveShare(sh) || shares.get(share) !== sh) return REFUSED.gone;
-      // Only after the hub said yes, and with the hub's own expiry (never a time computed here).
-      sh.allow.set(user, { until, iso: a.expires_at, at: clock() });
+      // Only after the hub said yes; the hub-returned expiry is what the hub must name back (iso), the Mac judges its own clock.
+      // Skew never lengthens it: this Mac's clock ends it no later than the chosen time after now.
+      sh.allow.set(user, { until: Math.min(until, clock() + seconds * 1000), iso: a.expires_at, at: clock() });
       return { ok: true, share: shareView(sh) };
     });
   }
