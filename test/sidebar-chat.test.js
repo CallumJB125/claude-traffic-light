@@ -27,7 +27,7 @@ const ROWS = [
 const open = [];
 test.afterEach(() => { while (open.length) open.pop().close(); });
 
-async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus = { filter: 'all', seq: 0 }, early = null, selected = undefined, chats = undefined, team = undefined } = {}) {
+async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus = { filter: 'all', seq: 0 }, early = null, selected = undefined, chats = undefined, team = undefined, ended = null } = {}) {
   const dom = new JSDOM(HTML, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'file:///app/buddy-window/sidebar.html' });
   const w = dom.window;
   open.push(w);
@@ -38,7 +38,7 @@ async function boot({ chatFirst = true, rows = ROWS, collapsed = ['idle'], focus
       ...(chatFirst ? { chatFirst: true, chat: { collapsed, focus, ...(selected !== undefined ? { selected } : {}), ...(chats !== undefined ? { chats } : {}) } } : {}) }),
     select: (x) => calls.select.push(x), retry() {}, retryAccountStorage() {}, workspace() {}, optimiserSection() {}, signOut() {},
     onState: (fn) => onState.push(fn),
-    sessions: async () => { calls.sessions++; return { schema: 1, status: 'complete', sessions: typeof rows === 'function' ? rows() : rows }; },
+    sessions: async () => { calls.sessions++; return { schema: 1, status: 'complete', sessions: typeof rows === 'function' ? rows() : rows, ...(ended ? { ended: ended() } : {}) }; },
     openThread: (x) => calls.thread.push(x),
     openNewChat: () => { calls.newchat++; },
     setGroups: (ids) => calls.groups.push([...ids]),
@@ -524,4 +524,29 @@ test('T1: an account switch whose first read fails clears the previous account\'
   out = { schema: 1, status: 'unavailable', viewer: null, teams: [], teamsTotal: 0, rows: [] };
   await again();
   assert.equal(s.qa('.sb-shared, .sb-gone').length, 0);
+});
+
+// T4a (plan-t4a §2.4): main names the owned rows it ended; only a row this sidebar was showing becomes a tombstone.
+test('owned rows: an ended id tombstones a shown row in place, with its reason; dismiss removes it; others are ignored', async () => {
+  const owned = { id: id(9), bucket: 'working', title: 'Plexiform channel', project: '', origin: null, age_ms: 1000, team: false, terminal: false, chat: false, thread: true };
+  let rows = [...ROWS, owned], ended = [];
+  const s = await boot({ rows: () => rows, ended: () => ended });
+  assert.ok(s.q(`[data-key="r:${id(9)}"]`));
+  rows = ROWS; ended = [{ id: id(9), reason: 'overview' }, { id: id(42), reason: 'ended' }];
+  await s.push({});
+  const gone = s.qa('.sb-gone');
+  assert.equal(gone.length, 1, 'only the row it was showing');
+  assert.equal(gone[0].dataset.key, `e:${id(9)}`);
+  assert.equal(gone[0].closest('.sb-group').dataset.bucket, 'working', 'in place');
+  assert.match(gone[0].textContent, /Plexiform channel.*Ended when Overview reloaded/);
+  gone[0].querySelector('.sb-dismiss').dispatchEvent(new s.w.MouseEvent('click', { bubbles: true }));
+  assert.equal(s.qa('.sb-gone').length, 0);
+  await s.push({});
+  assert.equal(s.qa('.sb-gone').length, 0, 'a dismissed tombstone stays dismissed');
+  // A row that just leaves (no ended entry) leaves without a tombstone.
+  rows = [...ROWS, { ...owned, id: id(10) }]; ended = [];
+  await s.push({});
+  rows = ROWS;
+  await s.push({});
+  assert.equal(s.qa('.sb-gone').length, 0);
 });
