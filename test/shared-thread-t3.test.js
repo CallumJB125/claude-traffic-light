@@ -101,6 +101,8 @@ async function rig({ accountName = null, adapterCaps = {} } = {}) {
   };
   return x;
 }
+// An expected refusal answers at once; a missing lock would wait on the held dispatch instead.
+const within = (p, ms = 1500) => Promise.race([p, new Promise((r) => setTimeout(() => r({ status: 'no answer: dispatched past the lock' }), ms))]);
 const gate = () => { let release; const p = new Promise((r) => { release = r; }); return { wait: p, release }; };
 
 test('channels: the three T3 channels exist and nothing else was added', () => {
@@ -259,7 +261,7 @@ test('shared lock (S1, S3): Overview and the thread serialise on one session, ac
     x.hold(async (req) => { if (req.op === 'send') await g.wait; });
     const pending = x.svc.teamAction({ selection: o.selection, operation: 'send', text: 'Overview' });
     await tick(); await tick(); await tick();
-    const busy = await x.confirm(r.selection, 'Thread');
+    const busy = await within(x.confirm(r.selection, 'Thread'));
     assert.equal(busy.status, 'busy'); assert.equal(busy.error, SharedMain.TEXT.BUSY);
     g.release(); assert.equal((await pending).ok, true);
     x.hold(null);
@@ -272,10 +274,10 @@ test('shared lock (S1, S3): Overview and the thread serialise on one session, ac
     await tick(); await tick(); await tick(); await tick();
     x.hold(null);
     const o2 = await x.overviewInspect();
-    assert.equal((await x.svc.teamAction({ selection: o2.selection, operation: 'send', text: 'Overview two' })).status, 'busy');
+    assert.equal((await within(x.svc.teamAction({ selection: o2.selection, operation: 'send', text: 'Overview two' }))).status, 'busy');
     x.reopen();
     const r3 = await x.review('send', 'After reopen'); x.later();
-    assert.equal((await x.confirm(r3.selection, 'After reopen')).status, 'busy', 'still serialised after close and reopen');
+    assert.equal((await within(x.confirm(r3.selection, 'After reopen'))).status, 'busy', 'still serialised after close and reopen');
     g2.release(); await held;
     x.emit({ kind: 'turn-completed', turnId: 'private-native-turn-2', status: 'completed' }); await tick();
     assert.equal((await x.send('send', 'Now it goes')).ok, true, 'released in finally');
