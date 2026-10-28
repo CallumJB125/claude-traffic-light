@@ -62,6 +62,7 @@ test('Ask me each time: main.js stores it with the preferences, off by default, 
   assert.match(main, /config\.threadAskEach = saved\.threadAskEach === true;/);
   assert.match(main, /if \('threadAskEach' in partial\) next\.threadAskEach = partial\.threadAskEach === true;/);
   assert.match(main, /askEach: \{ get: \(\) => loadConfig\(\)\.threadAskEach === true, set: \(on\) => saveConfig\(\{ threadAskEach: on === true \}\) \}/);
+  assert.match(main, /delete partial\.threadAskEach;/, 'a renderer save-config (Lights) cannot write it');
   const thread = fs.readFileSync(path.join(__dirname, '..', 'src', 'thread-main.js'), 'utf8');
   assert.match(thread, /createSharedThreadActions\(\{ authority: sharedAuthority, askEach, now \}\)/);
 });

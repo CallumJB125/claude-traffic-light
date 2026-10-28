@@ -4156,6 +4156,7 @@ function commitConfig(partial) {
   // __backupReason is only compared with Backups' closed marker list to decide whether to snapshot first (backupFirst() takes no label): never stored, logged or used in a filename.
   const marker = partial.__backupReason;
   delete partial.__backupReason;
+  delete partial.threadAskEach; // only the thread toggle's main-side setter writes this; no renderer save (e.g. Lights) may change it
   delete partial.__prefsFrom; // R8-2b: control field of the rules pane's template saves (checked in rulesRefusal), never stored
   if (Backups.needsBackup({
     prevRules: prev.rules, nextRules: Array.isArray(partial.rules) ? partial.rules.map(Rules.normalizeRule) : undefined,

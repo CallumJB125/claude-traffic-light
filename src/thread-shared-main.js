@@ -127,7 +127,7 @@ function createSharedThreadActions({ authority = null, askEach: pref = null, now
   async function reviewInner(c, req, still) {
     if (plain(req) && Object.keys(req).join(',') === 'askEach' && typeof req.askEach === 'boolean') {
       askEach = req.askEach;
-      try { pref?.set?.(askEach); } catch { /* the choice still applies for this run */ }
+      try { pref?.set?.(askEach); } catch { console.warn('[thread] could not save Ask me each time; it applies for this run only'); }
       if (askEach) for (const h of auths.values()) h.window = null;
       return { ok: true, status: 'ask-each', askEach };
     }
