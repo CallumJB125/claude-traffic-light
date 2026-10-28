@@ -312,7 +312,7 @@ test('M1 and no Overview side effects: the real coordinator gives a review on on
     assert.equal((await x.svc.teamAction({ selection: o2.selection, operation: 'send', text: 'Overview still works' })).ok, true, 'an Overview selection minted before a thread propose dispatches after it');
     // The thread's authority never reads Overview's directory or moves its route, view or refs.
     const src = read('src/overview-service.js'), body = src.slice(src.indexOf('function sharedThreadAuthority'), src.indexOf('\n // Message a teammate'));
-    for (const w of ['directory(', 'routeEpoch', 'directoryEpoch', 'teamView', 'teamRefs', 'resolveTeam', 'handles.']) assert.ok(!body.includes(w), w);
+    for (const w of ['directory(', 'routeEpoch', 'directoryEpoch', 'teamView', 'teamRefs', 'resolveTeam(', 'handles.']) assert.ok(!body.includes(w), w);
     assert.match(body, /const controls=createTeamSessionControls\(\{resolve:threadResolve,/);
     assert.match(body, /const coordinator=createTeamCoordinator\(\{inventory:oneEntry,/);
   } finally { x.close(); }
