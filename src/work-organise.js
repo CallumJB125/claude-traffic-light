@@ -540,7 +540,18 @@
     return { resolve, groupOf, idle, clear: () => cache.clear(), size: () => cache.size };
   }
 
-  const api = { BUCKETS, FALLBACK, SENTENCE_FALLBACK, headingOf, MAX_TITLE, bucketOf, knowsState, projectOf, keyOf, titleOf, group, createGitInfoResolver, safeText, promptSummary, humaniseBranch };
+  // QoL4a: My sessions' "Find a session". A case-insensitive substring of the task title, project (folder name), AI
+  // tool, device, board, card key, or any child agent's label or task; an empty query matches everything.
+  function matchesQuery(e, query) {
+    const q = typeof query === 'string' ? query.trim().toLocaleLowerCase() : '';
+    if (!q) return true;
+    if (!e || typeof e !== 'object') return false;
+    const kids = Array.isArray(e.children) ? e.children : [];
+    const hay = [e.task?.title, e.project, e.provider?.label, e.device?.label, e.board?.label, e.card?.key, ...kids.flatMap((c) => [c?.label, c?.task?.title])];
+    return hay.some((x) => typeof x === 'string' && x.toLocaleLowerCase().includes(q));
+  }
+
+  const api = { BUCKETS, FALLBACK, SENTENCE_FALLBACK, headingOf, MAX_TITLE, bucketOf, knowsState, projectOf, keyOf, titleOf, group, createGitInfoResolver, safeText, promptSummary, humaniseBranch, matchesQuery };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PlexiformWorkOrganise = Object.freeze(api);
 })(typeof globalThis !== 'undefined' ? globalThis : this);

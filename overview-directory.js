@@ -563,8 +563,7 @@
   // matches. While it is set, groups with no match are left out (their collapsed state lives in mineMem/mineSaved, so
   // it comes back) and matching groups show open without changing what was saved.
   const mineQuery = () => ($('mine-search')?.value || '').trim().toLocaleLowerCase();
-  const mineHay = e => [e.task.title, e.project, e.provider.label, e.device.label, e.board.label, e.card?.key || '', ...e.children.map(c => `${c.label} ${c.task.title}`)].filter(x => typeof x === 'string').join('\n').toLocaleLowerCase();
-  const mineMatch = (e, q) => !q || mineHay(e).includes(q);
+  const mineMatch = (e, q) => W.matchesQuery(e, q);
   // Saved only in Project mode, and only a person's toggle; Status and AI tool keep theirs for the page.
   function mineToggle(key, closed) {
     mineMem.set(`${mineBy}|${key}`, closed);
