@@ -30,11 +30,16 @@ const spotsOf = (file) => (file && Array.isArray(file.spots) ? file.spots : [])
   .slice(0, 64);
 
 // The next file after saving `bounds` on `display`: the last bounds at the top level, and that display's spot.
-function remember(file, display, bounds, at = Date.now()) {
+// `connected`: the ids (keyOf().id) of the displays connected now. A spot with this display's label under an id
+// that isn't connected is this display under its old id (ids change across reconnects), so it is replaced, not
+// kept beside: otherwise the next id change would find two spots with the label and use neither. Two identical
+// monitors connected together keep a spot each.
+function remember(file, display, bounds, at = Date.now(), connected = null) {
   const b = rect(bounds);
   if (!b) return file;
   const k = keyOf(display);
-  const others = spotsOf(file).filter((s) => !k || !k.id || s.id !== k.id);
+  const stale = (s) => !!k && !!k.label && s.label === k.label && connected instanceof Set && !connected.has(s.id);
+  const others = spotsOf(file).filter((s) => !(k && k.id && s.id === k.id) && !stale(s));
   const spots = k ? [...others, { id: k.id, label: k.label, bounds: b, at }] : others;
   spots.sort((p, q) => (num(p.at) ? p.at : 0) - (num(q.at) ? q.at : 0));
   return { ...b, v: 2, spots: spots.slice(-MAX_SPOTS) };
@@ -83,7 +88,8 @@ function createKeeper({ screen, read, write, bounds, move, commit, busy = () => 
     if (!r || settling()) return false;
     const display = screen.getDisplayMatching(r);
     lastDisplay = keyOf(display);
-    write(remember(fileNow(), display, r, now()));
+    const connected = new Set(screen.getAllDisplays().map((d) => keyOf(d)?.id).filter(Boolean));
+    write(remember(fileNow(), display, r, now(), connected));
     return true;
   }
 

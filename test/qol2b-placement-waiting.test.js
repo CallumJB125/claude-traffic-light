@@ -98,6 +98,30 @@ test('B-M1: unplugging the display moves the widget to its spot on the one left,
   assert.deepEqual(r.moves.at(-1), { x: 2000, y: 100 });
 });
 
+test('QB-M1: the label fallback keeps working across repeated reconnects under new ids; twin monitors keep a spot each', () => {
+  const r = keeperRig();
+  r.k.save({ ...r.widget }); // on the Dell, id 7
+  let current = 7;
+  for (const id of [2, 3, 4]) {
+    r.screen.list = [LAPTOP];
+    r.k.displayRemoved({ ...DELL, id: current });
+    r.advance(2000);
+    const back = { ...DELL, id };
+    r.screen.list = [LAPTOP, back];
+    r.k.displayAdded(back);
+    assert.deepEqual(r.moves.at(-1), { x: 2000, y: 100 }, `back on the Dell as id ${id}`);
+    r.advance(2000);
+    r.k.save({ ...r.widget }); // saved again under the new id
+    assert.equal(r.file().spots.filter((s) => s.label === 'DELL U2720Q|1920x1080').length, 1, 'the old id is replaced, not kept beside');
+    current = id;
+  }
+  // Two identical Dells connected at once keep a spot each.
+  const twin = keeperRig({ displays: [LAPTOP, DELL, { ...DELL, id: 8, bounds: { ...DELL.bounds, x: 3432 }, workArea: { ...DELL.workArea, x: 3432 } }] });
+  twin.k.save({ x: 2000, y: 100, width: 100, height: 80 });
+  twin.k.save({ x: 3500, y: 100, width: 100, height: 80 });
+  assert.equal(twin.file().spots.filter((s) => s.label === 'DELL U2720Q|1920x1080').length, 2);
+});
+
 test('replugging does not move the widget if the person moved it after it was re-homed', () => {
   const r = keeperRig();
   r.k.save({ ...r.widget });
