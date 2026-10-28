@@ -10,6 +10,8 @@ const IDLE = new Set(['idle', 'idle-nudge', 'stop', 'session-end']);
 const MAX = 80;
 const Organise = require('./work-organise.js');
 const Actions = require('./session-row-actions.js');
+const Snooze = require('./session-snooze.js');
+const id0 = (s) => !!Snooze.idOf(s && s.sessionId);
 
 const str = (v, max = MAX) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f‪-‮⁦-⁩]/g, '').trim().slice(0, max) : '');
 const stamp = (v) => { const t = typeof v === 'number' ? v : Date.parse(v || ''); return Number.isFinite(t) && t > 0 ? t : null; };
@@ -65,10 +67,11 @@ function deployLine(deploy) {
  * "pause nudges" rule holds this burning session's nudges.
  * QoL2: home (the home folder, for `~`), platform (names the file manager), resumable (main found the session has
  * ended and has a resume command for it: only then is copy-resume offered).
+ * QoL3b: snoozedUntil (epoch ms the session's alerts are snoozed until, from main's store; 0 when not snoozed).
  * → {id, title, state, model, spend, teammate, actions, waiting, idle, remote, recap, deploy, help, helpWhy, nudgesPaused,
  *    folder, folderApp, waitFor}
  */
-function sessionCard(session, { now = Date.now(), spend = null, teammate = null, explain = null, deploy = null, nudgesPaused = false, home = null, platform = process.platform, resumable = false } = {}) {
+function sessionCard(session, { now = Date.now(), spend = null, teammate = null, explain = null, deploy = null, nudgesPaused = false, home = null, platform = process.platform, resumable = false, snoozedUntil = 0 } = {}) {
   const s = session && typeof session === 'object' ? session : {};
   const signal = str(s.signal, 40);
   const tool = str(s.tool, 60);
@@ -90,6 +93,9 @@ function sessionCard(session, { now = Date.now(), spend = null, teammate = null,
   // The model the session runs on (a local model's name, or the provider's model when its hooks report one).
   const model = str(s.model, 80);
   if (model) parts.push(model);
+  // QoL3b: your own session's alerts snoozed from its card or a notification ("alerts snoozed, 42m left").
+  const snoozeLeft = !teammate && !s.remote && Number.isFinite(snoozedUntil) ? Snooze.leftText(snoozedUntil, now) : '';
+  if (snoozeLeft) parts.push(`alerts snoozed, ${snoozeLeft} left`);
   const state = parts.join(' · ');
   const cost = spend && Number.isFinite(spend.cost_usd) ? spend.cost_usd : null;
   const spendLine = cost == null ? '' : `${money(cost)} this session${spend.unpriced > 0 ? ` (+${spend.unpriced} unpriced)` : ''}`;
@@ -103,6 +109,7 @@ function sessionCard(session, { now = Date.now(), spend = null, teammate = null,
   if (own && waiting) actions.push('answer');
   if (own && resumable === true) actions.push('copy-resume');
   if (own && folder) actions.push('finder', 'editor');
+  if (own && id0(s)) actions.push(snoozeLeft ? 'unsnooze' : 'snooze');
   if (!mate) actions.push(s.pinned ? 'unpin' : 'pin');
   const paused = !mate && nudgesPaused === true;
   if (paused) actions.push('resume-nudges');

@@ -33,14 +33,16 @@ const idOf = (v) => (typeof v === 'string' && ID.test(v) ? v : null);
  * nudgesPaused(id) → bool; copyHelp(handle) → {ok}; resumeNudges(id) → {ok}. All optional.
  * QoL2: home, platform; ended(row) → true only when the session has clearly ended (session-row-actions sessionEnded,
  * cheap: no process listing); openSession(how, row) → {feedback}
- * for how 'terminal'|'finder'|'editor'; copyText(text). */
+ * for how 'terminal'|'finder'|'editor'; copyText(text).
+ * QoL3b: snoozedUntil(id) → epoch ms or 0; snooze(id, kind) → the new end (0 when off or refused), kind '15m'|'1h'|'off'. */
 const HOW = new Set(['terminal', 'finder', 'editor']);
+const SNOOZE_FOR = new Set(['15m', '1h', 'off']);
 const ACTION_GAP_MS = 500;
 const closed = (req, keys) => !!req && typeof req === 'object' && !Array.isArray(req) && Object.getPrototypeOf(req) === Object.prototype
   && Object.keys(req).length === keys.length && keys.every((k) => Object.hasOwn(req, k));
 function install({ ipcMain, getSessions = () => [], getSpend = () => null, config, allowed = () => true, now = Date.now, collapseAfter,
   getExplain = () => null, getDeploy = () => null, nudgesPaused = () => false, copyHelp = () => ({ ok: false }), resumeNudges = () => ({ ok: false }),
-  home = null, platform = process.platform, ended = () => false, openSession = null, copyText = null } = {}) {
+  home = null, platform = process.platform, ended = () => false, openSession = null, copyText = null, snoozedUntil = () => 0, snooze = null } = {}) {
   if (!config || typeof config.load !== 'function' || typeof config.save !== 'function') throw new Error('widget-cards-main: config {load, save} required');
   const pinned = () => idOf(config.load().widgetPinnedSession);
   const sessionsOf = async () => {
@@ -66,6 +68,7 @@ function install({ ipcMain, getSessions = () => [], getSpend = () => null, confi
       const quiet = (fn) => { try { return fn() || null; } catch { return null; } };
       const card = sessionCard(r.session, { now: at, spend, teammate: r.team ? { name: r.name } : null, home, platform,
         resumable: !!(own && copyText && resumable(r.session)),
+        snoozedUntil: own && r.id && typeof snooze === 'function' ? Number(quiet(() => snoozedUntil(r.id))) || 0 : 0,
         explain: own ? quiet(() => getExplain(r.session)) : null,
         deploy: own && typeof r.session.cwd === 'string' ? quiet(() => getDeploy(r.session.cwd)) : null,
         nudgesPaused: !!(own && r.id && quiet(() => nudgesPaused(r.id))) });
@@ -117,13 +120,25 @@ function install({ ipcMain, getSessions = () => [], getSpend = () => null, confi
     return { ok: true, feedback: 'Copied the resume command.' };
   }
 
+  // QoL3b: snooze this session's alerts for 15 minutes or an hour, or end the snooze. The end comes from main's clock.
+  async function snoozeOne(req) {
+    const row = await ownRow(req.id);
+    if (!row || typeof snooze !== 'function') return GONE;
+    let until = 0;
+    try { until = Number(await snooze(row.sessionId, req.for)) || 0; } catch { until = 0; }
+    if (req.for === 'off') return { ok: true, feedback: 'Alerts for this session are back on.' };
+    if (!until) return { ok: false, feedback: "Couldn't snooze this session's alerts." };
+    return { ok: true, feedback: `Alerts for this session are snoozed for ${req.for === '1h' ? '1 hour' : '15 minutes'}.` };
+  }
+
   ipcMain.handle('widget:session-cards', (e) => (allowed(e) ? cards() : null));
   ipcMain.handle('widget:session-open', (e, req) => (allowed(e) && closed(req, ['id', 'how']) && HOW.has(req.how) && idOf(req.id) && !tooSoon(e) ? open(req) : { ok: false, feedback: '' }));
   ipcMain.handle('widget:session-copy-resume', (e, req) => (allowed(e) && closed(req, ['id']) && idOf(req.id) && !tooSoon(e) ? copyResume(req) : { ok: false, feedback: '' }));
+  ipcMain.handle('widget:session-snooze', (e, req) => (allowed(e) && closed(req, ['id', 'for']) && SNOOZE_FOR.has(req.for) && idOf(req.id) && !tooSoon(e) ? snoozeOne(req) : { ok: false, feedback: '' }));
   ipcMain.handle('widget:pin-session', (e, id) => (allowed(e) ? pin(id) : { ok: false, pinned: null }));
   ipcMain.handle('widget:card-help', (e, h) => (allowed(e) && typeof h === 'string' && h.length <= 40 ? copyHelp(h) : { ok: false }));
   ipcMain.handle('widget:resume-nudges', (e, id) => (allowed(e) && idOf(id) ? resumeNudges(id) : { ok: false }));
-  return { cards, pin, pinned, open, copyResume };
+  return { cards, pin, pinned, open, copyResume, snoozeOne };
 }
 
 module.exports = { install };

@@ -831,6 +831,18 @@ const CARD_ACTIONS = {
   }),
   pin: (c) => cardButton('Pin', async () => { await window.trafficLight.pinSession(c.id).catch(() => null); loadCards(true); }),
   unpin: () => cardButton('Unpin', async () => { await window.trafficLight.pinSession(null).catch(() => null); loadCards(true); }),
+  // QoL3b: Snooze swaps the card's buttons for the two lengths and Cancel; Unsnooze ends it.
+  snooze: (c) => {
+    const b = cardButton('Snooze', () => {
+      const box = b.closest('.card-acts');
+      if (!box) return;
+      const before = [...box.childNodes];
+      const pickLen = (how) => sessionAct(async () => { const r = await window.trafficLight.sessionSnooze(c.id, how); loadCards(true); return r; });
+      box.replaceChildren(cardButton('15 minutes', pickLen('15m')), cardButton('1 hour', pickLen('1h')), cardButton('Cancel', () => box.replaceChildren(...before)));
+    });
+    return b;
+  },
+  unsnooze: (c) => cardButton('Unsnooze', sessionAct(async () => { const r = await window.trafficLight.sessionSnooze(c.id, 'off'); loadCards(true); return r; })),
   'resume-nudges': (c) => cardButton('Resume nudges', async () => { await window.trafficLight.resumeNudges?.(c.id).catch(() => null); loadCards(true); }),
 };
 function showCard(row, anchor) {

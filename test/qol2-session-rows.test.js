@@ -100,7 +100,7 @@ test('card: own local sessions get the folder and the folder buttons; a teammate
   const own = V.sessionCard({ sessionId: 's', cwd: '/Users/me/app', signal: 'tool-use' }, { now: NOW, home: '/Users/me', platform: 'darwin' });
   assert.equal(own.folder, '~/app');
   assert.equal(own.folderApp, 'Finder');
-  assert.deepEqual(own.actions, ['open', 'finder', 'editor', 'pin']);
+  assert.deepEqual(own.actions, ['open', 'finder', 'editor', 'snooze', 'pin']);
   const mate = V.sessionCard({ sessionId: 's', cwd: '/Users/me/app', signal: 'tool-use' }, { now: NOW, home: '/Users/me', teammate: { name: 'Ann' } });
   assert.equal(mate.folder, null);
   assert.deepEqual(mate.actions, []);
@@ -113,9 +113,9 @@ test('card: own local sessions get the folder and the folder buttons; a teammate
 
 test('card: copy-resume only when main found the session ended; the waiting time only on a waiting card, from a minute', () => {
   const idle = (o) => V.sessionCard({ sessionId: 's', cwd: '/p', signal: 'session-end' }, { now: NOW, ...o }).actions;
-  assert.deepEqual(idle({ resumable: true }), ['open', 'copy-resume', 'finder', 'editor', 'pin']);
-  assert.deepEqual(idle({ resumable: false }), ['open', 'finder', 'editor', 'pin']);
-  assert.deepEqual(idle({ resumable: 'yes' }), ['open', 'finder', 'editor', 'pin']);
+  assert.deepEqual(idle({ resumable: true }), ['open', 'copy-resume', 'finder', 'editor', 'snooze', 'pin']);
+  assert.deepEqual(idle({ resumable: false }), ['open', 'finder', 'editor', 'snooze', 'pin']);
+  assert.deepEqual(idle({ resumable: 'yes' }), ['open', 'finder', 'editor', 'snooze', 'pin']);
   const waiting = V.sessionCard({ sessionId: 's', cwd: '/p', signal: 'permission-ask', signalSince: ago(4) }, { now: NOW });
   assert.ok(!waiting.actions.includes('copy-resume'));
   assert.equal(waiting.waitFor, '4m');

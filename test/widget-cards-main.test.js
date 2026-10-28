@@ -13,9 +13,9 @@ function rig({ sessions = [], cfg = {}, spend = () => null, allowed = () => true
   return { handlers, saved, cfg, api, call: (ch, e, ...a) => handlers.get(ch)(e || {}, ...a) };
 }
 
-test('registers exactly the six widget channels', () => {
+test('registers exactly the seven widget channels (QoL3b: session-snooze)', () => {
   const { handlers } = rig();
-  assert.deepEqual([...handlers.keys()].sort(), ['widget:card-help', 'widget:pin-session', 'widget:resume-nudges', 'widget:session-cards', 'widget:session-copy-resume', 'widget:session-open']);
+  assert.deepEqual([...handlers.keys()].sort(), ['widget:card-help', 'widget:pin-session', 'widget:resume-nudges', 'widget:session-cards', 'widget:session-copy-resume', 'widget:session-open', 'widget:session-snooze']);
 });
 
 test('cards carry the view, the spend for local rows, and never the raw row; the path only as the ~ folder line', async () => {
@@ -36,7 +36,7 @@ test('pinning persists widgetPinnedSession and puts that row first; null unpins'
   const m = await r.call('widget:session-cards');
   assert.equal(m.pinnedId, 'b');
   assert.equal(m.rows[0].id, 'b');
-  assert.deepEqual(m.rows[0].card.actions, ['open', 'unpin']);
+  assert.deepEqual(m.rows[0].card.actions, ['open', 'snooze', 'unpin']);
   assert.deepEqual(await r.call('widget:pin-session', null, null), { ok: true, pinned: null });
   assert.equal(r.cfg.widgetPinnedSession, null);
 });

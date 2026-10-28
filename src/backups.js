@@ -46,6 +46,7 @@ const EXCLUDED = [
   { name: 'requests/, sessions/, owned/', why: 'live state about running agents, stale within minutes' },
   { name: 'app.log, *.port, *.lock', why: 'logs and process state' },
   { name: 'window-bounds.json, manual-override.json', why: 'where a window sits, not something to restore' },
+  { name: 'session-snoozes.json', why: 'snoozes end within the hour; a restored one would mean nothing' },
   { name: 'stats.json, spend-snapshot.json, git-signals.json', why: 'derived and rebuilt on their own' },
 ];
 

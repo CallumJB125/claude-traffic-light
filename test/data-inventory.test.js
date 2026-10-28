@@ -10,7 +10,7 @@ const ROOT = path.join(__dirname, '..');
 // Every file or folder Plexiform is known to write, by root. A new store
 // added to the code without a home in src/data-inventory.js fails below.
 const KNOWN = {
-  data: ['config.json', 'rules/r.json', 'presets/p.json', 'window-bounds.json', 'manual-override.json', 'claude-deny-rules.json', 'router-baseline.json', 'automation-explained.json', 'ai-tools.json', 'tasks-seen.json', 'morning-seen.json', 'away.json', 'clients.json', '.help-shown', '.onboarded', '.auto-launch-configured', '.calendar-granted',
+  data: ['config.json', 'rules/r.json', 'presets/p.json', 'window-bounds.json', 'session-snoozes.json', 'manual-override.json', 'claude-deny-rules.json', 'router-baseline.json', 'automation-explained.json', 'ai-tools.json', 'tasks-seen.json', 'morning-seen.json', 'away.json', 'clients.json', '.help-shown', '.onboarded', '.auto-launch-configured', '.calendar-granted',
     'sessions/s.json', 'requests/r.json', 'owned/o.json', 'senders/x.json', 'last-hook.json', 'hook-endpoint.json', 'burst-snapshot.json', 'burst-handover.json', 'burst-scripts/a.sh', 'git-signals.json', 'busy-ics-cache.json',
     'handovers/claude-code-1.md', 'app.log', 'app.log.old', 'one-key-approvals.jsonl', 'approval-counts.json',
     'stats.json', 'usage/daily/2026-10.json', 'compaction-stats.json', 'cost-guard.json', 'cost-guard-log.json', 'spend-gate.json',
