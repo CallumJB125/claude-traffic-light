@@ -232,15 +232,19 @@ function deleteOutcome(r, { again = 'Send a new code and do the check again.' } 
  * `store.save(record, {keep})` may return a promise; async stores check `keep`
  * before committing so a cancelled sign-in cannot outlive its owner.
  */
-function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Date.now(), onSignedOut = () => {}, pin = null }) {
+function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Date.now(), onSignedOut = () => {}, onEnded = () => {}, pin = null }) {
   const host = new URL(origin).host;
   let flow = null; // {id, email, purpose:'signin'|'delete', at, verifiedAt?}: the email-code flow in progress
   const asked = new Map(); // email → when sign-in codes were asked for, this run only
   let credentialGeneration = 0;
 
-  function clearSaved() {
+  // `ended`: the account's sign-in really ended (explicit sign-out, revoked token, deleted account); onEnded gets its user id.
+  // A discarded half-finished sign-in clears without it.
+  function clearSaved(ended = false) {
     credentialGeneration += 1;
+    const userId = ended ? saved()?.user?.id : null;
     try { store.clear(); } catch { /* already gone */ }
+    if (typeof userId === 'string' && userId) { try { onEnded({ origin, userId }); } catch { /* a listener must not break sign-out */ } }
   }
 
   function saved() {
@@ -295,7 +299,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
     if (res.status === 401 && s && (json?.error?.code ?? 'UNAUTHENTICATED') === 'UNAUTHENTICATED') {
       // No refresh in this model: a 401 on the device token means it was
       // revoked (signed out elsewhere, account deleted, device removed).
-      if (saved()?.token === s.token) { clearSaved(); try { onSignedOut(); } catch { /* UI gone */ } }
+      if (saved()?.token === s.token) { clearSaved(true); try { onSignedOut(); } catch { /* UI gone */ } }
       return { ok: false, signedOut: true, error: 'You’ve been signed out. Sign in again.' };
     }
     if (res.status < 200 || res.status >= 300 || !json || typeof json !== 'object') {
@@ -599,7 +603,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       credentialGeneration += 1;
       const r = saved() ? await call('signOut', { body: {} }) : { ok: true };
       // Forget the token whatever the hub said: signing out must always work offline.
-      clearSaved();
+      clearSaved(true);
       flow = null;
       return { ok: true, revoked: r.ok };
     },
@@ -629,7 +633,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
         if (r.code === 'STEP_UP_REQUIRED') flow = null;
         return deleteOutcome(r);
       }
-      clearSaved();
+      clearSaved(true);
       flow = null;
       return { ok: true };
     },
@@ -639,7 +643,7 @@ function createAccountClient({ origin, fetchImpl = fetch, store, now = () => Dat
       if (typeof flowId !== 'string' || !flowId) return { ok: false, stepUp: true, error: 'Confirm it’s you first.' };
       const r = await call('deleteAccount', { body: { flow_id: flowId } });
       if (!r.ok) return deleteOutcome(r, { again: 'Confirm it’s you again.' });
-      clearSaved();
+      clearSaved(true);
       flow = null;
       return { ok: true };
     },

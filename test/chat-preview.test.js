@@ -34,8 +34,8 @@ test('main reads the gate once from IS_DEV_RUN and app.isPackaged and hands it t
   // the R2a thread (registered only when on, and told the gate) and its deep links, and Sessions' Start (with the gate on
   // Home is the new chat, which takes no draft, so Start copies the command), and the Settings sheet's pane guards
   // (R8-1: settingsPane, settingsPaneOf, sendToSettings), the Settings deep links (R8-2: openSettingsAt) and the widget rules pane
-  // (R8-2b: rulesPane, sendToRules) and the two sheet documents (R8-3b-1: sheetDoc), nothing else.
-  assert.equal((mainSrc.match(/CHAT_PREVIEW/g) || []).length, 14);
+  // (R8-2b: rulesPane, sendToRules) and the two sheet documents (R8-3b-1: sheetDoc), and the main-level follow-up pump (T5a: FollowupPump), nothing else.
+  assert.equal((mainSrc.match(/CHAT_PREVIEW/g) || []).length, 15);
   assert.match(mainSrc, /    if \(CHAT_PREVIEW && !invited\) \{\n/);
   assert.match(mainSrc, /\nif \(CHAT_PREVIEW\) \{\n  const SidebarRows[^]*?buddy: \(\) => buddyWin, chatPreview: CHAT_PREVIEW,\n/);
   assert.match(mainSrc, /createOverviewMain\(\{\n  buddy:\(\)=>buddyWin,chatPreview:CHAT_PREVIEW,/);

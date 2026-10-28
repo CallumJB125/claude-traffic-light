@@ -9,7 +9,7 @@ const crypto = require('node:crypto');
 const { validFollowupSchedule, describeFollowup } = require('./recipe-schedules');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const STATES = new Set(['queued', 'blocked', 'sending', 'acknowledged', 'unconfirmed', 'refused', 'cancelled', 'expired']);
-const MAX_ITEMS = 16, MAX_FILE = 512 * 1024, MAX_AGE_MS = 7 * 86400 * 1000;
+const MAX_ITEMS = 16, MAX_PER_TARGET = 3, MAX_FILE = 512 * 1024, MAX_AGE_MS = 7 * 86400 * 1000;
 const object = v => v && typeof v === 'object' && !Array.isArray(v);
 const text = v => typeof v === 'string' && !v.includes('\0') && !!v.trim() && v.trim().length <= 4000 && Buffer.byteLength(v.trim()) <= 8192;
 const fail = (status, error) => ({ ok: false, status, error });
@@ -18,7 +18,7 @@ const validTarget = t => object(t) && ['owned', 'team'].includes(t.kind) && type
   && object(t.route) && Buffer.byteLength(JSON.stringify(t.route)) <= 2048 && Number.isSafeInteger(t.generation) && t.generation >= 0
   && typeof t.provider === 'string' && /^[a-z][a-z0-9-]{0,79}$/.test(t.provider);
 const validItem = e => object(e) && UUID.test(e.id) && /^[0-9a-f]{64}$/.test(e.scope) && validTarget(e.target)
-  && typeof e.label === 'string' && e.label.length <= 240 && (text(e.text) || e.text === '' && ['cancelled','expired'].includes(e.status))
+  && typeof e.label === 'string' && e.label.length <= 240 && (text(e.text) || e.text === '' && ['cancelled','expired','refused'].includes(e.status))
   && STATES.has(e.status) && Number.isSafeInteger(e.createdAt) && e.createdAt >= 0 && Number.isSafeInteger(e.updatedAt) && e.updatedAt >= e.createdAt
   && validFollowupSchedule(e.schedule, e.createdAt)
   && typeof e.reason === 'string' && e.reason.length <= 600
@@ -93,7 +93,29 @@ function createSessionFollowups({ file, storage, scope, now = Date.now, onChange
     const next=entries.map(e=>['queued','blocked','refused'].includes(e.status)&&now()>=e.createdAt+MAX_AGE_MS?{...e,status:'expired',text:'',reason:'Expired after seven days without dispatch. Saved message text was removed.',updatedAt:Math.max(e.updatedAt,now())}:e);
     if(next.some((e,i)=>e!==entries[i]))await save(next,()=>current(s));
   }
+  // The only functions besides expire() that touch items outside the current scope (a test pins this).
+  // They edit only status/reason/text/updatedAt of queued/blocked team items, and clear the text.
+  function refuseTeam(match, reason, keep) {
+    return serial(async () => {
+      try {
+        await load();
+        let hit = false;
+        const next = entries.map(e => {
+          if (e.target.kind !== 'team' || !['queued', 'blocked'].includes(e.status) || !match(e)) return e;
+          hit = true;
+          return { ...e, status: 'refused', reason, text: '', updatedAt: Math.max(e.updatedAt, now()) };
+        });
+        if (hit && keep()) await save(next, () => !closed && keep());
+      } catch { /* retried on the next pass; ciphertext is unchanged */ }
+    });
+  }
   return {
+    // Another account on the same hub: terminal, text removed. The caller proves the viewer is stable.
+    sweepForeign: ({ origin, viewer, current: keep = () => true } = {}) => typeof origin === 'string' && typeof viewer === 'string' && viewer
+      ? refuseTeam(e => e.target.route?.origin === origin && e.target.route.viewer !== viewer, "Signed in as someone else; this follow-up won't be sent.", keep) : Promise.resolve(),
+    // The hub account explicitly signed out or its token was revoked (never inferred from a missing viewer).
+    signedOut: ({ origin, userId } = {}) => typeof origin === 'string' && typeof userId === 'string' && userId
+      ? refuseTeam(e => e.target.route?.origin === origin && e.target.route.viewer === userId, "Signed out; this follow-up won't be sent.", () => true) : Promise.resolve(),
     list: (keep=()=>true) => {const s=scope();
       // The durable sending marker is already cached. A passive read must not
       // wait behind its provider acknowledgement, or Sending would never be
@@ -110,10 +132,11 @@ function createSessionFollowups({ file, storage, scope, now = Date.now, onChange
         if (prior) return prior.scope === s && JSON.stringify(prior.target) === JSON.stringify(request.target) && prior.text === request.text.trim() && JSON.stringify(prior.schedule ?? {kind:'ready'}) === JSON.stringify(request.schedule ?? {kind:'ready'})
           ? { ok: true, status: prior.status, item: dto(prior) } : fail('invalid', 'This request ID was already used.');
         if (entries.length >= MAX_ITEMS) return fail('full', 'Discard an old follow-up before adding another (16 per device).');
+        if (entries.filter(e => e.target.key === request.target.key && ['queued', 'blocked'].includes(e.status)).length >= MAX_PER_TARGET) return fail('full', 'Three follow-ups are already waiting for this session. Cancel one first.');
         const at = now();
         if (!validFollowupSchedule(request.schedule, at)) return fail('invalid', 'Choose a future time within seven days and review it again.');
         const schedule = copy(request.schedule ?? {kind:'ready'});
-        const item = { id: request.id, scope: s, target: copy(request.target), label: request.label, text: request.text.trim(), status: 'queued', reason: 'Waiting while Overview is focused on the original account and board. Expires after seven days.', createdAt: at, updatedAt: at,receipt:null,schedule };
+        const item = { id: request.id, scope: s, target: copy(request.target), label: request.label, text: request.text.trim(), status: 'queued', reason: 'Sent once, when the session is idle, while Plexiform is running and you are signed in as you. Dropped after seven days.', createdAt: at, updatedAt: at,receipt:null,schedule };
         await save([...entries, item], () => current(s) && request.current() === true);
         return { ok: true, status: 'queued', item: dto(item) };
       } catch { return unavailable(); }
@@ -151,11 +174,15 @@ function createSessionFollowups({ file, storage, scope, now = Date.now, onChange
           if (item.schedule?.atMs > now()) continue;
           let target;
           try { target = await resolve(copy(item.target)); } catch { target = null; }
+          // The resolver may hold a per-session lock until this item is finished.
+          try {
           if (!current(s)) return;
           if (!target?.ok || target.current?.() !== true || typeof target.send !== 'function') {
             const reason = typeof target?.error === 'string' ? target.error.slice(0, 600) : 'The original session is unavailable. It will not be recreated or reattached.';
             const status = target?.terminal === true ? 'refused' : 'blocked';
-            if (item.status !== status || item.reason !== reason) await update(item, { status, reason }, s);
+            // A team item refused for identity or permission keeps no text on disk.
+            const clear = status === 'refused' && item.target.kind === 'team';
+            if (item.status !== status || item.reason !== reason || clear && item.text !== '') await update(item, clear ? { status, reason, text: '' } : { status, reason }, s);
             continue;
           }
           const evidenceCurrent = () => {
@@ -186,6 +213,7 @@ function createSessionFollowups({ file, storage, scope, now = Date.now, onChange
           // Save the receipt in its original account even if the UI switched.
           // No subsequent entry is dispatched under the new account.
           await update(item, fields, s, () => !closed);
+          } finally { try { target?.release?.(); } catch { /* lock already gone */ } }
         }
       } catch { /* Preserve ciphertext and pending intent; list reports vault errors. */ }
     });},
@@ -193,4 +221,4 @@ function createSessionFollowups({ file, storage, scope, now = Date.now, onChange
   };
 }
 
-module.exports = { createSessionFollowups, MAX_ITEMS, MAX_AGE_MS, validTarget };
+module.exports = { createSessionFollowups, MAX_PER_TARGET, MAX_ITEMS, MAX_AGE_MS, validTarget };

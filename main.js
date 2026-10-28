@@ -1661,6 +1661,7 @@ function getBuddy() {
     buddyWin = createBuddyWindow({
       isConstrained: () => lowPowerOn,
       chatFirst: CHAT_PREVIEW,
+      onHubAccountEnded: (who) => { void sessionFollowups.signedOut(who); }, // an explicit sign-out or revoked token drops that account's queued team follow-ups
       // The chat-first sidebar's collapsed groups (only read or written with the preview on).
       sidebarGroups: { load: () => loadConfig().ui?.sidebarGroups ?? null, save: (v) => saveConfig({ ui: { ...(loadConfig().ui ?? {}), sidebarGroups: v } }) },
       simpleMode: () => loadConfig().simpleMode === true,
@@ -1875,12 +1876,16 @@ const OverviewMain=require('./src/overview-main').createOverviewMain({
   followups:sessionFollowups,followupScope,
   followupLocal:{target:session=>InteractionMain.followupTarget(session),resolve:(target,fresh)=>InteractionMain.resolveFollowup(target,fresh)},
 });
+// Queued follow-ups send from main whenever Plexiform is running (chat-first preview only; the gate-off Overview keeps its own pump).
+const FollowupPump=CHAT_PREVIEW===true?require('./src/followup-pump').createFollowupPump({followups:sessionFollowups,scope:followupScope,hub:()=>overviewTeamHub||liveTeamHub.current(),ready:()=>app.isReady(),
+  resolve:t=>require('./src/followup-resolve').resolveFollowup(t,{teamHub:()=>overviewTeamHub||liveTeamHub.current(),local:{resolve:(target,fresh)=>InteractionMain.resolveFollowup(target,fresh)},scope:followupScope})}):null;
+FollowupPump?.start();
 OverviewMain.register(ipcMain);
 overviewTeamHub?.onChange(()=>OverviewMain.directoryChanged());
 // A subscription reads the current identity immediately. Electron's secure
 // storage is unavailable before ready; do not construct the account vault then.
 app.whenReady().then(()=>{if(!overviewTeamHub)liveTeamHub.onChange(()=>OverviewMain.directoryChanged());});
-onQuit(app,()=>{liveTeamHub.close();PresenceLink.stop();OverviewMain.close();sessionFollowups.close();followupStorageProcess?.close();});
+onQuit(app,()=>{FollowupPump?.stop();liveTeamHub.close();PresenceLink.stop();OverviewMain.close();sessionFollowups.close();followupStorageProcess?.close();});
 // Owned-session interaction: Plexiform starts its own provider sessions and
 // talks only to those. Existing unmanaged sessions stay observation-only.
 const CodexAppServer=require('./src/codex-app-server');

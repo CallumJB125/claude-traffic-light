@@ -511,7 +511,7 @@ test("Q5: with the gate on, Overview's one-click approve is refused before actor
   }
   const main = read('main.js');
   assert.match(main, /ThreadMain\.register\(ipcMain\);\n  \/\/ T4 \(Q5\)[^\n]*\n  InteractionMain\.approveInThread\(\);/, 'set inside the chat-first gate block');
-  assert.equal((main.match(/CHAT_PREVIEW/g) || []).length, 14);
+  assert.equal((main.match(/CHAT_PREVIEW/g) || []).length, 15);
 });
 
 test('no other approve path: only thread-owner-main and Overview call proposalApprove', () => {

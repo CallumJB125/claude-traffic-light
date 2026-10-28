@@ -63,7 +63,7 @@ test('main.js: the successors are bound at the registration, the old ids are nam
   for (const id of ['upgrade', 'sync']) assert.equal((mainSrc.match(new RegExp(`fromUtilityPage\\(e, '${id}'\\)`, 'g')) || []).length, 1, id);
   assert.doesNotMatch(mainSrc, /settings:\*/);
   assert.match(mainSrc, /phoneAllowed: phonePage, upgradeAllowed: planPage, syncAllowed: syncPage, openPlan, /);
-  assert.equal((mainSrc.match(/CHAT_PREVIEW/g) || []).length, 14, 'no new gate use');
+  assert.equal((mainSrc.match(/CHAT_PREVIEW/g) || []).length, 15, 'no new gate use');
 });
 
 function wired({ preview = true } = {}) {
