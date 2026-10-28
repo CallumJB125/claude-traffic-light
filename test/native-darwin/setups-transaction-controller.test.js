@@ -24,7 +24,7 @@ test('L16 controller: CANCELLED re-arms the same handle, writes nothing, keeps t
  const f=fixture(t,helper),clock={t:Date.now()};let mode='cancel',writes=0;f.state.storeHook=m=>{if(m==='write')writes++;};
  const c=cancelCtl(t,f,async d=>mode==='cancel'?CANCELLED:{approved:true,plan_hash:d.plan_hash},clock),p=await c.plan(f.sourceHandle,f.request());assert.equal(p.ok,true);
  for(let i=0;i<2;i++){const r=await c.apply(p.handle,p.plan_hash);assert.deepEqual({ok:r.ok,status:r.status},{ok:false,status:'cancelled'});assert.equal(writes,0);assert.ok(kept(f));}
- clock.t+=48*3600*1000;mode='approve';assert.equal((await c.apply(p.handle,p.plan_hash)).ok,false,'the original expiry still applies after Cancel');assert.ok(kept(f));
+ clock.t=p.expires_at+1;mode='approve';assert.equal((await c.apply(p.handle,p.plan_hash)).ok,false,'the original expiry still applies after Cancel');assert.ok(kept(f));
  const g=fixture(t,helper),k2={t:Date.now()};let m2='cancel';const c2=cancelCtl(t,g,async d=>m2==='cancel'?CANCELLED:{approved:true,plan_hash:d.plan_hash},k2),p2=await c2.plan(g.sourceHandle,g.request());
  assert.equal((await c2.apply(p2.handle,p2.plan_hash)).status,'cancelled');m2='approve';assert.equal((await c2.apply(p2.handle,p2.plan_hash)).ok,true);assert.equal((await c2.apply(p2.handle,p2.plan_hash)).ok,false);
 });
