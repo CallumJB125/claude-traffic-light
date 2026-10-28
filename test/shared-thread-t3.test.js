@@ -541,3 +541,21 @@ test('copy: T3 strings pass the glossary and platform-words rules', () => {
   assert.ok(!/this Mac/.test(src));
   assert.ok(!/Ask \$\{h\.owner\} to allow sending/.test(src), 'T2\'s watch wording is replaced');
 });
+
+test('afterRead: a read that sees a new generation or turn, or a watch scope, retires the card before any act', async () => {
+  for (const next of [{ generation: 3, turn: null, scope: 'interact' }, { generation: 2, turn: TURN, scope: 'interact' }, { generation: 2, turn: null, scope: 'watch' }]) {
+    let t = 0, seen = { generation: 2, turn: null, scope: 'interact' }, acted = 0;
+    const auth = { live: () => true, owner: 'Bob', seen: () => seen, invalidate() {}, resolve: async () => ({ hub: {}, scope: 'interact' }),
+      inspect: async () => ({ ok: true, selection: crypto.randomUUID(), state: { generation: 2, activeTurn: null, provider: { label: 'Codex' } }, capabilities: { send: { available: true, reason: '' } } }),
+      act: async () => { acted++; return { ok: true, delivery: { id: 'd', state: 'acknowledged' } }; } };
+    const a = SharedMain.createSharedThreadActions({ authority: () => auth, now: () => t });
+    const c = { contents: { id: 1 }, generation: 1, boundId: 'b'.repeat(64) }, still = () => true;
+    const r = await a.review(c, { op: 'send', text: 'x' }, still); t += 700;
+    a.afterRead(c, { header: {} });
+    assert.equal(a.size(), 1, 'the same generation and turn keeps it');
+    seen = next; a.afterRead(c, { header: {} });
+    assert.equal(a.size(), 0, JSON.stringify(next));
+    assert.equal((await a.confirm(c, { selection: r.selection, text: 'x' }, still)).error, SharedMain.TEXT.MOVED);
+    assert.equal(acted, 0);
+  }
+});
