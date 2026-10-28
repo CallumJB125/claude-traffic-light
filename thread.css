@@ -93,6 +93,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .th-own-btn { font-size: var(--text-sm); }
 .th-own { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
 .th-own[hidden] { display: none; }
+/* Nothing to show (no note, sheet, card or proposals): no box and no margin, so an unshared thread is unchanged. */
+.th-own:not(:has(> :not(:empty))) { display: none; }
 .th-own-note { margin: 0; font-size: var(--text-sm); color: var(--muted); overflow-wrap: anywhere; }
 .th-own-note:empty { display: none; }
 .th-own-note[data-kind="error"] { color: var(--danger-text); }
@@ -104,7 +106,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .th-own-sheet select { font: inherit; max-width: 100%; }
 .th-own-earlier { font-size: var(--text-sm); min-width: 0; max-width: 100%; }
 .th-own-earlier summary { cursor: default; color: var(--muted); }
-.th-own-earlier .th-msgs { margin: var(--space-1) 0 0; }
+.th-own-earlier-list { list-style: none; margin: var(--space-1) 0 var(--space-2); padding: 0 0 0 var(--space-3); display: grid; gap: var(--space-1); border-left: 1px solid var(--line-strong); }
+.th-own-earlier-list li { margin: 0; overflow-wrap: anywhere; }
 .th-stop { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .th-stop-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .th-stop-q { font-size: var(--text-sm); font-weight: 600; }

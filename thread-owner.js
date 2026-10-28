@@ -80,14 +80,14 @@
       const btns = el('div', 'th-card-btns');
       const yes = button('th-btn th-primary', 'Approve one send · 10 min', () => { void review({ op: 'approve', proposal: p.key }); }); yes.disabled = busy || !!cardOn;
       const no = button('th-btn th-danger-outline', 'Reject', () => { void act('reject', p.key); }); no.disabled = busy;
-      btns.append(yes, el('span', 'th-own-gap'), no);
+      btns.append(yes, no);
       c.append(btns);
       const earlier = Array.isArray(g.earlier) ? g.earlier : [];
       if (earlier.length) {
         const n = earlier.length + (g.more || 0);
         const more = el('details', 'th-own-earlier');
         more.append(el('summary', '', `${n} earlier from ${g.requester}`));
-        const list = el('ul', 'th-msgs');
+        const list = el('ul', 'th-own-earlier-list');
         for (const x of earlier) list.append(el('li', 'th-card-sub', x.text));
         if (g.more) list.append(el('li', 'th-card-sub', `+${g.more} more`));
         more.append(list);

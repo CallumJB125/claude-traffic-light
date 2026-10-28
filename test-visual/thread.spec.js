@@ -70,7 +70,7 @@ const ENDED = {
   replay: CHAT.replay.slice(0, 12),
 };
 
-async function open({ fixture = null, theme = 'light', env = GATE, shared = null, sharedReview = null, sharedProposals = null, owned = null } = {}) {
+async function open({ fixture = null, theme = 'light', env = GATE, shared = null, sharedReview = null, sharedProposals = null, owned = null, owner = null } = {}) {
   const h = await launchApp({ env, files: { 'sessions/thread-fixture.json': session() } });
   if (fixture) {
     // Answers the thread document only, as main does.
@@ -98,6 +98,14 @@ async function open({ fixture = null, theme = 'light', env = GATE, shared = null
       const mine = (e) => { try { return new URL(e.sender.getURL()).pathname.endsWith('/thread.html'); } catch { return false; } };
       ipcMain.removeHandler('thread:owned-state'); ipcMain.handle('thread:owned-state', (e) => (mine(e) ? owned : null));
     }, owned);
+  }
+  if (owner) {
+    // T4: owner controls. The state and review card are the shapes src/thread-owner-main.js returns; main's checks are test/owner-thread-t4.test.js.
+    await h.app.evaluate(({ ipcMain }, owner) => {
+      const mine = (e) => { try { return new URL(e.sender.getURL()).pathname.endsWith('/thread.html'); } catch { return false; } };
+      ipcMain.removeHandler('thread:owner-state'); ipcMain.handle('thread:owner-state', (e) => (mine(e) ? owner.state : null));
+      ipcMain.removeHandler('thread:owner-review'); ipcMain.handle('thread:owner-review', (e) => (mine(e) && owner.review ? { ok: true, status: 'review', selection: '11111111-1111-4111-8111-111111111111', card: owner.review } : null));
+    }, owner);
   }
   const widget = await windowByFile(h.app, 'index.html');
   await widget.evaluate(() => window.trafficLight.openHelp());
@@ -677,5 +685,62 @@ test('owned thread, gone (dark): ended when Overview reloaded, nothing kept', as
     await expect(page.locator('#th-empty-title')).toHaveText('This session ended when Overview reloaded.');
     await expect(page.locator('.th-msg')).toHaveCount(0);
     await shot(page, 'thread-owned-gone-dark.png');
+  } finally { await h.cleanup(); }
+});
+
+// T4: owner controls on my own thread (plan-t4 Rev 3 §3, Rev 4 grouping).
+const K = (c) => c.repeat(32);
+const OWNER_WATCH = { shareable: true, available: true, provider: 'Codex', reason: '', teams: [{ key: K('1'), name: 'Design team' }, { key: K('2'), name: 'Platform' }],
+  shares: [{ key: K('3'), team: 'Design team', scope: 'watch', expiresAt: null, automatic: false, members: 4 }], groups: [], others: [] };
+const OWNER_PROPOSAL = { ...OWNER_WATCH, shares: [{ ...OWNER_WATCH.shares[0], scope: 'interact' }],
+  groups: [{ requester: 'Alex', latest: { key: K('5'), text: 'Run the export tests again with the retry logging on, and paste the failures.', version: 3, status: 'awaiting' },
+    earlier: [{ key: K('6'), text: 'Run the export tests.', version: 1 }, { key: K('7'), text: 'Add logging to each retry.', version: 2 }], more: 0, rejectAll: K('8') }], others: [] };
+const OWNER_APPROVED = { ...OWNER_PROPOSAL, groups: [], others: [{ key: K('9'), requester: 'Alex', status: 'approved', expiresAt: Date.UTC(2026, 10, 2, 15, 40) }] };
+const ownerOpen = (theme, state, review = null) => open({ fixture: { kind: 'owned', header: null }, theme, owned: OWNED_CODEX, owner: { state, review } });
+for (const theme of ['dark', 'light']) {
+  test(`owner: shared with a team, watch only (${theme})`, async () => {
+    const { h, side } = await ownerOpen(theme, OWNER_WATCH);
+    try {
+      const page = await openThread(h, side, theme);
+      await expect(page.locator('#th-owner-line .th-own-share-text')).toHaveText('Shared with Design team · Watch only · until you stop it · 4 members');
+      await expect(page.getByRole('button', { name: 'Allow sending' })).toBeVisible();
+      await expect(page.locator('#th-more')).toBeVisible();
+      await shot(page, `thread-owner-shared-watch-${theme}.png`);
+    } finally { await h.cleanup(); }
+  });
+}
+test('owner: Share with team… then the review card (dark)', async () => {
+  const { h, side } = await ownerOpen('dark', OWNER_WATCH, { op: 'share', title: 'Share this session with Platform', text: '', scope: 'Watch only',
+    notes: ['Platform members can read this session and its replies until you stop sharing.', 'They cannot send to it.'], confirm: 'Share', armMs: 600 });
+  try {
+    const page = await openThread(h, side, 'dark');
+    await page.locator('#th-more').click();
+    await page.locator('#th-share').click();
+    await expect(page.locator('#th-own-scope')).toHaveValue('watch');
+    await page.locator('#th-own-team').selectOption({ label: 'Platform' });
+    await page.locator('#th-own-continue').click();
+    await expect(page.locator('#th-own-yes')).toHaveText('Share');
+    await expect(page.locator('#th-own-yes')).toBeEnabled();
+    await shot(page, 'thread-owner-share-review-dark.png');
+  } finally { await h.cleanup(); }
+});
+test('owner: one card for a teammate, earlier ones folded, Reject all (dark)', async () => {
+  const { h, side } = await ownerOpen('dark', OWNER_PROPOSAL);
+  try {
+    const page = await openThread(h, side, 'dark');
+    await expect(page.locator('.th-own-proposal .th-card-title')).toHaveText('Alex proposes a message');
+    await expect(page.locator('.th-own-earlier summary')).toHaveText('2 earlier from Alex');
+    await page.locator('.th-own-earlier summary').click();
+    await expect(page.getByRole('button', { name: 'Reject all' })).toBeVisible();
+    await shot(page, 'thread-owner-proposal-dark.png');
+  } finally { await h.cleanup(); }
+});
+test('owner: approved for one send, with Revoke (dark)', async () => {
+  const { h, side } = await ownerOpen('dark', OWNER_APPROVED);
+  try {
+    const page = await openThread(h, side, 'dark');
+    await expect(page.locator('.th-own-done')).toContainText('Alex: approved for one send until');
+    await expect(page.getByRole('button', { name: 'Revoke' })).toBeVisible();
+    await shot(page, 'thread-owner-proposal-approved-dark.png');
   } finally { await h.cleanup(); }
 });
