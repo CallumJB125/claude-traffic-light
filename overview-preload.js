@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('overviewApi', {
   state: () => ipcRenderer.invoke('overview:state'),
   // T1: a teammate row the sidebar asked to open (consumed once; navigation only).
   ...(chatFirst ? { openHint: () => ipcRenderer.invoke('overview:open-hint') } : {}),
+  // QoL4a: the folder a notification's "Show in Overview" names (consumed once; navigation only).
+  mineHint: () => ipcRenderer.invoke('overview:mine-hint'),
   openSearch: () => ipcRenderer.invoke('search:open-page'),
   onReady: callback => {
     if (typeof callback !== 'function') return () => {};

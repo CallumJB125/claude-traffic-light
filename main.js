@@ -1911,8 +1911,10 @@ if(IS_DEV_RUN&&!app.isPackaged&&process.env.CLAUDE_BUDDY_FAKE_TEAM_HUB){try{over
 // Team depth lane C: board presence over the person's own hub sign-in (who views which card, who runs where); feeds Team sessions and beats this computer's open shared session.
 const PresenceLink=require('./src/team-presence-link').createPresenceLink({links:async()=>devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[],WebSocket:require('ws'),log:m=>console.log(m),onChange:()=>OverviewMain.directoryChanged(),onInbox:(hub,item)=>ingestTeamInbox(hub,[item]),onRouteDropped:()=>PresenceOwner.clearAll()}); // privacy-flow: team-hub
 const PresenceOwner=require('./src/presence-owner').createPresenceOwner({presenceView:r=>PresenceLink.view(r)});
+// QoL4a: the one folder name a notification's "Show in Overview" hands My sessions' search (10 s, taken once).
+const OverviewMineHint=require('./src/overview-mine-hint.js').createMineHint();
 const OverviewMain=require('./src/overview-main').createOverviewMain({
-  buddy:()=>buddyWin,chatPreview:CHAT_PREVIEW,presenceOwner:PresenceOwner,sessions:()=>aggregateState().sessions||[],
+  buddy:()=>buddyWin,chatPreview:CHAT_PREVIEW,mineHint:OverviewMineHint,presenceOwner:PresenceOwner,sessions:()=>aggregateState().sessions||[],
   // Burst's loose ends per repository (BurstIpc is created further down; null until then and whenever Burst lacks the check).
   looseEnds:()=>{try{return BurstIpc.looseEndsView();}catch{return null;}},
   // T3: the signed-in hub account's display name, for "From ‹name›" on a proposal sent from a thread (main-only).
@@ -2991,7 +2993,12 @@ function maybeNotify(st) {
       if (!b) return;
       liveNotifications.delete(note);
       if (b.run === 'stop' && stop) Promise.resolve().then(stop).catch((err) => console.warn('[spend] stop failed:', err.message));
-      else if (b.run === 'overview') openBuddy('overview');
+      else if (b.run === 'overview') {
+        // QoL4a: only the local row's own folder name, re-found now (review A4-S1); never the notification's text.
+        const r = rowNow();
+        if (r && !r.remote && !r.device && !isRemote(r)) OverviewMineHint.set(r.cwd); else OverviewMineHint.clear();
+        openBuddy('overview');
+      }
       else if (b.run === 'snooze') snoozeSession(n.sessionId, '1h');
     });
     note.on('click', () => {

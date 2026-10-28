@@ -559,6 +559,12 @@
   const mineMem = new Map(), mineNodes = new Map();
   const mineProject = e => { const h = typeof e.project === 'string' ? e.project.trim() : ''; return h && h !== W.FALLBACK ? { key: W.keyOf('name', h.toLowerCase()), heading: h, sub: null } : { key: 'other', heading: W.FALLBACK, sub: null }; };
   const mineClosed = (key, fallback) => { const m = mineMem.get(`${mineBy}|${key}`); if (m !== undefined) return m; return mineBy === 'project' && mineSaved.has(key) ? mineSaved.get(key) : fallback; };
+  // QoL4a: find a session. The query is a moment, never saved (no store write); a row stays when it or a child agent
+  // matches. While it is set, groups with no match are left out (their collapsed state lives in mineMem/mineSaved, so
+  // it comes back) and matching groups show open without changing what was saved.
+  const mineQuery = () => ($('mine-search')?.value || '').trim().toLocaleLowerCase();
+  const mineHay = e => [e.task.title, e.project, e.provider.label, e.device.label, e.board.label, e.card?.key || '', ...e.children.map(c => `${c.label} ${c.task.title}`)].filter(x => typeof x === 'string').join('\n').toLocaleLowerCase();
+  const mineMatch = (e, q) => !q || mineHay(e).includes(q);
   // Saved only in Project mode, and only a person's toggle; Status and AI tool keep theirs for the page.
   function mineToggle(key, closed) {
     mineMem.set(`${mineBy}|${key}`, closed);
@@ -594,6 +600,7 @@
   }
   // views (pin order kept) → the group sections, a group holding a pinned row first.
   function mineGroups(views) {
+    const searching = !!mineQuery();
     const rows = views.map(v => ({ v, project: mineProject(v.entry), bucket: v.entry.bucket || W.bucketOf(v.entry.state), provider: v.entry.provider?.id }));
     let groups = mineBy === 'bucket' ? W.group(rows, 'bucket') : W.group(rows, mineBy, { then: 'bucket' });
     if (Pins) { const pinned = gr => gr.rows.some(r => !r.v.gone && Pins.pinned(pins, r.v.entry)); groups = groups.map((gr, i) => [gr, i]).sort((a, b) => Number(pinned(b[0])) - Number(pinned(a[0])) || a[1] - b[1]).map(([gr]) => gr); }
@@ -601,7 +608,7 @@
     for (const gr of groups) {
       const g = mineGroupNode(gr.key);
       set(g.name, gr.heading);
-      const open = !mineClosed(gr.key, mineBy === 'bucket' ? !!gr.collapsed : false);
+      const open = searching || !mineClosed(gr.key, mineBy === 'bucket' ? !!gr.collapsed : false);
       g.body.hidden = !open; g.btn.setAttribute('aria-expanded', String(open));
       const counts = Object.fromEntries(W.BUCKETS.map(b => [b.id, 0]));
       for (const r of gr.rows) if (Object.hasOwn(counts, r.bucket)) counts[r.bucket]++;
@@ -616,7 +623,7 @@
         const seen = [];
         for (const inner of gr.groups) {
           const b = mineBucketNode(g, inner.key);
-          b.details.open = !mineClosed(`${gr.key}/${inner.key}`, !!inner.collapsed);
+          b.details.open = searching || !mineClosed(`${gr.key}/${inner.key}`, !!inner.collapsed);
           set(b.summary, `${W.headingOf(inner.key)} (${inner.rows.length})`);
           b.list.setAttribute('aria-label', `${gr.heading}: ${W.headingOf(inner.key)}`);
           place(b.list, inner.rows.map(r => r.v.li)); seen.push(b.details);
@@ -637,9 +644,12 @@
     const all = [...l.rows.values()];
     if (which === 'mine') {
       $('mine-summary').replaceChildren(...renderSummary(data));
-      place($('mine-list'), mineGroups(Pins ? Pins.order(pins, all.map(v => v.entry)).map(e => all.find(v => v.entry === e)) : all));
-      set($('mine-count'), `${data.entries.length} ${data.entries.length === 1 ? 'session' : 'sessions'}`);
+      const q = mineQuery(), shown = q ? all.filter(v => !v.gone && mineMatch(v.entry, q)) : all;
+      place($('mine-list'), mineGroups(Pins ? Pins.order(pins, shown.map(v => v.entry)).map(e => shown.find(v => v.entry === e)) : shown));
+      const n = data.entries.length, noun = n === 1 ? 'session' : 'sessions';
+      set($('mine-count'), q ? `${shown.length} of ${n} ${noun}` : `${n} ${noun}`);
       $('mine-empty').hidden = all.length > 0;
+      $('mine-no-match').hidden = !(q && all.length > 0 && shown.length === 0);
       return;
     }
     teamFilters(data);
@@ -776,11 +786,13 @@
     if (which === 'team' && selected) void inspectActivity(selected);
     set(status, `Checked ${new Date(data.observed_at).toLocaleTimeString()}. Updates automatically.${data.status === 'partial' ? ' Some activity is unavailable.' : ''}`);
     if (which === 'team' && hint) { const h = hint; hint = null; landHint(h, data); }
+    if (which === 'mine' && mineHint) landMineHint();
   }
   // T1: a teammate row the sidebar asked to open. Main hands it over once (overview:open-hint);
   // the row is opened through this page's own read and openActivity, exactly as a click would.
   let hint = null;
   async function takeHint() {
+    void takeMineHint();
     if (typeof api.openHint !== 'function') return;
     let h; try { h = await api.openHint(); } catch { h = null; }
     if (!h || typeof h !== 'object' || !hex(h.team, 32) || !hex(h.entry, 40)) return;
@@ -795,6 +807,26 @@
     if (!v || v.gone) { set($('team-status'), 'That session is no longer shared with you.'); return; }
     v.li.scrollIntoView?.({ block: 'center' }); v.li.classList.add('selected'); setTimeout(() => v.li.classList.remove('selected'), 2000);
     void openActivity(v);
+  }
+  // QoL4a: a notification's "Show in Overview". Main hands over one folder name (overview:mine-hint, once, 10 s); it
+  // goes into My sessions' search and the first matching row gets focus. Nothing else is read from the hint.
+  let mineHint = null;
+  async function takeMineHint() {
+    if (typeof api.mineHint !== 'function') return;
+    let h; try { h = await api.mineHint(); } catch { h = null; }
+    if (!h || typeof h !== 'object' || typeof h.query !== 'string' || !h.query.trim() || h.query.length > 100) return;
+    $('mine-search').value = h.query;
+    mineHint = { at: Date.now() };
+    if (view !== 'mine') show('mine'); else { render('mine'); landMineHint(); void refresh(); }
+  }
+  function landMineHint() {
+    const h = mineHint; if (!h || !lists.mine.data) return;
+    mineHint = null;
+    if (Date.now() - h.at > 10000) return;
+    const first = $('mine-list').querySelector('li.dir-entry');
+    if (!first) return;
+    first.tabIndex = -1; first.scrollIntoView?.({ block: 'center' }); first.focus({ preventScroll: true });
+    first.classList.add('selected'); setTimeout(() => first.classList.remove('selected'), 2000);
   }
   function show(next) {
     if (view === next) return;
@@ -820,6 +852,13 @@
     for (const id of ['team-group', ...TEAM_FILTERS.map(f => `team-${f}-filter`)]) $(id).addEventListener('change', () => { clearActivity(); render('team'); });
     { const pick = $('mine-group'); pick.value = mineBy; pick.addEventListener('change', () => { if (!MINE_BY.includes(pick.value)) { pick.value = mineBy; return; } mineBy = pick.value; store.write(MINE_BY_STORE, mineBy); for (const g of mineNodes.values()) g.box.remove(); mineNodes.clear(); render('mine'); }); }
     $('team-search').addEventListener('input', () => { clearActivity(); render('team'); });
+    // QoL4a: one render per frame while typing; Clear empties it. A search left over 10 minutes is gone on return.
+    { let frame = 0; const later = window.requestAnimationFrame || (fn => setTimeout(fn, 16));
+      $('mine-search').addEventListener('input', () => { if (frame) return; frame = later(() => { frame = 0; render('mine'); }); });
+      const clear = () => { $('mine-search').value = ''; render('mine'); $('mine-search').focus(); };
+      $('mine-no-match-clear').addEventListener('click', clear);
+      let hiddenAt = 0;
+      document.addEventListener('visibilitychange', () => { if (document.hidden) { hiddenAt = Date.now(); return; } if (hiddenAt && Date.now() - hiddenAt > 600000 && $('mine-search').value) { $('mine-search').value = ''; render('mine'); } }); }
     for (const b of document.querySelectorAll('[data-team-focus]')) b.addEventListener('click', () => { teamFocus = b.dataset.teamFocus; clearActivity(); render('team'); });
     $('team-clear-filters').addEventListener('click', resetTeamFilters);
     $('team-empty-reset').addEventListener('click', resetTeamFilters);

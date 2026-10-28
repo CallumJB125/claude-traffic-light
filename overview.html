@@ -24,9 +24,10 @@
     <p class="muted">Your sessions across connected tools, devices and local models, each counted once. Sessions you share with a team or that run on a team board carry a team badge.</p>
     <p id="mine-status" class="muted" role="status" aria-live="polite"></p>
     <div id="mine-summary" class="summary" aria-label="My sessions summary"></div>
-    <div class="mine-filters"><label>Group by<select id="mine-group"><option value="project">Project</option><option value="bucket">Status</option><option value="provider">AI tool</option></select></label></div>
+    <div class="mine-filters"><label class="session-search">Find a session<input type="search" id="mine-search" placeholder="Search folder, task or AI…" autocomplete="off"></label><label>Group by<select id="mine-group"><option value="project">Project</option><option value="bucket">Status</option><option value="provider">AI tool</option></select></label></div>
     <div id="mine-list" class="dir-groups"></div>
     <p id="mine-empty" class="empty" hidden>No sessions yet. Start one below, or start work in a connected tool.</p>
+    <p id="mine-no-match" class="empty" role="status" hidden>No session matches. Clear the search to see all of them. <button type="button" class="secondary" id="mine-no-match-clear">Clear</button></p>
   </section>
   <section id="team-section" class="directory" role="tabpanel" aria-labelledby="tab-team" hidden>
     <div class="section-header"><h2>Team sessions</h2><p id="team-count" class="muted"></p></div>
