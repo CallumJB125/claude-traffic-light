@@ -91,7 +91,7 @@ test('migration 080 keeps every inbox row and the cross-team guard, and accepts 
     INSERT INTO inbox (id, org_id, member_id, kind, ref_json, created_at, read_at) VALUES ('i1','o1','m1','mention','{"card_id":"c1"}','${NOW}',NULL), ('i2','o1','m1','reply','{}','${NOW}','${NOW}');
   `);
   assert.throws(() => db.exec(`INSERT INTO inbox VALUES ('x','o1','m1','board_link_request','{}','${NOW}',NULL)`), /CHECK constraint/);
-  assert.deepEqual(migrate(db, { migrations: all }), [80]);
+  assert.deepEqual(migrate(db, { migrations: all }), [80, 81]);
   assert.deepEqual(db.prepare('SELECT id, kind, ref_json, read_at FROM inbox ORDER BY id').all().map((r) => ({ ...r })), [
     { id: 'i1', kind: 'mention', ref_json: '{"card_id":"c1"}', read_at: null }, { id: 'i2', kind: 'reply', ref_json: '{}', read_at: NOW }]);
   db.exec(`INSERT INTO inbox VALUES ('i3','o1','m1','board_link_request','{"repo_short":"app"}','${NOW}',NULL)`);
