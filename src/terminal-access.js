@@ -78,7 +78,8 @@ function healthRow(rows) {
 /**
  * The store and the one prompting path. deps:
  *   read() / write(obj): terminal-access.json; now();
- *   running(bundleId) → Promise<bool>: is it running, asked without a prompt (lsappinfo, no shell);
+ *   running(bundleId) → Promise<bool>: is it running, asked of LaunchServices without a prompt (main.js runs it;
+ *   nothing in src/ or hooks/ spawns that tool, test/waiting-inputs.test.js);
  *   script(bundleId, timeoutMs) → Promise<{ok, stderr, timedOut}>: the read-only test script.
  */
 function createStore({ read, write, now = Date.now, running, script }) {
@@ -117,7 +118,7 @@ function createStore({ read, write, now = Date.now, running, script }) {
 /** The test script: a read-only count, addressed by bundle id so no app is looked up by name. */
 const testScript = (bundle) => `tell application id "${bundle}" to count windows`;
 
-/** lsappinfo's answer for one bundle: running when it names a pid. */
+/** LaunchServices' answer for one bundle (main.js's running check): running when it names a pid. */
 const runningFrom = (stdout) => /"pid"\s*=\s*\d+/.test(String(stdout || ''));
 
 module.exports = { AUTOMATION, NO_PERMISSION, AUTOMATION_URL, ACCESSIBILITY_URL, MIN_TEST_GAP_MS, TEST_TIMEOUT_MS, known, cleanSeen, view, healthRow, createStore, testScript, runningFrom };

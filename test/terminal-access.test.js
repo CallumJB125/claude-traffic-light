@@ -172,7 +172,8 @@ test('main: channels are Settings › Terminal only, Test is gated to the four n
   assert.match(mainSrc, /'terminal-access': 'terminal' \}\);/);
   assert.match(read('settings.js'), /if \(id === 'terminal-access'\) \{ showSection\('advanced'\); window\.loadTerminalAccess\?\.\(\);/);
   const term = read('src/terminal.js');
-  assert.match(term, /execFile\('\/usr\/bin\/lsappinfo', \['info', '-only', 'pid', '-app', bundle\]/);
+  assert.match(term, /running: \(bundle\) => appRunning\(bundle\),/);
+  assert.match(mainSrc, /appRunning: \(bundle\) => new Promise\(\(resolve\) => require\('child_process'\)\.execFile\('\/usr\/bin\/lsappinfo', \['info', '-only', 'pid', '-app', bundle\]/);
   assert.match(term, /access: \(app, state\) => access\.record\(app, state\)/);
 });
 

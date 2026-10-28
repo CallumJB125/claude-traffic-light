@@ -72,7 +72,11 @@ const UpdateView = require('./src/update-view.js');
 const Feedback = require('./src/feedback');
 const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
-const Terminal = require('./src/terminal.js')({ getSessions: () => localSessions(aggregateState().sessions), getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST, getGhosttyDockMode: () => GhosttyDock.modeOf(loadConfig()), isAiProcess: (pid, provider) => AgentAwareness.isAiProcess(pid, provider) });
+const Terminal = require('./src/terminal.js')({ getSessions: () => localSessions(aggregateState().sessions), getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST, getGhosttyDockMode: () => GhosttyDock.modeOf(loadConfig()), isAiProcess: (pid, provider) => AgentAwareness.isAiProcess(pid, provider),
+  // QoL4b (review B4-M1): Terminal access's Test asks LaunchServices whether the app runs before any script, so it can
+  // never launch it. Here in main, on a click only: hooks/ and src/ never spawn this tool (test/waiting-inputs.test.js).
+  appRunning: (bundle) => new Promise((resolve) => require('child_process').execFile('/usr/bin/lsappinfo', ['info', '-only', 'pid', '-app', bundle], { timeout: 2000, killSignal: 'SIGKILL' }, (err, out) => resolve(!err && require('./src/terminal-access.js').runningFrom(out)))), // privacy-flow: terminal-jump
+});
 const {
   TERMINAL_APPS, escapeForAppleScript, activateTerminalApp, jumpToSession, isRemote, osa, frontmostApp,
   dockIconRect, clampToDisplay, runningProcessNames, terminalForSessions,

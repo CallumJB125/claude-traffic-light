@@ -229,7 +229,8 @@ function openBundle(id) {
   });
 }
 
-module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = () => 'auto', isAiProcess = null }) => {
+// `appRunning(bundleId)`: main's prompt-free running check for Terminal access's Test (QoL4b, review B4-M1).
+module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = () => 'auto', isAiProcess = null, appRunning = async () => false }) => {
   // ── Jump to the exact tab ─────────────────────────────────────────────────
   // The session file says where the session's tab is (hooks/terminal-id.js);
   // src/focus/ has one adapter per terminal. On macOS, anything short of a
@@ -249,8 +250,8 @@ module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = 
   const access = TerminalAccess.createStore({
     read: () => JSON.parse(fs.readFileSync(accessFile(), 'utf8')),
     write: (obj) => { fs.mkdirSync(getRootDir(), { recursive: true }); writeJsonAtomic(accessFile(), obj); },
-    // Asked of LaunchServices, never of the app: no prompt, and no script that could launch it (review B4-M1).
-    running: (bundle) => new Promise((resolve) => execFile('/usr/bin/lsappinfo', ['info', '-only', 'pid', '-app', bundle], { timeout: 2000, killSignal: 'SIGKILL' }, (err, out) => resolve(!err && TerminalAccess.runningFrom(out)))), // privacy-flow: terminal-jump
+    // Asked of LaunchServices by main, never of the app: no prompt, and no script that could launch it (review B4-M1).
+    running: (bundle) => appRunning(bundle),
     script: (bundle, timeout) => new Promise((resolve) => execFile('/usr/bin/osascript', ['-e', TerminalAccess.testScript(bundle)], { timeout, killSignal: 'SIGKILL' }, (err, _out, stderr) => resolve({ ok: !err, stderr: String(stderr || ''), timedOut: !!err && err.killed === true }))), // privacy-flow: terminal-jump
   });
   let jumper = null;
