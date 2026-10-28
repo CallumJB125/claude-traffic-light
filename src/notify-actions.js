@@ -4,11 +4,8 @@
 //   actionsFor(n, {row, stop}) → [{text, run}] with run 'stop' | 'overview' | 'snooze'. The array that builds the
 //   buttons is the one an action index is read against, so an index can never pick another button.
 //   pick(list, details, legacyIndex) → the chosen entry or null (a bad or out-of-range index runs nothing, review S3).
-// A device name as a note may show it: no control or direction characters, at most 60 characters.
-function deviceLabel(name) {
-  const s = [...String(typeof name === 'string' ? name : '').replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, '').trim()];
-  return s.length ? s.slice(0, 60).join('') : 'another device';
-}
+// A device name is cleaned the way the next-waiting key's notes clean it (QoL3a): no control or direction characters, ≤60.
+const { deviceLabel } = require('./needing-queue.js');
 
 const remoteId = (id) => typeof id === 'string' && id.startsWith('remote:');
 const remoteRow = (row) => !!(row && (row.remote || row.device));
