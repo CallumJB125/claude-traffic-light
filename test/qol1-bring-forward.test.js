@@ -26,7 +26,7 @@ test('B1: Terminal and iTerm2 pin the window by id, activate, restore a minimise
   order(ITerm.SCRIPT, ['set wid to id of w', 'set sid to id of s', 'activate', 'set w to window id wid', 'if miniaturized of w then set miniaturized of w to false', 'select w', 'if id of s2 is sid then', 'select t2', 'select s2']);
   // F-M1: the session not found again in its pinned window is a miss, never "ok" with only the window raised.
   const it = ITerm.SCRIPT.split('\n').map((l) => l.trim());
-  assert.deepEqual(it.filter((l) => l.startsWith('return ')), ['return "not-running"', 'return "ok"', 'return "lost"', 'return "no match"']);
+  assert.deepEqual(it.filter((l) => l.includes('return ')), ['if application "iTerm2" is not running then return "not-running"', 'return "ok"', 'return "lost"', 'return "no match"']);
   assert.equal(it[it.indexOf('return "ok"') - 1], 'select s2', 'the only "ok" follows selecting the session');
   for (const s of [Ghostty.SCRIPT, Dock.SCRIPT]) assert.ok(at(s, 'activate') < at(s, 'focus (item 1 of hits)'), 'Ghostty: activate, then focus');
 });
