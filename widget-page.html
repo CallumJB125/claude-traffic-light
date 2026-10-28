@@ -94,6 +94,11 @@
           <button type="button" id="compose-shortcut-on">Turn on ⇧⌘Space</button></div>
         <p class="hint" id="compose-shortcut-hint">This takes ⇧⌘Space from every app, including Parameter Hints in VS Code and Cursor. Clear the field to give it back. Home and the menu bar's New task… work without it.</p>
         <p class="note" id="compose-shortcut-note" role="status"></p>
+        <div class="row"><label for="next-shortcut">Jump to the next session that needs you</label>
+          <input type="text" id="next-shortcut" placeholder="Off" spellcheck="false" autocomplete="off" aria-describedby="next-shortcut-hint next-shortcut-note" />
+          <button type="button" id="next-shortcut-save">Save</button></div>
+        <p class="hint" id="next-shortcut-hint">Off until you set a key. Each press brings forward the next session waiting on you, oldest first.</p>
+        <p class="note" id="next-shortcut-note" role="status"></p>
         <p class="note" id="where-note" role="status"></p>
       </section>
 

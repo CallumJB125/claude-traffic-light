@@ -32,6 +32,9 @@
       $('compose-shortcut-hint').textContent = `${s.compose.editorNote} Home and the menu bar's New task… work without it.`;
       $('compose-shortcut-note').textContent = s.compose.line || '';
     }
+    // QoL3a: the next-waiting key (off unless set); main says why it isn't registered.
+    if (document.activeElement !== $('next-shortcut')) $('next-shortcut').value = c.nextShortcut || '';
+    if (s.next) $('next-shortcut-note').textContent = s.next.line || '';
     const size = $('size');
     size.min = String(s.limits.minWidth);
     size.max = String(s.limits.maxWidth);
@@ -74,6 +77,9 @@
   const composeSaved = (r) => { $('compose-shortcut-note').textContent = r && r.ok ? (r.state?.compose?.line || '') : 'That shortcut is not one the system accepts. Try something like CmdOrCtrl+Shift+Space.'; };
   $('compose-shortcut-save').addEventListener('click', () => send(api.set({ composeShortcut: $('compose-shortcut').value.trim() }), 'compose-shortcut-note').then(composeSaved));
   $('compose-shortcut-on').addEventListener('click', () => { if (st?.compose) send(api.set({ composeShortcut: st.compose.suggested }), 'compose-shortcut-note').then(composeSaved); });
+  $('next-shortcut-save').addEventListener('click', () => send(api.set({ nextShortcut: $('next-shortcut').value.trim() }), 'next-shortcut-note').then((r) => {
+    $('next-shortcut-note').textContent = r && r.ok ? (r.state?.next?.line || '') : 'That shortcut is not one the system accepts. Try something like CmdOrCtrl+Shift+J.';
+  }));
   $('shortcut-save').addEventListener('click', () => send(api.set({ widgetShortcut: $('shortcut').value.trim() }), 'where-note').then((r) => {
     if (r && !r.ok) $('where-note').textContent = 'That shortcut is not one the system accepts. Try something like CmdOrCtrl+Shift+Space.';
   }));

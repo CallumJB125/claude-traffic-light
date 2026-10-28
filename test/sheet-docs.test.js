@@ -44,7 +44,7 @@ test('the two documents are sheet pages with their own file and preload, outside
 
 test('widget-look writes only the keys cleanPatch can emit; keys another pane owns are listed, not hidden', () => {
   const probe = { showWidget: true, menuBarMode: true, showTasks: true, showAgents: true, agentRoster: true, paceTooltip: true, agentChipSize: 'large',
-    agentKinds: { subagent: true }, widgetSnap: 'edges', widgetSize: 'dot', widgetShortcut: 'Command+Shift+K', composeShortcut: 'Command+Shift+J', projectColours: { app: '#aabbcc' } };
+    agentKinds: { subagent: true }, widgetSnap: 'edges', widgetSize: 'dot', widgetShortcut: 'Command+Shift+K', composeShortcut: 'Command+Shift+J', nextShortcut: 'Command+Shift+N', projectColours: { app: '#aabbcc' } };
   assert.deepEqual(Object.keys(WidgetPage.cleanPatch(probe, {})).sort(), [...SP.WIDGET_LOOK_KEYS].sort(), 'the table equals what the module can emit');
   const shared = SP.WIDGET_LOOK_KEYS.filter((k) => k in SP.KEY_OWNER);
   assert.deepEqual(shared.sort(), ['agentChipSize', 'agentKinds', 'agentRoster', 'menuBarMode', 'paceTooltip', 'showAgents', 'showTasks', 'showWidget']);

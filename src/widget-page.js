@@ -101,6 +101,9 @@ function cleanPatch(v, current = {}) {
   // The task box's shortcut (O4): off unless the person sets one; '' turns it off again.
   if (v.composeShortcut === '') out.composeShortcut = '';
   else if (cleanAccelerator(v.composeShortcut)) out.composeShortcut = cleanAccelerator(v.composeShortcut);
+  // QoL3a: the next-waiting key, off unless the person sets one; '' turns it off again.
+  if (v.nextShortcut === '') out.nextShortcut = '';
+  else if (cleanAccelerator(v.nextShortcut)) out.nextShortcut = cleanAccelerator(v.nextShortcut);
   if ('projectColours' in v) { const c = cleanColours(v.projectColours, current.projectColours); if (c) out.projectColours = c; }
   if (v.agentKinds && typeof v.agentKinds === 'object' && !Array.isArray(v.agentKinds)) {
     const kinds = { ...(current.agentKinds || {}) };
@@ -140,6 +143,7 @@ function configView(c) {
     widgetSize: SIZES.includes(c.widgetSize) ? c.widgetSize : 'normal',
     widgetShortcut: cleanAccelerator(c.widgetShortcut) || '',
     composeShortcut: cleanAccelerator(c.composeShortcut) || '',
+    nextShortcut: cleanAccelerator(c.nextShortcut) || '',
     projectColours: savedColours(c.projectColours),
   };
 }
@@ -168,6 +172,7 @@ function register(ctx) {
       held: WidgetStrip.blocksTravel(s) || !!ctx.busy(),
       platform: ctx.platform,
       compose: ctx.composeShortcut ? ctx.composeShortcut() : null,
+      next: ctx.nextShortcut ? ctx.nextShortcut() : null,
     };
   }
 

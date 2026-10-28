@@ -14,6 +14,9 @@ function applyConfigSideEffects(prev, next, d, touched) {
   // The task box's shortcut first whenever any of the three keys changes (review R5): the widget and voice keys
   // win, so compose lets go of a key before either of them takes it.
   const composeHit = hit('composeShortcut') || hit('widgetShortcut') || hit('voice');
+  // QoL3a: the next-waiting key yields to all three, so it lets go first and settles last.
+  const nextHit = composeHit || hit('nextShortcut');
+  if (nextHit) d.nextShortcut?.(next);
   if (composeHit) d.composeShortcut?.(next);
   if (hit('voice')) d.applyVoiceHotkey();
   if (hit('lowPower')) d.applyLowPower?.();
@@ -25,6 +28,7 @@ function applyConfigSideEffects(prev, next, d, touched) {
   if ((prev.homeComposer !== false) !== (next.homeComposer !== false)) d.chatsChanged?.();
   // Then once more if it was taken: clearing the widget's key gives the task box the key it was waiting for.
   if (composeHit) d.composeShortcutSettle?.(next);
+  if (nextHit) d.nextShortcutSettle?.(next);
   d.broadcastStatus();
 }
 

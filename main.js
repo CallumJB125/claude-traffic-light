@@ -2454,6 +2454,9 @@ ipcMain.handle('tasks:pick-folder', async (e) => {
 onQuit(app, () => tasksSvc?.stop());
 // O4: Home's task box (src/compose-main.js), its shortcut (src/compose-shortcut.js) and the tray's "New task…".
 // The shortcut is off until the person turns it on (it would take Parameter Hints from VS Code and Cursor).
+// QoL3a: the next-waiting key (nextWaitingFromKey below); declared here, before anything can commit config.
+const NextShortcut = require('./src/next-shortcut.js').install({ globalShortcut, config: loadConfig, onPress: () => { nextWaitingFromKey().catch((err) => console.warn('[next] failed:', err.message)); }, enabled: !IS_DEV_RUN, log: console.log });
+if (IS_DEV_RUN && !app.isPackaged) global.__plexiformNext = { press: () => nextWaitingFromKey(), view: () => NextShortcut.view() };
 const ComposeShortcut = require('./src/compose-shortcut.js').install({ globalShortcut, config: loadConfig, onPress: () => openCompose(), enabled: !IS_DEV_RUN, log: console.log });
 const Compose = require('./src/compose-main.js').register({
   ipcMain, buddy: () => buddyWin, service: getTasks, config: loadConfig, homeDir: os.homedir(),
@@ -4190,6 +4193,8 @@ function applyConfigEffects(prev, next, touched) {
     installHooks,
     enableCalendar: () => BusyWatch.enableCalendar().catch((err) => console.warn('[busy]', err.message)),
     applyWidgetVisibility, syncTailnetListener, createTray, applyVoiceHotkey, applyLowPower, syncFastHook, broadcastStatus, syncInteractionHost, widgetPolish: (p, n) => WidgetPolish.configChanged(p, n),
+    nextShortcut: (n) => { NextShortcut.apply(n); },
+    nextShortcutSettle: (n) => { NextShortcut.settle(n); },
     composeShortcut: (n) => { ComposeShortcut.apply(n); },
     composeShortcutSettle: (n) => { ComposeShortcut.settle(n); refreshTrayMenu?.(); },
     syncAgentMail: () => AgentMail.sync(),
@@ -4670,7 +4675,7 @@ async function runAction(action, st) {
         return away ? { feedback: `waiting on ${away.deviceName}` } : { react: { eyes: 'surprised', pose: 'bounce' }, feedback: 'boop' };
       }
       const r = await jumpToNeeding();
-      return { feedback: r };
+      return { feedback: r.text };
     }
     case 'terminal': {
       const a = await jumpToSession(target, folderHint);
@@ -4727,12 +4732,13 @@ async function runAction(action, st) {
   }
 }
 
+// → {text (the widget's line), note (QoL3a: what the next-waiting key says, or null when a tab came forward)}.
 async function jumpToNeeding() {
   const sessions = localSessions(aggregateState().sessions);
   const queue = NeedingQueue.needingQueue(sessions, { dockStatus: await dockStatusFor(sessions) });
   if (!queue.length) {
-    const away = aggregateState().sessions.find((s) => s.remote && WAITING_SIGNALS.has(s.signal));
-    return away ? `waiting on ${away.deviceName}` : 'nothing waiting';
+    const away = aggregateState().sessions.find((s) => s.remote && WAITING_SIGNALS.has(s.signal)) || null;
+    return { text: away ? `waiting on ${NeedingQueue.deviceLabel(away.deviceName)}` : 'nothing waiting', note: NeedingQueue.keyNote({ queue: 0, away }) };
   }
   cycleIndex = cycleIndex % queue.length;
   const target = queue[cycleIndex];
@@ -4742,7 +4748,15 @@ async function jumpToNeeding() {
   const folderHint = Rules.folderOf(target.cwd);
   const activated = await jumpToSession(target, folderHint);
   const badge = queue.length > 1 ? ` (${shownIndex}/${queue.length})` : '';
-  return NeedingQueue.jumpFeedback(folderHint, badge, activated);
+  return { text: NeedingQueue.jumpFeedback(folderHint, badge, activated), note: NeedingQueue.keyNote({ queue: queue.length, activated, folder: folderHint, badge }) };
+}
+
+// QoL3a: the next-waiting key (src/next-shortcut.js; off until the person sets one). A press that brought no tab
+// forward says why through the jump's own notification path.
+async function nextWaitingFromKey() {
+  const r = await jumpToNeeding();
+  if (r.note) showJumpNote({ title: 'Plexiform', body: r.note });
+  return r;
 }
 
 ipcMain.handle('gesture', async (e, gesture) => {
@@ -5105,7 +5119,7 @@ const BUBBLE_MIN_W = 288; // the bubble is 280 px wide, with 4 px each side
 const WidgetStrip = require('./src/widget-strip.js');
 let strip = WidgetStrip.NONE;
 let applyingStrip = false;
-require('./src/widget-page.js').register({ utilityHandle, allowed: widgetLookPage, loadConfig, commitConfig, widget: () => win, strip: () => strip, ensureWidget: () => { if (!win) createWindow(); applyWidgetVisibility(); }, resizeBy, busy: () => roamState.busy || !!gardenRun, stopGlide, saveBounds, screen, limits: { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }, openPage: (id, e) => { if (e && sheetDoc(SettingsPanes.WIDGET_LOOK)(e)) { openBuddy(id === 'lights' ? `settings:${SettingsPanes.RULES_PANE}` : 'settings:widget'); return; } openBuddy(id); if (id === 'settings') buddyWin?.sendToPage('settings', 'show-section', 'widget'); }, platform: process.platform, composeShortcut: () => ComposeShortcut.view() });
+require('./src/widget-page.js').register({ utilityHandle, allowed: widgetLookPage, loadConfig, commitConfig, widget: () => win, strip: () => strip, ensureWidget: () => { if (!win) createWindow(); applyWidgetVisibility(); }, resizeBy, busy: () => roamState.busy || !!gardenRun, stopGlide, saveBounds, screen, limits: { minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }, openPage: (id, e) => { if (e && sheetDoc(SettingsPanes.WIDGET_LOOK)(e)) { openBuddy(id === 'lights' ? `settings:${SettingsPanes.RULES_PANE}` : 'settings:widget'); return; } openBuddy(id); if (id === 'settings') buddyWin?.sendToPage('settings', 'show-section', 'widget'); }, platform: process.platform, composeShortcut: () => ComposeShortcut.view(), nextShortcut: () => NextShortcut.view() });
 spendSafety = require('./src/spend-safety-main.js').install({ Notification, handle: utilityHandle, allowed: (e) => analyticsSender(e) || settingsPane('spend')(e), rootDir: ROOT_DIR, projectsDir: PROJECTS_DIR, home: os.homedir(), env: process.env, provider: () => require('./src/claude-carry.js').carryFor(process.env)?.resolve() ?? null, config: loadConfig, turns: () => getUsageTurns(), spend: () => spendSnapshot(loadConfig()), silent: IS_DEV_RUN, log: console.log });
 require('./src/rule-notify-main.js').install({ Notification, busy: () => BusyWatch.holding(), paused: (id) => spendSafety?.nudgesPaused(id), handle: utilityHandle, allowed: rulesEditor, config: loadConfig, sessions: () => aggregateState({ ignoreTravel: true }).sessions || [], env: () => { const c = loadConfig(); return { offline: !online, ...BusyWatch.env(), git: gitEvents(c), spend: spendSnapshot(c) }; }, log: console.log });
 const WidgetPolish = require('./src/widget-polish-main.js').install({ ipcMain, globalShortcut, utilityHandle, config: loadConfig, commitConfig, widgetWindow: () => win, quiet: Quiet, widgetAllowed: (e) => widgetOnly(e), pageAllowed: widgetLookPage, sessions: () => localSessions(aggregateState().sessions || []), strip: () => strip, saveBounds, stopGlide, screen, sizing: { aspect: WIDGET_ASPECT, minWidth: MIN_WIDTH }, log: console.log });
@@ -6028,6 +6042,7 @@ app.whenReady().then(() => {
   BusyWatch.start();
   powerMonitor.on('resume', checkOnline);
   initVoice();
+  NextShortcut.apply(); // QoL3a: off unless set; it yields to the other keys, read from config
   ComposeShortcut.apply(); // after the voice key; the widget's key is read from config, so its lazy apply needs no order
   refreshTrayMenu(); // createTray ran before the key was registered: show it on New task…
   // Other agents live on disk, not in hooks: poll for them.
