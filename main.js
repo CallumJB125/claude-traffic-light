@@ -317,6 +317,8 @@ const DEFAULT_CONFIG = {
   // Remote interaction host: off until ticked in Preferences.
   remoteInteractionHost: false,
   teamSessionSharing: true,
+  // T3b "Ask me each time" in a teammate's shared thread: per device, off until the toggle is turned on.
+  threadAskEach: false,
   // Session-start team brief and team_* MCP tools (src/team-activity.js): off until ticked.
   teamBrief: false,
   // Agent mail inbox (src/agent-mail.js): teammates' AI questions polled from the team hub; off until ticked.
@@ -388,6 +390,7 @@ function buildConfig() {
   config.agentAwareness = require('./src/agent-awareness.js').normalize(saved.agentAwareness);
   config.mcpBusUserOff = saved.mcpBusUserOff === true;
   config.mcpUserOff = saved.mcpUserOff === true;
+  config.threadAskEach = saved.threadAskEach === true;
   config.voice = Voice.normalizeConfig(saved.voice);
   config.compaction = Compaction.normalizeSettings(saved.compaction);
   config.integrations = { ...(saved.integrations && typeof saved.integrations === 'object' && !Array.isArray(saved.integrations) ? saved.integrations : {}), ghosttyDock: GhosttyDock.normalizeMode(saved.integrations && saved.integrations.ghosttyDock) };
@@ -429,6 +432,7 @@ function saveConfig(partial) {
   if (partial.agentAwareness) next.agentAwareness = require('./src/agent-awareness.js').normalize(partial.agentAwareness);
   if ('mcpBusUserOff' in partial) next.mcpBusUserOff = partial.mcpBusUserOff === true;
   if ('mcpUserOff' in partial) next.mcpUserOff = partial.mcpUserOff === true;
+  if ('threadAskEach' in partial) next.threadAskEach = partial.threadAskEach === true;
   if (partial.autoAnswer) next.autoAnswer = { v: 1, sealed: null, rules: AutoRules.sanitize(partial.autoAnswer.rules).rules };
   fs.mkdirSync(ROOT_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2));
@@ -2471,6 +2475,7 @@ if (CHAT_PREVIEW) {
   const SidebarRows = require('./src/overview-sidebar-rows');
   ThreadMain = require('./src/thread-main').createThreadMain({
     buddy: () => buddyWin, chatPreview: CHAT_PREVIEW,
+    askEach: { get: () => loadConfig().threadAskEach === true, set: (on) => saveConfig({ threadAskEach: on === true }) },
     target: (id) => OverviewMain.threadTarget(id),
     sharedRead: (id, alive) => OverviewMain.sharedThreadRead(id, alive),
     sharedAuthority: (id, live) => OverviewMain.sharedThreadAuthority(id, live),
@@ -4151,6 +4156,7 @@ function commitConfig(partial) {
   // __backupReason is only compared with Backups' closed marker list to decide whether to snapshot first (backupFirst() takes no label): never stored, logged or used in a filename.
   const marker = partial.__backupReason;
   delete partial.__backupReason;
+  delete partial.threadAskEach; // only the thread toggle's main-side setter writes this; no renderer save (e.g. Lights) may change it
   delete partial.__prefsFrom; // R8-2b: control field of the rules pane's template saves (checked in rulesRefusal), never stored
   if (Backups.needsBackup({
     prevRules: prev.rules, nextRules: Array.isArray(partial.rules) ? partial.rules.map(Rules.normalizeRule) : undefined,
