@@ -44,7 +44,11 @@
     // C4: main says whether chats can be started here. Off hides New chat and the Chats filter; rows stay (a chat
     // started earlier may need you, and its thread still opens).
     chats: true,
+    // T4a: my own Plexiform-held rows that main ended (plan-t4a §2.4): row id → { title, bucket, reason }.
+    // Only a row this sidebar was showing becomes one; it stays where the row was until dismissed. Memory only.
+    ended: new Map(),
   };
+  const ENDED = { overview: 'Ended when Overview reloaded', ended: 'Ended' };
   const filters = () => FILTERS.filter((f) => ui.chats || f.id !== 'chats');
   // T1: teammates' shared sessions, Team filter only (read-only rows; a click opens Overview ›
   // Team sessions). Memory only: person groups' open state is never saved (names stay out of
@@ -164,8 +168,9 @@
     else {
       for (const b of BUCKETS) {
         const mine = rows.filter((r) => r.bucket === b.id);
-        if (!mine.length) continue; // an empty group is hidden; Needs you never shows empty
-        tree.append(groupEl(b.id, b.label, mine.length, 1, null, mine.map((r) => ownRow(r, 2, null))));
+        const ended = ui.filter === 'all' ? [...ui.ended].filter(([, g]) => g.bucket === b.id) : [];
+        if (!mine.length && !ended.length) continue; // an empty group is hidden; Needs you never shows empty
+        tree.append(groupEl(b.id, b.label, mine.length + ended.length, 1, null, [...mine.map((r) => ownRow(r, 2, null)), ...ended.map(([id, g]) => endedRow(id, g))]));
       }
       empty.hidden = rows.length > 0 || !ui.loaded;
       empty.textContent = !ui.chats && ui.filter === 'all' ? EMPTY_NO_CHATS : EMPTY[ui.filter];
@@ -201,6 +206,16 @@
     el('span', { class: 'sb-dot', 'data-bucket': r.bucket, 'aria-hidden': 'true' }),
     el('span', { class: 'sb-text' }, el('span', { class: 'sb-title' }, r.title), meta ? el('span', { class: 'sb-meta' }, meta) : null),
     el('span', { class: 'sb-age' }, age(r.age_ms)));
+  }
+
+  // T4a: an owned row whose session ended, or whose Overview document was replaced. Dismissable, never opens.
+  function endedRow(id, g) {
+    const why = ENDED[g.reason] || ENDED.ended;
+    return el('li', { role: 'treeitem', class: 'sidebar-row sb-gone', 'data-key': `e:${id}`, 'data-bucket': g.bucket, 'aria-level': 2,
+      'aria-label': `${g.title}, ${why}. Dismiss`, tabindex: -1 },
+    el('span', { class: 'sb-dot', 'data-bucket': 'idle', 'aria-hidden': 'true' }),
+    el('span', { class: 'sb-text' }, el('span', { class: 'sb-title' }, g.title), el('span', { class: 'sb-meta', title: why }, why)),
+    el('span', { class: 'sb-dismiss', title: 'Dismiss', 'aria-hidden': 'true' }, svg('M4.5 4.5l7 7M11.5 4.5l-7 7', 'sb-icon')));
   }
 
   // T1: the Team filter. My own team-board rows, then teammates' shared sessions by person.
@@ -317,7 +332,7 @@
   function openShared(key) { ui.focusKey = key; window.buddy.openTeamRow?.(key.slice(2)); }
   function dismiss(key) {
     const items = treeItems(), i = items.findIndex((n) => n.dataset.key === key);
-    team.gone.delete(key.slice(2));
+    if (key.startsWith('e:')) ui.ended.delete(key.slice(2)); else team.gone.delete(key.slice(2));
     render();
     const after = treeItems(), next = after[Math.min(i, after.length - 1)];
     if (next) focusKey(next.dataset.key);
@@ -327,7 +342,7 @@
     if (!key) return;
     if (key.startsWith('g:')) { if (e.target.closest('.sb-group-head')) toggle(key.slice(2)); return; }
     if (key.startsWith('s:')) { openShared(key); return; }
-    if (key.startsWith('x:')) { if (e.target.closest('.sb-dismiss')) dismiss(key); return; }
+    if (key.startsWith('x:') || key.startsWith('e:')) { if (e.target.closest('.sb-dismiss')) dismiss(key); return; }
     openRow(key);
   }
 
@@ -357,10 +372,10 @@
         return;
       case 'Enter': case ' ':
         e.preventDefault();
-        if (isGroup) toggle(key.slice(2)); else if (key.startsWith('s:')) openShared(key); else if (key.startsWith('x:')) dismiss(key); else openRow(key);
+        if (isGroup) toggle(key.slice(2)); else if (key.startsWith('s:')) openShared(key); else if (key.startsWith('x:') || key.startsWith('e:')) dismiss(key); else openRow(key);
         return;
       case 'Delete': case 'Backspace':
-        if (key.startsWith('x:')) { e.preventDefault(); dismiss(key); }
+        if (key.startsWith('x:') || key.startsWith('e:')) { e.preventDefault(); dismiss(key); }
         return;
       default:
     }
@@ -395,12 +410,26 @@
     try {
       const out = await window.buddy.sessions();
       if (!out || !Array.isArray(out.sessions)) return;
+      const endedChanged = applyEnded(out);
       // Unchanged rows: keep the DOM as it is (no node churn under the cursor, the focus or a screenshot).
       // Ages tick on every read, so they're left out of the key and updated in place.
       const key = JSON.stringify(out.sessions.map(({ age_ms, ...rest }) => rest));
-      if (ui.loaded && key === rowsKey) { ui.rows = out.sessions; paintAges(); return; }
+      if (ui.loaded && key === rowsKey && !endedChanged) { ui.rows = out.sessions; paintAges(); return; }
       rowsKey = key; ui.rows = out.sessions; ui.loaded = true; render();
     } catch { /* keep the last rows */ } finally { refreshing = false; refreshTeam(); }
+  }
+
+  // T4a: main names the owned rows it ended; one becomes a tombstone only if this sidebar was showing it.
+  function applyEnded(out) {
+    const before = ui.ended.size, live = new Set(out.sessions.map((r) => r && r.id));
+    for (const e of Array.isArray(out.ended) ? out.ended : []) {
+      if (!e || typeof e.id !== 'string' || live.has(e.id) || ui.ended.has(e.id)) continue;
+      const was = ui.rows.find((r) => r.id === e.id);
+      if (was) ui.ended.set(e.id, { title: was.title, bucket: was.bucket, reason: e.reason === 'overview' ? 'overview' : 'ended' });
+    }
+    for (const id of [...ui.ended.keys()]) if (live.has(id)) ui.ended.delete(id);
+    while (ui.ended.size > 50) ui.ended.delete(ui.ended.keys().next().value);
+    return ui.ended.size !== before;
   }
 
   // T1: read only while the Team filter is showing in a visible window (main also holds a 15 s floor).

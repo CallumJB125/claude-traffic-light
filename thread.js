@@ -724,6 +724,7 @@
     for (let i = 0; i < 4; i++) {
       const r = await api.open(rowId);
       if (r && r.kind === 'shared' && window.ThreadShared) { kind = 'shared'; window.ThreadShared.start(api, rowId); return; }
+      if (r && r.kind === 'owned' && window.ThreadOwned) { kind = 'owned'; window.ThreadOwned.start(api, rowId); return; }
       if (apply(r)) { if (!gone) { renderAll(); startPoll(); readInputs(); } return; }
       await new Promise((res) => setTimeout(res, 250));
     }
@@ -791,7 +792,7 @@
   });
 
   // Coming back into view re-arms every choice (R3.4), then refreshes.
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && kind !== 'shared') { rearmAll(); renderCards(); renderHooks(); renderReply(); renderStop(); refresh(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && kind !== 'shared' && kind !== 'owned') { rearmAll(); renderCards(); renderHooks(); renderReply(); renderStop(); refresh(); } });
   window.addEventListener('pagehide', () => { stopPoll(); if (rowId) api.close(rowId); });
 
   $('th-tx').addEventListener('load', () => { wireFrame(); renderTranscript(); });

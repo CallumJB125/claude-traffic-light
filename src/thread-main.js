@@ -23,13 +23,16 @@
 // opened for (boundId), the chat-first gate; re-checked after every await.
 // Effects (open-in-tasks, go-to-terminal) also need the window focused and the
 // thread on screen, and run at most once per 500 ms per document (labfix-review S1).
+// T4a (plan-t4a §2.3) adds the `owned` kind, one of my own Plexiform-held sessions: thread:owned-state reads its
+// fixed projection, and thread:open-overview is navigation only. No send, stop, share or approve here (T4 adds the
+// owner controls); sending into my own owned session stays in Overview.
 // One thread is alive at a time; its Tasks slot lives only while it is shown
 // (index.js retires it, and main closes the slot through retire()).
 
 const { createSharedThreadActions } = require('./thread-shared-main');
 const ROW_ID = /^[0-9a-f]{64}$/;
 const EFFECT_MS = 500;
-const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act', 'thread:inputs', 'thread:answer-input', 'thread:shared-state', 'thread:open-team', 'thread:shared-review', 'thread:shared-confirm', 'thread:shared-proposals']);
+const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act', 'thread:inputs', 'thread:answer-input', 'thread:shared-state', 'thread:open-team', 'thread:shared-review', 'thread:shared-confirm', 'thread:shared-proposals', 'thread:owned-state', 'thread:open-overview']);
 // The reply's own bound: guard's (TV.LIMITS.message), checked before any await.
 const MESSAGE_BYTES = 8192;
 const REPLY_TEXT = Object.freeze({
@@ -84,7 +87,7 @@ const INPUT_TEXT = Object.freeze({
 // Provisional, awaiting Callum (plan-r2.md §7 item 3): the link form may change.
 const LINK = (id) => `plexiform://thread/${id}`;
 
-function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, hook = null, copy = () => {}, header = () => null, now = Date.now, sharedRead = null, presence = null, openTeam = null, sharedAuthority = null }) {
+function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, hook = null, copy = () => {}, header = () => null, now = Date.now, sharedRead = null, presence = null, openTeam = null, sharedAuthority = null, ownedRead = null, openOverview = null }) {
   let slot = null; // { wcId, generation, taskId }
   // Documents that asked the Tasks service for a slot: only these are closed, so a terminal
   // session's thread (or a document that never read) never reaches, or starts, the service.
@@ -200,6 +203,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       setPresence(c, t);
       return { kind: 'shared', header: null };
     }
+    if (t.kind === 'owned') return { kind: 'owned', header: null };
     return GONE;
   }
 
@@ -216,6 +220,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       return still(c) ? { kind: 'session', header: head, origin: t.origin ?? null, activity: a } : null;
     }
     if (t.kind === 'shared') return { kind: 'shared', header: null };
+    if (t.kind === 'owned') return { kind: 'owned', header: null };
     return { kind: 'task', header: head };
   }
 
@@ -550,6 +555,35 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     return entry.pending;
   }
 
+  // thread:owned-state (T4a): the bound owned row's projection, or {gone, reason}. The read is synchronous and
+  // main-only (interaction-main's non-reaping accessor); a 2 s floor per document, like thread:shared-state.
+  const ownedReads = new Map(); // `${wcId}:${generation}` -> { at, result }
+  function ownedState(e, args) {
+    const c = guard(e, args);
+    if (!c) return null;
+    const t = resolve(c.boundId);
+    if (!t) return { gone: true, reason: 'ended' };
+    if (t.kind !== 'owned') return null;
+    const key = `${c.contents.id}:${c.generation}`, last = ownedReads.get(key), at = now();
+    if (last && at - last.at < SHARED_MIN_MS) return last.result;
+    let r = null;
+    try { r = typeof ownedRead === 'function' ? ownedRead(c.boundId) : null; } catch { r = null; }
+    if (!r || typeof r !== 'object') r = { gone: true, reason: 'ended' };
+    if (r.gone === true) r = { gone: true, reason: r.reason === 'overview' ? 'overview' : 'ended' };
+    ownedReads.set(key, { at, result: r });
+    while (ownedReads.size > 16) ownedReads.delete(ownedReads.keys().next().value);
+    return r;
+  }
+  // "Open in Overview" (T4a): navigation only. Focused document, rate floor, the bound row still an owned one, and
+  // the select happens with no await after those checks (buddy-window also needs the window visible and unminimised).
+  function toOverview(e, args) {
+    const c = guard(e, args, { effect: true });
+    if (!c || !rateOk(c, 'open-overview')) return false;
+    const t = resolve(c.boundId);
+    if (!t || t.kind !== 'owned' || typeof openOverview !== 'function' || !still(c, true)) return false;
+    try { return openOverview() === true; } catch { return false; }
+  }
+
   // "Team overview" / "Open in Team sessions" (T2): navigation only, the same one-shot hint a sidebar click arms.
   async function toTeam(e, args) {
     const c = guard(e, args, { effect: true });
@@ -564,7 +598,8 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     const c = guard(e, args, { effect: true });
     if (!c || !rateOk(c, 'copy-link')) return false;
     const t = resolve(c.boundId);
-    if (!t || t.kind === 'shared') return false;
+    // An owned row's id is per Overview document, so it has no stable link either.
+    if (!t || t.kind === 'shared' || t.kind === 'owned') return false;
     try { copy(LINK(c.boundId)); return true; } catch { return false; }
   }
 
@@ -587,6 +622,8 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       ipc.handle('thread:shared-review', (e, ...a) => sharedReview(e, a));
       ipc.handle('thread:shared-confirm', (e, ...a) => sharedConfirm(e, a));
       ipc.handle('thread:shared-proposals', (e, ...a) => sharedProposals(e, a));
+      ipc.handle('thread:owned-state', (e, ...a) => ownedState(e, a));
+      ipc.handle('thread:open-overview', (e, ...a) => toOverview(e, a));
     },
     // tasks-service onEvent, before the Tasks pages: true when the event is the thread slot's.
     onEvent(wcId, taskId, event) {
@@ -601,7 +638,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       return true;
     },
     // index.js: the thread document is gone, reloaded, hidden or left.
-    retire(wcId) { if (Number.isSafeInteger(wcId)) { clearPresence(wcId); shared.retire(wcId); for (const k of [...sharedReads.keys()]) if (k.startsWith(`${wcId}:`)) sharedReads.delete(k); void closeSlot(wcId); } },
+    retire(wcId) { if (Number.isSafeInteger(wcId)) { clearPresence(wcId); shared.retire(wcId); for (const m of [sharedReads, ownedReads]) for (const k of [...m.keys()]) if (k.startsWith(`${wcId}:`)) m.delete(k); void closeSlot(wcId); } },
     inputsChanged,
     slot: () => (slot ? { ...slot } : null),
     stop() { stopped = true; clearPresence(); shared.stop(); if (slot) void closeSlot(slot.wcId); },

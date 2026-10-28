@@ -76,6 +76,9 @@ function createInteractionMain({ context, readContext = context, adapters: given
   const withCard = (o) => (o && typeof o === 'object' ? { ...o, card: localModelCard(o) } : o);
   const documents = new Map();
   const ownedScopes = new Map();
+  // T4a: moves whenever the owning Overview document changes (replaced, retired or closed), never back.
+  // The chat-first sidebar keys its owned rows by it, so a row never outlives the document that held the session.
+  let epoch = 0;
   const boardCurrent = (b) => b !== null && b === boardKey(currentBoard());
   const actorFor = (c) => `overview:${c.contents.id}:${c.document}`;
   // Workspace folder name per owned session, main-only: lets the Overview
@@ -100,7 +103,7 @@ function createInteractionMain({ context, readContext = context, adapters: given
     if (e.sender !== c.contents || e.senderFrame !== c.contents.mainFrame) return null;
     const actor = actorFor(c);
     if (!documents.has(actor)) {
-      documents.clear(); documents.set(actor, c.contents);
+      documents.clear(); epoch++; documents.set(actor, c.contents);
       await hub.reap((a) => a === actor);
       // The reap awaited the provider: the document must still be the same one and, for an effect, still focused.
       const again = effect ? context() : readContext();
@@ -123,7 +126,13 @@ function createInteractionMain({ context, readContext = context, adapters: given
     },
     // Existing sessions on an opt-in provider (codex-daemon): metadata list, then subscribe to one by handle.
     discover: (req, actor) => hub.discover(req, actor),
-    attach: (req, actor) => (object(req) && !Object.hasOwn(req, 'board') ? hub.attach({ ...req, board: boardKey(currentBoard()) }, actor) : hub.attach(null, actor)),
+    async attach(req, actor) {
+      const owner = accountScope();
+      const out = await (object(req) && !Object.hasOwn(req, 'board') ? hub.attach({ ...req, board: boardKey(currentBoard()) }, actor) : hub.attach(null, actor));
+      // T4a: a terminal channel is shareable, so it is listed for the account that connected it (launch does the same).
+      if (out?.ok && out.state?.session && out.state.provider?.id === 'claude-channel') { ownedScopes.set(out.state.session, owner); while (ownedScopes.size > 64) ownedScopes.delete(ownedScopes.keys().next().value); }
+      return out;
+    },
     async send(req, actor) {
       if (!object(req) || Object.hasOwn(req, 'board')) return hub.send(null, actor);
       const result = await hub.send({ ...req, board: boardKey(currentBoard()) }, actor);
@@ -151,6 +160,7 @@ function createInteractionMain({ context, readContext = context, adapters: given
   const owns = (session, actor) => typeof session === 'string' && UUID.test(session) && !!hub.state({ session }, actor);
   // A session started outside Plexiform (codex-daemon) runs with its own permissions: never shared with a team.
   const shareable = (session, actor) => owns(session, actor) && (hub.state({ session }, actor).ownership === 'plexiform-owned' || hub.state({ session }, actor).provider.id === 'claude-channel');
+  const listed = (session, actor, account) => shareable(session, actor) && ownedScopes.has(session) && ownedScopes.get(session) === account;
   const sharing = {
     async [CHANNELS.shareList](req, actor) {
       const host = shares();
@@ -194,6 +204,22 @@ function createInteractionMain({ context, readContext = context, adapters: given
       }
       return { ok: false, status: 'stale', error: 'Plexiform is not running that session any more. Refresh and try again.' };
     },
+    // T4a: the chat-first sidebar's read of this document's shareable sessions, for the account that started them.
+    // Read-only: never actorOf, reap or an effect, and `documents` is untouched. Main-only (actor, native id, folder).
+    ownedView() {
+      const account = accountScope(), sessions = [];
+      for (const actor of documents.keys()) for (const state of hub.list(actor)) {
+        if (!listed(state.session, actor, account)) continue;
+        sessions.push({ actor, session: state.session, state, leaf: leaves.get(state.session) ?? null, nativeSessionId: hub.targetOf(state.session) });
+      }
+      return { epoch, account, sessions };
+    },
+    // One session's state, only while it is still listed in the same epoch.
+    ownedState(at, actor, session) {
+      if (at !== epoch || !documents.has(actor) || !listed(session, actor, accountScope())) return null;
+      return hub.state({ session }, actor);
+    },
+    ownedEpoch: () => epoch,
     // Session directory: this document's owned sessions (public state + main-only folder name).
     listOwned() { const out = []; for (const actor of documents.keys()) for (const state of hub.list(actor)) out.push({ state, leaf: leaves.get(state.session) ?? null, nativeSessionId: hub.targetOf(state.session), nativeTurnId: hub.reportTurnOf(state.session) }); return out; },
     // Main-only outbox route. Never attach/relaunch, borrow a new generation,
@@ -245,7 +271,7 @@ function createInteractionMain({ context, readContext = context, adapters: given
       }
     },
     // The Overview document was reloaded, crashed or destroyed: its sessions end now, not on the next request.
-    retireDocuments() { documents.clear(); ownedScopes.clear(); return hub.reap(() => false); },
+    retireDocuments() { documents.clear(); epoch++; ownedScopes.clear(); return hub.reap(() => false); },
     register(ipc) {
       // null (not []) when this document may not read, so the page keeps its last known state.
       ipc.handle(CHANNELS.capabilities, async (e) => {
@@ -311,7 +337,7 @@ function createInteractionMain({ context, readContext = context, adapters: given
     },
     // App start: one read-only check of the fixed loopback ports so Overview opens with an answer.
     detectLocalModels() { return localModels ? localModels.refresh({ force: true }).then(withCard, () => null) : Promise.resolve(null); },
-    close() { hub.stopAll(); documents.clear(); ownedScopes.clear(); },
+    close() { hub.stopAll(); documents.clear(); epoch++; ownedScopes.clear(); },
   };
 }
 

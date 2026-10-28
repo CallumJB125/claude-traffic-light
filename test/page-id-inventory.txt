@@ -67,7 +67,7 @@ onboarding	test-visual/simple-mode.spec.js	navigate	1
 optimiser	buddy-window/pages.js	PAGES	1
 optimiser	buddy-window/pages.js	SECTIONS	1
 optimiser	main.js	openBuddy	3
-overview	buddy-window/index.js	select	2
+overview	buddy-window/index.js	select	3
 overview	buddy-window/pages.js	PAGES	1
 overview	buddy-window/sidebar-chat.js	select	2
 overview	home-inbox-view.js	navigate	1

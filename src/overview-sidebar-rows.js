@@ -14,6 +14,7 @@ const ORIGINS = Object.freeze(['iTerm', 'Terminal', 'Plexiform Terminal']);
 // ref never leaves main: only the two booleans below are derived from it.
 const { AI, NO_PROJECT, text } = require('./session-title');
 const MAX = 200;
+const ENDED_REASONS = Object.freeze(['overview', 'ended']);
 
 function row(vm, origins) {
   if (!vm || typeof vm !== 'object' || typeof vm.id !== 'string' || !/^[0-9a-f]{64}$/.test(vm.id)) return null;
@@ -37,10 +38,13 @@ function row(vm, origins) {
 
 /** passiveRows() output → the sidebar payload. */
 function sidebarRows(out) {
-  if (!out || !Array.isArray(out.rows) || !(out.vms instanceof Map)) return { schema: 1, status: 'unavailable', sessions: [] };
+  if (!out || !Array.isArray(out.rows) || !(out.vms instanceof Map)) return { schema: 1, status: 'unavailable', sessions: [], ended: [] };
   const sessions = [];
   for (const dto of out.rows) { if (sessions.length >= MAX) break; const r = row(out.vms.get(dto?.id), out.origins); if (r) sessions.push(r); }
-  return { schema: 1, status: out.status === 'complete' ? 'complete' : 'partial', sessions };
+  // T4a: owned rows main ended (plan-t4a §2.4): the row id and a closed reason only. The sidebar tombstones
+  // one of these only while it shows that row; every other row that leaves just leaves.
+  const ended = (Array.isArray(out.ended) ? out.ended : []).filter((e) => e && typeof e.id === 'string' && /^[0-9a-f]{64}$/.test(e.id) && ENDED_REASONS.includes(e.reason)).slice(0, 50).map((e) => ({ id: e.id, reason: e.reason }));
+  return { schema: 1, status: out.status === 'complete' ? 'complete' : 'partial', sessions, ended };
 }
 
 // The thread header: the same fixed, path-free shape as a sidebar row, plus
@@ -96,4 +100,4 @@ function teamRows(out) {
   };
 }
 
-module.exports = { sidebarRows, headerOf, teamRows, KEYS, HEADER_KEYS, TEAM_KEYS, NO_PROJECT };
+module.exports = { sidebarRows, headerOf, teamRows, KEYS, HEADER_KEYS, TEAM_KEYS, NO_PROJECT, ENDED_REASONS };

@@ -15,6 +15,7 @@ const {sessionRow}=require('./session-row');
 const {createTeamSessionControls}=require('./team-session-controls');
 const {createTeamCoordinator}=require('./team-coordinator');
 const SharedThread=require('./shared-thread-view');
+const {createOwnedRows}=require('./owned-rows');
 const {personHandoffs}=require('./handoff-people');
 const FollowupSchedules=require('./recipe-schedules');
 const PROVIDERS=Object.freeze({codex:'Codex',claude:'Claude Code','claude-code':'Claude Code',cursor:'Cursor',gemini:'Gemini',hermes:'Hermes',opencode:'OpenCode',copilot:'Copilot',ollama:'Ollama',lmstudio:'LM Studio','llama.cpp':'llama.cpp',local:'Local model'});
@@ -37,7 +38,7 @@ const provider=(source,model)=>{const known=typeof source==='string'&&Object.has
 // Mac's live session shares; hubTeams() → {origin, teams} the signed-in
 // user's teams on the sharing hub; teamHub() → the team directory adapter
 // (src/session-directory.js interface) or null.
-function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwner=null,sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,actionCurrent=current,navigationCurrent=()=>false,owned=()=>[],shares=()=>null,hubTeams=async()=>null,teamHub=()=>null,followups=null,followupScope=()=>null,followupLocal=null,looseEnds=()=>null,accountName=()=>null}){
+function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwner=null,sessions=()=>[],work=async()=>({sources:[],capture:[]}),managed=()=>({conn:{status:'offline'},tasks:[]}),openManaged=null,messageManaged=null,now=Date.now,current=()=>true,actionCurrent=current,navigationCurrent=()=>false,owned=()=>[],shares=()=>null,hubTeams=async()=>null,teamHub=()=>null,followups=null,followupScope=()=>null,followupLocal=null,looseEnds=()=>null,accountName=()=>null,ownedThreads=null}){
  // Burst's loose ends (src/burst-loose-ends-view.js) matched to a session's working directory here in main: the page gets counts, never a path.
  const looseBadge=cwd=>{let v=null;try{v=looseEnds();}catch{v=null;}const m=v?LooseEnds.forPath(v,cwd):null;return m?{uncommitted:m.uncommitted,unpushed:m.unpushed,stashes:m.stashes,stale:m.stale===true,text:LooseEnds.badgeText(m)}:null;};
  let epoch=0,directoryEpoch=0,routeEpoch=0,teamView=null,handles=new Map(),teamRefs=new Map();const secret=crypto.randomBytes(32);
@@ -55,6 +56,9 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
  const taskRef=(t)=>{try{return Surface.sessionRef({provider:t.ai?.id||'unknown',sessionId:t.id,taskId:t.id,origin:'chat',driver:Surface.driverOfTaskState(t.state)});}catch{return null;}};
  const directoryModel=Directory.createSessionDirectory({now});
  const stable=parts=>crypto.createHmac('sha256',secret).update(JSON.stringify(parts)).digest('hex');
+ // T4a: my own Plexiform-held sessions as sidebar rows and owned threads. ownedThreads is interaction-main's
+ // read-only {view, state, epoch} (never actorOf); null keeps the sidebar exactly as before.
+ const ownedRows=createOwnedRows({stable,now});
  const teamKey=(origin,teamId)=>stable(['team',origin,teamId]).slice(0,32);
  // Opaque team key → the hub team it stands for, for the team the page is showing only (share view).
  const teamIds=new Map();
@@ -179,6 +183,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   if(typeof rowId!=='string'||!/^[0-9a-f]{64}$/.test(rowId))return null;
   const known=lastRefs.get(rowId)??null;
   if(!known&&sharedRoutes.has(rowId))return sharedTargetOf(rowId);
+  if(!known){const o=ownedThreads?ownedRows.target(rowId):null;if(o)return o;}
   if(!known||known.ref.origin==='chat'){
    let snap=null;try{snap=managed();}catch{snap=null;}
    if(snap?.conn?.status==='connected'&&Array.isArray(snap.tasks)){
@@ -208,7 +213,15 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   const time=now(),built=await build(time,alive);
   if(!built||!alive())return null;
   for(const row of built.rows)row.handle=null;
-  return{status:built.partial||built.omitted?'partial':'complete',observed_at:time,omitted:built.omitted,rows:built.rows,origins:built.origins,vms:built.vms};
+  let rows=built.rows,ended=[];
+  if(ownedThreads){
+   const view=safe(()=>ownedThreads.view(),null),got=ownedRows.pass(view,built.refs);
+   rows=rows.filter(r=>!got.hide.has(r.id));
+   for(const o of got.rows){rows.push(o.dto);built.vms.set(o.dto.id,o.vm);}
+   rows.sort((a,b)=>(a.age_ms??Infinity)-(b.age_ms??Infinity));
+   ended=got.ended;
+  }
+  return{status:built.partial||built.omitted?'partial':'complete',observed_at:time,omitted:built.omitted,rows,origins:built.origins,vms:built.vms,ended};
  }
  async function action(request,message=false){
   if(!closed(request,message?['handle','text']:['handle'])||typeof request.handle!=='string'||!UUID.test(request.handle)||message&&(typeof request.text!=='string'||!request.text.trim()||request.text.includes('\0')||request.text.trim().length>4000||Buffer.byteLength(request.text.trim())>8192))return response('invalid');
@@ -480,6 +493,11 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   const raw=plainName(safe(()=>hub?.viewer?.(),null)?.name);
   return usableName(raw)?raw:'a teammate';
  }
+ // T4a: the bound owned row's fixed projection, or {gone, reason} ('overview' | 'ended'). Read-only.
+ function ownedThreadRead(rowId){
+  if(!ownedThreads||typeof rowId!=='string'||!/^[0-9a-f]{64}$/.test(rowId))return{gone:true,reason:'ended'};
+  return ownedRows.read(rowId,{state:(e,a,x)=>ownedThreads.state(e,a,x),currentEpoch:()=>ownedThreads.epoch()});
+ }
  function sharedThreadAuthority(rowId,{read,effect}={}){
   const r=typeof rowId==='string'?sharedRoutes.get(rowId):null;
   if(!sharedLive(r)||typeof r.entryId!=='string'||typeof read!=='function'||typeof effect!=='function')return null;
@@ -548,7 +566,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   if(!alive())return{ok:false,status:'unconfirmed',error:'The view changed. Inspect the receipt before sending again.'};
   return out?.ok===true?out:{ok:false,status:['forbidden','stale','busy','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
- return{snapshot,passiveRows,clearViewing,sharedThreadBind,sharedThreadRead,sharedThreadAuthority,passiveTeamRows,viewerScope,threadTarget,threadForTask,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
+ return{snapshot,passiveRows,clearViewing,sharedThreadBind,sharedThreadRead,sharedThreadAuthority,ownedThreadRead,passiveTeamRows,viewerScope,threadTarget,threadForTask,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
   followupReview,followupEnqueue,
   coordinatorRequestOwner:coordinator.requestOwner,coordinatorRemoteList:coordinator.remoteList,coordinatorRemoteSend:coordinator.remoteSend,coordinatorRemoteCancel:coordinator.remoteCancel,coordinatorRemoteReplace:coordinator.remoteReplace,
   coordinatorInventory:coordinator.inventory,coordinatorPropose:coordinator.propose,coordinatorConfirm:coordinator.confirm,coordinatorResults:coordinator.results,coordinatorCancel:coordinator.cancel,

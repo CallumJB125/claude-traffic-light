@@ -280,7 +280,7 @@ test('a hub change reaches the thread\'s slot too: clearAll sends the null on th
 // ── wiring ──────────────────────────────────────────────────────────────
 test('wiring: no new authority; main passes the presence owner and the bind; the window opens a thread first and falls back to Overview', () => {
   const main = read('main.js'), win = read('buddy-window/index.js'), tm = read('src/thread-main.js');
-  assert.match(main, /sharedRead: \(id, alive\) => OverviewMain\.sharedThreadRead\(id, alive\),\n    sharedAuthority: \(id, live\) => OverviewMain\.sharedThreadAuthority\(id, live\),\n    openTeam: \(id\) => buddyWin\?\.openTeamRow\?\.\(id\) \?\? false,\n    presence: PresenceOwner,/);
+  assert.match(main, /sharedRead: \(id, alive\) => OverviewMain\.sharedThreadRead\(id, alive\),\n    sharedAuthority: \(id, live\) => OverviewMain\.sharedThreadAuthority\(id, live\),\n    openTeam: \(id\) => buddyWin\?\.openTeamRow\?\.\(id\) \?\? false,\n    \/\/ T4a[^\n]*\n    ownedRead: \(id\) => OverviewMain\.ownedThreadRead\(id\),\n    openOverview: \(\) => buddyWin\?\.openOverviewFromThread\?\.\(\) \?\? false,\n    presence: PresenceOwner,/);
   assert.match(main, /threadBindShared: \(id, alive\) => OverviewMain\.sharedThreadBind\(id, alive\),/);
   assert.match(win, /openTeamRow\(id\) \{ if \(typeof id !== 'string' \|\| !ROW_ID\.test\(id\)\) return false;/);
   const body = tm.slice(tm.indexOf('async function sharedState'), tm.indexOf('// "Team overview"'));
@@ -392,7 +392,7 @@ test('copy: the shared view\'s words come from the glossary and avoid platform w
   const src = read('thread-shared.js');
   assert.doesNotMatch(src, /\bMac\b|\bmacOS\b|\bWindows\b/);
   assert.match(read('package.json'), /"thread-shared\.js"/);
-  assert.match(read('thread.html'), /<script src="thread-shared\.js"><\/script>\n  <script src="thread\.js">/);
+  assert.match(read('thread.html'), /<script src="thread-shared\.js"><\/script>\n  <script src="thread-owned\.js"><\/script>\n  <script src="thread\.js">/);
 });
 
 // ── the real hub client ─────────────────────────────────────────────────

@@ -197,7 +197,7 @@ test('sidebarRows: pinned keys, clamped values, path-like labels dropped, at mos
     [id(6), { provider: 'claude', sessionId: 's-6', origin: 'external', driver: 'external', hostApp: 'Ghostty Dock' }],
   ]);
   const out = sidebarRows(withVms({ status: 'complete', rows, origins: new Map([[id(1), 'iTerm'], [id(2), '/Applications/Evil.app'], [id(6), 'Ghostty Dock']]) }, refs));
-  assert.deepEqual(out, { schema: 1, status: 'complete', sessions: [
+  assert.deepEqual(out, { schema: 1, status: 'complete', ended: [], sessions: [
     { id: id(1), bucket: 'needs', title: 'Ship it', project: 'alpha', origin: 'iTerm', age_ms: 1200, team: true, terminal: true, chat: false, thread: false },
     { id: id(2), bucket: 'idle', title: 'AI session', project: '', origin: null, age_ms: null, team: false, terminal: true, chat: false, thread: false },
     { id: id(3), bucket: 'working', title: 'Claude session in billing', project: 'billing', origin: null, age_ms: null, team: false, terminal: false, chat: false, thread: false },
@@ -206,10 +206,10 @@ test('sidebarRows: pinned keys, clamped values, path-like labels dropped, at mos
     { id: id(6), bucket: 'idle', title: 'Claude session in delta', project: 'delta', origin: null, age_ms: null, team: false, terminal: true, chat: false, thread: true },
   ] });
   assert.ok(!JSON.stringify(out).includes('t-5') && !JSON.stringify(out).includes('s-6'), 'no ref field reaches the sidebar');
-  assert.deepEqual(sidebarRows({ status: 'complete', rows }), { schema: 1, status: 'unavailable', sessions: [] }, 'no vms, no rows');
+  assert.deepEqual(sidebarRows({ status: 'complete', rows }), { schema: 1, status: 'unavailable', sessions: [], ended: [] }, 'no vms, no rows');
   const many = Array.from({ length: 250 }, (_, i) => ({ id: id(i + 10), bucket: 'idle' }));
   assert.equal(sidebarRows(withVms({ status: 'partial', rows: many })).sessions.length, 200);
-  assert.deepEqual(sidebarRows(null), { schema: 1, status: 'unavailable', sessions: [] });
+  assert.deepEqual(sidebarRows(null), { schema: 1, status: 'unavailable', sessions: [], ended: [] });
 });
 
 test('index.js: the sidebar context exists only with the gate on and has its own generation', () => {
