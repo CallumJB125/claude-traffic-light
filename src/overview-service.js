@@ -516,7 +516,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
    if(!object(got)||!Array.isArray(got.teams))return{ok:false,status:'unavailable',error:'The shared session could not be checked.'};
    const x=got.teams.find(t=>object(t)&&t.id===r.team)?.entries?.find?.(h=>object(h)&&h.ref===r.ref);
    if(!x)return{ok:false,status:'stale',error:'This session is no longer shared with you.'};
-   return{hub,viewer,team:r.team,ref:r.ref,scope:x.share?.scope==='interact'?'interact':'watch',isCurrent:live};
+   return{hub,viewer,team:r.team,ref:r.ref,scope:x.share?.scope==='interact'?'interact':'watch',expiresAt:(typeof x.share?.expiresAt==='string'||Number.isFinite(x.share?.expiresAt))?x.share.expiresAt:null,isCurrent:live};
   }
   // One inspect of the bound ref writes its state slot; sharedEntry projects the listed row with it; the same
   // directory model makes the entry Overview would (equal id). Nothing else is read or written.
