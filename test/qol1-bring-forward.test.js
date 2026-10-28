@@ -18,14 +18,12 @@ const HOST = 'qol1-host';
 const at = (script, line) => { const i = script.split('\n').findIndex((l) => l.trim() === line); assert.ok(i >= 0, `missing: ${line}`); return i; };
 
 // ── B1 ────────────────────────────────────────────────────────────────────
-test('B1: Terminal and iTerm2 activate first, then restore a minimised window, then pick the tab', () => {
-  const t = TerminalApp.SCRIPT;
-  assert.ok(at(t, 'activate') < at(t, 'if miniaturized of w then set miniaturized of w to false'));
-  assert.ok(at(t, 'if miniaturized of w then set miniaturized of w to false') < at(t, 'set selected tab of w to t'));
-  assert.ok(at(t, 'set selected tab of w to t') < at(t, 'set index of w to 1'), 'the window order is set after the app is un-hidden');
-  const i = ITerm.SCRIPT;
-  assert.ok(at(i, 'activate') < at(i, 'if miniaturized of w then set miniaturized of w to false'));
-  assert.ok(at(i, 'if miniaturized of w then set miniaturized of w to false') < at(i, 'select w'));
+test('B1: Terminal and iTerm2 pin the window by id, activate, restore a minimised window, then pick the tab', () => {
+  // The loop's references are by position and activating reorders the windows (seen on the real Terminal.app,
+  // where an unpinned script raised another window), so the window is pinned by id and the tab found again.
+  const order = (script, lines) => { const ix = lines.map((l) => at(script, l)); assert.deepEqual([...ix].sort((a, b) => a - b), ix, lines.join(' → ')); };
+  order(TerminalApp.SCRIPT, ['set w to window id (id of w)', 'activate', 'if miniaturized of w then set miniaturized of w to false', 'set selected tab of w to (first tab of w whose tty is wantTty)', 'set index of w to 1']);
+  order(ITerm.SCRIPT, ['set wid to id of w', 'set sid to id of s', 'activate', 'set w to window id wid', 'if miniaturized of w then set miniaturized of w to false', 'select w', 'if id of s2 is sid then', 'select t2', 'select s2']);
   for (const s of [Ghostty.SCRIPT, Dock.SCRIPT]) assert.ok(at(s, 'activate') < at(s, 'focus (item 1 of hits)'), 'Ghostty: activate, then focus');
 });
 
