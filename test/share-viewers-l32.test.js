@@ -59,13 +59,17 @@ test('share-view: nothing before painted; then a beat now and every BEAT_MS; pai
   release(); await flush();
 });
 
-test('share-view: hidden or minimised says viewing:false once (only after a beat), resumes on show; close and clearAll take it back once', async () => {
+test('share-view: hidden says viewing:false once (only after a beat); shown again the line comes back and no beat goes until a fresh paint (D-S2)', async () => {
   const x = viewRig(), a = route();
   x.sv.open('7:1', a.r); x.sv.painted('7:1', REF); await flush();
   x.show(false); await x.t.fire(); await x.t.fire();
   assert.deepEqual(a.sent, [true, false], 'false once, never twice in a row');
   assert.equal(x.sv.watching('7:1'), 'off');
-  x.show(true); x.sv.poke('7:1'); await flush();
+  x.show(true); x.sv.poke('7:1'); await flush(); await x.t.fire();
+  assert.deepEqual(a.sent, [true, false], 'shown: no beat before the line is painted again');
+  assert.equal(x.sv.watching('7:1'), 'pending', 'the line shows again');
+  assert.equal(x.sv.painted('7:1', REF2), false, 'another share does not count');
+  assert.equal(x.sv.painted('7:1', REF), true); await flush();
   assert.deepEqual(a.sent, [true, false, true]);
   assert.equal(x.sv.watching('7:1'), 'on');
   x.sv.close('7:1'); x.sv.clearAll();
@@ -91,24 +95,24 @@ test('share-view: a 404 on the first beat (old hub or gone) stops it for this (d
   assert.deepEqual(a.sent, [true, true]);
 });
 
-test('share-view: 401 is off at once; one network failure keeps the last state, two in a row are off; an accepted beat is on again', async () => {
-  const x = viewRig(), a = route(REF, ['throw', 'throw', { ok: true, viewing: true }, { ok: false, status: 'sign-in' }, { ok: true, viewing: true }, 'throw']);
+test('share-view (D-S1): 401s and network failures keep the line and keep beating; an accepted viewing:false (the cap) is off and stops', async () => {
+  const x = viewRig(), a = route(REF, ['throw', 'throw', { ok: true, viewing: true }, { ok: false, status: 'sign-in' }, { ok: false, status: 'sign-in' }, 'throw', { ok: false, status: 'failed' }]);
   x.sv.open('7:1', a.r); x.sv.painted('7:1', REF); await flush();
-  assert.equal(x.sv.watching('7:1'), 'pending', 'one failure: the painted line stays');
+  assert.equal(x.sv.watching('7:1'), 'pending', 'a lost beat may have landed: the line stays');
   await x.t.fire();
-  assert.equal(x.sv.watching('7:1'), 'off', 'two in a row');
-  await x.t.fire();
-  assert.equal(x.sv.watching('7:1'), 'on');
-  await x.t.fire();
-  assert.equal(x.sv.watching('7:1'), 'off', '401');
+  assert.equal(x.sv.watching('7:1'), 'pending');
   await x.t.fire();
   assert.equal(x.sv.watching('7:1'), 'on');
-  await x.t.fire();
-  assert.equal(x.sv.watching('7:1'), 'on', 'a single blip keeps it');
-  // The hub at its 50-viewer cap answers {viewing:false}: not seen, so off.
+  for (let i = 0; i < 4; i++) { await x.t.fire(); assert.equal(x.sv.watching('7:1'), 'on', `failure ${i}: kept`); }
+  assert.equal(a.sent.length, 7, 'still beating');
+  assert.equal(x.t.q.length, 1);
+  // The hub at its 50-viewer cap answers {viewing:false}: not seen, so off, and no more beats this open.
   const y = viewRig(), b = route(REF, [{ ok: true, viewing: false }]);
   y.sv.open('7:1', b.r); y.sv.painted('7:1', REF); await flush();
   assert.equal(y.sv.watching('7:1'), 'off');
+  assert.equal(y.t.q.length, 0);
+  y.sv.close();
+  assert.deepEqual(b.sent, [true], 'nothing to take back');
 });
 
 test('share-view: another share in the same document closes the old one and needs its own paint (A-S3); a moved route stops', async () => {
@@ -209,8 +213,12 @@ test('thread:shared-state carries watching: pending before the first beat, on af
   y.setVisible(false); await y.t.fire();
   assert.deepEqual(y.a.sent, [true, false]);
   assert.equal((await y.call('thread:shared-state', ID)).watching, 'off');
-  // Shown again: the next read wakes it.
-  y.setVisible(true); y.advance(3000); await y.call('thread:shared-state', ID); await flush();
+  // Shown again (D-S2): the read says pending (the line comes back) and nothing is sent until the paint.
+  y.setVisible(true); y.advance(3000);
+  assert.equal((await y.call('thread:shared-state', ID)).watching, 'pending');
+  await y.t.fire(); await flush();
+  assert.deepEqual(y.a.sent, [true, false], 'no beat before the paint');
+  assert.equal(await y.call('thread:shared-painted', ID), true); await flush();
   assert.deepEqual(y.a.sent, [true, false, true]);
   // Leaving the share for a task row closes it.
   y.setTarget({ kind: 'task', taskId: 'task-1' }); await y.call('thread:open', ID);

@@ -8,17 +8,19 @@
 //   closes the old one and needs a new paint.
 // - Then a beat now and every BEAT_MS, one request in flight. Each beat re-checks, through `showing(docKey)`, that the
 //   same document is bound to the same share and its window is visible and not minimised. Hidden: viewing:false once,
-//   only if a beat was sent (A-S4), and resume on show (it was painted).
+//   only if a beat was sent (A-S4). Shown again (D-S2): back to 'pending' (the line shows again) and no beat until a
+//   fresh painted() for this (docKey, ref).
 // - 404/405 ('unsupported': an older hub, or the share is gone for this person): stop for this (docKey, ref) until the
 //   thread is reopened. The hub's TTL ages out the last beat, so no viewing:false follows.
-// - `watching(docKey)` is what the thread may say: 'on' after an accepted beat; 'off' after unsupported, a 401, two
-//   network failures in a row, or the beat stopping (D2a). One failure keeps the last state. 'pending' before the
-//   first outcome, so the line painted on open stays until a beat answers.
+// - `watching(docKey)` is what the thread may say (D2a, D-S1): 'pending' before the first outcome, 'on' after an
+//   accepted beat. 'off' only on 404/405, an accepted viewing:false (the hub's 50-viewer cap: then no more beats this
+//   open), hidden, or the beat ending. A 401 or a network failure keeps the line: a lost beat may have landed and the
+//   hub keeps it for 90 s, so the line is never taken down while the owner may still see this person.
 // - close/clearAll: viewing:false fire-and-forget, only if a beat was sent.
 const { BEAT_MS } = require('./session-presence');
 
 function createShareView({ showing = () => false, setTimeout: st = globalThis.setTimeout, clearTimeout: ct = globalThis.clearTimeout, beatMs = BEAT_MS } = {}) {
-  let cur = null; // { docKey, route, painted, sent, inFlight, timer, stopped, fails, watching, paused }
+  let cur = null; // { docKey, route, painted, sent, inFlight, timer, stopped, watching, paused }
   const safe = (fn, d) => { try { return fn(); } catch { return d; } };
   function bye(c) {
     if (!c.sent) return;
@@ -41,17 +43,21 @@ function createShareView({ showing = () => false, setTimeout: st = globalThis.se
       arm(c);
       return;
     }
-    c.paused = false;
+    if (c.paused) {
+      // D-S2: shown again. The line comes back first; the beat waits for the thread to paint it.
+      c.paused = false; c.painted = false; c.watching = 'pending'; disarm(c);
+      return;
+    }
     if (c.inFlight) { arm(c); return; }
     c.inFlight = true;
     let r = null;
     try { r = await c.route.beat(true); } catch { r = { ok: false, status: 'network' }; }
     c.inFlight = false;
     if (cur !== c || c.stopped) return;
-    if (r && r.ok === true) { c.sent = true; c.fails = 0; c.watching = r.viewing === true ? 'on' : 'off'; }
+    if (r && r.ok === true && r.viewing === true) { c.sent = true; c.watching = 'on'; }
+    else if (r && r.ok === true) { c.stopped = true; c.sent = false; c.watching = 'off'; disarm(c); return; } // not taken (cap)
     else if (r?.status === 'unsupported') { c.stopped = true; c.sent = false; c.watching = 'off'; disarm(c); return; }
-    else if (r?.status === 'sign-in' || r?.status === 'invalid') { c.fails = 0; c.watching = 'off'; }
-    else { c.fails += 1; if (c.fails >= 2) c.watching = 'off'; }
+    // A 401 or a failure: keep the state and the line (D-S1); the next beat tries again.
     arm(c);
   }
   const api = {
@@ -60,7 +66,7 @@ function createShareView({ showing = () => false, setTimeout: st = globalThis.se
       if (typeof docKey !== 'string' || !route || typeof route.ref !== 'string' || typeof route.beat !== 'function' || typeof route.live !== 'function') return;
       if (cur && cur.docKey === docKey && cur.route.ref === route.ref) { if (!cur.stopped) cur.route = route; return; }
       api.close();
-      cur = { docKey, route, painted: false, sent: false, inFlight: false, timer: null, stopped: false, fails: 0, watching: 'pending', paused: false };
+      cur = { docKey, route, painted: false, sent: false, inFlight: false, timer: null, stopped: false, watching: 'pending', paused: false };
     },
     // The renderer has shown "‹Owner› can see you're watching" in this document: beats may start.
     painted(docKey, ref = null) {

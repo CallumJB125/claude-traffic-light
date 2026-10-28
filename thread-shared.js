@@ -15,6 +15,7 @@
   const WATCH = 'Shared with you to watch only. The owner can choose Allow sending.';
   // L32: the owner can see who has their shared session open. Said from the first paint, before main sends anything
   // (main starts only after sharedPainted), and taken down when main says the hub isn't taking it (watching:'off').
+  // After 'off' or a hide, a line shown again is confirmed again: main beats only after it (D-S2).
   const SEEN = (owner) => `${owner} can see you're watching.`;
   const PROPOSALS_MS = 10000;
   const STATUS_CHIP = { awaiting: 'Awaiting', approved: 'Approved', expired: 'Expired', rejected: 'Rejected', sending: 'Sending', sent: 'Sent', refused: 'Refused', unconfirmed: 'Unconfirmed' };
@@ -58,6 +59,7 @@
     $('th-meta').textContent = `${h.owner}'s ${h.provider} session · ${h.scope === 'interact' ? 'Watch and send' : 'Shared with you to watch'}${h.expiresAt ? ` · until ${clock(h.expiresAt)}` : ''}${h.fake ? ' (test data)' : ''}`;
     const banner = $('th-banner'); banner.hidden = false;
     const seen = v.watching !== 'off';
+    if (!seen) painted = false;
     const watch = el('span', 'th-watch', SEEN(h.owner)); watch.id = 'th-watch'; watch.hidden = !seen;
     banner.replaceChildren(el('span', '', BANNER), ' ', watch);
     if (seen && !painted) {
@@ -322,7 +324,7 @@
     hideChat(); pieces(); menu();
     stop(); timer = setInterval(read, POLL_MS);
     // Coming back into view re-arms an open card (as R4 does), then refreshes.
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) { const yes = $('th-sh-yes'); if (cardOn && yes) arm(yes, cardOn.armMs); void read(); } });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) painted = false; if (!document.hidden) { const yes = $('th-sh-yes'); if (cardOn && yes) arm(yes, cardOn.armMs); void read(); } });
     window.addEventListener('pagehide', stop);
     void read();
   }

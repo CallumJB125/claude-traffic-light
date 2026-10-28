@@ -323,6 +323,17 @@ test("renderer L32: the watching line shows on first paint, then the page tells 
   p.w.document.dispatchEvent(new p.w.Event('visibilitychange')); await tick(); await tick();
   assert.equal(p.$('th-watch').hidden, true);
   assert.equal(p.calls.filter((c) => c[0] === 'painted').length, 1, 'never asks again');
+  // D-S2: hidden, then shown with main back at pending: the line shows again and the page confirms it again.
+  const r = page({ ...view(), watching: 'pending' }, { ...view(), watching: 'pending' });
+  r.ready(); await tick(); await tick();
+  await new Promise((res) => r.w.requestAnimationFrame(() => r.w.requestAnimationFrame(res))); await tick();
+  Object.defineProperty(r.w.document, 'hidden', { configurable: true, get: () => true });
+  r.w.document.dispatchEvent(new r.w.Event('visibilitychange'));
+  Object.defineProperty(r.w.document, 'hidden', { configurable: true, get: () => false });
+  r.w.document.dispatchEvent(new r.w.Event('visibilitychange')); await tick(); await tick();
+  await new Promise((res) => r.w.requestAnimationFrame(() => r.w.requestAnimationFrame(res))); await tick();
+  assert.equal(r.$('th-watch').hidden, false);
+  assert.equal(r.calls.filter((c) => c[0] === 'painted').length, 2, 'confirmed again after the hide');
   // Off from the very first read (the beat already stopped): no line and nothing asked.
   const q = page({ ...view(), watching: 'off' });
   q.ready(); await tick(); await tick();
