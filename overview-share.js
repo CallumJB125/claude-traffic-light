@@ -32,18 +32,46 @@
     return [send.length ? `${send.join(', ')} can watch and send` : '', watch.length ? `${watch.join(', ')} can watch` : ''].filter(Boolean).join('; ');
   };
 
+  // L32: who has my shared sessions open. One poll for every mounted card, every 15 s while this page is shown; main
+  // refreshes from the hub only while Overview is the visible page (≥ 15 s apart), and its names age out on their own.
+  const VIEWERS_MS = 15000;
+  const watchers = new Map(); // session → Set<render callback>
+  let seenBy = {}, viewersTimer = null;
+  const chipText = (names) => names.length === 1 ? `${names[0]} watching` : `${names[0]} and ${names.length - 1} more watching`;
+  async function readViewers() {
+    if (document.hidden || typeof ix.shareViewers !== 'function') return;
+    let r; try { r = await ix.shareViewers(); } catch { r = null; }
+    seenBy = obj(r) && r.ok === true && obj(r.sessions) ? r.sessions : {};
+    for (const set of watchers.values()) for (const fn of set) fn();
+  }
+  function watchViewers(session, fn) {
+    if (typeof ix.shareViewers !== 'function') return;
+    if (!watchers.has(session)) watchers.set(session, new Set());
+    watchers.get(session).add(fn);
+    if (!viewersTimer) {
+      viewersTimer = setInterval(() => { void readViewers(); }, VIEWERS_MS);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) void readViewers(); });
+      void readViewers();
+    }
+  }
+  const viewersOf = (session) => (Array.isArray(seenBy[session]) ? seenBy[session].filter(n => str(n, 80) && n).slice(0, 50) : []);
+
   function mount(card, session) {
     if (!card || !str(session, 100)) return;
     const box = el('div', '', 'share'), status = el('p', '', 'reason'), panel = el('div', '', 'share-panel');
+    const chip = el('span', '', 'share-watching'); chip.hidden = true;
     status.setAttribute('role', 'status'); panel.hidden = true;
     const toggle = button('Share…', () => { panel.hidden = !panel.hidden; toggle.setAttribute('aria-expanded', String(!panel.hidden)); render(); if (!panel.hidden) void refresh(); });
     toggle.setAttribute('aria-expanded', 'false');
-    box.append(toggle, status, panel);
+    box.append(toggle, chip, status, panel);
     card.append(box);
+    const showViewers = () => { const names = mine.length ? viewersOf(session) : []; chip.textContent = names.length ? chipText(names) : ''; chip.hidden = !names.length; };
+    watchViewers(session, showViewers);
     let teams = [], mine = [], busy = false, note = '', approveHere = true;
     const proposals = new Map();
 
     function render() {
+      showViewers();
       toggle.textContent = mine.length ? 'Sharing…' : 'Share…';
       status.textContent = (!panel.hidden && note) || (mine.length ? `Shared with ${mine.map(s => `${s.team.name} (${SCOPE[s.scope]})`).join(', ')}.` : '');
       const parts = [];

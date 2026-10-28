@@ -24,7 +24,7 @@ const CHANNELS = Object.freeze({
   launch: 'interaction:launch', discover: 'interaction:discover', attach: 'interaction:attach', send: 'interaction:send', interrupt: 'interaction:interrupt', close: 'interaction:close',
   event: 'interaction:event', localModels: 'interaction:local-models', fanout: 'interaction:fanout',
   proposalList: 'interaction:proposal-list', proposalApprove: 'interaction:proposal-approve', proposalRevoke: 'interaction:proposal-revoke',
-  shareList: 'interaction:share-list', shareCreate: 'interaction:share-create', shareStop: 'interaction:share-stop',
+  shareList: 'interaction:share-list', shareViewers: 'interaction:share-viewers', shareCreate: 'interaction:share-create', shareStop: 'interaction:share-stop',
   channelSetup: 'interaction:channel-setup', openAiTools: 'interaction:open-aitools',
   localEndpoints: 'interaction:local-endpoints', localEndpointSave: 'interaction:local-endpoint-save', localEndpointRemove: 'interaction:local-endpoint-remove',
 });
@@ -165,10 +165,39 @@ function createInteractionMain({ context, readContext = context, adapters: given
   // A session started outside Plexiform (codex-daemon) runs with its own permissions: never shared with a team.
   const shareable = (session, actor) => owns(session, actor) && (hub.state({ session }, actor).ownership === 'plexiform-owned' || hub.state({ session }, actor).provider.id === 'claude-channel');
   const listed = (session, actor, account) => shareable(session, actor) && ownedScopes.has(session) && ownedScopes.get(session) === account;
+  // L32 (D4): who is watching this person's shares, for Overview's chips. The read context already requires Overview
+  // to be the page shown in a visible, unminimised window (A-S2). One listShares per host per 15 s, shared with the
+  // share list's own reads, one in flight; between refreshes the host's own copy answers (names fresh ≤ 35 s).
+  const VIEWERS_FLOOR_MS = 15_000;
+  const clockNow = typeof now === 'function' ? now : Date.now;
+  let listed15 = { host: null, at: -Infinity, pending: null };
+  function listSharesFloored(host) {
+    const t = clockNow();
+    if (listed15.host === host && (listed15.pending || t - listed15.at < VIEWERS_FLOOR_MS)) return listed15.pending ?? Promise.resolve(null);
+    const entry = { host, at: t, pending: null };
+    listed15 = entry;
+    entry.pending = Promise.resolve().then(() => host.listShares()).catch(() => null).finally(() => { entry.pending = null; });
+    return entry.pending;
+  }
   const sharing = {
+    async [CHANNELS.shareViewers](req, actor) {
+      const host = shares();
+      if (!host) return { ok: true, sessions: {} };
+      await listSharesFloored(host);
+      const sessions = {};
+      let list = [];
+      try { list = host.shared(); } catch { list = []; }
+      for (const s of Array.isArray(list) ? list : []) {
+        if (!object(s) || typeof s.session !== 'string' || !owns(s.session, actor) || !Array.isArray(s.viewers) || !s.viewers.length) continue;
+        const names = s.viewers.filter((n) => typeof n === 'string' && n).slice(0, 50).map((n) => n.slice(0, 80));
+        sessions[s.session] = [...new Set([...(sessions[s.session] ?? []), ...names])].slice(0, 50);
+      }
+      return { ok: true, sessions };
+    },
     async [CHANNELS.shareList](req, actor) {
       const host = shares();
       if (!host) return noSharing;
+      listed15 = { host, at: clockNow(), pending: null };
       const r = await host.listShares();
       return r.ok ? { ok: true, teams: r.teams, shares: r.shares.filter((x) => owns(x.session, actor)) } : r;
     },
@@ -330,6 +359,7 @@ function createInteractionMain({ context, readContext = context, adapters: given
       });
       ipc.handle(CHANNELS.state, async (e, ...args) => { const a = await actorOf(e, false); return a ? hub.state(one(args), a) : null; });
       ipc.handle(CHANNELS.shareList, async (e) => { const a = await actorOf(e, false); return a ? sharing[CHANNELS.shareList](null, a) : null; });
+      ipc.handle(CHANNELS.shareViewers, async (e) => { const a = await actorOf(e, false); return a ? sharing[CHANNELS.shareViewers](null, a) : null; });
       for (const [name, method] of [['proposalList', 'proposalList'], ['proposalApprove', 'proposalApprove'], ['proposalRevoke', 'proposalRevoke']]) {
         ipc.handle(CHANNELS[name], async (e, ...args) => {
           // Gate on: refused before actorOf, so the refusal never reaps or replaces the Overview actor.

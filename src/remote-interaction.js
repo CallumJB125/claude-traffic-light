@@ -363,8 +363,18 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     const owner = typeof ownerName === 'string' && ownerName.trim() ? fold(ownerName) : null;
     return new Map(list.map((m) => [m.id, { name: seen.get(fold(m.name)) > 1 || fold(m.name) === owner ? `${m.name.slice(0, 70)} #${tag(m.id)}` : m.name, act: m.act }]));
   }
+  // L32: who has this share open, as the hub's owner list last said (names only: no ids leave this file). Shown only
+  // while fresh, so a surface that stopped refreshing (hidden, signed out, hub gone) stops saying anyone is watching.
+  const VIEWERS_FRESH_MS = 35_000, VIEWERS_MAX = 50;
+  const VIEWER_HIDDEN = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
+  function viewersOf(list) {
+    if (!Array.isArray(list)) return [];
+    return list.slice(0, VIEWERS_MAX).filter((v) => object(v) && typeof v.name === 'string')
+      .map((v) => v.name.replace(VIEWER_HIDDEN, '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Teammate');
+  }
+  const freshViewers = (sh) => (Array.isArray(sh.viewers) && Number.isFinite(sh.viewersAt) && clock() - sh.viewersAt < VIEWERS_FRESH_MS ? [...sh.viewers] : []);
   const shareView = (sh) => ({ id: sh.id, session: sh.session, team: { id: sh.team, name: sh.teamName }, scope: sh.scope, expiresAt: sh.expiresAt,
-    members: [...sh.users].map(([id, u]) => ({ id, name: u.name, canSend: sh.scope === 'interact' && u.act })) });
+    members: [...sh.users].map(([id, u]) => ({ id, name: u.name, canSend: sh.scope === 'interact' && u.act })), viewers: freshViewers(sh) });
   const hubError = (r, fallback) => refuse('unavailable', (typeof r?.body?.error?.message === 'string' ? r.body.error.message : '') || fallback);
 
   // Creating a share replaces the live one for the same session and team at the hub, so two creates for one
@@ -424,6 +434,8 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
       if (!sh || !liveShare(sh) || !targetFor(sh.session)) { if (sh) dropShare(id); else hubCall('DELETE', `/api/interaction/v1/shares/${encodeURIComponent(id)}`, {}).catch(() => {}); continue; }
       if (typeof x.owner?.name === 'string') sh.ownerName = x.owner.name;
       sh.users = usersOf(x.members, sh.ownerName);
+      // An older hub sends no viewers: none, never an error.
+      sh.viewers = viewersOf(x.viewers); sh.viewersAt = clock();
     }
     // Revoked by a team admin, expired or deleted at the hub: gone here too.
     for (const id of [...shares.keys()]) if (!onHub.has(id)) dropShare(id, { tellHub: false });

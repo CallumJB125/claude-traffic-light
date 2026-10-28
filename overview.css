@@ -126,6 +126,9 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 .coordinator-assignment label { display: block; margin-bottom: 10px; }
 .coordinator-assignment input, .coordinator-assignment select, .coordinator-assignment textarea { display: block; margin-top: 5px; }
 .coordinator-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 12px; }
+/* L32: who has my shared session open (names only). */
+.share-watching { display: inline-flex; align-items: center; margin-left: 8px; padding: 2px 10px; border-radius: var(--radius-pill); background: var(--accent-soft); color: var(--accent); font-size: var(--text-sm); max-width: 100%; overflow-wrap: anywhere; }
+.share-watching[hidden] { display: none; }
 .coordinator-result { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; min-width: 0; }
 .coordinator-result h4 { font-size: var(--text-base); margin: 0; }
 .coordinator-action-review { border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 12px; margin-top: 12px; background: var(--panel-2); }

@@ -112,7 +112,7 @@ test('channels: the three T3 channels exist and nothing else was added', () => {
   for (const c of ['thread:shared-review', 'thread:shared-confirm', 'thread:shared-proposals']) assert.ok(CHANNELS.includes(c), c);
   // T4a adds thread:owned-state and thread:open-overview (test/owned-thread-t4a.test.js); T4 the four owner
   // channels (test/owner-thread-t4.test.js).
-  assert.equal(CHANNELS.length, 21);
+  assert.equal(CHANNELS.length, 22); // + T4a's two, T4's four, L32's thread:shared-painted
 });
 
 test('Guard T: wrong sender or frame, args, an unbound id, a watch scope, a task row', async () => {

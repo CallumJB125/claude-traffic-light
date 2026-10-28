@@ -546,7 +546,8 @@ for (const theme of ['light', 'dark']) {
     const { h, side } = await sharedOpen(theme, SHARED_BASE);
     try {
       const page = await openThread(h, side, theme);
-      await expect(page.locator('#th-banner')).toHaveText('You see messages sent since it was shared, and its current activity. Earlier history stays private.');
+      // L32: the owner can see who has it open, said from the first paint.
+      await expect(page.locator('#th-banner')).toHaveText("You see messages sent since it was shared, and its current activity. Earlier history stays private. Bob can see you're watching.");
       await expect(page.locator('#th-meta')).toHaveText("Bob's Claude Code session · Shared with you to watch");
       await expect(page.locator('#th-reply')).toBeHidden();
       await expect(page.locator('.th-shared-foot')).toHaveText('Shared with you to watch only. The owner can choose Allow sending.');
@@ -691,7 +692,7 @@ test('owned thread, gone (dark): ended when Overview reloaded, nothing kept', as
 // T4: owner controls on my own thread (plan-t4 Rev 3 §3, Rev 4 grouping).
 const K = (c) => c.repeat(32);
 const OWNER_WATCH = { shareable: true, available: true, provider: 'Codex', reason: '', teams: [{ key: K('1'), name: 'Design team' }, { key: K('2'), name: 'Platform' }],
-  shares: [{ key: K('3'), team: 'Design team', scope: 'watch', expiresAt: null, automatic: false, members: 4 }], groups: [], others: [] };
+  shares: [{ key: K('3'), team: 'Design team', scope: 'watch', expiresAt: null, automatic: false, members: 4, viewers: ['Alice'] }], groups: [], others: [] };
 const OWNER_PROPOSAL = { ...OWNER_WATCH, shares: [{ ...OWNER_WATCH.shares[0], scope: 'interact' }],
   groups: [{ requester: 'Alex', latest: { key: K('5'), text: 'Run the export tests again with the retry logging on, and paste the failures.', version: 3, status: 'awaiting' },
     earlier: [{ key: K('6'), text: 'Run the export tests.', version: 1 }, { key: K('7'), text: 'Add logging to each retry.', version: 2 }], more: 0, rejectAll: K('8') }], others: [] };
@@ -702,7 +703,8 @@ for (const theme of ['dark', 'light']) {
     const { h, side } = await ownerOpen(theme, OWNER_WATCH);
     try {
       const page = await openThread(h, side, theme);
-      await expect(page.locator('#th-owner-line .th-own-share-text')).toHaveText('Shared with Design team · Watch only · until you stop it · 4 members');
+      // L32: who has it open.
+      await expect(page.locator('#th-owner-line .th-own-share-text')).toHaveText('Shared with Design team · Watch only · until you stop it · 4 members · Alice is watching');
       await expect(page.getByRole('button', { name: 'Allow sending' })).toBeVisible();
       await expect(page.locator('#th-more')).toBeVisible();
       await shot(page, `thread-owner-shared-watch-${theme}.png`);

@@ -1718,8 +1718,8 @@ function getBuddy() {
       if (typeof unsubscribe === 'function') onQuit(app, unsubscribe);
     }
     buddyWin.attachBurst?.(() => BurstIpc);
-    if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => {OverviewMain.invalidate();PresenceOwner.clearAll();sendToSettings('account-changed');});
-    if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>{OverviewMain.invalidate();PresenceOwner.clearAll();SetupsLocal.invalidate();buddyWin.sendToPage('setups','setups:changed');});
+    if (typeof buddyWin.onAccountChange === 'function') buddyWin.onAccountChange(() => {OverviewMain.invalidate();PresenceOwner.clearAll();ThreadMain?.viewClear();sendToSettings('account-changed');});
+    if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>{OverviewMain.invalidate();PresenceOwner.clearAll();ThreadMain?.viewClear();SetupsLocal.invalidate();buddyWin.sendToPage('setups','setups:changed');});
     if(typeof buddyWin.onSetupsIdentityChange==='function')buddyWin.onSetupsIdentityChange(()=>syncInteractionHost());
     if(typeof buddyWin.onActiveChange==='function')buddyWin.onActiveChange(()=>syncInteractionHost());
   }
@@ -2480,7 +2480,8 @@ if (CHAT_PREVIEW) {
     openOverview: () => buddyWin?.openOverviewFromThread?.() ?? false,
     // T4: owner controls on my own thread (plan-t4). The host directly, never interaction-main's actorOf.
     owner: { target: (id) => OverviewMain.ownerTarget(id), host: () => hostSync.host(), account: () => InteractionMain.ownedAccount(), automatic: (shareId) => TeamSessionSharing.isAutomatic(shareId) },
-    presence: PresenceOwner,
+    // L32: the grantee's beat for the shared session this thread shows (src/share-view.js), main-held route.
+    sharedView: (id) => OverviewMain.sharedViewRoute(id),
     header: (t, id) => SidebarRows.headerOf(t, id),
     tasks: () => getTasks(),
     copy: (text) => clipboard.writeText(text),
@@ -6043,7 +6044,7 @@ function guardRenderer(w, name, recreate) {
 }
 
 // Quitting must not be vetoed by the editor's unsaved-changes prompt.
-app.on('before-quit', () => { flushStats(); backups?.flush(); lightsWin?.destroy(); });
+app.on('before-quit', () => { flushStats(); backups?.flush(); lightsWin?.destroy(); ThreadMain?.viewClear(); });
 // The embedded board hub gets SIGTERM and a grace period to close its DB
 // before we exit, once; a second quit goes straight through.
 let hubStopped = false;

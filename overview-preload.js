@@ -146,6 +146,7 @@ contextBridge.exposeInMainWorld('overviewApi', {
     proposalApprove: request => closed(request, ['share','id','version','digest','expiresInS']) && uuid(request.share) && uuid(request.id) && Number.isSafeInteger(request.version) && request.version > 0 && typeof request.digest === 'string' && /^[a-f0-9]{64}$/.test(request.digest) && Number.isSafeInteger(request.expiresInS) && request.expiresInS >= 60 && request.expiresInS <= 3600 ? ipcRenderer.invoke('interaction:proposal-approve', { ...request }) : denied(),
     proposalRevoke: request => closed(request, ['share','id']) && uuid(request.share) && uuid(request.id) ? ipcRenderer.invoke('interaction:proposal-revoke', { ...request }) : denied(),
     shareList: () => ipcRenderer.invoke('interaction:share-list'),
+    shareViewers: () => ipcRenderer.invoke('interaction:share-viewers'),
     shareCreate: request => {
       if (!closed(request, ['session', 'team', 'scope', 'expiresInS']) || !uuid(request.session) || typeof request.team !== 'string' || !request.team || request.team.length > 100
         || !['watch', 'interact'].includes(request.scope) || (request.expiresInS !== null && !(Number.isSafeInteger(request.expiresInS) && request.expiresInS >= 60 && request.expiresInS <= 30 * 86400))) return denied();
