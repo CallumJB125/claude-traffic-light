@@ -235,7 +235,11 @@
   const validProvider = p => obj(p) && text(p.id, 80) && text(p.label, 120);
   const validState = s => obj(s) && uuid(s.session) && Number.isSafeInteger(s.generation) && s.generation >= 0 && validProvider(s.provider) && ['plexiform-owned', 'existing-unmanaged'].includes(s.ownership) && (s.ownership === 'plexiform-owned' || obj(s.thread) && text(s.thread.title, 120) && text(s.thread.project, 120)) && text(s.label, 200) && STATUSES.includes(s.status) && turnRef(s.activeTurn) && obj(s.capabilities) && Array.isArray(s.deliveries) && s.deliveries.length <= 20 && s.deliveries.every(validDelivery);
   const validCap = c => obj(c) && providerId(c.provider) && text(c.label, 120) && typeof c.available === 'boolean' && text(c.reason, 600) && obj(c.capabilities);
-  const ownedStatus = message => { $('owned-status').textContent = message; };
+  // L25: the "unavailable" sentence appears after two failed reads in a row and goes away on the first good one; no other message is touched by that.
+  const OWNED_DOWN = 'Plexiform session state is unavailable right now. Showing the last known state.';
+  let ownedDown = false, ixFails = 0;
+  const ownedStatus = message => { ownedDown = message === OWNED_DOWN; $('owned-status').textContent = message; };
+  const ownedFailed = () => { if (++ixFails >= 2) ownedStatus(OWNED_DOWN); };
   const statusLabel = status => { const W = window.PlexiformWorkOrganise; return status === 'working' ? W.headingOf('working') : status === 'ended' ? `${W.headingOf('idle')} (ended)` : W.headingOf('idle'); };
   const deliveryLabel = (state, label) => DELIVERY[state].replace('%', label);
   const nameOf = entry => entry.state.provider.label;
@@ -672,7 +676,8 @@
       if (request !== ixRead || document.hidden) return;
       if (typeof ix.localModels === 'function') renderLocal(local);
       if (Array.isArray(caps)) renderProviders(caps);
-      if (!Array.isArray(items)) { ownedStatus('Plexiform session state is unavailable right now. Showing the last known state.'); return; }
+      if (!Array.isArray(items)) { ownedFailed(); return; }
+      ixFails = 0; if (ownedDown) ownedStatus('');
       const seen = new Set();
       for (const item of items) {
         if (validState(item)) { seen.add(item.session); applyState(item, asOf); }
@@ -680,7 +685,7 @@
       // A list read that started before a push or launch cannot declare that session gone.
       for (const [id, entry] of owned) if (!seen.has(id) && !entry.missing && !entry.busy && entry.touched <= asOf) { entry.missing = true; updateCard(id); }
       renderOwnedEmpty(); renderAsk();
-    } catch { if (request === ixRead) ownedStatus('Plexiform session state is unavailable right now. Showing the last known state.'); }
+    } catch { if (request === ixRead) ownedFailed(); }
   }
   async function effect(id, kind) {
     const entry = owned.get(id); if (!entry || entry.busy || entry.missing) return;
