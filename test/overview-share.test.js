@@ -207,3 +207,25 @@ test('Overview Share…: Allow sending upgrades a watch share in one click, keep
     assert.match(s.card().textContent, /about to end\. Share again to choose a new time\./);
   } finally { s.close(); }
 });
+
+test('T4 Q5: with the chat-first gate on, the panel shows no approve button and says where to approve; reject stays', async () => {
+  const crypto = require('node:crypto'), host = fakeHost(); let p;
+  host.shareSession = async (req) => { const share = { id: crypto.randomUUID(), session: req.session, team: { id: req.team, name: 'Dev team' }, scope: 'interact', expiresAt: null, members: [{ id: 'bob', name: 'Bob', canSend: true }] }; host.shares.set(share.id, share); p = { id: crypto.randomUUID(), share: share.id, title: 'Review parser', text: 'Inspect only this parser', requester: { id: 'bob', name: 'Bob' }, version: 2, generation: 1, digest: 'a'.repeat(64), status: 'pending', acknowledgedAt: null, expiresAt: null }; return { ok: true, share }; };
+  host.proposalList = async (_share, fresh) => (fresh() ? { ok: true, proposals: [{ ...p }] } : { ok: false });
+  host.proposalApprove = async () => { host.calls.push(['approve']); return { ok: false }; };
+  host.proposalRevoke = async () => { host.calls.push(['revoke']); p.status = 'revoked'; return { ok: true, proposal: { ...p } }; };
+  const s = stack({ host });
+  try {
+    s.main.approveInThread();
+    await s.ready(); await s.start(); s.btn('Share…').click(); await tick();
+    const selects = [...s.card().querySelectorAll('.share-panel select')]; selects[1].value = 'interact'; s.btn('Share').click(); await tick();
+    s.btn('Review team proposals').click(); await tick();
+    assert.match(s.card().textContent, /Inspect only this parser/);
+    assert.equal(s.btn('Approve this message for 10 minutes'), undefined, 'no approve control');
+    assert.match(s.card().textContent, /Approve a proposal on the session’s thread in the sidebar\. You can still reject or revoke here\./);
+    assert.equal((await s.api.interaction.proposalApprove({ share: p.share, id: p.id, version: 2, digest: p.digest, expiresInS: 600 })).status, 'forbidden');
+    assert.ok(!host.calls.some((c) => c[0] === 'approve'));
+    s.btn('Reject proposal').click(); await tick();
+    assert.ok(host.calls.some((c) => c[0] === 'revoke'));
+  } finally { s.close(); }
+});
