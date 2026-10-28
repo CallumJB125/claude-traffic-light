@@ -71,6 +71,7 @@ overview	buddy-window/index.js	select	3
 overview	buddy-window/pages.js	PAGES	1
 overview	buddy-window/sidebar-chat.js	select	2
 overview	home-inbox-view.js	navigate	1
+overview	main.js	openBuddy	1
 overview	test/account-hub-routing.test.js	select	1
 phone	buddy-window/pages.js	PAGES	1
 section:sessions	buddy-window/pages.js	SECTIONS	1

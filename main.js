@@ -182,6 +182,8 @@ const ROOT_DIR = process.env.CLAUDE_TRAFFIC_LIGHT_HOME || path.join(os.homedir()
 const SPEND_FIXTURE = DEMO === 'visual' ? path.join(ROOT_DIR, 'spend-snapshot.json') : null;
 const SESSIONS_DIR = path.join(ROOT_DIR, 'sessions');
 const BOUNDS_FILE = path.join(ROOT_DIR, 'window-bounds.json');
+// QoL3b: per-session alert snoozes (src/session-snooze.js), beside config.json and never in it.
+const SNOOZE_FILE = path.join(ROOT_DIR, 'session-snoozes.json');
 const MANUAL_OVERRIDE_FILE = path.join(ROOT_DIR, 'manual-override.json');
 const CONFIG_FILE = path.join(ROOT_DIR, 'config.json');
 const CLAUDE_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
@@ -1151,6 +1153,21 @@ function firedSignal(rule) {
 // Snooze, quiet hours and project mutes (src/quiet.js): why this ping stays
 // quiet, or null. With no cwd, a project mute counts only when every live
 // session is muted.
+// QoL3b: the snooze store, and whether snoozes hold the sound owned by `ruleId` (review Q3-M2: only when every
+// session feeding that rule is local and snoozed or project-muted; never a GitHub rule's sound).
+const SessionSnooze = require('./src/session-snooze.js');
+const sessionSnoozes = SessionSnooze.createStore({
+  read: () => JSON.parse(fs.readFileSync(SNOOZE_FILE, 'utf8')),
+  write: (o) => { fs.mkdirSync(ROOT_DIR, { recursive: true }); fs.writeFileSync(SNOOZE_FILE, JSON.stringify(o)); },
+});
+function alertsSnoozed(ruleId) {
+  const config = loadConfig();
+  const rule = ruleId ? (config.rules || []).find((r) => r.id === ruleId) || null : null;
+  return SessionSnooze.soundHeld({
+    rule, sessions: aggregateState({ ignoreTravel: true }).sessions, isRemote, gitSignals: GitSignals.SIGNALS,
+    quiet: (s) => sessionSnoozes.until(s.sessionId) > 0 || Quiet.projectMuted(config.mutedProjects, s.cwd),
+  });
+}
 function quietHolds(cwd) {
   const config = loadConfig();
   const now = Date.now();
@@ -1184,6 +1201,8 @@ function nudgesPausedFor(session) {
 }
 function notificationAllowed(n) {
   if (nudgesPausedFor(n.session)) return false;
+  // QoL3b: this session's alerts are snoozed from its card or a notification's button.
+  if (SessionSnooze.notificationHeld(n, (id) => sessionSnoozes.until(id))) { console.log(`[notify] held (session snoozed): ${n.key}`); return false; }
   const quiet = quietHolds((n.session && n.session.cwd) || n.cwd || null);
   if (quiet) { console.log(`[notify] held (${quiet}): ${n.key}`); return false; }
   if (!BusyWatch.holding()) return true;
@@ -2265,6 +2284,8 @@ require('./src/widget-cards-main.js').install({ ipcMain, allowed: widgetOnly, ge
   getExplain: (sess) => explainSvc?.cardFor(sess), getDeploy: (cwd) => (deployStatus?.store.enabled() ? deployStatus.status().find((d) => d.cwd === cwd) : null),
   nudgesPaused: (id) => spendSafety?.nudgesPaused(id), resumeNudges: (id) => spendSafety?.resumeNudges(id) ?? { ok: false },
   copyHelp: (h) => explainSvc?.copy(h) ?? { ok: false },
+  // QoL3b: snooze this session's alerts; the card shows what's left.
+  snoozedUntil: (id) => sessionSnoozes.until(id), snooze: (id, kind) => snoozeSession(id, kind),
   // QoL2: the card's own actions, on the row main re-found by id.
   home: os.homedir(), platform: process.platform, copyText: (t) => clipboard.writeText(t),
   ended: (s) => RowActions.sessionEnded(s, LOCAL_HOST),
@@ -2932,6 +2953,15 @@ function maybeAutoShowHelp() {
 // ── Notifications for states that need you ─────────────────────────────────
 // Help.notifications decides (once per state entry); this only shows them.
 let notifyKeys = null;
+const NotifyActions = require('./src/notify-actions.js');
+// QoL3b: snooze one local session's alerts (its card or a notification's button); re-found by id, main's clock.
+function snoozeSession(id, kind) {
+  const row = (aggregateState().sessions || []).find((s) => s && s.sessionId === id) || null;
+  if (!row || row.remote || row.device || isRemote(row)) return 0;
+  const until = sessionSnoozes.set(id, kind);
+  broadcastStatus();
+  return until;
+}
 const liveNotifications = new Set(); // held so a click still reaches its handler after GC
 function maybeNotify(st) {
   // A preview empties the pending list; skipping it keeps that from reading as a new ask.
@@ -2945,19 +2975,28 @@ function maybeNotify(st) {
     if (IS_DEV_RUN || !Notification.isSupported()) continue;
     // Silent: the widget's own sound channel already speaks for these states.
     const stop = n.kind === 'runaway' ? runawayStoppers.get(n.sessionId) : null;
-    const note = new Notification({ title: n.title, body: n.body, silent: true, ...(stop ? { actions: [{ type: 'button', text: 'Stop session' }] } : {}) });
+    const rowNow = () => (n.sessionId ? aggregateState().sessions.find((x) => x.sessionId === n.sessionId) || null : null);
+    // QoL3b: the buttons, and the one array an action index is read against (src/notify-actions.js).
+    const buttons = NotifyActions.actionsFor(n, { row: rowNow(), stop: !!stop, isRemote });
+    const note = new Notification({ title: n.title, body: n.body, silent: true, ...(buttons.length ? { actions: buttons.map((b) => ({ type: 'button', text: b.text })) } : {}) });
     liveNotifications.add(note);
-    if (stop) note.on('action', () => { liveNotifications.delete(note); Promise.resolve().then(stop).catch((err) => console.warn('[spend] stop failed:', err.message)); });
+    if (buttons.length) note.on('action', (details, legacyIndex) => {
+      const b = NotifyActions.pick(buttons, details, legacyIndex);
+      if (!b) return;
+      liveNotifications.delete(note);
+      if (b.run === 'stop' && stop) Promise.resolve().then(stop).catch((err) => console.warn('[spend] stop failed:', err.message));
+      else if (b.run === 'overview') openBuddy('overview');
+      else if (b.run === 'snooze') snoozeSession(n.sessionId, '1h');
+    });
     note.on('click', () => {
       liveNotifications.delete(note);
-      // A runaway's whole point is the jump, so it goes even without a known host app.
-      const s = n.sessionId ? aggregateState().sessions.find((x) => x.sessionId === n.sessionId) : null;
-      // Another machine's session: nothing on this Mac to jump to.
-      if (String(n.sessionId || '').startsWith('remote:') || isRemote(s) || isRemote({ sessionId: n.sessionId })) return;
-      if (n.hostApp || n.kind === 'runaway') {
-        // QoL1: a click that switched nothing says why, through the same notification path as the jump's own notes.
-        jumpToSession(s, Rules.folderOf(n.cwd), n.hostApp).then((r) => { if (r && r.cant) showJumpNote({ title: 'Plexiform', body: r.cant }); }).catch((err) => console.warn('[jump] failed:', err.message));
-      }
+      const s = rowNow();
+      // QoL3b: never silent. Another machine's session or a gone one says so; a local one jumps (a runaway even
+      // without a known host app), and QoL1's path says why when nothing switched.
+      const plan = NotifyActions.clickPlan(n, s, isRemote);
+      if (plan.kind === 'note') { showJumpNote({ title: 'Plexiform', body: plan.body }); return; }
+      if (plan.kind !== 'jump') return;
+      jumpToSession(s, Rules.folderOf(n.cwd), n.hostApp).then((r) => { if (r && r.cant) showJumpNote({ title: 'Plexiform', body: r.cant }); }).catch((err) => console.warn('[jump] failed:', err.message));
     });
     note.on('close', () => liveNotifications.delete(note));
     note.show();
@@ -3701,7 +3740,7 @@ async function roamAndKnock(st, { force = false } = {}) {
     await tween({ x: home.x, y: home.y }, target, 1400, (pt) => win?.setPosition(pt.x, pt.y));
     sendLean(0);
     // A knock you asked for (tray, demo) always sounds; a roaming one is a ping.
-    await performKnock(appName, target, base, force || pingAllowed(st.owned?.sound, { lamp: base.lamp }));
+    await performKnock(appName, target, base, force || (pingAllowed(st.owned?.sound, { lamp: base.lamp }) && !alertsSnoozed(st.owned?.sound)));
     travelLook = { ...base, pose: 'run', facing: facing === 'left' ? 'right' : 'left', aimAngle: 0, name: 'Running home' };
     broadcastStatus();
     sendLean(-runSpeed);
@@ -4209,6 +4248,7 @@ function commitConfig(partial) {
   // __backupReason is only compared with Backups' closed marker list to decide whether to snapshot first (backupFirst() takes no label): never stored, logged or used in a filename.
   const marker = partial.__backupReason;
   delete partial.__backupReason;
+  delete partial.sessionSnoozes; // QoL3b (Q3-M1): snoozes live in session-snoozes.json, written only by main's store
   delete partial.threadAskEach; // only the thread toggle's main-side setter writes this; no renderer save (e.g. Lights) may change it
   delete partial.__prefsFrom; // R8-2b: control field of the rules pane's template saves (checked in rulesRefusal), never stored
   if (Backups.needsBackup({
@@ -5724,7 +5764,7 @@ function maybePlayAlertSound() {
   if (reason === 'preview') return;
   const { key, restored } = GitSignals.soundKey(look, owned, config.rules, gitEvents(config));
   // F5: a git rule's sound is held while you're busy like any other rule's.
-  if (config.sounds && key && key !== lastSoundKey && !restored && pingAllowed(owned.sound, { lamp: look.lamp })) playSound(look.sound);
+  if (config.sounds && key && key !== lastSoundKey && !restored && pingAllowed(owned.sound, { lamp: look.lamp }) && !alertsSnoozed(owned.sound)) playSound(look.sound);
   lastSoundKey = key;
 }
 

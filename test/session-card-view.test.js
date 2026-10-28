@@ -17,14 +17,14 @@ test('the title is the project folder name, never the path; the folder line has 
 test('a working session says its tool and how long it has run, in words', () => {
   const c = V.sessionCard({ sessionId: 's1', cwd: '/p/a', signal: 'tool-use', tool: 'Edit', startedAt: ago(75) }, { now: NOW });
   assert.equal(c.state, 'Edit · running for 1 h 15');
-  assert.deepEqual(c.actions, ['open', 'finder', 'editor', 'pin']);
+  assert.deepEqual(c.actions, ['open', 'finder', 'editor', 'snooze', 'pin']);
 });
 
 test('a waiting session says since when and offers Answer', () => {
   const c = V.sessionCard({ sessionId: 's1', cwd: '/p/a', signal: 'permission-ask', tool: 'Bash', updatedAt: ago(7) }, { now: NOW });
   assert.match(c.state, /^Needs you since 7 min/);
   assert.equal(c.waiting, true);
-  assert.deepEqual(c.actions, ['open', 'answer', 'finder', 'editor', 'pin']);
+  assert.deepEqual(c.actions, ['open', 'answer', 'finder', 'editor', 'snooze', 'pin']);
   assert.equal(c.waitFor, '7m');
 });
 
@@ -43,7 +43,7 @@ test('a teammate card carries initials and no local actions', () => {
 });
 
 test('pinned sessions offer Unpin; remote ones cannot be opened here', () => {
-  assert.deepEqual(V.sessionCard({ sessionId: 's', signal: 'idle', pinned: true }, { now: NOW }).actions, ['open', 'unpin']);
+  assert.deepEqual(V.sessionCard({ sessionId: 's', signal: 'idle', pinned: true }, { now: NOW }).actions, ['open', 'snooze', 'unpin']);
   const r = V.sessionCard({ sessionId: 'remote:x', signal: 'permission-ask', remote: true, deviceName: 'Laptop' }, { now: NOW });
   assert.deepEqual(r.actions, ['pin']);
   assert.match(r.state, /on Laptop/);

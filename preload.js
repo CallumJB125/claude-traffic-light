@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('trafficLight', {
   resumeNudges: (id) => (typeof id === 'string' ? ipcRenderer.invoke('widget:resume-nudges', id) : Promise.resolve({ ok: false })),
   // QoL2: a session's own card actions, by id only (main re-finds the row).
   sessionOpen: (id, how) => (typeof id === 'string' && ['terminal', 'finder', 'editor'].includes(how) ? ipcRenderer.invoke('widget:session-open', { id, how }) : Promise.resolve({ ok: false, feedback: '' })),
+  sessionSnooze: (id, how) => (typeof id === 'string' && ['15m', '1h', 'off'].includes(how) ? ipcRenderer.invoke('widget:session-snooze', { id, for: how }) : Promise.resolve({ ok: false, feedback: '' })),
   copyResume: (id) => (typeof id === 'string' ? ipcRenderer.invoke('widget:session-copy-resume', { id }) : Promise.resolve({ ok: false, feedback: '' })),
   getAggregateStatus: () => ipcRenderer.invoke('get-aggregate-status'),
   cursorInWindow: () => ipcRenderer.invoke('cursor-in-window'),
