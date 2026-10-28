@@ -139,7 +139,7 @@ test('the four owner channels: Guard T, only an owned or session row, effects ne
   try {
     await ownedRow(r);
     for (const c of ['thread:owner-state', 'thread:owner-review', 'thread:owner-confirm', 'thread:owner-act']) assert.ok(CHANNELS.includes(c), c);
-    assert.equal(CHANNELS.length, 22); // + L32's thread:shared-painted
+    assert.equal(CHANNELS.length, 24); // + L32's thread:shared-painted, T5b's two
     assert.equal(await r.handlers['thread:owner-state']({ sender: {}, senderFrame: {} }, 'a'.repeat(64)), null, 'another sender');
     assert.equal(await r.handlers['thread:owner-state']({ sender: { id: 7 }, senderFrame: {} }, 'b'.repeat(64)), null);
     const st = await r.call('thread:owner-state');

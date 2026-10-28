@@ -70,7 +70,7 @@ const ENDED = {
   replay: CHAT.replay.slice(0, 12),
 };
 
-async function open({ fixture = null, theme = 'light', env = GATE, shared = null, sharedReview = null, sharedProposals = null, owned = null, owner = null } = {}) {
+async function open({ fixture = null, theme = 'light', env = GATE, shared = null, sharedReview = null, sharedProposals = null, sharedQueue = null, owned = null, owner = null } = {}) {
   const h = await launchApp({ env, files: { 'sessions/thread-fixture.json': session() } });
   if (fixture) {
     // Answers the thread document only, as main does.
@@ -86,11 +86,13 @@ async function open({ fixture = null, theme = 'light', env = GATE, shared = null
       ipcMain.removeHandler('thread:shared-state'); ipcMain.handle('thread:shared-state', (e) => (mine(e) ? shared : null));
     }, shared);
     // T3: main's review card and my proposals, as src/thread-shared-main.js returns them (main's checks: test/shared-thread-t3.test.js).
-    await h.app.evaluate(({ ipcMain }, { review, proposals }) => {
+    await h.app.evaluate(({ ipcMain }, { review, proposals, queue }) => {
       const mine = (e) => { try { return new URL(e.sender.getURL()).pathname.endsWith('/thread.html'); } catch { return false; } };
       ipcMain.removeHandler('thread:shared-review'); ipcMain.handle('thread:shared-review', (e, id, req) => (mine(e) && review ? { ok: true, status: 'review', selection: '11111111-1111-4111-8111-111111111111', card: { ...review, op: req.op, text: req.op === 'stop' ? '' : req.text } } : null));
       ipcMain.removeHandler('thread:shared-proposals'); ipcMain.handle('thread:shared-proposals', (e) => (mine(e) ? proposals ?? { ok: true, status: 'ready', proposals: [] } : null));
-    }, { review: sharedReview, proposals: sharedProposals });
+      // T5b: my queued messages (main's rows: test/shared-thread-t5b.test.js).
+      ipcMain.removeHandler('thread:shared-queue'); ipcMain.handle('thread:shared-queue', (e) => (mine(e) ? queue ?? { ok: true, status: 'ready', items: [] } : null));
+    }, { review: sharedReview, proposals: sharedProposals, queue: sharedQueue });
   }
   if (owned) {
     // T4a: one of my own Plexiform-held sessions. The projection is the shape src/owned-thread-view.js returns; main's rows and reads are test/owned-thread-t4a.test.js.
@@ -560,9 +562,13 @@ for (const theme of ['light', 'dark']) {
 const yes = { available: true, reason: '' }, no = (reason) => ({ available: false, reason });
 const BUSY_SEND = no('A turn is running. Steer it where supported, or wait for it to finish.'), BUSY_PROPOSE = no("Bob's session is busy. Propose when it's idle.");
 const interact = (provider, status, controls) => ({ ...SHARED_BASE, header: { ...SHARED_BASE.header, provider, scope: 'interact' }, status, canSendLater: true, controls });
-const IDLE = interact('Codex', 'ready', { send: yes, steer: no('No current turn is available to steer.'), interrupt: no('No current turn is available to interrupt.'), propose: yes });
-const BUSY_CODEX = interact('Codex', 'working', { send: BUSY_SEND, steer: yes, interrupt: yes, propose: BUSY_PROPOSE });
-const BUSY_CLAUDE = interact('Claude Code', 'working', { send: BUSY_SEND, steer: no('This provider does not support steering a running turn.'), interrupt: yes, propose: BUSY_PROPOSE });
+const IDLE = interact('Codex', 'ready', { send: yes, steer: no('No current turn is available to steer.'), interrupt: no('No current turn is available to interrupt.'), propose: yes, queue: no('Send now; the session is idle.') });
+const BUSY_CODEX = interact('Codex', 'working', { send: BUSY_SEND, steer: yes, interrupt: yes, propose: BUSY_PROPOSE, queue: yes });
+const BUSY_CLAUDE = interact('Claude Code', 'working', { send: BUSY_SEND, steer: no('This provider does not support steering a running turn.'), interrupt: yes, propose: BUSY_PROPOSE, queue: yes });
+const QUEUED = { ok: true, status: 'ready', items: [
+  { key: 'a'.repeat(32), text: 'Run the full test suite once you are free.', state: 'queued', reason: '', expiresAt: Date.now() + 6 * 86400000, receipt: null },
+  { key: 'b'.repeat(32), text: 'Then update the changelog.', state: 'received', reason: '', expiresAt: null, receipt: { state: 'acknowledged' } },
+  { key: 'c'.repeat(32), text: 'Rebase on main.', state: 'not-sent', reason: 'Bob changed this share to watch only; this follow-up won\'t be sent.', expiresAt: null, receipt: null }] };
 for (const theme of ['dark', 'light']) {
   test(`shared thread, interact idle (${theme}): the composer with Send as the default, the quota line, no Stop`, async () => {
     const { h, side } = await sharedOpen(theme, IDLE);
@@ -746,3 +752,17 @@ test('owner: approved for one send, with Revoke (dark)', async () => {
     await shot(page, 'thread-owner-proposal-approved-dark.png');
   } finally { await h.cleanup(); }
 });
+
+// T5b: my queued messages above the composer (main's rows; their checks are test/shared-thread-t5b.test.js).
+for (const theme of ['dark', 'light']) {
+  test(`shared thread, queued messages (${theme}): Queued, Received and Not sent rows with Cancel / Discard`, async () => {
+    const { h, side } = await open({ fixture: { kind: 'shared', header: null }, theme, shared: BUSY_CODEX, sharedQueue: QUEUED });
+    try {
+      const page = await openThread(h, side, theme);
+      await expect(page.locator('#th-sh-queue')).toBeVisible();
+      await expect(page.locator('#th-sh-queue li')).toHaveCount(3);
+      await expect(page.locator('#th-sh-queue .th-chip').first()).toHaveText('Queued');
+      await shot(page, `thread-shared-queue-${theme}.png`);
+    } finally { await h.cleanup(); }
+  });
+}

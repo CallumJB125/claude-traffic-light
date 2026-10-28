@@ -17,12 +17,12 @@
   // (main starts only after sharedPainted), and taken down when main says the hub isn't taking it (watching:'off').
   // After 'off' or a hide, a line shown again is confirmed again: main beats only after it (D-S2).
   const SEEN = (owner) => `${owner} can see you're watching.`;
-  const PROPOSALS_MS = 10000;
+  const PROPOSALS_MS = 10000, QUEUE_MS = 4000;
   const STATUS_CHIP = { awaiting: 'Awaiting', approved: 'Approved', expired: 'Expired', rejected: 'Rejected', sending: 'Sending', sent: 'Sent', refused: 'Refused', unconfirmed: 'Unconfirmed' };
   let painted = false;
   let api = null, rowId = '', timer = null, reading = false, view = null, stale = false, over = false, offline = '', signIn = false;
   // T3: the composer's own state. The draft lives in the textarea itself and survives every re-render.
-  let sticky = '', windowEnds = 0, askEach = false, layout = '', chosen = null, cardOn = null, cardTimer = null, busy = false, proposalsAt = 0, proposalsReading = false, myProposals = [];
+  let sticky = '', windowEnds = 0, askEach = false, layout = '', chosen = null, cardOn = null, cardTimer = null, busy = false, proposalsAt = 0, proposalsReading = false, myProposals = [], myQueue = [], queueAt = 0, queueReading = false;
 
   function pieces() {
     let root = $('th-shared');
@@ -88,9 +88,12 @@
   const OPTIONS = (owner) => [
     { op: 'send', label: 'Send', sub: '' },
     { op: 'steer', label: 'Steer this turn', sub: '' },
+    { op: 'queue', label: 'Queue for when idle', sub: 'Sent once, when the session is idle.' },
     { op: 'propose', label: `Propose to ${owner}`, sub: `${owner} reviews this exact text before it runs.` },
   ];
-  const capOf = (v, op) => (op === 'steer' ? v.controls.steer : op === 'propose' ? v.controls.propose : v.controls.send);
+  const capOf = (v, op) => (op === 'steer' ? v.controls.steer : op === 'propose' ? v.controls.propose : op === 'queue' ? v.controls.queue : v.controls.send);
+  // Only these can skip the card inside T3b's window; a queued message and a proposal always get one.
+  const WINDOW_OPS = ['send', 'steer', 'stop'];
   // Send when idle, otherwise Steer where it's available, otherwise nothing (plan-t3 M2).
   const defaultOp = (v) => (v.controls.send.available ? 'send' : v.controls.steer.available ? 'steer' : null);
   function clearDraft() { const t = $('th-sh-text'); if (t) t.value = ''; }
@@ -99,7 +102,7 @@
     const h = v.header;
     if (h.scope !== 'interact' || !v.controls) {
       // The box itself goes, so no private text stays in a box that can no longer send.
-      if (layout === 'interact') { closeCard(); myProposals = []; }
+      if (layout === 'interact') { closeCard(); myProposals = []; myQueue = []; }
       if (layout !== 'watch') { layout = 'watch'; foot.replaceChildren(el('p', 'th-shared-note', WATCH)); }
       return;
     }
@@ -110,11 +113,12 @@
     const t = $('th-sh-text'), go = $('th-sh-go'), chip = $('th-sh-chip');
     const label = OPTIONS(owner).find((o) => o.op === opt)?.label;
     chip.textContent = label ? `${label} ▾` : 'Send ▾';
-    chip.disabled = !opt || busy;
+    // Queue can be the way in even when Send and Steer are not (a working session that can't be steered).
+    chip.disabled = !OPTIONS(owner).some((o) => capOf(v, o.op).available) || busy;
     t.disabled = !opt || busy;
     t.placeholder = `Message ${owner}'s session`;
     // T3b: after one accepted card, send/steer/stop go straight through until main says the window ends.
-    const direct = winOn() && opt && opt !== 'propose';
+    const direct = winOn() && WINDOW_OPS.includes(opt);
     go.textContent = direct ? (opt === 'steer' ? 'Steer' : 'Send') : 'Review';
     go.disabled = !opt || busy || !!cardOn;
     const wl = $('th-sh-window');
@@ -122,7 +126,7 @@
     wl.textContent = winOn() ? `Messages to ${owner}'s session send straight away for 30 minutes.` : '';
     $('th-sh-ask').checked = askEach;
     if (!opt) note(v.controls.send.reason);
-    else if ($('th-sh-note').dataset.tone !== 'error' && !busy) note(sticky || (opt === 'propose' ? `${owner} reviews this exact text before it runs.` : ''));
+    else if ($('th-sh-note').dataset.tone !== 'error' && !busy) note(sticky || (opt === 'propose' ? `${owner} reviews this exact text before it runs.` : opt === 'queue' ? `Sent once, when ${owner}'s session is idle.` : ''));
     $('th-sh-quota').textContent = `Runs on ${owner}'s ${h.provider} account and quota.`;
     const items = $('th-sh-menu');
     items.replaceChildren(...OPTIONS(owner).map((o) => {
@@ -139,6 +143,7 @@
     stop.hidden = !v.controls.interrupt.available;
     stop.disabled = busy || !!cardOn;
     renderProposals(v);
+    renderQueue(v);
   }
   function buildComposer(h) {
     const wrap = el('div', 'th-sh');
@@ -172,14 +177,17 @@
     stop.addEventListener('click', () => { void startReview('stop', ''); });
     const cardHost = el('div', 'th-sh-card-host'); cardHost.id = 'th-sh-card';
     const props = el('ul', 'th-msgs th-sh-proposals'); props.id = 'th-sh-proposals'; props.setAttribute('aria-label', 'Your proposals');
-    wrap.append(props, cardHost, form, win, askRow, quota, stop);
+    const queue = el('div', 'th-sh-queue'); queue.id = 'th-sh-queue'; queue.hidden = true;
+    const qList = el('ul', 'th-msgs th-sh-queue-list'); qList.id = 'th-sh-queue-list'; qList.setAttribute('aria-label', 'Queued messages');
+    queue.append(el('p', 'th-sh-queue-head', 'Queued'), qList);
+    wrap.append(queue, props, cardHost, form, win, askRow, quota, stop);
     return wrap;
   }
   async function startReview(op, text) {
     if (busy || cardOn) return;
     busy = true; sticky = ''; note(''); if (view) renderFoot(pieces().querySelector('.th-shared-foot'), view);
     let r = null;
-    const seen = winOn() && op !== 'propose' && view ? { generation: view.generation, turn: view.turn ?? null } : null;
+    const seen = winOn() && WINDOW_OPS.includes(op) && view ? { generation: view.generation, turn: view.turn ?? null } : null;
     try { r = await api.sharedReview(rowId, op, text, seen); } catch { r = null; }
     if (r) windowEnds = Number(r.window) || 0;
     if (r && r.ok === true && r.status === 'direct' && typeof r.selection === 'string') {
@@ -241,11 +249,11 @@
   const winOn = () => !askEach && windowEnds > Date.now();
   function finished(op, r, direct) {
     if (r && r.ok === true) {
-      if (op === 'send' || op === 'steer' || op === 'propose') clearDraft();
+      if (op === 'send' || op === 'steer' || op === 'propose' || op === 'queue') clearDraft();
       const to = view?.header?.owner ? `Sent to ${view.header.owner}.` : 'Sent.';
-      sticky = op === 'propose' ? 'Proposal sent. It waits for the owner to review it.' : op === 'stop' ? 'Stop requested.' : op === 'withdraw' ? 'Proposal withdrawn.' : r.note || (direct ? to : 'Sent. Its receipt appears with the messages.');
+      sticky = op === 'queue' ? `Queued. It sends once ${view?.header?.owner ? `${view.header.owner}'s` : 'the'} session is idle.` : op === 'propose' ? 'Proposal sent. It waits for the owner to review it.' : op === 'stop' ? 'Stop requested.' : op === 'withdraw' ? 'Proposal withdrawn.' : r.note || (direct ? to : 'Sent. Its receipt appears with the messages.');
       note(sticky);
-      proposalsAt = 0;
+      proposalsAt = 0; queueAt = 0;
     } else note(failure(r), 'error');
     if (view) renderFoot(pieces().querySelector('.th-shared-foot'), view);
     void read();
@@ -272,6 +280,42 @@
       return li;
     }));
   }
+  const QUEUE_WORD = { queued: 'Queued', sending: 'Sending…', received: 'Received', unconfirmed: 'Unconfirmed', 'not-sent': 'Not sent' };
+  function renderQueue(v) {
+    const host = $('th-sh-queue'), list = $('th-sh-queue-list'); if (!host || !list) return;
+    host.hidden = myQueue.length === 0;
+    list.replaceChildren(...myQueue.map((q) => {
+      const li = el('li', 'th-msg th-sh-queued'); li.dataset.state = q.state;
+      li.append(el('p', 'th-msg-text', q.text));
+      const chip = el('span', 'th-chip', QUEUE_WORD[q.state] || 'Unconfirmed'); chip.dataset.state = q.state; li.append(chip);
+      if (q.state === 'queued') {
+        const days = q.expiresAt ? Math.max(0, Math.ceil((q.expiresAt - Date.now()) / 86400000)) : null;
+        li.append(el('p', 'th-msg-note', `Waiting for ${v.header.owner}'s session to be idle.${days === null ? '' : ` Expires in ${days}d.`}`));
+      } else if (q.reason && (q.state === 'not-sent' || q.state === 'unconfirmed')) li.append(el('p', 'th-msg-note', q.reason));
+      if (q.state !== 'sending') {
+        const op = q.state === 'queued' ? 'cancel' : 'discard';
+        const b = el('button', 'th-btn', op === 'cancel' ? 'Cancel' : 'Discard'); b.type = 'button'; b.disabled = busy;
+        b.addEventListener('click', async () => {
+          b.disabled = true; let r = null;
+          try { r = await api.sharedQueueRemove(rowId, q.key, op); } catch { r = null; }
+          if (over) return;
+          if (!r || r.ok !== true) note(failure(r), 'error');
+          queueAt = 0; void readQueue();
+        });
+        li.append(b);
+      }
+      return li;
+    }));
+  }
+  async function readQueue() {
+    if (over || queueReading || layout !== 'interact' || Date.now() - queueAt < QUEUE_MS) return;
+    queueReading = true; queueAt = Date.now();
+    let r = null;
+    try { r = await api.sharedQueue(rowId); } catch { r = null; }
+    queueReading = false;
+    if (over || layout !== 'interact') return;
+    if (r && r.ok === true && Array.isArray(r.items)) { myQueue = r.items; if (view) renderQueue(view); }
+  }
   async function readProposals() {
     if (over || proposalsReading || layout !== 'interact' || Date.now() - proposalsAt < PROPOSALS_MS || cardOn) return;
     proposalsReading = true; proposalsAt = Date.now();
@@ -290,7 +334,7 @@
     root.querySelector('.th-activity').textContent = ''; root.querySelector('.th-msgs').replaceChildren(); root.querySelector('.th-shared-foot').replaceChildren();
     root.querySelector('.th-shared-empty').textContent = '';
     $('th-banner').hidden = true;
-    clearDraft(); closeCard(); myProposals = []; layout = '';
+    clearDraft(); closeCard(); myProposals = []; myQueue = []; layout = '';
     const text = reason === 'ended' ? 'This session has ended.' : 'This session is no longer shared with you.';
     $('th-title').textContent = text; $('th-meta').textContent = '';
     const e = $('th-empty'); e.hidden = false; $('th-empty-title').textContent = text; $('th-empty-text').textContent = 'Nothing from it is kept here.';
@@ -314,13 +358,13 @@
       return;
     }
     stale = false; offline = ''; signIn = false; view = r; windowEnds = Number(r.window) || 0; askEach = r.askEach === true; render();
-    void readProposals();
+    void readProposals(); void readQueue();
   }
   function stop() { if (timer) clearInterval(timer); timer = null; }
 
   function start(threadApi, id) {
     api = threadApi; rowId = id; over = false; view = null; stale = false; offline = ''; signIn = false; painted = false;
-    windowEnds = 0; askEach = false; layout = ''; chosen = null; cardOn = null; busy = false; proposalsAt = 0; myProposals = [];
+    windowEnds = 0; askEach = false; layout = ''; chosen = null; cardOn = null; busy = false; proposalsAt = 0; myProposals = []; myQueue = []; queueAt = 0; queueReading = false;
     hideChat(); pieces(); menu();
     stop(); timer = setInterval(read, POLL_MS);
     // Coming back into view re-arms an open card (as R4 does), then refreshes.

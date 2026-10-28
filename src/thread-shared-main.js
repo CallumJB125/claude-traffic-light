@@ -19,7 +19,9 @@ const PROPOSALS_MIN_MS = 10_000;
 const MAX_TEXT = 4000;
 const MAX_BYTES = 8192;
 const MAX_PER_DOC = 16;
-const OPS = Object.freeze(['send', 'steer', 'stop', 'propose']);
+const OPS = Object.freeze(['send', 'steer', 'stop', 'propose', 'queue']);
+const QUEUE_NOTICE = 'Sent once, when the session is idle, while Plexiform is running and you are signed in as you. If the share ends, becomes watch-only or you sign in as someone else, it is dropped and not sent.';
+const QUEUE_STATE = Object.freeze({ queued: 'queued', blocked: 'queued', sending: 'sending', acknowledged: 'received', unconfirmed: 'unconfirmed', refused: 'not-sent', expired: 'not-sent' });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const STATUSES = Object.freeze(['stale', 'forbidden', 'busy', 'unavailable', 'unconfirmed', 'invalid', 'unsupported', 'refused']);
 const TEXT = Object.freeze({
@@ -34,6 +36,7 @@ const TEXT = Object.freeze({
   REVIEW_AGAIN: 'Review needed again. Your draft is kept.',
   IN_FLIGHT: 'Still sending your last message.',
   STEER_NOTE: 'This does not confirm the requested change was applied.',
+  QUEUE_FAILED: 'Could not queue it. Check the queue before trying again.',
 });
 // The hub's proposal statuses, as the requester sees them (board/hub/interaction-proposals.js).
 const PROPOSAL_STATUS = Object.freeze({ pending: 'awaiting', approved: 'approved', expired: 'expired', revoked: 'rejected', superseded: 'expired', dispatching: 'sending', sent: 'sent', refused: 'refused', unconfirmed: 'unconfirmed' });
@@ -56,6 +59,8 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
   const auths = new Map(); // `${wcId}:${generation}` → { boundId, auth }
   const selections = new Map(); // selection → record
   const proposalReads = new Map(); // docKey → { at, pending, result }
+  const queueReads = new Map(); // docKey → { at, pending, result }
+  const queueSecrets = new Map(); // docKey → random key for this document's opaque queue row keys
   let askEach = false; // T3b: "Ask me each time" (this run of the app; off by default). On, no window opens.
   const docKey = (c) => `${c.contents.id}:${c.generation}`;
 
@@ -65,7 +70,7 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
   function forget(key) {
     const held = auths.get(key);
     if (held) { try { held.auth.invalidate(); } catch { /* gone */ } }
-    auths.delete(key); proposalReads.delete(key); drop(key);
+    auths.delete(key); proposalReads.delete(key); queueReads.delete(key); queueSecrets.delete(key); drop(key);
   }
   // The thread's authority for its bound row, built once per document; rebuilt only when the bound route changed
   // (and then every selection the old one minted is dropped).
@@ -103,6 +108,7 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
       send: { title: `Send to ${owner}'s session`, target, notes: [], confirm: 'Send' },
       steer: { title: `Steer ${owner}'s current turn`, target: `${target} · this current turn only`, notes: [TEXT.STEER_NOTE], confirm: 'Steer this turn' },
       stop: { title: `Stop ${owner}'s current turn`, target: `${target} · this current turn only`, notes: ['Asks the provider to stop the current turn. Work already done stays.'], confirm: 'Stop turn' },
+      queue: { title: `Queue for ${owner}'s session`, target, notes: [QUEUE_NOTICE, 'Expires in 7 days.'], confirm: 'Queue message' },
       propose: { title: `Propose to ${owner}`, target, notes: [`Nothing runs until ${owner} approves it. Approval allows one send.`], confirm: 'Send proposal' },
       'send-approved': { title: `Send ${owner}'s approved message`, target, notes: [], confirm: 'Send approved message' },
       withdraw: { title: 'Withdraw this proposal', target, notes: [`${owner} won't be able to approve it.`], confirm: 'Withdraw' },
@@ -126,6 +132,8 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
     const keys = plain(req) ? Object.keys(req).sort().join(',') : '';
     if (!plain(req) || (keys !== 'op,text' && keys !== 'op,seen,text') || !OPS.includes(req.op) || typeof req.text !== 'string' || (keys === 'op,seen,text' && !seenOk(req.seen))) return fail('invalid', TEXT.INVALID);
     const { op, text } = req;
+    // A queued message is never window-eligible: no `seen`, always a card.
+    if (op === 'queue' && keys !== 'op,text') return fail('invalid', TEXT.INVALID);
     if (op === 'stop' ? text !== '' : !textOk(text)) return fail('invalid', TEXT.INVALID);
     const auth = authOf(c, still);
     if (!auth) return fail('unavailable', TEXT.UNAVAILABLE);
@@ -150,6 +158,14 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
     try { r = await auth.inspect(); } catch { r = null; }
     if (!still(c)) return null;
     if (r?.ok !== true || typeof r.selection !== 'string') return mapped(r);
+    if (op === 'queue') {
+      const st = r.state, why = typeof auth.queue?.enqueue !== 'function' ? TEXT.UNAVAILABLE : st.status === 'ended' ? 'This session has ended.'
+        : st.status === 'ready' && (st.activeTurn ?? null) === null ? 'Send now; the session is idle.' : st.capabilities?.newTurn === false ? TEXT.UNAVAILABLE : !Number.isSafeInteger(st.generation) || typeof st.provider?.id !== 'string' ? TEXT.UNAVAILABLE : '';
+      if (why) return fail('unavailable', why);
+      // Bound to the generation only: it waits for the current turn to end by design.
+      const selection = mint(c, auth, { op, text, inner: null, generation: st.generation, provider: st.provider.id, providerLabel: line(st.provider.label, 60), requestId: crypto.randomUUID(), expires: now() + SELECTION_MS });
+      return { ok: true, status: 'review', selection, card: card(op, owner, line(st.provider.label, 60) || 'AI', text.trim()) };
+    }
     const cap = r.capabilities?.[op === 'stop' ? 'interrupt' : op];
     if (cap?.available !== true) return fail('unavailable', line(cap?.reason, 300) || TEXT.UNAVAILABLE);
     // T3b: inside the window a send, steer or stop skips the card, but only when the page's own view of the session
@@ -212,6 +228,13 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
       if (!rec.direct && !askEach && !windowLive(held)) held.window = { openedAt: now(), until: now() + WINDOW_MS, share: identity(t) };
       const d = out.delivery;
       return { ok: true, status: 'sent', receipt: d && typeof d.id === 'string' ? { id: line(d.id, 100), state: line(d.state, 40) || 'unknown' } : null, ...(op === 'steer' ? { note: TEXT.STEER_NOTE } : {}) };
+    }
+    if (op === 'queue') {
+      try { out = await auth.queue.enqueue({ text: rec.text, requestId: rec.requestId, generation: rec.generation, provider: rec.provider, providerLabel: rec.providerLabel }); } catch { return fail('unavailable', TEXT.QUEUE_FAILED); }
+      if (!still(c)) return fail('unavailable', TEXT.QUEUE_FAILED);
+      if (out?.ok === true) return { ok: true, status: 'queued' };
+      if (out?.status === 'full') return fail('refused', line(out.error, 300) || TEXT.QUEUE_FAILED);
+      return out?.status === 'stale' ? fail('stale', TEXT.MOVED) : mapped(out, TEXT.QUEUE_FAILED);
     }
     if (op === 'propose') {
       try { out = await auth.requestOwner(rec.inner); } catch { return fail('unconfirmed', TEXT.UNCONFIRMED); }
@@ -284,6 +307,72 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
     return entry.pending;
   }
 
+  // thread:shared-queue [boundId]: my queued messages to this share. Rows carry an opaque per-document key, never a store id.
+  const QUEUE_MIN_MS = 2000;
+  const rowKey = (c, id) => {
+    const dk = docKey(c);
+    let secret = queueSecrets.get(dk);
+    if (!secret) { secret = crypto.randomBytes(32); queueSecrets.set(dk, secret); }
+    return crypto.createHmac('sha256', secret).update(id).digest('hex').slice(0, 32);
+  };
+  const reasonOf = (reason, owner) => { const r = line(reason, 300); return r.startsWith('The owner ') ? `${owner} ${r.slice('The owner '.length)}` : r; };
+  async function queueItems(c, auth) {
+    let out;
+    try { out = await auth.queue.list(); } catch { out = null; }
+    return out?.ok === true && Array.isArray(out.items) ? out.items : null;
+  }
+  async function queueList(c, still) {
+    const key = docKey(c), last = queueReads.get(key), at = now();
+    if (last && (last.pending || at - last.at < QUEUE_MIN_MS)) return last.pending ?? last.result;
+    const auth = authOf(c, still);
+    if (!auth || typeof auth.queue?.list !== 'function') return fail('unavailable', TEXT.UNAVAILABLE);
+    const entry = { at, pending: null, result: null };
+    queueReads.set(key, entry);
+    entry.pending = (async () => {
+      let t, items;
+      try { t = await auth.resolve(); } catch { t = null; }
+      if (!still(c)) { queueReads.delete(key); return null; }
+      if (!t?.hub) { entry.pending = null; entry.result = mapped(t); return entry.result; }
+      if (t.scope !== 'interact') { entry.pending = null; entry.result = fail('forbidden', TEXT.WATCH); return entry.result; }
+      items = await queueItems(c, auth);
+      entry.pending = null;
+      if (!still(c)) { queueReads.delete(key); return null; }
+      if (!items) { entry.result = fail('unavailable', TEXT.UNAVAILABLE); return entry.result; }
+      const owner = line(auth.owner, 80) || 'Teammate';
+      entry.result = {
+        ok: true, status: 'ready',
+        items: items.slice(0, 16).filter((i) => i.status !== 'cancelled' && QUEUE_STATE[i.status]).map((i) => ({
+          key: rowKey(c, i.id), text: prose(i.text, 200), state: QUEUE_STATE[i.status], reason: reasonOf(i.reason, owner),
+          expiresAt: Number.isFinite(i.expiresAt) ? i.expiresAt : null, receipt: i.receipt ? { state: line(i.receipt.state, 40) || 'unknown' } : null,
+        })),
+      };
+      return entry.result;
+    })();
+    return entry.pending;
+  }
+  // thread:shared-queue-remove [boundId, {key, op}]: cancel a waiting message, or discard a finished one's saved copy.
+  async function queueRemove(c, req, still) {
+    if (!plain(req) || Object.keys(req).sort().join(',') !== 'key,op' || typeof req.key !== 'string' || !/^[0-9a-f]{32}$/.test(req.key) || !['cancel', 'discard'].includes(req.op)) return fail('invalid', TEXT.INVALID);
+    const auth = authOf(c, still);
+    if (!auth || typeof auth.queue?.list !== 'function') return fail('unavailable', TEXT.UNAVAILABLE);
+    let t;
+    try { t = await auth.resolve(); } catch { t = null; }
+    if (!still(c, true)) return fail('stale', TEXT.MOVED);
+    if (!t?.hub) return mapped(t);
+    if (t.scope !== 'interact') return fail('forbidden', TEXT.WATCH);
+    // The key is mapped back to a store id among this share's own items only; anything else is unknown.
+    const items = await queueItems(c, auth);
+    if (!still(c, true)) return fail('stale', TEXT.MOVED);
+    const item = items?.find((i) => rowKey(c, i.id) === req.key);
+    if (!item) return fail('stale', 'That message is no longer in the queue.');
+    const waiting = item.status === 'queued' || item.status === 'blocked';
+    if (req.op === 'cancel' ? !waiting : (waiting || item.status === 'sending')) return fail('stale', 'That message has changed. Look at the queue again.');
+    let out;
+    try { out = req.op === 'cancel' ? await auth.queue.cancel(item.id) : await auth.queue.discard(item.id); } catch { out = null; }
+    queueReads.delete(docKey(c));
+    return out?.ok === true ? { ok: true, status: req.op === 'cancel' ? 'cancelled' : 'discarded' } : fail(out?.status === 'unconfirmed' ? 'unconfirmed' : 'stale', out?.status === 'unconfirmed' ? TEXT.UNCONFIRMED : 'That message has changed. Look at the queue again.');
+  }
+
   // After each thread:shared-state read: a card whose session moved on (generation, turn) or went to watch retires.
   function afterRead(c, result) {
     const key = docKey(c), held = auths.get(key);
@@ -297,14 +386,14 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
     if (seen.scope !== 'interact') { drop(key); proposalReads.delete(key); held.window = null; return; }
     for (const [s, rec] of selections) {
       if (rec.doc !== key || rec.generation === undefined) continue;
-      if (rec.generation !== seen.generation || rec.turn !== seen.turn) selections.delete(s);
+      if (rec.generation !== seen.generation || (rec.op !== 'queue' && rec.turn !== seen.turn)) selections.delete(s);
     }
   }
 
   return {
-    review, confirm, proposals, afterRead,
-    retire(wcId) { for (const k of [...auths.keys(), ...proposalReads.keys()]) if (k.startsWith(`${wcId}:`)) forget(k); for (const [s, rec] of selections) if (rec.doc.startsWith(`${wcId}:`)) selections.delete(s); },
-    stop() { for (const k of [...auths.keys()]) forget(k); selections.clear(); proposalReads.clear(); },
+    review, confirm, proposals, queueList, queueRemove, afterRead,
+    retire(wcId) { for (const k of [...auths.keys(), ...proposalReads.keys(), ...queueReads.keys()]) if (k.startsWith(`${wcId}:`)) forget(k); for (const [s, rec] of selections) if (rec.doc.startsWith(`${wcId}:`)) selections.delete(s); },
+    stop() { for (const k of [...auths.keys()]) forget(k); selections.clear(); proposalReads.clear(); queueReads.clear(); queueSecrets.clear(); },
     size: () => selections.size,
   };
 }

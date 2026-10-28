@@ -53,6 +53,9 @@ contextBridge.exposeInMainWorld('threadApi', {
   sharedAskEach: (row, on) => sharedReviewCall(row, { askEach: on === true }),
   sharedConfirm: (row, selection, text) => ipcRenderer.invoke('thread:shared-confirm', id(row), { selection: String(selection), text: String(text) }),
   sharedProposals: (row) => ipcRenderer.invoke('thread:shared-proposals', id(row)),
+  // T5b: this thread's queued messages, and cancel (still waiting) or discard (finished) one by main's opaque key.
+  sharedQueue: (row) => ipcRenderer.invoke('thread:shared-queue', id(row)),
+  sharedQueueRemove: (row, key, op) => ipcRenderer.invoke('thread:shared-queue-remove', id(row), { key: String(key), op: String(op) }),
   // T4a: one of my own Plexiform-held sessions (read-only): its projection, and the way to Overview.
   ownedState: (row) => ipcRenderer.invoke('thread:owned-state', id(row)),
   openOverview: (row) => ipcRenderer.invoke('thread:open-overview', id(row)),
