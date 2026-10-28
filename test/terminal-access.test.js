@@ -190,3 +190,11 @@ test('renderer: rows are built with textContent, Test only where the row offers 
   assert.match(html, /<div class="field" data-pane="terminal" id="terminal-access" hidden>/);
   assert.match(read('onboarding.html'), /id="terminal-access-box" hidden/);
 });
+
+test('terminal-access.json is in Your data (exported and deleted with Settings) and left out of backups', () => {
+  const Inv = require('../src/data-inventory.js');
+  const store = Inv.STORES.find((x) => x.id === 'settings');
+  assert.ok(store.names.includes('terminal-access.json'));
+  assert.notEqual(store.export, false, 'exported with Settings');
+  assert.ok(require('../src/backups.js').EXCLUDED.some((x) => x.name === 'terminal-access.json'));
+});
