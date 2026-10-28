@@ -4,15 +4,16 @@
 // same way (chatState, openInTerminal). Pure: no I/O, nothing imported from the
 // app. The chat (C-PRs) and the terminal (T-PRs) both build on this file.
 
-const ORIGINS = Object.freeze(['chat', 'plexiform-tab', 'external']);
-const DRIVERS = Object.freeze(['chat', 'terminal', 'external']);
+// T4a: 'owned' is a session Plexiform holds for the Overview document (interaction hub), driven only from there.
+const ORIGINS = Object.freeze(['chat', 'plexiform-tab', 'external', 'owned']);
+const DRIVERS = Object.freeze(['chat', 'terminal', 'external', 'owned']);
 // focus/ids.js ORIGINS labels, plus Ghostty Dock, which joins originOf when the
 // focus layer learns it.
 const HOST_APPS = Object.freeze(['Terminal', 'iTerm', 'Plexiform Terminal', 'Ghostty Dock']);
 // Each origin's legal drivers. A chat is driven by the chat or, after a
 // take-over, a terminal; a native Plexiform tab is always a terminal; an
 // external session is never taken over.
-const LEGAL = Object.freeze({ chat: ['chat', 'terminal'], 'plexiform-tab': ['terminal'], external: ['external'] });
+const LEGAL = Object.freeze({ chat: ['chat', 'terminal'], 'plexiform-tab': ['terminal'], external: ['external'], owned: ['owned'] });
 const EVENTS = Object.freeze(['takeover', 'handback']);
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 

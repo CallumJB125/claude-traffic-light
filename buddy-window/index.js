@@ -1676,6 +1676,9 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     tasksCompose() { return sendWhenReady('tasks', 'tasks:compose', null); },
     // T2: the thread's "Team overview": the same one-shot hint and plain select a sidebar click arms.
     openTeamRow(id) { if (typeof id !== 'string' || !ROW_ID.test(id)) return false; let armed = false; try { armed = openTeamRow(id) === true; } catch { armed = false; } if (armed) select('overview'); return armed; },
+    // T4a: an owned thread's "Open in Overview": a plain select, only in a visible, unminimised window. thread-main
+    // calls this straight after its own focused-document check, with no await between, so the click can't land late.
+    openOverviewFromThread() { if (!chatFirst || !win || win.isDestroyed() || !win.isVisible() || win.isMinimized()) return false; select('overview'); return true; },
     tasksReveal(id) { return typeof id === 'string' && id.length <= 128 ? sendWhenReady('tasks', 'tasks:reveal', id) : false; },
     // Main-only identities. No renderer receives a sealed marker or window.
     setupsActorCurrent(actor) {

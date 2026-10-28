@@ -70,7 +70,7 @@ const ENDED = {
   replay: CHAT.replay.slice(0, 12),
 };
 
-async function open({ fixture = null, theme = 'light', env = GATE, shared = null, sharedReview = null, sharedProposals = null } = {}) {
+async function open({ fixture = null, theme = 'light', env = GATE, shared = null, sharedReview = null, sharedProposals = null, owned = null } = {}) {
   const h = await launchApp({ env, files: { 'sessions/thread-fixture.json': session() } });
   if (fixture) {
     // Answers the thread document only, as main does.
@@ -91,6 +91,13 @@ async function open({ fixture = null, theme = 'light', env = GATE, shared = null
       ipcMain.removeHandler('thread:shared-review'); ipcMain.handle('thread:shared-review', (e, id, req) => (mine(e) && review ? { ok: true, status: 'review', selection: '11111111-1111-4111-8111-111111111111', card: { ...review, op: req.op, text: req.op === 'stop' ? '' : req.text } } : null));
       ipcMain.removeHandler('thread:shared-proposals'); ipcMain.handle('thread:shared-proposals', (e) => (mine(e) ? proposals ?? { ok: true, status: 'ready', proposals: [] } : null));
     }, { review: sharedReview, proposals: sharedProposals });
+  }
+  if (owned) {
+    // T4a: one of my own Plexiform-held sessions. The projection is the shape src/owned-thread-view.js returns; main's rows and reads are test/owned-thread-t4a.test.js.
+    await h.app.evaluate(({ ipcMain }, owned) => {
+      const mine = (e) => { try { return new URL(e.sender.getURL()).pathname.endsWith('/thread.html'); } catch { return false; } };
+      ipcMain.removeHandler('thread:owned-state'); ipcMain.handle('thread:owned-state', (e) => (mine(e) ? owned : null));
+    }, owned);
   }
   const widget = await windowByFile(h.app, 'index.html');
   await widget.evaluate(() => window.trafficLight.openHelp());
@@ -623,5 +630,52 @@ test('shared thread, gone (dark): the body is dropped and the way back is offere
     await expect(page.locator('#th-title')).toHaveText('This session is no longer shared with you.');
     await expect(page.locator('.th-msg')).toHaveCount(0);
     await shot(page, 'thread-shared-gone-dark.png');
+  } finally { await h.cleanup(); }
+});
+
+// T4a: my own Plexiform-held sessions (plan-t4a §3): T2's layout, no prompt box, the way to Overview.
+const OWNED_CODEX = {
+  header: { title: 'Add retries to the invoice export', provider: 'Codex', channel: false },
+  activity: { category: 'Running a command', ageMs: 6000, stale: false }, status: 'working',
+  deliveries: [
+    { id: 'a', by: null, text: 'Add a retry with backoff to the invoice export.', state: 'replied', response: 'Added three retries with backoff to exportInvoices(). The export tests pass.', at: 1 },
+    { id: 'b', by: null, text: 'Now log each retry.', state: 'acknowledged', response: '', at: 2 },
+  ],
+};
+const OWNED_CHANNEL = {
+  header: { title: 'Plexiform channel', provider: 'Claude Code', channel: true },
+  activity: { category: null, ageMs: null, stale: false }, status: 'ready', deliveries: [],
+};
+const ownedOpen = (theme, owned) => open({ fixture: { kind: 'owned', header: null }, theme, owned });
+test('owned thread, Codex (dark): Started from Overview, activity, messages with receipts, no prompt box', async () => {
+  const { h, side } = await ownedOpen('dark', OWNED_CODEX);
+  try {
+    const page = await openThread(h, side, 'dark');
+    await expect(page.locator('#th-meta')).toHaveText('Codex session · Started from Overview');
+    await expect(page.locator('.th-shared-foot .th-shared-note')).toHaveText('Started from Overview. To message it, use Overview.');
+    await expect(page.locator('#th-ow-overview')).toHaveText('Open in Overview');
+    await expect(page.locator('#th-reply')).toBeHidden();
+    await expect(page.locator('textarea:visible')).toHaveCount(0);
+    await shot(page, 'thread-owned-codex-dark.png');
+  } finally { await h.cleanup(); }
+});
+test('owned thread, Plexiform channel (light): its own title, nothing sent yet', async () => {
+  const { h, side } = await ownedOpen('light', OWNED_CHANNEL);
+  try {
+    const page = await openThread(h, side, 'light');
+    await expect(page.locator('#th-title')).toHaveText('Plexiform channel');
+    await expect(page.locator('#th-meta')).toHaveText('Claude Code in your terminal · Connected from Overview');
+    await expect(page.locator('.th-shared-empty')).toHaveText('No messages have been sent to it yet.');
+    await expect(page.locator('.th-shared-foot .th-shared-note')).toHaveText('Connected from Overview. To message it, use Overview.');
+    await shot(page, 'thread-owned-claude-light.png');
+  } finally { await h.cleanup(); }
+});
+test('owned thread, gone (dark): ended when Overview reloaded, nothing kept', async () => {
+  const { h, side } = await ownedOpen('dark', { gone: true, reason: 'overview' });
+  try {
+    const page = await openThread(h, side, 'dark');
+    await expect(page.locator('#th-empty-title')).toHaveText('This session ended when Overview reloaded.');
+    await expect(page.locator('.th-msg')).toHaveCount(0);
+    await shot(page, 'thread-owned-gone-dark.png');
   } finally { await h.cleanup(); }
 });

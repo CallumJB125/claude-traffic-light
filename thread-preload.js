@@ -47,6 +47,9 @@ contextBridge.exposeInMainWorld('threadApi', {
   sharedReview: (row, op, text) => ipcRenderer.invoke('thread:shared-review', id(row), { op: String(op), text: String(text) }),
   sharedConfirm: (row, selection, text) => ipcRenderer.invoke('thread:shared-confirm', id(row), { selection: String(selection), text: String(text) }),
   sharedProposals: (row) => ipcRenderer.invoke('thread:shared-proposals', id(row)),
+  // T4a: one of my own Plexiform-held sessions (read-only): its projection, and the way to Overview.
+  ownedState: (row) => ipcRenderer.invoke('thread:owned-state', id(row)),
+  openOverview: (row) => ipcRenderer.invoke('thread:open-overview', id(row)),
   // Back to Board from an ended chat.
   board: () => ipcRenderer.send('thread:board'),
 });

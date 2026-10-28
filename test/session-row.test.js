@@ -107,7 +107,10 @@ test('frozen sidebar payload (generated from main before PR 0s): R2\'s projectio
   assert.ok(now.sessions.every((s) => /^[0-9a-f]{64}$/.test(s.id)));
   // R2a adds two keys after the golden was frozen; every other byte must match.
   const added = now.sessions.map(({ chat, thread }) => ({ chat, thread }));
-  assert.deepEqual({ ...now, sessions: now.sessions.map(({ chat, thread, ...s }) => ({ ...s, id: '<per-instance id>' })) }, golden);
+  // T4a adds the top-level `ended` list (owned rows main ended); this build has none.
+  const { ended, ...rest } = now;
+  assert.deepEqual(ended, []);
+  assert.deepEqual({ ...rest, sessions: now.sessions.map(({ chat, thread, ...s }) => ({ ...s, id: '<per-instance id>' })) }, golden);
   assert.ok(added.every((a) => typeof a.chat === 'boolean' && typeof a.thread === 'boolean'), JSON.stringify(added));
   const titles = golden.sessions.map((s) => s.title);
   assert.ok(golden.sessions.some((s) => s.team === true), 'a team row');

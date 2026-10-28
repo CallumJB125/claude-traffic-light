@@ -1864,6 +1864,9 @@ const OverviewMain=require('./src/overview-main').createOverviewMain({
   messageManaged:(id,text,fresh)=>fresh()?getTasks().act({id,action:'message',payload:{body:text}},0,fresh):Promise.resolve({ok:false}),
   // Session directory (My sessions / Team sessions); see src/session-directory.js.
   owned:()=>{InteractionMain.reportHooks(aggregateState().sessions||[]);return InteractionMain.listOwned();},
+  // T4a: the chat-first sidebar's owned rows and threads, through interaction-main's read-only accessors (never actorOf).
+  // Read only through passiveRows, which only the gated chat-first sidebar and new chat call.
+  ownedThreads:{view:()=>InteractionMain.ownedView(),state:(e,a,s)=>InteractionMain.ownedState(e,a,s),epoch:()=>InteractionMain.ownedEpoch()},
   // hostSync (declared below) is only read when Overview asks, after startup.
   shares:()=>{const h=hostSync.host(),origin=hostSync.origin();return h&&origin?{origin,list:h.shared()}:null;},
   hubTeams:async()=>{const h=hostSync.host(),origin=hostSync.origin();if(!h||!origin)return null;if(overviewTeams.host===h&&Date.now()-overviewTeams.at<30_000)return overviewTeams.value;
@@ -2467,6 +2470,9 @@ if (CHAT_PREVIEW) {
     sharedRead: (id, alive) => OverviewMain.sharedThreadRead(id, alive),
     sharedAuthority: (id, live) => OverviewMain.sharedThreadAuthority(id, live),
     openTeam: (id) => buddyWin?.openTeamRow?.(id) ?? false,
+    // T4a: my own Plexiform-held session's thread: a read, and the way to Overview (navigation only).
+    ownedRead: (id) => OverviewMain.ownedThreadRead(id),
+    openOverview: () => buddyWin?.openOverviewFromThread?.() ?? false,
     presence: PresenceOwner,
     header: (t, id) => SidebarRows.headerOf(t, id),
     tasks: () => getTasks(),

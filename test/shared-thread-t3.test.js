@@ -109,7 +109,8 @@ const gate = () => { let release; const p = new Promise((r) => { release = r; })
 
 test('channels: the three T3 channels exist and nothing else was added', () => {
   for (const c of ['thread:shared-review', 'thread:shared-confirm', 'thread:shared-proposals']) assert.ok(CHANNELS.includes(c), c);
-  assert.equal(CHANNELS.length, 15);
+  // T4a adds thread:owned-state and thread:open-overview (test/owned-thread-t4a.test.js).
+  assert.equal(CHANNELS.length, 17);
 });
 
 test('Guard T: wrong sender or frame, args, an unbound id, a watch scope, a task row', async () => {

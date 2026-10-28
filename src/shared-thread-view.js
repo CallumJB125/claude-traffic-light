@@ -32,15 +32,14 @@ function controlsOf(scope, s, owner) {
   return { send: pick(c.send), steer: pick(c.steer), interrupt: pick(c.interrupt), propose: pick(propose) };
 }
 
-function project({ state, share, route, now }) {
-  const s = state && typeof state === 'object' ? state : {};
-  const provider = line(s.provider?.label, 60) || 'AI';
-  const owner = line(route.ownerName, 80) || 'Teammate';
-  const scope = share?.scope === 'interact' ? 'interact' : 'watch';
-  const exp = typeof share?.expiresAt === 'string' ? Date.parse(share.expiresAt) : NaN;
+// T4a reuses these two for the owned thread, so both kinds keep the same bounds and cleaners.
+function activityOf(s, now) {
   const act = s.activity && typeof s.activity === 'object' && CATEGORIES.includes(s.activity.label) && Number.isSafeInteger(s.activity.observed_at) ? s.activity : null;
   const ageMs = act ? Math.max(0, now - act.observed_at) : null;
-  const deliveries = (Array.isArray(s.deliveries) ? s.deliveries : []).slice(-MAX_DELIVERIES).map((d) => (d && typeof d === 'object' && typeof d.id === 'string' && d.id ? {
+  return { category: act ? act.label : null, ageMs, stale: act ? ageMs > STALE_MS : false };
+}
+function deliveriesOf(s) {
+  return (Array.isArray(s.deliveries) ? s.deliveries : []).slice(-MAX_DELIVERIES).map((d) => (d && typeof d === 'object' && typeof d.id === 'string' && d.id ? {
     id: line(d.id, 80),
     by: line(d.by, 80) || null,
     text: prose(d.text, MAX_TEXT),
@@ -48,10 +47,19 @@ function project({ state, share, route, now }) {
     response: prose(d.response, MAX_RESPONSE),
     at: Number.isSafeInteger(d.sentAt) ? d.sentAt : null,
   } : null)).filter(Boolean);
+}
+
+function project({ state, share, route, now }) {
+  const s = state && typeof state === 'object' ? state : {};
+  const provider = line(s.provider?.label, 60) || 'AI';
+  const owner = line(route.ownerName, 80) || 'Teammate';
+  const scope = share?.scope === 'interact' ? 'interact' : 'watch';
+  const exp = typeof share?.expiresAt === 'string' ? Date.parse(share.expiresAt) : NaN;
+  const deliveries = deliveriesOf(s);
   return {
     header: { title: line(s.task_title, 120) || `${owner}'s ${provider} session`, owner, initials: initialsOf(owner), provider, scope, expiresAt: Number.isFinite(exp) ? new Date(exp).toISOString() : null, fake: route.fake === true },
     banner: true,
-    activity: { category: act ? act.label : null, ageMs, stale: act ? ageMs > STALE_MS : false },
+    activity: activityOf(s, now),
     deliveries,
     status: ['ready', 'working', 'compacting', 'ended'].includes(s.status) ? s.status : 'ready',
     generation: Number.isSafeInteger(s.generation) ? s.generation : 0,
@@ -60,4 +68,4 @@ function project({ state, share, route, now }) {
   };
 }
 
-module.exports = { project, TOP_KEYS, CONTROL_KEYS, HEADER_KEYS, DELIVERY_KEYS, MAX_DELIVERIES, MAX_TEXT, MAX_RESPONSE, STALE_MS, STATES, CATEGORIES };
+module.exports = { project, activityOf, deliveriesOf, prose, line, TOP_KEYS, CONTROL_KEYS, HEADER_KEYS, DELIVERY_KEYS, MAX_DELIVERIES, MAX_TEXT, MAX_RESPONSE, STALE_MS, STATES, CATEGORIES };

@@ -16,6 +16,7 @@ test('the driver state machine table', () => {
     ['chat', 'terminal', null, 'chat'],
     ['plexiform-tab', 'terminal', null, null],
     ['external', 'external', null, null],
+    ['owned', 'owned', null, null],
   ];
   for (const [origin, driver, onTakeover, onHandback] of rows) {
     const r = ref({ origin, driver, taskId: origin === 'chat' ? 'tsk_0123456789ab' : null });
@@ -28,7 +29,7 @@ test('the driver state machine table', () => {
 
 test('sessionRef refuses every pair the table has no row for, and other bad fields', () => {
   for (const origin of S.ORIGINS) for (const driver of S.DRIVERS) {
-    const legal = (origin === 'chat' && driver !== 'external') || (origin === 'plexiform-tab' && driver === 'terminal') || (origin === 'external' && driver === 'external');
+    const legal = (origin === 'chat' && ['chat', 'terminal'].includes(driver)) || (origin === 'plexiform-tab' && driver === 'terminal') || (origin === 'external' && driver === 'external') || (origin === 'owned' && driver === 'owned');
     const make = () => ref({ origin, driver, taskId: origin === 'chat' ? 'tsk_0123456789ab' : null });
     if (legal) assert.equal(make().driver, driver); else assert.throws(make, { code: 'VALIDATION' }, `${origin}/${driver}`);
   }
