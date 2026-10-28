@@ -18,7 +18,7 @@ const TOP_KEYS = Object.freeze(['header', 'banner', 'activity', 'deliveries', 's
 // T3: what the interact layout may offer, as booleans and fixed reasons only. Main checks every one again.
 const CONTROL_KEYS = Object.freeze(['send', 'steer', 'interrupt', 'propose', 'queue']);
 const HEADER_KEYS = Object.freeze(['title', 'owner', 'initials', 'provider', 'scope', 'expiresAt', 'fake']);
-const DELIVERY_KEYS = Object.freeze(['id', 'by', 'text', 'state', 'response', 'at']);
+const DELIVERY_KEYS = Object.freeze(['id', 'by', 'mode', 'text', 'state', 'response', 'stoppedBy', 'at']);
 
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f‪-‮⁦-⁩]/g;
@@ -51,9 +51,11 @@ function deliveriesOf(s) {
   return (Array.isArray(s.deliveries) ? s.deliveries : []).slice(-MAX_DELIVERIES).map((d) => (d && typeof d === 'object' && typeof d.id === 'string' && d.id ? {
     id: line(d.id, 80),
     by: line(d.by, 80) || null,
+    mode: d.mode === 'steer' ? 'steer' : 'send', // T4b
     text: prose(d.text, MAX_TEXT),
     state: STATES.includes(d.state) ? d.state : 'unknown',
     response: prose(d.response, MAX_RESPONSE),
+    stoppedBy: line(d.stoppedBy, 80) || null, // T4b: who stopped the turn (host-stamped)
     at: Number.isSafeInteger(d.sentAt) ? d.sentAt : null,
   } : null)).filter(Boolean);
 }

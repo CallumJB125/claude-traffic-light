@@ -30,6 +30,7 @@ const { ACTIVITY_LABELS } = require('./session-activity');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MAX_TEXT = 4000, MAX_BYTES = 8192, MAX_RESPONSE = 16000, MAX_DELIVERIES = 20, MAX_TURNS = 40, MAX_SESSIONS = 8, MAX_NOTICES = 5;
 const FINAL = ['completed', 'interrupted', 'failed'];
+const MAX_STOP_CLAIMS = 8; // T4b: stop requests remembered per turn
 const REPORT_RECENT_MS = 90_000;
 const NOTICES = {
   approval: 'The provider asked for an approval; Plexiform refused it.',
@@ -159,7 +160,9 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     let state = d.state;
     if (state === 'acknowledged' && t) state = FINAL.includes(t.status) ? t.status : response ? 'responding' : recorded ? 'recorded' : 'acknowledged';
     if (state === 'acknowledged' && r.ended) state = 'failed';
-    return { id: d.id, text: d.text, by: d.by ?? null, mode: d.mode, state, recorded, turn: t?.tag ?? null, response, error: t?.error ?? null, notices: t ? [...t.notices] : [], sentAt: d.sentAt, finishedAt: t?.finishedAt ?? null };
+    // T4b: who stopped this turn, on its new-turn delivery only, and only once the provider says it was interrupted.
+    const stoppedBy = d.mode === 'new-turn' && t && t.status === 'interrupted' && typeof t.stops?.[0]?.by === 'string' ? t.stops[0].by : null;
+    return { id: d.id, text: d.text, by: d.by ?? null, mode: d.mode, stoppedBy, state, recorded, turn: t?.tag ?? null, response, error: t?.error ?? null, notices: t ? [...t.notices] : [], sentAt: d.sentAt, finishedAt: t?.finishedAt ?? null };
   }
   function dto(r) {
     const active = r.activeTurn ? r.turns.get(r.activeTurn) : null;
@@ -411,14 +414,22 @@ function createInteractionHub({ adapters = {}, workspace = () => null, boardCurr
     return { ok: true, status: 'acknowledged', delivery: publicDelivery(r, d), state: dto(r) };
   }
 
-  async function interrupt(req, actor) {
+  // T4b: `by` (main-only, never from a request) is the teammate who asked for the stop (src/remote-interaction.js).
+  // Each request claims the turn this call captured, never the one active after the await (B-S1), before the provider
+  // answers (its 'interrupted' can arrive first). A failed request withdraws its claim. The first standing claim names
+  // the stopper: the stop that actually ended the turn, so a later one (or one on a turn that already ended, which is
+  // refused stale above) never replaces the name. Claims are capped per turn.
+  async function interrupt(req, actor, { by = null } = {}) {
     if (!closed(req, ['session', 'generation', 'turn']) || typeof req.turn !== 'string' || !UUID.test(req.turn)) return refuse('invalid', ERRORS.invalid);
     const { r, error } = lookup(req, actor, { board: false });
     if (error) return error;
     const active = r.activeTurn ? r.turns.get(r.activeTurn) : null;
     if (r.existing && ((r.activeTurn && !r.own.has(r.activeTurn)) || (!r.activeTurn && r.foreignBusy) || [...r.turns].some(([id, t]) => t.tag === req.turn && !r.own.has(id)))) return refuse('busy', ERRORS.foreignTurn);
     if (!active || active.tag !== req.turn || !r.adapter.capabilities.interrupt) return refuse('stale', ERRORS.stale);
-    try { await r.adapter.interrupt({ target: r.target, turnId: r.activeTurn }); } catch { return refuse('unavailable', ERRORS.unavailable); }
+    const claim = { by: typeof by === 'string' && by && by.length <= 80 ? by : null };
+    const claims = active.stops ?? (active.stops = []);
+    if (claims.length < MAX_STOP_CLAIMS) claims.push(claim);
+    try { await r.adapter.interrupt({ target: r.target, turnId: r.activeTurn }); } catch { const i = claims.indexOf(claim); if (i >= 0) claims.splice(i, 1); return refuse('unavailable', ERRORS.unavailable); }
     return { ok: true, status: 'interrupt-requested', state: dto(r) };
   }
 

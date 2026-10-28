@@ -49,9 +49,11 @@
     root.querySelector('.th-activity').textContent = v.status === 'working' && !a.category ? 'Working.' : a.category ? `${a.stale ? 'Last reported' : 'Now'}: ${a.category} · ${ago(a.ageMs)}` : 'No activity reported yet.';
     const items = v.deliveries.map((d) => {
       const li = el('li', 'th-msg');
-      li.append(el('p', 'th-msg-by', d.by ? `Sent by ${d.by}` : 'Sent from Overview'), el('p', 'th-msg-text', d.text));
+      // T4b: whose message, and a steer; a teammate's stop names them.
+      li.append(el('p', 'th-msg-by', `${d.by ? `Sent by ${d.by} (teammate)` : 'Sent from Overview'}${d.mode === 'steer' ? ' · steer' : ''}`), el('p', 'th-msg-text', d.text));
       const chip = el('span', 'th-chip', CHIP[d.state] || 'Unconfirmed'); chip.dataset.state = d.state;
       li.append(chip);
+      if (d.state === 'interrupted' && d.stoppedBy) li.append(el('p', 'th-msg-note', `${d.stoppedBy} stopped this turn.`));
       if (d.state === 'unconfirmed' || d.state === 'unknown') li.append(el('p', 'th-msg-note', 'Receipt unconfirmed. The agent may still act; do not resend automatically.'));
       if (d.response) li.append(el('p', 'th-msg-reply', d.response));
       return li;

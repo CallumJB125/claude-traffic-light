@@ -72,9 +72,10 @@
     root.querySelector('.th-activity').textContent = stale ? (offline ? `${offline}'s computer is offline. Showing the last known state.` : signIn ? 'Sign in again to refresh. Showing the last known state.' : 'Showing the last known state.') : a.category ? `${a.stale ? 'Last reported' : 'Now'}: ${a.category} · ${ago(a.ageMs)}` : 'No activity reported yet.';
     const list = root.querySelector('.th-msgs'), items = v.deliveries.map((d) => {
       const li = el('li', 'th-msg');
-      li.append(el('p', 'th-msg-by', d.by ? `Sent by ${d.by}` : 'Sent through this share'), el('p', 'th-msg-text', d.text));
+      li.append(el('p', 'th-msg-by', `${d.by ? `Sent by ${d.by}` : 'Sent through this share'}${d.mode === 'steer' ? ' · steer' : ''}`), el('p', 'th-msg-text', d.text));
       const chip = el('span', 'th-chip', CHIP[d.state] || 'Unconfirmed'); chip.dataset.state = d.state;
       li.append(chip);
+      if (d.state === 'interrupted' && d.stoppedBy) li.append(el('p', 'th-msg-note', `${d.stoppedBy} stopped this turn.`)); // T4b
       if (d.state === 'unconfirmed' || d.state === 'unknown') li.append(el('p', 'th-msg-note', 'Receipt unconfirmed. The agent may still act; do not resend automatically.'));
       if (d.response) li.append(el('p', 'th-msg-reply', d.response));
       return li;
