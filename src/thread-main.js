@@ -93,7 +93,7 @@ const INPUT_TEXT = Object.freeze({
 // Provisional, awaiting Callum (plan-r2.md §7 item 3): the link form may change.
 const LINK = (id) => `plexiform://thread/${id}`;
 
-function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, hook = null, copy = () => {}, header = () => null, now = Date.now, sharedRead = null, sharedView = null, viewTimers = undefined, openTeam = null, sharedAuthority = null, ownedRead = null, openOverview = null, owner = null, ownerTimers = undefined }) {
+function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, hook = null, copy = () => {}, header = () => null, now = Date.now, sharedRead = null, sharedView = null, viewTimers = undefined, openTeam = null, sharedAuthority = null, askEach = null, ownedRead = null, openOverview = null, owner = null, ownerTimers = undefined }) {
   let slot = null; // { wcId, generation, taskId }
   // Documents that asked the Tasks service for a slot: only these are closed, so a terminal
   // session's thread (or a document that never read) never reaches, or starts, the service.
@@ -156,7 +156,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     if (k && (wcId === null || k.startsWith(`${wcId}:`))) views.close(k);
   }
   // T3 (plan-t3 §2): send, steer, stop and propose for a bound interact share. Guard T here; the rest in thread-shared-main.
-  const shared = createSharedThreadActions({ authority: sharedAuthority, now });
+  const shared = createSharedThreadActions({ authority: sharedAuthority, askEach, now });
   // Guard T for a channel whose args are [boundId, request].
   function guardWith(e, args, { effect = false } = {}) {
     const c = ctx();

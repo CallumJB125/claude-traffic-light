@@ -317,6 +317,8 @@ const DEFAULT_CONFIG = {
   // Remote interaction host: off until ticked in Preferences.
   remoteInteractionHost: false,
   teamSessionSharing: true,
+  // T3b "Ask me each time" in a teammate's shared thread: per device, off until the toggle is turned on.
+  threadAskEach: false,
   // Session-start team brief and team_* MCP tools (src/team-activity.js): off until ticked.
   teamBrief: false,
   // Agent mail inbox (src/agent-mail.js): teammates' AI questions polled from the team hub; off until ticked.
@@ -388,6 +390,7 @@ function buildConfig() {
   config.agentAwareness = require('./src/agent-awareness.js').normalize(saved.agentAwareness);
   config.mcpBusUserOff = saved.mcpBusUserOff === true;
   config.mcpUserOff = saved.mcpUserOff === true;
+  config.threadAskEach = saved.threadAskEach === true;
   config.voice = Voice.normalizeConfig(saved.voice);
   config.compaction = Compaction.normalizeSettings(saved.compaction);
   config.integrations = { ...(saved.integrations && typeof saved.integrations === 'object' && !Array.isArray(saved.integrations) ? saved.integrations : {}), ghosttyDock: GhosttyDock.normalizeMode(saved.integrations && saved.integrations.ghosttyDock) };
@@ -429,6 +432,7 @@ function saveConfig(partial) {
   if (partial.agentAwareness) next.agentAwareness = require('./src/agent-awareness.js').normalize(partial.agentAwareness);
   if ('mcpBusUserOff' in partial) next.mcpBusUserOff = partial.mcpBusUserOff === true;
   if ('mcpUserOff' in partial) next.mcpUserOff = partial.mcpUserOff === true;
+  if ('threadAskEach' in partial) next.threadAskEach = partial.threadAskEach === true;
   if (partial.autoAnswer) next.autoAnswer = { v: 1, sealed: null, rules: AutoRules.sanitize(partial.autoAnswer.rules).rules };
   fs.mkdirSync(ROOT_DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2));
@@ -2474,6 +2478,7 @@ if (CHAT_PREVIEW) {
     target: (id) => OverviewMain.threadTarget(id),
     sharedRead: (id, alive) => OverviewMain.sharedThreadRead(id, alive),
     sharedAuthority: (id, live) => OverviewMain.sharedThreadAuthority(id, live),
+    askEach: { get: () => loadConfig().threadAskEach === true, set: (on) => saveConfig({ threadAskEach: on === true }) },
     openTeam: (id) => buddyWin?.openTeamRow?.(id) ?? false,
     // T4a: my own Plexiform-held session's thread: a read, and the way to Overview (navigation only).
     ownedRead: (id) => OverviewMain.ownedThreadRead(id),

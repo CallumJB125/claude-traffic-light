@@ -55,13 +55,14 @@ function mapped(out, fallback = TEXT.UNAVAILABLE) {
   return fail(status, error);
 }
 
-function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
+function createSharedThreadActions({ authority = null, askEach: pref = null, now = Date.now } = {}) {
   const auths = new Map(); // `${wcId}:${generation}` → { boundId, auth }
   const selections = new Map(); // selection → record
   const proposalReads = new Map(); // docKey → { at, pending, result }
   const queueReads = new Map(); // docKey → { at, pending, result }
   const queueSecrets = new Map(); // docKey → random key for this document's opaque queue row keys
-  let askEach = false; // T3b: "Ask me each time" (this run of the app; off by default). On, no window opens.
+  // T3b: "Ask me each time", kept in the device's preferences (off by default; only the toggle changes it). On, no window opens.
+  let askEach = (() => { try { return pref?.get?.() === true; } catch { return false; } })();
   const docKey = (c) => `${c.contents.id}:${c.generation}`;
 
   function drop(key) {
@@ -126,6 +127,7 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
   async function reviewInner(c, req, still) {
     if (plain(req) && Object.keys(req).join(',') === 'askEach' && typeof req.askEach === 'boolean') {
       askEach = req.askEach;
+      try { pref?.set?.(askEach); } catch { /* the choice still applies for this run */ }
       if (askEach) for (const h of auths.values()) h.window = null;
       return { ok: true, status: 'ask-each', askEach };
     }
