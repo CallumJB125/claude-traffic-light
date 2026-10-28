@@ -203,6 +203,8 @@ const deliveries = [
 test('renderers: the owner thread says "(teammate)", " · steer" and "‹name› stopped this turn."; the grantee thread the same without "(teammate)"; text only', async () => {
   const owned = { header: { title: 'T', provider: 'Codex', channel: false }, activity: { category: null, ageMs: null, stale: false }, deliveries, status: 'ready' };
   const w = render('thread-owned.js', () => {}, null);
+  const s = render('thread-shared.js', () => {}, null);
+  try {
   const api = { ownedState: async () => owned, openOverview: async () => true };
   w.ThreadOwned.start(api, 'a'.repeat(64)); await new Promise((r) => setTimeout(r, 20));
   const by = [...w.document.querySelectorAll('.th-msg-by')].map((n) => n.textContent);
@@ -210,12 +212,10 @@ test('renderers: the owner thread says "(teammate)", " · steer" and "‹name›
   const notes = [...w.document.querySelectorAll('.th-msg-note')].map((n) => n.textContent);
   assert.deepEqual(notes, ['Alex stopped this turn.', '<i>Sam</i> stopped this turn.']);
   assert.equal(w.document.querySelector('.th-msgs i, .th-msgs img, .th-msgs b'), null);
-  w.close();
-  const s = render('thread-shared.js', () => {}, null);
   const shared = SharedView.project({ state: { status: 'ready', generation: 1, provider: { label: 'Codex' }, deliveries: deliveries.map((d) => ({ ...d, mode: d.mode === 'steer' ? 'steer' : 'new-turn', sentAt: d.at })) }, share: { scope: 'watch', expiresAt: null }, route: { ownerName: 'Bob' }, now: 0 });
   s.ThreadShared.start({ sharedState: async () => shared, sharedPainted: async () => true, sharedProposals: async () => null, openTeam: async () => true }, 'a'.repeat(64)); await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual([...s.document.querySelectorAll('.th-msgs .th-msg-by')].map((n) => n.textContent), ['Sent by Alex', 'Sent through this share · steer', 'Sent by Sam · steer']);
   assert.deepEqual([...s.document.querySelectorAll('.th-msgs .th-msg-note')].map((n) => n.textContent), ['Alex stopped this turn.', '<i>Sam</i> stopped this turn.']);
   assert.equal(s.document.querySelector('.th-msgs i, .th-msgs img, .th-msgs b'), null);
-  s.close();
+  } finally { w.close(); s.close(); }
 });
