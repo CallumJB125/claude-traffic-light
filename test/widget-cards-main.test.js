@@ -9,21 +9,22 @@ function rig({ sessions = [], cfg = {}, spend = () => null, allowed = () => true
   const ipcMain = { handle: (ch, fn) => handlers.set(ch, fn) };
   const saved = [];
   const config = { load: () => cfg, save: (p) => { saved.push(p); Object.assign(cfg, p); } };
-  const api = Cards.install({ ipcMain, getSessions: () => (teammates ? { sessions, teammates } : sessions), getSpend: spend, config, allowed, now: () => NOW });
+  const api = Cards.install({ ipcMain, getSessions: () => (teammates ? { sessions, teammates } : sessions), getSpend: spend, config, allowed, now: () => NOW, home: '/Users/me' });
   return { handlers, saved, cfg, api, call: (ch, e, ...a) => handlers.get(ch)(e || {}, ...a) };
 }
 
-test('registers exactly the four widget channels', () => {
+test('registers exactly the six widget channels', () => {
   const { handlers } = rig();
-  assert.deepEqual([...handlers.keys()].sort(), ['widget:card-help', 'widget:pin-session', 'widget:resume-nudges', 'widget:session-cards']);
+  assert.deepEqual([...handlers.keys()].sort(), ['widget:card-help', 'widget:pin-session', 'widget:resume-nudges', 'widget:session-cards', 'widget:session-copy-resume', 'widget:session-open']);
 });
 
-test('cards carry the view, the spend for local rows, and never the raw row or path', async () => {
+test('cards carry the view, the spend for local rows, and never the raw row; the path only as the ~ folder line', async () => {
   const r = rig({ sessions: [{ sessionId: 's1', cwd: '/Users/me/secret/plex', signal: 'tool-use', tool: 'Bash', prompt: 'do not leak' }], spend: async (id) => (id === 's1' ? { cost_usd: 2, unpriced: 0 } : null) });
   const m = await r.call('widget:session-cards');
   assert.equal(m.rows.length, 1);
   assert.equal(m.rows[0].card.title, 'plex');
   assert.equal(m.rows[0].card.spend, '$2.00 this session');
+  assert.equal(m.rows[0].card.folder, '~/secret/plex');
   const text = JSON.stringify(m);
   assert.ok(!text.includes('/Users/me') && !text.includes('do not leak'));
 });
@@ -80,7 +81,9 @@ test('cards take explain, deploy and paused-nudge slices; help and resume go thr
   assert.equal(card.recap.headline, 'recap s1');
   assert.equal(card.deploy, 'Vercel · shop: live');
   assert.equal(card.nudgesPaused, true);
-  assert.ok(!JSON.stringify(m).includes('/w/shop'));
+  // QoL2: the folder line is the only place the path shows (outside the home folder it can't be shortened).
+  assert.equal(card.folder, '/w/shop');
+  assert.ok(!JSON.stringify({ ...m, rows: m.rows.map((r) => ({ ...r, card: { ...r.card, folder: null } })) }).includes('/w/shop'));
   assert.deepEqual(await handlers.get('widget:card-help')({}, 'h1'), { ok: true });
   assert.deepEqual(await handlers.get('widget:card-help')({}, 7), { ok: false });
   assert.deepEqual(await handlers.get('widget:resume-nudges')({}, 's1'), { ok: true });

@@ -9,6 +9,7 @@ const WAITING = new Set(['permission-ask', 'limit-hit', 'idle-nudge', 'stop', 't
 const IDLE = new Set(['idle', 'idle-nudge', 'stop', 'session-end']);
 const MAX = 80;
 const Organise = require('./work-organise.js');
+const Actions = require('./session-row-actions.js');
 
 const str = (v, max = MAX) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f‪-‮⁦-⁩]/g, '').trim().slice(0, max) : '');
 const stamp = (v) => { const t = typeof v === 'number' ? v : Date.parse(v || ''); return Number.isFinite(t) && t > 0 ? t : null; };
@@ -62,9 +63,12 @@ function deployLine(deploy) {
  * explain: {recap:{headline, line}|null, help:[{label, handle}], why} from explain mode, or null.
  * deploy: the project's deploy row (see deployLine), or null. nudgesPaused: a
  * "pause nudges" rule holds this burning session's nudges.
- * → {id, title, state, model, spend, teammate, actions, waiting, idle, remote, recap, deploy, help, helpWhy, nudgesPaused}
+ * QoL2: home (the home folder, for `~`), platform (names the file manager), resumable (main found the session has
+ * ended and has a resume command for it: only then is copy-resume offered).
+ * → {id, title, state, model, spend, teammate, actions, waiting, idle, remote, recap, deploy, help, helpWhy, nudgesPaused,
+ *    folder, folderApp, waitFor}
  */
-function sessionCard(session, { now = Date.now(), spend = null, teammate = null, explain = null, deploy = null, nudgesPaused = false } = {}) {
+function sessionCard(session, { now = Date.now(), spend = null, teammate = null, explain = null, deploy = null, nudgesPaused = false, home = null, platform = process.platform, resumable = false } = {}) {
   const s = session && typeof session === 'object' ? session : {};
   const signal = str(s.signal, 40);
   const tool = str(s.tool, 60);
@@ -90,9 +94,15 @@ function sessionCard(session, { now = Date.now(), spend = null, teammate = null,
   const cost = spend && Number.isFinite(spend.cost_usd) ? spend.cost_usd : null;
   const spendLine = cost == null ? '' : `${money(cost)} this session${spend.unpriced > 0 ? ` (+${spend.unpriced} unpriced)` : ''}`;
   const mate = teammate && str(teammate.name, 120) ? { name: str(teammate.name, 120), initials: initials(teammate.name) } : null;
+  // QoL2: your own sessions on this computer show their folder; a teammate's or another device's never does.
+  const own = !mate && !s.remote;
+  const folder = own ? Actions.folderLabel(str(s.cwd, 4096), home) : null;
+  const waitFor = waiting && since ? Actions.waitShort(now - since) : '';
   const actions = [];
-  if (!mate && !s.remote) actions.push('open');
-  if (!mate && waiting && !s.remote) actions.push('answer');
+  if (own) actions.push('open');
+  if (own && waiting) actions.push('answer');
+  if (own && resumable === true) actions.push('copy-resume');
+  if (own && folder) actions.push('finder', 'editor');
   if (!mate) actions.push(s.pinned ? 'unpin' : 'pin');
   const paused = !mate && nudgesPaused === true;
   if (paused) actions.push('resume-nudges');
@@ -101,7 +111,8 @@ function sessionCard(session, { now = Date.now(), spend = null, teammate = null,
   const recap = ex && ex.recap && str(ex.recap.headline, 120) ? { headline: str(ex.recap.headline, 120), line: str(ex.recap.line, 160) } : null;
   const help = (ex && Array.isArray(ex.help) ? ex.help : []).filter((h) => h && str(h.label, 60) && typeof h.handle === 'string' && /^[\w-]{1,40}$/.test(h.handle)).slice(0, 3).map((h) => ({ label: str(h.label, 60), handle: h.handle }));
   return { id, title: str(s.title, MAX) || titleOf(s), state, model: model || null, spend: spendLine, teammate: mate, actions, waiting, idle, remote: !!s.remote, pinned: !!s.pinned,
-    recap, deploy: mate ? '' : deployLine(deploy), help, helpWhy: help.length ? str(ex.why, 100) : '', nudgesPaused: paused };
+    recap, deploy: mate ? '' : deployLine(deploy), help, helpWhy: help.length ? str(ex.why, 100) : '', nudgesPaused: paused,
+    folder, folderApp: Actions.folderApp(platform), waitFor };
 }
 
 // A short tag per row when two or more rows share a provider and project, so

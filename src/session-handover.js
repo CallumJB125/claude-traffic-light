@@ -423,4 +423,4 @@ function forCard(writer, cardId, capture) {
   return t ? { markdown: t.replace(MARKER, '').replace(/<!-- plexiform-meta[^>]*-->\n?/, '').trim() } : null;
 }
 
-module.exports = { salvagePayload, forCard, create, renderDoc, factsFromDoc, mergeFacts, asPrompt, gitFacts, adapterOf, keyOf, MARKER, RING_LIMIT, MAX_DOC_BYTES, LABEL, LABELS };
+module.exports = { KEY, RESUME, salvagePayload, forCard, create, renderDoc, factsFromDoc, mergeFacts, asPrompt, gitFacts, adapterOf, keyOf, MARKER, RING_LIMIT, MAX_DOC_BYTES, LABEL, LABELS };

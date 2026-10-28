@@ -6,6 +6,9 @@ contextBridge.exposeInMainWorld('trafficLight', {
   getSessionCards: () => ipcRenderer.invoke('widget:session-cards'), pinSession: (id) => ipcRenderer.invoke('widget:pin-session', typeof id === 'string' ? id : null),
   cardHelp: (h) => (typeof h === 'string' && h.length <= 40 ? ipcRenderer.invoke('widget:card-help', h) : Promise.resolve({ ok: false })),
   resumeNudges: (id) => (typeof id === 'string' ? ipcRenderer.invoke('widget:resume-nudges', id) : Promise.resolve({ ok: false })),
+  // QoL2: a session's own card actions, by id only (main re-finds the row).
+  sessionOpen: (id, how) => (typeof id === 'string' && ['terminal', 'finder', 'editor'].includes(how) ? ipcRenderer.invoke('widget:session-open', { id, how }) : Promise.resolve({ ok: false, feedback: '' })),
+  copyResume: (id) => (typeof id === 'string' ? ipcRenderer.invoke('widget:session-copy-resume', { id }) : Promise.resolve({ ok: false, feedback: '' })),
   getAggregateStatus: () => ipcRenderer.invoke('get-aggregate-status'),
   cursorInWindow: () => ipcRenderer.invoke('cursor-in-window'),
   getWindowPosition: () => ipcRenderer.invoke('get-window-position'),

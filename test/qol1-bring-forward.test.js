@@ -152,7 +152,7 @@ test('B4: every jump result is used; the input click, a notification click and "
   const lines = main.split('\n').filter((l) => /\bjumpToSession\(/.test(l));
   // Each call either keeps the result or (the notification) shows its note.
   for (const l of lines) assert.match(l, /(=\s*await jumpToSession|jumpToSession\(.*\)\.then\(\(r\) => \{ if \(r && r\.cant\) showJumpNote|jump: \(s\) => jumpToSession)/, l.trim().slice(0, 140));
-  assert.equal(lines.length, 7);
+  assert.equal(lines.length, 8); // QoL2 added the widget card's Open (openSessionTerminal)
   assert.match(main, /if \(!session\) return \{ ok: false, note: "This session has ended, so there's no terminal window to show\." \};/);
   assert.match(read('widget.js'), /if \(r\.inputId\) \{ const o = await window\.trafficLight\.openInput\(r\.inputId\)\.catch\(\(\) => null\); if \(o && o\.note\) showFeedback\(o\.note\); return; \}/);
 });
