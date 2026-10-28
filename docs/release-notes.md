@@ -4,6 +4,7 @@ For macOS (Apple silicon and Intel) and Linux (x64).
 
 What changed
 
+- In Setups, pressing Cancel on the Apply confirmation now says "Cancelled. Nothing was changed." instead of an error, and you can press Apply again without building the review again (the review still expires when it did). If another window is asking you something, Setups says so.
 - Overview no longer sticks on "Plexiform session state is unavailable right now" after a Settings save: it appears only after two failed reads in a row and goes away on the first good one.
 - A teammate's shared session now opens as a watch-only chat when you click it under Shared with you in the sidebar (chat-first preview): who shared it, what it is doing now, and the messages sent through the share with each reply. You can't send from it yet; use Team sessions for that.
 - Your teammates no longer see you as viewing a session after you minimise Plexiform, leave Team sessions or sign out.
