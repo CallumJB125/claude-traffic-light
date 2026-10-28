@@ -71,7 +71,7 @@
     'data:inventory': 'privacy', 'data:export': 'privacy', 'data:export-activity': 'privacy', 'data:delete': 'privacy',
     'backups-list': 'privacy', 'backups-now': 'privacy', 'backups-diff': 'privacy', 'backups-restore': 'privacy', 'backups-open-folder': 'privacy',
     'interaction-host-status': 'phone', 'open-feedback': 'privacy',
-    'cli-install-status': 'general', 'cli-install': 'general', 'ghostty-dock-install': 'terminal', 'signal-endpoint': 'aitools',
+    'cli-install-status': 'general', 'cli-install': 'general', 'ghostty-dock-install': 'terminal', 'terminal-access:view': 'terminal', 'terminal-access:test': 'terminal', 'terminal-access:open': 'terminal', 'signal-endpoint': 'aitools',
     'native-board-status': 'aitools', 'native-board-boards': 'aitools', 'native-board-connect': 'aitools', 'native-board-disconnect': 'aitools',
     'git-status': 'projects', 'deploy:settings': 'projects', 'deploy:set-enabled': 'projects', 'deploy:token-save': 'projects', 'deploy:token-remove': 'projects',
     'remote-devices': 'phone', 'remote-pair': 'phone', 'remote-revoke': 'phone', 'remote-copy-code': 'phone',

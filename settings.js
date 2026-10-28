@@ -324,6 +324,46 @@
     };
     if (inPane('general')) window.settingsApi.cliStatus().then(showCli);
     document.getElementById('cli-install').addEventListener('click', async () => showCli(await window.settingsApi.cliInstall()));
+    // Terminal access (QoL4b): one row per installed terminal, then Accessibility. Test only for a terminal macOS can
+    // still ask about; once it has said no, the row points at System Settings instead (macOS won't ask again).
+    const accessNote = document.getElementById('terminal-access-note');
+    const showAccess = (rows) => {
+      const list = document.getElementById('terminal-access-list');
+      list.replaceChildren();
+      for (const r of Array.isArray(rows) ? rows : []) {
+        const li = document.createElement('li');
+        li.className = 'row terminal-access-row';
+        li.dataset.state = String(r.state || '');
+        const name = document.createElement('strong');
+        name.textContent = String(r.app || '');
+        const text = document.createElement('span');
+        text.textContent = ` ${String(r.text || '')}${r.fix ? ` ${String(r.fix)}` : ''}`;
+        li.append(name, text);
+        const acts = Array.isArray(r.actions) ? r.actions : [];
+        if (acts.includes('test')) {
+          const b = document.createElement('button');
+          b.type = 'button'; b.className = 'secondary'; b.textContent = 'Test';
+          b.setAttribute('aria-label', `Test ${String(r.app || '')}`);
+          b.addEventListener('click', async () => {
+            b.disabled = true;
+            accessNote.textContent = `Testing ${String(r.app || '')}… If macOS asks, choose OK.`;
+            try { const res = await window.settingsApi.terminalAccess('test', r.app); accessNote.textContent = res && res.note ? res.note : ''; if (res) showAccess(res.rows); } catch (err) { accessNote.textContent = err.message; }
+            b.disabled = false;
+          });
+          li.append(b);
+        }
+        if (acts.includes('open-settings')) {
+          const b = document.createElement('button');
+          b.type = 'button'; b.className = 'secondary'; b.textContent = 'Open settings';
+          b.setAttribute('aria-label', `Open System Settings for ${String(r.app || '')}`);
+          b.addEventListener('click', () => window.settingsApi.terminalAccess('open', r.needs === 'accessibility' ? 'accessibility' : 'automation'));
+          li.append(b);
+        }
+        list.append(li);
+      }
+      for (const id of ['terminal-access', 'terminal-access-title']) document.getElementById(id).hidden = !list.childElementCount;
+    };
+    if (inPane('terminal')) window.settingsApi.terminalAccess('view').then((res) => showAccess(res && res.rows), () => showAccess([]));
     // Ghostty Dock: Install only where it can be installed and isn't yet; Check again when installed but not usable.
     const showDock = (r, note) => {
       if (!r) return;

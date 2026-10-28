@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('settingsApi', {
   signalEndpoint: () => ipcRenderer.invoke('signal-endpoint'),
   cliStatus: () => ipcRenderer.invoke('cli-install-status'),
   cliInstall: () => ipcRenderer.invoke('cli-install'),
+  terminalAccess: (op, app) => ipcRenderer.invoke(op === 'test' ? 'terminal-access:test' : op === 'open' ? 'terminal-access:open' : 'terminal-access:view', typeof app === 'string' ? app.slice(0, 40) : null),
   ghosttyDock: (action) => ipcRenderer.invoke('ghostty-dock-install', ['status', 'install', 'recheck', 'github'].includes(action) ? action : 'status'),
   onGhosttyDockChanged: (cb) => ipcRenderer.on('ghostty-dock-changed', (e, s) => cb(s)),
   nativeBoardStatus: () => ipcRenderer.invoke('native-board-status'),

@@ -29,7 +29,13 @@ function hitResult(r, used) {
 // Ghostty Dock lists under its exact id, though its hook recorded another
 // app (src/terminal.js). It answers null to leave the session as it is.
 // `liveness(session)` answers 'gone', 'alive' or 'unknown' (src/terminal.js); `openApp(bundleId)` true once opened.
-function createJumper({ localHost, platform, focus, activate, explainer, adopt = null, liveness = null, openApp = null, log = () => {} }) {
+// `access(app, state)` (QoL4b, src/terminal-access.js): told 'allowed' when an Automation-needing adapter switched a
+// tab and 'denied' when macOS refused it. Only Automation needs reach it, and it can never break a jump (review B4-S2).
+function createJumper({ localHost, platform, focus, activate, explainer, adopt = null, liveness = null, openApp = null, access = null, log = () => {} }) {
+  function noteAccess(needs, state) {
+    if (!access || !needs || needs.permission !== 'automation' || typeof needs.app !== 'string') return;
+    try { access(needs.app, state); } catch (e) { log(`access note failed: ${e.message}`); }
+  }
   let current = null; // { key, gen, promise } of the jump in flight
   let gen = 0;
 
@@ -109,9 +115,13 @@ function createJumper({ localHost, platform, focus, activate, explainer, adopt =
         r = await focus(used, ctx);
         if (stale()) return null;
       }
-      if (r.ok) return hitResult(r, used);
+      if (r.ok) {
+        const a = ADAPTERS.find((x) => x.id === String(r.adapter).split('+').pop());
+        noteAccess(a && a.needs, 'allowed');
+        return hitResult(r, used);
+      }
       log(`${r.adapter || 'no adapter'}: ${r.reason || 'failed'}; nothing switched`);
-      if (r.denied) explainer.onDenied(r.needs);
+      if (r.denied) { explainer.onDenied(r.needs); noteAccess(r.needs, 'denied'); }
       return missed(r, session, stale);
     }
     if (platform === 'linux' && here) return runLinux(session, folderHint, preferApp, stale);
