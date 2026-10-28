@@ -1694,7 +1694,9 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     },
     async setupsConfirm(show) {
       const before=this.setupsContext();
-      if(typeof show!=='function' || !before?.foreground || setupModalTicket || homeModalTicket || tasksModalTicket || this.newChatHeld?.() || this.threadHeld?.())return null;
+      if(typeof show!=='function' || !before?.foreground)return null;
+      // L16: another dialog is open: say so (the Setups page shows its own sentence), do not show ours.
+      if(setupModalTicket || homeModalTicket || tasksModalTicket || this.newChatHeld?.() || this.threadHeld?.())return {busy:true};
       const ticket={window:before.window,contents:before.contents,generation:before.generation};setupModalTicket=ticket;
       try {
         const answer=await show(before.window);

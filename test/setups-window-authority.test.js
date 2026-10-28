@@ -34,7 +34,7 @@ test('owned context requires exact current top page, attachment, visible active 
  const f=fixture();f.state.focused=false;assert.equal(f.api.setupsContext().foreground,false);const g=f.api.setupsContext().generation;f.context.blur();f.state.focused=true;assert.ok(f.api.setupsContext().generation>g);
 });
 test('only one owned native modal and actual foreground/current view can return approval',async()=>{
- const f=fixture();let release;const pending=f.api.setupsConfirm(w=>{assert.equal(w,f.win);return new Promise(r=>release=r);});assert.equal(await f.api.setupsConfirm(()=>true),null);f.context.blur();release({approved:true});assert.equal((await pending).approved,true);
+ const f=fixture();let release;const pending=f.api.setupsConfirm(w=>{assert.equal(w,f.win);return new Promise(r=>release=r);});assert.equal((await f.api.setupsConfirm(()=>true))?.busy,true);f.context.blur();release({approved:true});assert.equal((await pending).approved,true);
  for(const mutate of [g=>g.state.focused=false,g=>g.context.navigate(),g=>g.state.visible=false,g=>g.wc.mainFrame.url='https://synthetic.example']){const g=fixture(),pending=g.api.setupsConfirm(()=>new Promise(r=>release=r));mutate(g);release({approved:true});assert.equal(await pending,null);}
 });
 test('same-URL document retirement invalidates pending native approval even with retained mainFrame',async()=>{

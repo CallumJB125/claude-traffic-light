@@ -46,11 +46,15 @@ test('same document number in a different owned window changes native observatio
 test('three native confirmations default Cancel and echo only exact controller authority',async()=>{
  const f=fixture();await f.invoke('local-state');const b=f.binding();for(const request of [{kind:'apply',plan_hash:HASH,summary:{}},{kind:'recovery',transaction_id:ID},{kind:'undo',transaction_id:ID,inspection_hash:HASH}]){
   const out=await b.confirm(request);assert.equal(out.approved,true);assert.equal(out.plan_hash,request.plan_hash);assert.equal(out.transaction_id,request.transaction_id);assert.equal(out.inspection_hash,request.inspection_hash);const dialog=f.calls.at(-1);assert.equal(dialog[1],f.context().window);assert.equal(dialog[2].defaultId,0);assert.equal(dialog[2].cancelId,0);assert.equal(dialog[2].buttons[0],'Cancel');
-  f.decision({response:0});assert.equal(await b.confirm(request),null);f.decision({response:1});
+  // L16: Cancel is its own frozen answer, the busy marker passes through, and neither is an approval.
+  f.decision({response:0});const cancel=await b.confirm(request);assert.deepEqual(cancel,{cancelled:true});assert.ok(Object.isFrozen(cancel));assert.equal(cancel.approved,undefined);
+  f.decision({busy:true});const busy=await b.confirm(request);assert.deepEqual(busy,{busy:true});assert.ok(Object.isFrozen(busy));
+  f.decision({response:2});assert.equal(await b.confirm(request),null);f.decision(null);assert.equal(await b.confirm(request),null);f.decision({response:1});
  }assert.equal(await b.confirm({kind:'unknown',approved:true}),null);
 });
 test('focus, document or owned window drift during native confirmation never grants',async()=>{
  for(const mode of ['focus','document','window']){const f=fixture();await f.invoke('local-state');f.during(()=>{const c=f.context();f.setContext({...c,...(mode==='focus'?{foreground:false}:mode==='document'?{generation:2}:{window:{isDestroyed:()=>false}})});});assert.equal(await f.binding().confirm({kind:'apply',plan_hash:HASH}),null);}
+ for(const mode of ['focus','document','window']){const f=fixture();await f.invoke('local-state');f.decision({response:0});f.during(()=>{const c=f.context();f.setContext({...c,...(mode==='focus'?{foreground:false}:mode==='document'?{generation:2}:{window:{isDestroyed:()=>false}})});});assert.equal(await f.binding().confirm({kind:'apply',plan_hash:HASH}),null,'Cancel after drift is a lost window, not a Cancel');}
 });
 test('identity retirement and close preserve one runtime lifetime and stop renewed access',async()=>{
  const f=fixture();await f.invoke('local-state');f.main.invalidate();assert.equal(f.calls.at(-1)[0],'invalidate');f.main.close();assert.equal(f.calls.at(-1)[0],'close');assert.equal((await f.invoke('local-state')).ok,false);assert.equal(f.calls.filter(c=>c[0]==='platform').length,1);
