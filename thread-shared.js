@@ -15,7 +15,7 @@
   const WATCH = 'Shared with you to watch only. The owner can choose Allow sending.';
   const PROPOSALS_MS = 10000;
   const STATUS_CHIP = { awaiting: 'Awaiting', approved: 'Approved', expired: 'Expired', rejected: 'Rejected', sending: 'Sending', sent: 'Sent', refused: 'Refused', unconfirmed: 'Unconfirmed' };
-  let api = null, rowId = '', timer = null, reading = false, view = null, stale = false, over = false;
+  let api = null, rowId = '', timer = null, reading = false, view = null, stale = false, over = false, offline = '';
   // T3: the composer's own state. The draft lives in the textarea itself and survives every re-render.
   let layout = '', chosen = null, cardOn = null, cardTimer = null, busy = false, proposalsAt = 0, proposalsReading = false, myProposals = [];
 
@@ -54,7 +54,7 @@
     $('th-meta').textContent = `${h.owner}'s ${h.provider} session · ${h.scope === 'interact' ? 'Watch and send' : 'Shared with you to watch'}${h.expiresAt ? ` · until ${clock(h.expiresAt)}` : ''}${h.fake ? ' (test data)' : ''}`;
     const banner = $('th-banner'); banner.hidden = false; banner.textContent = BANNER;
     const a = v.activity;
-    root.querySelector('.th-activity').textContent = stale ? 'Showing the last known state.' : a.category ? `${a.stale ? 'Last reported' : 'Now'}: ${a.category} · ${ago(a.ageMs)}` : 'No activity reported yet.';
+    root.querySelector('.th-activity').textContent = stale ? (offline ? `${offline}'s computer is offline. Showing the last known state.` : 'Showing the last known state.') : a.category ? `${a.stale ? 'Last reported' : 'Now'}: ${a.category} · ${ago(a.ageMs)}` : 'No activity reported yet.';
     const list = root.querySelector('.th-msgs'), items = v.deliveries.map((d) => {
       const li = el('li', 'th-msg');
       li.append(el('p', 'th-msg-by', d.by ? `Sent by ${d.by}` : 'Sent through this share'), el('p', 'th-msg-text', d.text));
@@ -254,14 +254,19 @@
     reading = false;
     if (over || !r || typeof r !== 'object') return;
     if (r.gone === true) { gone(r.reason); return; }
-    if (r.unavailable === true) { stale = true; if (view) render(); return; }
-    stale = false; view = r; render();
+    if (r.unavailable === true) {
+      stale = true; offline = r.offline === true && typeof r.owner === 'string' ? r.owner : '';
+      if (view) render();
+      else if (offline) { const n = pieces().querySelector('.th-activity'); if (n) n.textContent = `${offline}'s computer is offline. This will update when they are back.`; }
+      return;
+    }
+    stale = false; offline = ''; view = r; render();
     void readProposals();
   }
   function stop() { if (timer) clearInterval(timer); timer = null; }
 
   function start(threadApi, id) {
-    api = threadApi; rowId = id; over = false; view = null; stale = false;
+    api = threadApi; rowId = id; over = false; view = null; stale = false; offline = '';
     layout = ''; chosen = null; cardOn = null; busy = false; proposalsAt = 0; myProposals = [];
     hideChat(); pieces(); menu();
     stop(); timer = setInterval(read, POLL_MS);

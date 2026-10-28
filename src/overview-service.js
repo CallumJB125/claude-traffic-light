@@ -455,7 +455,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   if(!object(out))return{unavailable:true};
   if(out.ok!==true){
    if(out.status==='forbidden'||out.status==='stale'){sharedRoutes.delete(rowId);return{gone:true,reason:'removed'};}
-   return{unavailable:true};
+   return out.offline===true?{unavailable:true,offline:true,owner:clean(r.ownerName,80)||'The owner'}:{unavailable:true};
   }
   if(!object(out.state))return{unavailable:true};
   if(out.state.status==='ended'){sharedRoutes.delete(rowId);return{gone:true,reason:'ended'};}

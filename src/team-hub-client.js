@@ -21,6 +21,7 @@ const REASONS = Object.freeze({
   stale: 'This session is no longer shared with you.',
   forbidden: 'This session is not shared with you to send.',
   unavailable: 'The team hub did not accept the request just now.',
+  offline: "The owner's computer is offline.",
   unreadable: 'The team hub sent an unreadable answer.',
   invalid: 'Check the message and try again.',
 });
@@ -137,13 +138,17 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     request(`${base}/api/interaction/v1/shared/${encodeURIComponent(shareId)}/call`, { method: 'POST', body: { request_id: requestId, op, args }, deadline });
 
   const mapStatus = (code) => (code === 404 || code === 410 ? 'stale' : code === 401 || code === 403 ? 'forbidden' : 'unavailable');
+  // A shared call is made only for a share the hub just listed. The hub answers 404 for a listed share whose owner's computer is offline
+  // (interaction-shares.js: no live host), so 404 here is "offline", not "revoked": a share that is really gone is delisted or expired (sharedTarget).
+  const offlineFailure = () => ({ ...failed('unavailable', REASONS.offline), offline: true });
+  const sharedFailure = (code) => (code === 404 ? offlineFailure() : failed(mapStatus(code), reasonFor(mapStatus(code))));
   const reasonFor = (status) => REASONS[status] ?? REASONS.unavailable;
   const CHANGED = 'The session changed; try again.';
   // send() only: a generation race or any other named refusal means the session moved on, which is retryable.
   const movedOn = (res) => res.status === 'stale' || /generation[_ -]?(mismatch|race|changed|stale)/i.test(`${res.status ?? ''} ${res.error ?? ''} ${res.code ?? ''}`);
   function hubResult(r, send = false) {
     if (!object(r) || typeof r.status !== 'number') return failed('unavailable', REASONS.unavailable);
-    if (r.status !== 200) return failed(mapStatus(r.status), reasonFor(mapStatus(r.status)));
+    if (r.status !== 200) return sharedFailure(r.status);
     const res = object(r.body) && object(r.body.result) ? r.body.result : null;
     if (!res) return failed('unavailable', REASONS.unreadable);
     if (res.ok !== true) {
@@ -214,6 +219,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     if (!object(r) || typeof r.status !== 'number') return mutating ? uncertain() : failed('unavailable', REASONS.unavailable);
     if (r.status !== 200) {
       if (mutating && (r.status >= 500 || r.status <= 0)) return uncertain();
+      if (r.status === 404) return offlineFailure();
       const status = r.status === 409 ? 'stale' : mapStatus(r.status);
       return failed(status, status === 'stale' ? CHANGED : reasonFor(status));
     }
