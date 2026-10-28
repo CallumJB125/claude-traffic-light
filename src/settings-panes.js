@@ -52,7 +52,7 @@
   // channels and only as partial patches; both re-read when the sheet shows them again (settings:shown), so neither reverts the other.
   const WIDGET_LOOK_KEYS = Object.freeze([
     'showWidget', 'menuBarMode', 'showTasks', 'showAgents', 'agentRoster', 'paceTooltip', 'agentChipSize', 'agentKinds',
-    'widgetSnap', 'widgetSize', 'widgetShortcut', 'composeShortcut', 'projectColours',
+    'widgetSnap', 'widgetSize', 'widgetShortcut', 'composeShortcut', 'nextShortcut', 'projectColours',
   ]);
 
   // Old page id -> the sheet document that replaces it (preview). The REDIRECTS rows keep their `until`: resolve() learns
