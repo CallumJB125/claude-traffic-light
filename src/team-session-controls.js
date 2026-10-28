@@ -12,24 +12,47 @@ const UNKNOWN = 'The view changed while sending. Inspect the receipt before send
 const validState = s => object(s) && Number.isSafeInteger(s.generation) && s.generation >= 0
   && (s.activeTurn === null || typeof s.activeTurn === 'string' && UUID.test(s.activeTurn))
   && ['ready', 'working', 'compacting', 'ended'].includes(s.status) && object(s.capabilities) && Array.isArray(s.deliveries);
+const BUSY = 'An action on this session is awaiting a receipt. Inspect it before sending again.';
+// T3 (plan-t3 §2.2): one dispatch lock per shared target for the whole process, shared by Overview's controls
+// and every thread's. Keyed by the hub object, then [viewer, team, ref]: scope is left out, so a scope change
+// mid-dispatch never opens a second slot. It lives in the module, not a document, so closing and reopening a
+// view while an action is outstanding keeps the session serialised. Released in `finally`.
+const locks = new WeakMap();
+function takeLock(target) {
+  const hub = target?.hub;
+  if (!hub || (typeof hub !== 'object' && typeof hub !== 'function') || typeof target.viewer?.id !== 'string') return null;
+  let held = locks.get(hub);
+  if (!held) { held = new Set(); locks.set(hub, held); }
+  const key = JSON.stringify([target.viewer.id, target.team, target.ref]);
+  if (held.has(key)) return null;
+  held.add(key);
+  return () => { held.delete(key); };
+}
+// The same lock around a dispatch that doesn't go through action() (an approved proposal's send).
+async function withTargetLock(target, fn) {
+  const release = takeLock(target);
+  if (!release) return fail('busy', BUSY);
+  try { return await fn(); } finally { release(); }
+}
+// Per-op availability from one inspected state: the controls' own rule, also used for the thread's projection.
+function capabilitiesOf(scope, s) {
+  const canAct = scope === 'interact', live = s.status !== 'ended', caps = object(s.capabilities) ? s.capabilities : {};
+  const available = (yes, reason) => ({ available: yes === true, reason: yes ? '' : reason });
+  const why = reason => !canAct ? 'Shared with you to watch only.' : !live ? 'This session has ended.' : reason;
+  return {
+    send: available(canAct && live && s.status === 'ready' && s.activeTurn === null && caps.newTurn !== false, why('A turn is running. Steer it where supported, or wait for it to finish.')),
+    steer: available(canAct && live && s.status === 'working' && s.activeTurn !== null && caps.steer === true, why(caps.steer ? 'No current turn is available to steer.' : 'This provider does not support steering a running turn.')),
+    interrupt: available(canAct && live && s.status === 'working' && s.activeTurn !== null && caps.interrupt === true, why(caps.interrupt ? 'No current turn is available to interrupt.' : 'This provider does not support interruption.')),
+  };
+}
 
 function createTeamSessionControls({ resolve, current = () => true, actionCurrent = current, now = Date.now }) {
   const selections = new Map();
-  const pending = new Set();
   let epoch = 0;
   const alive = generation => generation === epoch && current() === true;
   const targetCurrent = target => { try { return typeof target?.isCurrent !== 'function' || target.isCurrent() === true; } catch { return false; } };
   const same = (a, b) => a && b && a.hub === b.hub && a.viewer.id === b.viewer.id && a.team === b.team && a.ref === b.ref && a.scope === b.scope;
-  const capabilities = (target, s) => {
-    const canAct = target.scope === 'interact', live = s.status !== 'ended';
-    const available = (yes, reason) => ({ available: yes === true, reason: yes ? '' : reason });
-    const why = reason => !canAct ? 'Shared with you to watch only.' : !live ? 'This session has ended.' : reason;
-    return {
-      send: available(canAct && live && s.status === 'ready' && s.activeTurn === null && s.capabilities.newTurn !== false, why('A turn is running. Steer it where supported, or wait for it to finish.')),
-      steer: available(canAct && live && s.status === 'working' && s.activeTurn !== null && s.capabilities.steer === true, why(s.capabilities.steer ? 'No current turn is available to steer.' : 'This provider does not support steering a running turn.')),
-      interrupt: available(canAct && live && s.status === 'working' && s.activeTurn !== null && s.capabilities.interrupt === true, why(s.capabilities.interrupt ? 'No current turn is available to interrupt.' : 'This provider does not support interruption.')),
-    };
-  };
+  const capabilities = (target, s) => capabilitiesOf(target.scope, s);
   async function inspect(request) {
     if (!closed(request, ['id']) || typeof request.id !== 'string' || !ID.test(request.id)) return fail('invalid', 'Choose a shared session.');
     const generation = epoch;
@@ -62,9 +85,8 @@ function createTeamSessionControls({ resolve, current = () => true, actionCurren
     if (!selected || selected.expires < now() || !alive(generation) || !actionCurrent() || !grantValid()) return fail('stale', STALE);
     // Consume before the first await. A double-click or replay cannot dispatch twice.
     selections.delete(request.selection);
-    if ([...pending].some(target => same(target, selected.target))) return fail('busy', 'An action on this session is awaiting a receipt. Inspect it before sending again.');
-    const lock = selected.target;
-    pending.add(lock);
+    const release = takeLock(selected.target);
+    if (!release) return fail('busy', BUSY);
     try {
     const fresh = () => alive(generation) && actionCurrent() === true && grantValid() && selected.expires >= now() && targetCurrent(selected.target);
     let target, state;
@@ -93,9 +115,9 @@ function createTeamSessionControls({ resolve, current = () => true, actionCurren
     // merely because focus changed after a request may have reached the host.
     if (!fresh()) return fail('unconfirmed', UNKNOWN);
     return object(out) ? out : fail('unconfirmed', 'No receipt yet. Inspect this session before sending again.');
-    } finally { pending.delete(lock); }
+    } finally { release(); }
   }
   return { inspect, action, invalidate() { epoch++; selections.clear(); } };
 }
 
-module.exports = { createTeamSessionControls };
+module.exports = { createTeamSessionControls, withTargetLock, capabilitiesOf };

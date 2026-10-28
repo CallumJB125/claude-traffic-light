@@ -1,5 +1,7 @@
-// A teammate's shared session as a read-only thread (T2). Builds everything from main's fixed projection
-// (src/shared-thread-view.js) with textContent only; it holds no ref, id or token and has no send path.
+// A teammate's shared session as a thread (T2), with send, steer, stop and propose on an interact share (T3).
+// Builds everything from main's fixed projection (src/shared-thread-view.js) and main's review cards, with
+// textContent only. It holds no ref or id; the only token it holds is main's opaque selection for the card on
+// screen, and confirm sends back just that and the exact text.
 (function () {
   'use strict';
   const $ = (id) => document.getElementById(id);
@@ -10,7 +12,12 @@
   const ago = (ms) => { const s = Math.round(ms / 1000); return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`; };
   const clock = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
 
+  const WATCH = 'Shared with you to watch only. The owner can choose Allow sending.';
+  const PROPOSALS_MS = 10000;
+  const STATUS_CHIP = { awaiting: 'Awaiting', approved: 'Approved', expired: 'Expired', rejected: 'Rejected', sending: 'Sending', sent: 'Sent', refused: 'Refused', unconfirmed: 'Unconfirmed' };
   let api = null, rowId = '', timer = null, reading = false, view = null, stale = false, over = false;
+  // T3: the composer's own state. The draft lives in the textarea itself and survives every re-render.
+  let layout = '', chosen = null, cardOn = null, cardTimer = null, busy = false, proposalsAt = 0, proposalsReading = false, myProposals = [];
 
   function pieces() {
     let root = $('th-shared');
@@ -59,11 +66,167 @@
     });
     list.replaceChildren(...items);
     root.querySelector('.th-shared-empty').textContent = items.length ? '' : 'No messages have been sent through this share yet.';
-    const foot = root.querySelector('.th-shared-foot');
-    if (h.scope === 'interact') {
-      const b = el('button', 'th-btn', 'Open in Team sessions'); b.type = 'button'; b.addEventListener('click', () => { void api.openTeam(rowId); });
-      foot.replaceChildren(el('p', 'th-shared-note', 'To send, steer or interrupt, use Team sessions.'), b);
-    } else foot.replaceChildren(el('p', 'th-shared-note', `Shared with you to watch only. Ask ${h.owner} to allow sending.`));
+    renderFoot(root.querySelector('.th-shared-foot'), v);
+  }
+
+  // ── T3: the interact layout ──
+  const OPTIONS = (owner) => [
+    { op: 'send', label: 'Send', sub: '' },
+    { op: 'steer', label: 'Steer this turn', sub: '' },
+    { op: 'propose', label: `Propose to ${owner}`, sub: `${owner} reviews this exact text before it runs.` },
+  ];
+  const capOf = (v, op) => (op === 'steer' ? v.controls.steer : op === 'propose' ? v.controls.propose : v.controls.send);
+  // Send when idle, otherwise Steer where it's available, otherwise nothing (plan-t3 M2).
+  const defaultOp = (v) => (v.controls.send.available ? 'send' : v.controls.steer.available ? 'steer' : null);
+  function clearDraft() { const t = $('th-sh-text'); if (t) t.value = ''; }
+  function note(text, tone) { const n = $('th-sh-note'); if (!n) return; n.textContent = text || ''; if (tone) n.dataset.tone = tone; else delete n.dataset.tone; }
+  function renderFoot(foot, v) {
+    const h = v.header;
+    if (h.scope !== 'interact' || !v.controls) {
+      if (layout === 'interact') { clearDraft(); closeCard(); myProposals = []; }
+      if (layout !== 'watch') { layout = 'watch'; foot.replaceChildren(el('p', 'th-shared-note', WATCH)); }
+      return;
+    }
+    if (layout !== 'interact') { layout = 'interact'; foot.replaceChildren(buildComposer(h)); }
+    const owner = h.owner;
+    const opt = chosen && capOf(v, chosen).available ? chosen : defaultOp(v);
+    chosen = opt;
+    const t = $('th-sh-text'), go = $('th-sh-go'), chip = $('th-sh-chip');
+    const label = OPTIONS(owner).find((o) => o.op === opt)?.label;
+    chip.textContent = label ? `${label} ▾` : 'Send ▾';
+    chip.disabled = !opt || busy;
+    t.disabled = !opt || busy;
+    t.placeholder = `Message ${owner}'s session`;
+    go.disabled = !opt || busy || !!cardOn;
+    if (!opt) note(v.controls.send.reason);
+    else if ($('th-sh-note').dataset.tone !== 'error' && !busy) note(opt === 'propose' ? `${owner} reviews this exact text before it runs.` : '');
+    $('th-sh-quota').textContent = `Runs on ${owner}'s ${h.provider} account and quota.`;
+    const items = $('th-sh-menu');
+    items.replaceChildren(...OPTIONS(owner).map((o) => {
+      const cap = capOf(v, o.op), b = el('button', 'th-menu-item'); b.type = 'button'; b.setAttribute('role', 'menuitemradio');
+      b.setAttribute('aria-checked', String(o.op === opt)); b.dataset.op = o.op;
+      b.append(document.createTextNode(o.label));
+      const sub = cap.available ? o.sub : cap.reason;
+      if (sub) b.append(el('span', 'th-menu-sub', sub));
+      if (!cap.available) { b.disabled = true; b.setAttribute('aria-disabled', 'true'); }
+      b.addEventListener('click', () => { if (!capOf(view, o.op).available) return; chosen = o.op; items.hidden = true; chip.setAttribute('aria-expanded', 'false'); note(''); renderFoot(foot, view); t.focus(); });
+      return b;
+    }));
+    const stop = $('th-sh-stop');
+    stop.hidden = !v.controls.interrupt.available;
+    stop.disabled = busy || !!cardOn;
+    renderProposals(v);
+  }
+  function buildComposer(h) {
+    const wrap = el('div', 'th-sh');
+    const form = el('form', 'th-reply th-sh-box'); form.id = 'th-sh-form'; form.setAttribute('aria-label', `Message ${h.owner}'s session`);
+    const lab = el('label', 'th-sr', `Message ${h.owner}'s session`); lab.htmlFor = 'th-sh-text';
+    const t = el('textarea', 'th-reply-text'); t.id = 'th-sh-text'; t.rows = 2; t.maxLength = 4000; t.setAttribute('aria-describedby', 'th-sh-note');
+    const row = el('div', 'th-reply-row');
+    const chipWrap = el('div', 'th-more-wrap th-sh-chip-wrap');
+    const chip = el('button', 'th-btn th-sh-chip'); chip.type = 'button'; chip.id = 'th-sh-chip'; chip.setAttribute('aria-haspopup', 'menu'); chip.setAttribute('aria-expanded', 'false'); chip.setAttribute('aria-controls', 'th-sh-menu');
+    const menu = el('div', 'th-menu th-sh-menu'); menu.id = 'th-sh-menu'; menu.setAttribute('role', 'menu'); menu.hidden = true;
+    chip.addEventListener('click', () => { menu.hidden = !menu.hidden; chip.setAttribute('aria-expanded', String(!menu.hidden)); });
+    chipWrap.append(chip, menu);
+    const n = el('p', 'th-reply-note'); n.id = 'th-sh-note'; n.setAttribute('aria-live', 'polite');
+    const go = el('button', 'th-btn th-primary', 'Review'); go.type = 'submit'; go.id = 'th-sh-go';
+    row.append(chipWrap, n, go);
+    form.append(lab, t, row);
+    form.addEventListener('submit', (ev) => { ev.preventDefault(); if (chosen) void startReview(chosen, t.value); });
+    t.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && ev.metaKey) { ev.preventDefault(); form.requestSubmit(); } });
+    const quota = el('p', 'th-sh-quota'); quota.id = 'th-sh-quota';
+    const stop = el('button', 'th-btn th-sh-stop', 'Stop turn'); stop.type = 'button'; stop.id = 'th-sh-stop'; stop.hidden = true;
+    stop.addEventListener('click', () => { void startReview('stop', ''); });
+    const cardHost = el('div', 'th-sh-card-host'); cardHost.id = 'th-sh-card';
+    const props = el('ul', 'th-msgs th-sh-proposals'); props.id = 'th-sh-proposals'; props.setAttribute('aria-label', 'Your proposals');
+    wrap.append(props, cardHost, form, quota, stop);
+    return wrap;
+  }
+  async function startReview(op, text) {
+    if (busy || cardOn) return;
+    busy = true; note(''); if (view) renderFoot(pieces().querySelector('.th-shared-foot'), view);
+    let r = null;
+    try { r = await api.sharedReview(rowId, op, text); } catch { r = null; }
+    busy = false;
+    if (over) return;
+    if (r && r.ok === true && r.card && typeof r.selection === 'string') showCard(r.card, r.selection, op === 'stop' ? '' : text);
+    else { note(failure(r), 'error'); if (r && r.status === 'forbidden') { void read(); } }
+    if (view) renderFoot(pieces().querySelector('.th-shared-foot'), view);
+  }
+  const failure = (r) => (r && typeof r.error === 'string' && r.error ? r.error : 'This action is unavailable right now.');
+  function arm(btn, ms) {
+    btn.disabled = true;
+    if (cardTimer) clearTimeout(cardTimer);
+    cardTimer = setTimeout(() => { btn.disabled = false; cardTimer = null; }, Math.max(ms || 600, 600));
+  }
+  function showCard(c, selection, text) {
+    const host = $('th-sh-card'); if (!host) return;
+    cardOn = { selection, text, op: c.op, armMs: c.armMs };
+    const card = el('section', 'th-card th-review th-sh-review'); card.setAttribute('role', 'group'); card.setAttribute('aria-labelledby', 'th-sh-card-title');
+    const title = el('h2', 'th-card-title', c.title); title.id = 'th-sh-card-title';
+    card.append(title);
+    if (c.text) card.append(el('p', 'th-card-text', c.text));
+    card.append(el('p', 'th-card-sub', c.target));
+    for (const n of Array.isArray(c.notes) ? c.notes : []) card.append(el('p', 'th-card-sub', n));
+    const btns = el('div', 'th-card-btns');
+    const yes = el('button', c.op === 'stop' || c.op === 'withdraw' ? 'th-btn th-danger' : 'th-btn th-primary', c.confirm); yes.type = 'button'; yes.id = 'th-sh-yes';
+    const back = el('button', 'th-btn', c.op === 'stop' || c.op === 'send-approved' || c.op === 'withdraw' ? 'Cancel' : 'Back to draft'); back.type = 'button';
+    yes.addEventListener('click', () => { void confirmCard(); });
+    back.addEventListener('click', () => { closeCard(); if (view) renderFoot(pieces().querySelector('.th-shared-foot'), view); $('th-sh-text')?.focus(); });
+    btns.append(yes, back);
+    card.append(btns);
+    host.replaceChildren(card);
+    arm(yes, c.armMs);
+    yes.focus();
+  }
+  function closeCard() { cardOn = null; if (cardTimer) { clearTimeout(cardTimer); cardTimer = null; } const host = $('th-sh-card'); if (host) host.replaceChildren(); }
+  async function confirmCard() {
+    if (!cardOn || busy) return;
+    const { selection, text, op } = cardOn;
+    busy = true; const yes = $('th-sh-yes'); if (yes) yes.disabled = true;
+    let r = null;
+    try { r = await api.sharedConfirm(rowId, selection, text); } catch { r = null; }
+    busy = false;
+    if (over) return;
+    if (r && r.status === 'not-ready') { if (yes) arm(yes, 600); return; }
+    closeCard();
+    if (r && r.ok === true) {
+      if (op === 'send' || op === 'steer' || op === 'propose') clearDraft();
+      note(op === 'propose' ? 'Proposal sent. It waits for the owner to review it.' : op === 'stop' ? 'Stop requested.' : op === 'withdraw' ? 'Proposal withdrawn.' : r.note || 'Sent. Its receipt appears with the messages.');
+      proposalsAt = 0;
+    } else note(failure(r), 'error');
+    void read();
+  }
+  function renderProposals(v) {
+    const list = $('th-sh-proposals'); if (!list) return;
+    const owner = v.header.owner, idle = v.controls.send.available;
+    list.replaceChildren(...myProposals.map((p) => {
+      const li = el('li', 'th-msg th-sh-proposal');
+      li.append(el('p', 'th-msg-by', p.title || 'Your proposal'), el('p', 'th-msg-text', p.text));
+      const word = p.status === 'awaiting' ? `Awaiting ${owner}` : p.status === 'approved' ? `Approved, one send${p.expiresAt ? ` until ${clock(p.expiresAt)}` : ''}` : STATUS_CHIP[p.status] || 'Unconfirmed';
+      const chip = el('span', 'th-chip', word); chip.dataset.state = p.status; li.append(chip);
+      if (p.action && p.status === 'approved') {
+        const b = el('button', 'th-btn th-primary', 'Send approved message'); b.type = 'button';
+        b.disabled = !idle || !!cardOn || busy;
+        if (!idle) li.append(el('p', 'th-msg-note', `Waiting for ${owner}'s session to be idle.`));
+        b.addEventListener('click', () => { if (!cardOn) showCard(p.action.card, p.action.selection, ''); });
+        li.append(b);
+      } else if (p.action && p.status === 'awaiting') {
+        const b = el('button', 'th-btn', 'Withdraw'); b.type = 'button'; b.disabled = !!cardOn || busy;
+        b.addEventListener('click', () => { if (!cardOn) showCard(p.action.card, p.action.selection, ''); });
+        li.append(b);
+      }
+      return li;
+    }));
+  }
+  async function readProposals() {
+    if (over || proposalsReading || layout !== 'interact' || Date.now() - proposalsAt < PROPOSALS_MS || cardOn) return;
+    proposalsReading = true; proposalsAt = Date.now();
+    let r = null;
+    try { r = await api.sharedProposals(rowId); } catch { r = null; }
+    proposalsReading = false;
+    if (over || layout !== 'interact' || cardOn) return;
+    if (r && r.ok === true && Array.isArray(r.proposals)) { myProposals = r.proposals; if (view) renderProposals(view); }
   }
 
   function gone(reason) {
@@ -74,6 +237,7 @@
     root.querySelector('.th-activity').textContent = ''; root.querySelector('.th-msgs').replaceChildren(); root.querySelector('.th-shared-foot').replaceChildren();
     root.querySelector('.th-shared-empty').textContent = '';
     $('th-banner').hidden = true;
+    clearDraft(); closeCard(); myProposals = []; layout = '';
     const text = reason === 'ended' ? 'This session has ended.' : 'This session is no longer shared with you.';
     $('th-title').textContent = text; $('th-meta').textContent = '';
     const e = $('th-empty'); e.hidden = false; $('th-empty-title').textContent = text; $('th-empty-text').textContent = 'Nothing from it is kept here.';
@@ -91,16 +255,19 @@
     if (r.gone === true) { gone(r.reason); return; }
     if (r.unavailable === true) { stale = true; if (view) render(); return; }
     stale = false; view = r; render();
+    void readProposals();
   }
   function stop() { if (timer) clearInterval(timer); timer = null; }
 
   function start(threadApi, id) {
     api = threadApi; rowId = id; over = false; view = null; stale = false;
+    layout = ''; chosen = null; cardOn = null; busy = false; proposalsAt = 0; myProposals = [];
     hideChat(); pieces(); menu();
     stop(); timer = setInterval(read, POLL_MS);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) void read(); });
+    // Coming back into view re-arms an open card (as R4 does), then refreshes.
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) { const yes = $('th-sh-yes'); if (cardOn && yes) arm(yes, cardOn.armMs); void read(); } });
     window.addEventListener('pagehide', stop);
     void read();
   }
-  window.ThreadShared = Object.freeze({ start, BANNER });
+  window.ThreadShared = Object.freeze({ start, BANNER, WATCH });
 })();

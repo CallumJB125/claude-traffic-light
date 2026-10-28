@@ -3,13 +3,16 @@
 // projection of one relayed `state` read (team-hub-client inspect) plus the share's
 // current terms. Nothing here is a ref, card id, entry id, selection, capability
 // or hub object; the renderer sets every string with textContent.
+const { capabilitiesOf } = require('./team-session-controls');
 const MAX_DELIVERIES = 10; // the newest; the hub client already keeps at most 20
 const MAX_TEXT = 4000;
 const MAX_RESPONSE = 16000; // the relay's own bound for a response
 const STALE_MS = 90_000;
 const STATES = Object.freeze(['queued', 'accepted', 'acknowledged', 'echoed', 'responding', 'replied', 'completed', 'interrupted', 'unconfirmed', 'failed', 'unknown']);
 const CATEGORIES = Object.freeze(['Thinking', 'Running a command', 'Editing files', 'Reading files', 'Searching', 'Using a tool', 'Coordinating agents']);
-const TOP_KEYS = Object.freeze(['header', 'banner', 'activity', 'deliveries', 'status', 'generation', 'canSendLater']);
+const TOP_KEYS = Object.freeze(['header', 'banner', 'activity', 'deliveries', 'status', 'generation', 'canSendLater', 'controls']);
+// T3: what the interact layout may offer, as booleans and fixed reasons only. Main checks every one again.
+const CONTROL_KEYS = Object.freeze(['send', 'steer', 'interrupt', 'propose']);
 const HEADER_KEYS = Object.freeze(['title', 'owner', 'initials', 'provider', 'scope', 'expiresAt', 'fake']);
 const DELIVERY_KEYS = Object.freeze(['id', 'by', 'text', 'state', 'response', 'at']);
 
@@ -18,6 +21,16 @@ const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f‪-‮⁦-
 const prose = (v, max) => (typeof v === 'string' ? v.replace(CONTROL, '').slice(0, max) : '');
 const line = (v, max) => prose(v, max).replace(/\s+/g, ' ').trim();
 const initialsOf = (name) => { const w = line(name, 80).split(' ').filter(Boolean); return ((w[0]?.[0] ?? '?') + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase().slice(0, 2); };
+
+function controlsOf(scope, s, owner) {
+  const valid = ['ready', 'working', 'compacting', 'ended'].includes(s.status) && Number.isSafeInteger(s.generation);
+  const state = { status: valid ? s.status : 'ended', activeTurn: typeof s.activeTurn === 'string' ? s.activeTurn : null, capabilities: s.capabilities };
+  const c = capabilitiesOf(scope, state), pick = (v) => ({ available: v.available === true, reason: v.available ? '' : prose(v.reason, 200) });
+  // Propose is idle-only, like the hub's proposal send (plan-t3 M2).
+  const propose = c.send.available ? { available: true, reason: '' }
+    : { available: false, reason: scope !== 'interact' || state.status === 'ended' ? c.send.reason : `${owner}'s session is busy. Propose when it's idle.` };
+  return { send: pick(c.send), steer: pick(c.steer), interrupt: pick(c.interrupt), propose: pick(propose) };
+}
 
 function project({ state, share, route, now }) {
   const s = state && typeof state === 'object' ? state : {};
@@ -43,7 +56,8 @@ function project({ state, share, route, now }) {
     status: ['ready', 'working', 'compacting', 'ended'].includes(s.status) ? s.status : 'ready',
     generation: Number.isSafeInteger(s.generation) ? s.generation : 0,
     canSendLater: scope === 'interact',
+    controls: controlsOf(scope, s, owner),
   };
 }
 
-module.exports = { project, TOP_KEYS, HEADER_KEYS, DELIVERY_KEYS, MAX_DELIVERIES, MAX_TEXT, MAX_RESPONSE, STALE_MS, STATES, CATEGORIES };
+module.exports = { project, TOP_KEYS, CONTROL_KEYS, HEADER_KEYS, DELIVERY_KEYS, MAX_DELIVERIES, MAX_TEXT, MAX_RESPONSE, STALE_MS, STATES, CATEGORIES };

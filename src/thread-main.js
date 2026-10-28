@@ -26,9 +26,10 @@
 // One thread is alive at a time; its Tasks slot lives only while it is shown
 // (index.js retires it, and main closes the slot through retire()).
 
+const { createSharedThreadActions } = require('./thread-shared-main');
 const ROW_ID = /^[0-9a-f]{64}$/;
 const EFFECT_MS = 500;
-const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act', 'thread:inputs', 'thread:answer-input', 'thread:shared-state', 'thread:open-team']);
+const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act', 'thread:inputs', 'thread:answer-input', 'thread:shared-state', 'thread:open-team', 'thread:shared-review', 'thread:shared-confirm', 'thread:shared-proposals']);
 // The reply's own bound: guard's (TV.LIMITS.message), checked before any await.
 const MESSAGE_BYTES = 8192;
 const REPLY_TEXT = Object.freeze({
@@ -83,7 +84,7 @@ const INPUT_TEXT = Object.freeze({
 // Provisional, awaiting Callum (plan-r2.md §7 item 3): the link form may change.
 const LINK = (id) => `plexiform://thread/${id}`;
 
-function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, hook = null, copy = () => {}, header = () => null, now = Date.now, sharedRead = null, presence = null, openTeam = null }) {
+function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, hook = null, copy = () => {}, header = () => null, now = Date.now, sharedRead = null, presence = null, openTeam = null, sharedAuthority = null }) {
   let slot = null; // { wcId, generation, taskId }
   // Documents that asked the Tasks service for a slot: only these are closed, so a terminal
   // session's thread (or a document that never read) never reaches, or starts, the service.
@@ -133,6 +134,34 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     if (presenceDoc === null || (wcId !== null && !presenceDoc.startsWith(`${wcId}:`))) return;
     presenceDoc = null;
     try { presence?.set('thread', null); } catch { /* best effort */ }
+  }
+  // T3 (plan-t3 §2): send, steer, stop and propose for a bound interact share. Guard T here; the rest in thread-shared-main.
+  const shared = createSharedThreadActions({ authority: sharedAuthority, now });
+  // Guard T for a channel whose args are [boundId, request].
+  function guardWith(e, args, { effect = false } = {}) {
+    const c = ctx();
+    if (!c || !e || e.sender !== c.contents || e.senderFrame !== c.frame) return null;
+    if (args.length !== 2 || typeof args[0] !== 'string' || args[0] !== c.boundId) return null;
+    if (effect && c.foreground !== true) return null;
+    return c;
+  }
+  const sharedBound = (c) => { const t = resolve(c.boundId); return !!t && t.kind === 'shared'; };
+  async function sharedReview(e, args) {
+    const c = guardWith(e, args);
+    if (!c || !sharedBound(c)) return null;
+    if (!rateOk(c, 'shared-review')) return { ok: false, status: 'busy', error: 'Wait a moment, then try again.' };
+    return shared.review(c, args[1], still);
+  }
+  async function sharedConfirm(e, args) {
+    const c = guardWith(e, args, { effect: true });
+    if (!c || !sharedBound(c)) return null;
+    if (!rateOk(c, 'shared-confirm')) return { ok: false, status: 'busy', error: 'Wait a moment, then try again.' };
+    return shared.confirm(c, args[1], still);
+  }
+  async function sharedProposals(e, args) {
+    const c = guard(e, args);
+    if (!c || !sharedBound(c)) return null;
+    return shared.proposals(c, still);
   }
   const headerOf = (t, id) => { try { return header(t, id) ?? null; } catch { return null; } };
 
@@ -194,6 +223,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     const c = guard(e, args);
     if (!c) return false;
     clearPresence(c.contents.id);
+    shared.retire(c.contents.id);
     await closeSlot(c.contents.id);
     return true;
   }
@@ -513,6 +543,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       entry.pending = null;
       if (!still(c) || r === null) { sharedReads.delete(key); return null; }
       if (r.gone === true) { clearPresence(c.contents.id); r = { gone: true, reason: typeof r.reason === 'string' ? r.reason : 'ended' }; }
+      if (r.unavailable !== true) shared.afterRead(c, r);
       entry.result = r;
       return r;
     })();
@@ -553,6 +584,9 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       ipc.handle('thread:answer-input', (e, ...a) => answerInput(e, a));
       ipc.handle('thread:shared-state', (e, ...a) => sharedState(e, a));
       ipc.handle('thread:open-team', (e, ...a) => toTeam(e, a));
+      ipc.handle('thread:shared-review', (e, ...a) => sharedReview(e, a));
+      ipc.handle('thread:shared-confirm', (e, ...a) => sharedConfirm(e, a));
+      ipc.handle('thread:shared-proposals', (e, ...a) => sharedProposals(e, a));
     },
     // tasks-service onEvent, before the Tasks pages: true when the event is the thread slot's.
     onEvent(wcId, taskId, event) {
@@ -567,10 +601,10 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       return true;
     },
     // index.js: the thread document is gone, reloaded, hidden or left.
-    retire(wcId) { if (Number.isSafeInteger(wcId)) { clearPresence(wcId); for (const k of [...sharedReads.keys()]) if (k.startsWith(`${wcId}:`)) sharedReads.delete(k); void closeSlot(wcId); } },
+    retire(wcId) { if (Number.isSafeInteger(wcId)) { clearPresence(wcId); shared.retire(wcId); for (const k of [...sharedReads.keys()]) if (k.startsWith(`${wcId}:`)) sharedReads.delete(k); void closeSlot(wcId); } },
     inputsChanged,
     slot: () => (slot ? { ...slot } : null),
-    stop() { stopped = true; clearPresence(); if (slot) void closeSlot(slot.wcId); },
+    stop() { stopped = true; clearPresence(); shared.stop(); if (slot) void closeSlot(slot.wcId); },
   };
 }
 
