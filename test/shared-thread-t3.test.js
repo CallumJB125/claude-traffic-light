@@ -131,10 +131,16 @@ test('Guard T: wrong sender or frame, args, an unbound id, a watch scope, a task
     assert.equal(x.calls.length, 0);
   } finally { x.close(); }
   // A row that isn't a teammate's share gets nothing.
-  const tm = createThreadMain({ buddy: () => ({ threadContext: () => ({ window: {}, contents: { id: 1, mainFrame: 1 }, frame: 1, generation: 1, boundId: 'a'.repeat(64), foreground: true }) }), chatPreview: true,
-    target: () => ({ kind: 'task', taskId: 't' }), tasks: () => null, sharedAuthority: () => { throw new Error('never asked'); } });
+  const contents = { id: 1, mainFrame: 1 };
+  let asked = 0;
+  const tm = createThreadMain({ buddy: () => ({ threadContext: () => ({ window: {}, contents, frame: 1, generation: 1, boundId: 'a'.repeat(64), foreground: true }) }), chatPreview: true,
+    target: () => ({ kind: 'task', taskId: 't' }), tasks: () => null, sharedAuthority: () => { asked++; return null; } });
   const h = new Map(); tm.register({ handle: (n, f) => h.set(n, f) });
-  assert.equal(await h.get('thread:shared-review')({ sender: { id: 1, mainFrame: 1 }, senderFrame: 1 }, 'a'.repeat(64), { op: 'send', text: 'x' }), null);
+  const e = { sender: contents, senderFrame: 1 };
+  assert.equal(await h.get('thread:shared-review')(e, 'a'.repeat(64), { op: 'send', text: 'x' }), null, 'a task row');
+  assert.equal(await h.get('thread:shared-confirm')(e, 'a'.repeat(64), { selection: crypto.randomUUID(), text: 'x' }), null);
+  assert.equal(await h.get('thread:shared-proposals')(e, 'a'.repeat(64)), null);
+  assert.equal(asked, 0, 'no authority is asked for a row that isn\'t a teammate\'s share');
 });
 
 test('send: review card from main, 600 ms arm, exact text, one use, receipt; effects need the focused window', async () => {
@@ -558,4 +564,17 @@ test('afterRead: a read that sees a new generation or turn, or a watch scope, re
     assert.equal((await a.confirm(c, { selection: r.selection, text: 'x' }, still)).error, SharedMain.TEXT.MOVED);
     assert.equal(acted, 0);
   }
+});
+
+test('one use at the thread level: a second confirm never reaches the subsystem', async () => {
+  let t = 0, acted = 0;
+  const auth = { live: () => true, owner: 'Bob', seen: () => null, invalidate() {}, resolve: async () => ({ hub: {}, scope: 'interact' }),
+    inspect: async () => ({ ok: true, selection: crypto.randomUUID(), state: { generation: 2, activeTurn: null, provider: { label: 'Codex' } }, capabilities: { send: { available: true, reason: '' } } }),
+    act: async () => { acted++; return { ok: true, delivery: { id: 'd', state: 'acknowledged' } }; } };
+  const a = SharedMain.createSharedThreadActions({ authority: () => auth, now: () => t });
+  const c = { contents: { id: 1 }, generation: 1, boundId: 'b'.repeat(64) }, still = () => true;
+  const r = await a.review(c, { op: 'send', text: 'x' }, still); t += 700;
+  const [one, two] = await Promise.all([a.confirm(c, { selection: r.selection, text: 'x' }, still), a.confirm(c, { selection: r.selection, text: 'x' }, still)]);
+  assert.deepEqual([one.ok, two.status], [true, 'stale']);
+  assert.equal(acted, 1);
 });
