@@ -128,3 +128,20 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
   .th-dot[data-bucket="needs"], .th-dot[data-bucket="stuck"] { background: CanvasText; }
   .th-waiting-title::before, .th-card-title::before { background: CanvasText; }
 }
+
+/* ── a teammate's shared session (T2): read-only ── */
+.th-shared { display: grid; gap: var(--space-3); margin: var(--space-3) 0; min-width: 0; }
+.th-activity { margin: 0; font-size: var(--text-sm); color: var(--muted); }
+.th-msgs { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+.th-msg { display: grid; gap: var(--space-1); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); min-width: 0; }
+.th-msg p { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.th-msg-by { font-size: var(--text-sm); color: var(--muted); }
+.th-msg-note { font-size: var(--text-sm); color: var(--muted); }
+.th-msg-reply { padding-top: var(--space-2); border-top: 1px solid var(--line); }
+.th-chip { justify-self: start; font-size: var(--text-xs); color: var(--muted); border: 1px solid var(--line); border-radius: var(--radius-pill); padding: 1px var(--space-2); }
+.th-shared-empty { margin: 0; color: var(--muted); }
+.th-shared-empty:empty { display: none; }
+.th-shared-foot { display: grid; gap: var(--space-2); justify-items: start; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel-2, var(--panel)); }
+.th-shared-foot:empty { display: none; }
+.th.is-shared .th-meta { padding-left: 0; }
+.th-shared-note { margin: 0; color: var(--muted); font-size: var(--text-sm); }

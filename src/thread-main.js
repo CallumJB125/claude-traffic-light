@@ -28,7 +28,7 @@
 
 const ROW_ID = /^[0-9a-f]{64}$/;
 const EFFECT_MS = 500;
-const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act', 'thread:inputs', 'thread:answer-input']);
+const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act', 'thread:inputs', 'thread:answer-input', 'thread:shared-state', 'thread:open-team']);
 // The reply's own bound: guard's (TV.LIMITS.message), checked before any await.
 const MESSAGE_BYTES = 8192;
 const REPLY_TEXT = Object.freeze({
@@ -83,7 +83,7 @@ const INPUT_TEXT = Object.freeze({
 // Provisional, awaiting Callum (plan-r2.md §7 item 3): the link form may change.
 const LINK = (id) => `plexiform://thread/${id}`;
 
-function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, hook = null, copy = () => {}, header = () => null, now = Date.now }) {
+function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, hook = null, copy = () => {}, header = () => null, now = Date.now, sharedRead = null, presence = null, openTeam = null }) {
   let slot = null; // { wcId, generation, taskId }
   // Documents that asked the Tasks service for a slot: only these are closed, so a terminal
   // session's thread (or a document that never read) never reaches, or starts, the service.
@@ -119,6 +119,21 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
   }
   const resolve = (id) => { try { return target(id) ?? null; } catch { return null; } };
   const GONE = Object.freeze({ gone: true });
+  const GONE_SHARED = Object.freeze({ gone: true, reason: 'unavailable' });
+  // T2: a teammate's shared session. Read-only: main holds the route, this file only asks for the fixed projection.
+  // Presence (ledger 30/31) is one slot in main's presence owner, set while this document shows the share.
+  const SHARED_MIN_MS = 2000;
+  const sharedReads = new Map(); // `${wcId}:${generation}` -> { at, pending, result }
+  let presenceDoc = null; // `${wcId}:${generation}` of the document that holds the thread's presence slot
+  function setPresence(c, t) {
+    if (!presence || !t || typeof t.cardId !== 'string' || !t.cardId || typeof t.teamId !== 'string') return;
+    try { presence.set('thread', { team: t.teamId, card: t.cardId }); presenceDoc = `${c.contents.id}:${c.generation}`; } catch { /* presence is best effort */ }
+  }
+  function clearPresence(wcId = null) {
+    if (presenceDoc === null || (wcId !== null && !presenceDoc.startsWith(`${wcId}:`))) return;
+    presenceDoc = null;
+    try { presence?.set('thread', null); } catch { /* best effort */ }
+  }
   const headerOf = (t, id) => { try { return header(t, id) ?? null; } catch { return null; } };
 
   async function closeSlot(wcId) {
@@ -152,6 +167,10 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       if (!still(c)) return null;
       return { kind: 'session', header: head, origin: t.origin ?? null, activity: a };
     }
+    if (t.kind === 'shared') {
+      setPresence(c, t);
+      return { kind: 'shared', header: null };
+    }
     return GONE;
   }
 
@@ -167,12 +186,14 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       try { a = await activity({ source: t.source, sessionId: t.sessionId }); } catch { a = null; }
       return still(c) ? { kind: 'session', header: head, origin: t.origin ?? null, activity: a } : null;
     }
+    if (t.kind === 'shared') return { kind: 'shared', header: null };
     return { kind: 'task', header: head };
   }
 
   async function close(e, args) {
     const c = guard(e, args);
     if (!c) return false;
+    clearPresence(c.contents.id);
     await closeSlot(c.contents.id);
     return true;
   }
@@ -473,10 +494,46 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     try { c.contents.send('thread:inputs-changed', { id: c.boundId }); } catch { /* closed */ }
   }
 
-  // Copy link: the clipboard gets this row's link, nothing else.
+  // thread:shared-state (T2): the bound teammate share's projection. Read-only; the route never leaves main.
+  // A 2 s floor per document and one read in flight: a second call inside either gets the same result.
+  async function sharedState(e, args) {
+    const c = guard(e, args);
+    if (!c) return null;
+    const t = resolve(c.boundId);
+    if (!t) return GONE_SHARED;
+    if (t.kind !== 'shared') return null;
+    if (typeof sharedRead !== 'function') return GONE_SHARED;
+    const key = `${c.contents.id}:${c.generation}`, last = sharedReads.get(key), at = now();
+    if (last && (last.pending || at - last.at < SHARED_MIN_MS)) return last.pending ? last.pending : last.result;
+    const entry = { at, pending: null, result: null };
+    sharedReads.set(key, entry);
+    entry.pending = (async () => {
+      let r = null;
+      try { r = await sharedRead(c.boundId, () => still(c)); } catch { r = null; }
+      entry.pending = null;
+      if (!still(c) || r === null) { sharedReads.delete(key); return null; }
+      if (r.gone === true) { clearPresence(c.contents.id); r = { gone: true, reason: typeof r.reason === 'string' ? r.reason : 'ended' }; }
+      entry.result = r;
+      return r;
+    })();
+    return entry.pending;
+  }
+
+  // "Team overview" / "Open in Team sessions" (T2): navigation only, the same one-shot hint a sidebar click arms.
+  async function toTeam(e, args) {
+    const c = guard(e, args, { effect: true });
+    if (!c || !rateOk(c, 'open-team')) return false;
+    const t = resolve(c.boundId);
+    if (!t || t.kind !== 'shared' || typeof openTeam !== 'function') return false;
+    try { return (await openTeam(c.boundId)) === true; } catch { return false; }
+  }
+
+  // Copy link: the clipboard gets this row's link, nothing else. A teammate's share has no stable link (its row id is per run).
   function copyLink(e, args) {
     const c = guard(e, args, { effect: true });
-    if (!c || !rateOk(c, 'copy-link') || !resolve(c.boundId)) return false;
+    if (!c || !rateOk(c, 'copy-link')) return false;
+    const t = resolve(c.boundId);
+    if (!t || t.kind === 'shared') return false;
     try { copy(LINK(c.boundId)); return true; } catch { return false; }
   }
 
@@ -494,6 +551,8 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       ipc.handle('thread:act', (e, ...a) => act(e, a));
       ipc.handle('thread:inputs', (e, ...a) => inputs(e, a));
       ipc.handle('thread:answer-input', (e, ...a) => answerInput(e, a));
+      ipc.handle('thread:shared-state', (e, ...a) => sharedState(e, a));
+      ipc.handle('thread:open-team', (e, ...a) => toTeam(e, a));
     },
     // tasks-service onEvent, before the Tasks pages: true when the event is the thread slot's.
     onEvent(wcId, taskId, event) {
@@ -508,10 +567,10 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       return true;
     },
     // index.js: the thread document is gone, reloaded, hidden or left.
-    retire(wcId) { if (Number.isSafeInteger(wcId)) void closeSlot(wcId); },
+    retire(wcId) { if (Number.isSafeInteger(wcId)) { clearPresence(wcId); for (const k of [...sharedReads.keys()]) if (k.startsWith(`${wcId}:`)) sharedReads.delete(k); void closeSlot(wcId); } },
     inputsChanged,
     slot: () => (slot ? { ...slot } : null),
-    stop() { stopped = true; if (slot) void closeSlot(slot.wcId); },
+    stop() { stopped = true; clearPresence(); if (slot) void closeSlot(slot.wcId); },
   };
 }
 

@@ -1673,6 +1673,8 @@ function getBuddy() {
       threadTarget: (id) => OverviewMain.threadTarget(id),
       // T1: a teammate row's click arms Overview's one-shot open hint (navigation only).
       openTeamRow: (id) => OverviewMain.armTeamHint(id),
+      // T2: bind a teammate's share for a thread (one shared-list read); false falls back to Overview.
+      threadBindShared: (id, alive) => OverviewMain.sharedThreadBind(id, alive),
       onThreadRetired: (wcId) => ThreadMain?.retire(wcId),
       // R2b-2: the new chat is kept only while a create it sent is in flight (review S1).
       newChatBusy: () => NewChat?.busy() === true,
@@ -2460,6 +2462,9 @@ if (CHAT_PREVIEW) {
   ThreadMain = require('./src/thread-main').createThreadMain({
     buddy: () => buddyWin, chatPreview: CHAT_PREVIEW,
     target: (id) => OverviewMain.threadTarget(id),
+    sharedRead: (id, alive) => OverviewMain.sharedThreadRead(id, alive),
+    openTeam: (id) => buddyWin?.openTeamRow?.(id) ?? false,
+    presence: PresenceOwner,
     header: (t, id) => SidebarRows.headerOf(t, id),
     tasks: () => getTasks(),
     copy: (text) => clipboard.writeText(text),

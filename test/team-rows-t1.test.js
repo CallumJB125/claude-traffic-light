@@ -151,7 +151,9 @@ test('teamRows: the fixed key list holds whatever the entry carries; ids are the
   assert.deepEqual(SidebarRows.teamRows(null), { schema: 1, status: 'unavailable', viewer: null, teams: [], teamsTotal: 0, rows: [] });
   const src = fs.readFileSync(path.join(__dirname, '../src/overview-service.js'), 'utf8');
   assert.match(src, /rowId:stable\(\['shared',e\.id\]\)/);
-  assert.equal((src.match(/stable\(\['shared'/g) || []).length, 1, "no other row id uses the 'shared' domain");
+  // T2's bind re-derives the same id to find its row; nothing else uses the domain.
+  assert.match(src, /stable\(\['shared',e\.id\]\)!==rowId/);
+  assert.equal((src.match(/stable\(\['shared'/g) || []).length, 2, "no other row id uses the 'shared' domain");
 });
 
 test('sidebar:team-rows guard: other senders, preview off, args, a document change mid-read; 15 s floor shared by concurrent reads', async () => {
@@ -240,12 +242,15 @@ test('a sidebar read leaves Overview alone: an open team selection still sends a
 
 test('buddy:open-team-row: sidebar main frame only, one 64-hex id; arms the hint, then a plain select of Overview (not route())', () => {
   const src = fs.readFileSync(path.join(__dirname, '../buddy-window/index.js'), 'utf8');
-  // A small named handler (T2 swaps its body for openThread with this as the fallback).
+  // A small named handler (T2 opens a thread first, with this hint as the fallback).
   assert.match(src, /if \(chatFirst === true\) ipcMain\.on\('buddy:open-team-row', openTeamRowFromSidebar\);/);
   const at = src.indexOf('function openTeamRowFromSidebar(');
   const body = src.slice(at, src.indexOf('\n  }\n', at));
   assert.match(body, /!fromSidebar\(e\) \|\| e\.senderFrame !== sidebar\.webContents\.mainFrame \|\| args\.length !== 1 \|\| typeof args\[0\] !== 'string' \|\| !ROW_ID\.test\(args\[0\]\)/);
-  assert.match(body, /armed = openTeamRow\(args\[0\]\) === true/);
+  // T2: a bindable share opens the thread; otherwise T1's hint and plain select stay the fallback.
+  assert.match(body, /bound = \(await threadBindShared\(id, current\)\) === true/);
+  assert.match(body, /if \(bound && openThread\(id\)\) return;/);
+  assert.match(body, /armed = openTeamRow\(id\) === true/);
   assert.match(body, /if \(armed\) select\('overview'\);/);
   assert.doesNotMatch(body, /route\(/);
   assert.match(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), /openTeamRow: \(id\) => OverviewMain\.armTeamHint\(id\),/);

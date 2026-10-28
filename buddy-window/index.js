@@ -127,7 +127,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, onPresenceLeave = () => {}, onOverviewLeft = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, chatsOn = () => true, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, openTeamRow = () => false, onThreadRetired = () => {}, newChatBusy = () => false, onNewChatRetired = () => {}, loginEnv = () => null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, onPresenceLeave = () => {}, onOverviewLeft = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, chatsOn = () => true, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, threadBindShared = async () => false, openTeamRow = () => false, onThreadRetired = () => {}, newChatBusy = () => false, onNewChatRetired = () => {}, loginEnv = () => null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -1342,11 +1342,24 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // T1: a teammate's shared row opens Overview › Team sessions on it. Main arms a one-shot hint
   // (the row's route, this viewer only) and does a plain select: route() would send overview to
   // the sidebar's All filter under the preview. The page reads the hint through its own fences.
+  let teamClick = 0;
   function openTeamRowFromSidebar(e, ...args) {
     if (!fromSidebar(e) || e.senderFrame !== sidebar.webContents.mainFrame || args.length !== 1 || typeof args[0] !== 'string' || !ROW_ID.test(args[0])) return;
-    let armed = false;
-    try { armed = openTeamRow(args[0]) === true; } catch { armed = false; }
-    if (armed) select('overview');
+    const id = args[0];
+    // T2: a bindable share opens as a thread; anything else (a board task, a fake hub, a read that fails) keeps T1's Overview hint.
+    // The bind awaits the hub, so it only counts while this is still the latest click, no navigation happened (select and
+    // openThread both bump homeGeneration) and the window is still there (labfix-review M1).
+    const mine = ++teamClick, stamp = homeGeneration;
+    const current = () => mine === teamClick && stamp === homeGeneration && !!win && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
+    void (async () => {
+      let bound = false;
+      try { bound = (await threadBindShared(id, current)) === true; } catch { bound = false; }
+      if (!current()) return;
+      if (bound && openThread(id)) return;
+      let armed = false;
+      try { armed = openTeamRow(id) === true; } catch { armed = false; }
+      if (armed) select('overview');
+    })();
   }
   if (chatFirst === true) ipcMain.on('buddy:open-team-row', openTeamRowFromSidebar);
   if (chatFirst === true) ipcMain.on('buddy:sidebar-groups', (e, ids) => {
@@ -1661,6 +1674,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     // that page is still selected in a visible window and its document is the one loading when this was asked.
     focusComposer() { return sendWhenReady('home', 'compose:focus', null); },
     tasksCompose() { return sendWhenReady('tasks', 'tasks:compose', null); },
+    // T2: the thread's "Team overview": the same one-shot hint and plain select a sidebar click arms.
+    openTeamRow(id) { if (typeof id !== 'string' || !ROW_ID.test(id)) return false; let armed = false; try { armed = openTeamRow(id) === true; } catch { armed = false; } if (armed) select('overview'); return armed; },
     tasksReveal(id) { return typeof id === 'string' && id.length <= 128 ? sendWhenReady('tasks', 'tasks:reveal', id) : false; },
     // Main-only identities. No renderer receives a sealed marker or window.
     setupsActorCurrent(actor) {

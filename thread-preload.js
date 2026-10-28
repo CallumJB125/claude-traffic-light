@@ -39,6 +39,9 @@ contextBridge.exposeInMainWorld('threadApi', {
     if (more && typeof more === 'object') out.more = JSON.parse(JSON.stringify(more));
     return ipcRenderer.invoke('thread:answer-input', out);
   },
+  // T2: a teammate's shared session (read-only): its projection, and the way back to Team sessions.
+  sharedState: (row) => ipcRenderer.invoke('thread:shared-state', id(row)),
+  openTeam: (row) => ipcRenderer.invoke('thread:open-team', id(row)),
   // Back to Board from an ended chat.
   board: () => ipcRenderer.send('thread:board'),
 });
