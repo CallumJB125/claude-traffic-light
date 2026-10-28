@@ -26,6 +26,8 @@ const LEASE_MS = 20_000;
 const POLL_CAP = 8;
 const MAX_PER_DOC = 8;
 const APPROVE_S = 600;
+const EARLIER_MAX = 20;
+const GROUPS_MAX = 10;
 const KEY = /^[0-9a-f]{32}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 // Overview's own choices (overview-share.js EXPIRY), keyed by what the page sends.
@@ -83,7 +85,7 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
     if (d && d.boundId !== c.boundId) { forget(key); d = null; }
     if (!d) {
       for (const k of [...docs.keys()]) if (k.startsWith(`${c.contents.id}:`)) forget(k);
-      d = { boundId: c.boundId, secret: crypto.randomBytes(32), last: null, held: false, interest: null, busy: false };
+      d = { boundId: c.boundId, secret: crypto.randomBytes(32), last: null, held: false, interest: null, busy: false, rejects: new Map() };
       docs.set(key, d);
     }
     return d;
@@ -145,19 +147,47 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
       key: mac(d, 's', s.id), team: line(s.team?.name, 120) || 'Team', scope: s.scope === 'interact' ? 'interact' : 'watch',
       expiresAt: s.expiresAt, automatic: automatic(s.id), members: Array.isArray(s.members) ? s.members.length : 0,
     }));
-    const proposals = [];
+    const { groups, others } = groupsOf(d, tgt.session, mine, host);
+    const teams = cat ? cat.teams.filter((x) => plain(x) && typeof x.id === 'string').slice(0, 40).map((x) => ({ key: mac(d, 't', x.id), name: line(x.name, 120) || 'Team' })) : [];
+    return { shareable: true, available: true, provider: tgt.provider, teams, shares, groups, others, reason: cat && !teams.length ? TEXT.NO_TEAMS : '', observedAt: t };
+  }
+  // Rev 4 (Callum, ledger 36): one card per teammate per session, not per proposal. The newest pending proposal from
+  // that teammate is the card; their older pending ones fold under it, with Reject all. Approved and finished ones are
+  // plain lines. Reject all names a snapshot main keeps of exactly what it rendered (R4-S1).
+  function groupsOf(d, session, mine, host) {
+    const pending = new Map(), others = [];
     for (const s of mine) {
       if (s.scope !== 'interact') continue;
       const cached = polls.get(s.id);
       if (!cached || cached.host !== host || !Array.isArray(cached.proposals)) continue;
-      for (const p of cached.proposals.slice(0, 10)) proposals.push(proposalView(d, s, p));
+      for (const p of cached.proposals) {
+        if (!plain(p) || typeof p.id !== 'string' || !plain(p.requester) || typeof p.requester.id !== 'string') continue;
+        if (p.status !== 'pending') { if (others.length < 20) others.push(proposalView(d, s, p)); continue; }
+        const list = pending.get(p.requester.id) ?? [];
+        list.push({ s, p });
+        pending.set(p.requester.id, list);
+      }
     }
-    const teams = cat ? cat.teams.filter((x) => plain(x) && typeof x.id === 'string').slice(0, 40).map((x) => ({ key: mac(d, 't', x.id), name: line(x.name, 120) || 'Team' })) : [];
-    return { shareable: true, available: true, provider: tgt.provider, teams, shares, proposals, reason: cat && !teams.length ? TEXT.NO_TEAMS : '', observedAt: t };
+    const at = (x) => { const t = Date.parse(x.p.createdAt); return Number.isFinite(t) ? t : 0; };
+    d.rejects.clear();
+    const groups = [];
+    for (const [requester, list] of [...pending].slice(0, GROUPS_MAX)) {
+      list.sort((a, b) => at(b) - at(a));
+      const [latest, ...rest] = list;
+      let rejectAll = null;
+      if (rest.length) {
+        rejectAll = crypto.randomBytes(16).toString('hex');
+        d.rejects.set(rejectAll, { session, requester, items: list.map(({ s, p }) => ({ share: s.id, id: p.id, version: p.version, digest: p.digest })) });
+      }
+      groups.push({ requester: line(latest.p.requester?.name, 80) || 'A teammate', latest: proposalView(d, latest.s, latest.p), earlier: rest.slice(0, EARLIER_MAX).map(({ s, p }) => proposalView(d, s, p)), more: Math.max(0, rest.length - EARLIER_MAX), rejectAll });
+    }
+    return { groups, others };
   }
+  // A proposal's key binds its share, id, version and digest: Approve and Reject act on the one shown (R4-S2).
+  const proposalKey = (d, s, p) => mac(d, 'p', s.id, p.id, String(p.version), String(p.digest));
   function proposalView(d, s, p) {
     return {
-      key: mac(d, 'p', s.id, p.id), share: mac(d, 's', s.id), requester: line(p.requester?.name, 80) || 'A teammate', title: line(p.title, 120),
+      key: proposalKey(d, s, p), share: mac(d, 's', s.id), requester: line(p.requester?.name, 80) || 'A teammate', title: line(p.title, 120),
       text: prose(p.text, 4000), version: p.version, status: PROPOSAL_STATUS[p.status] ?? 'unconfirmed',
       expiresAt: typeof p.expiresAt === 'string' && Number.isFinite(Date.parse(p.expiresAt)) ? Date.parse(p.expiresAt) : null,
     };
@@ -234,7 +264,7 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
       let r = null;
       try { r = await host.proposalList(s.id, fence); } catch { r = null; }
       if (!fence()) return null;
-      const p = r?.ok === true && Array.isArray(r.proposals) ? r.proposals.find((x) => plain(x) && typeof x.id === 'string' && mac(d, 'p', s.id, x.id) === key) : null;
+      const p = r?.ok === true && Array.isArray(r.proposals) ? r.proposals.find((x) => plain(x) && typeof x.id === 'string' && proposalKey(d, s, x) === key) : null;
       if (p) return { s, p };
     }
     return null;
@@ -293,7 +323,7 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
 
   // ── thread:owner-act [boundId, {op, key}]: stop, reject, revoke (only narrow access; one click) ──
   async function act(c, req, still) {
-    if (!exact(req, ['op', 'key']) || !['stop', 'reject', 'revoke'].includes(req.op) || typeof req.key !== 'string' || !KEY.test(req.key)) return fail('invalid', TEXT.INVALID);
+    if (!exact(req, ['op', 'key']) || !['stop', 'reject', 'revoke', 'reject-all'].includes(req.op) || typeof req.key !== 'string' || !KEY.test(req.key)) return fail('invalid', TEXT.INVALID);
     const d = docs.get(docKey(c));
     if (!d || d.boundId !== c.boundId) return fail('stale', TEXT.MOVED);
     if (d.busy) return fail('busy', TEXT.BUSY);
@@ -315,6 +345,7 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
         afterEffect(d, s.id);
         return out?.ok === true ? { ok: true, status: 'stopped', note: TEXT.STOPPED } : hostError(out, 'Could not stop sharing. Try again.');
       }
+      if (req.op === 'reject-all') return await rejectAll(d, host, mine, req.key, tgt.session, fence);
       const found = await findProposal(d, host, mine, req.key, fence);
       if (!fence()) return fail('stale', TEXT.MOVED);
       if (!found || found.p.status !== (req.op === 'reject' ? 'pending' : 'approved')) return fail('stale', TEXT.MOVED);
@@ -324,6 +355,35 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
       if (out?.ok !== true && !out?.proposal) return hostError(out);
       return { ok: true, status: req.op === 'reject' ? 'rejected' : 'revoked', note: out.proposal?.status === 'revoked' ? (req.op === 'reject' ? TEXT.REJECTED : TEXT.REVOKED) : TEXT.RETIRED };
     } finally { d.busy = false; }
+  }
+  // Reject all (R4-S1): only the proposals main rendered under that token, each still pending with the same version,
+  // digest and requester on a fresh list. One that arrived after the render is never touched; the rest report stale.
+  async function rejectAll(d, host, mine, token, session, fence) {
+    const snap = d.rejects.get(token);
+    if (!snap || snap.session !== session) return fail('stale', TEXT.MOVED);
+    d.rejects.delete(token);
+    let done = 0, stale = 0;
+    const byShare = new Map();
+    for (const it of snap.items) byShare.set(it.share, [...(byShare.get(it.share) ?? []), it]);
+    for (const [shareId, items] of byShare) {
+      const s = mine.find((x) => x.id === shareId);
+      if (!s || s.scope !== 'interact') { stale += items.length; continue; }
+      let r = null;
+      try { r = await host.proposalList(s.id, fence); } catch { r = null; }
+      if (!fence()) return fail('stale', TEXT.MOVED);
+      const now = r?.ok === true && Array.isArray(r.proposals) ? r.proposals : [];
+      for (const it of items) {
+        const p = now.find((x) => plain(x) && x.id === it.id);
+        if (!p || p.status !== 'pending' || p.version !== it.version || p.digest !== it.digest || p.requester?.id !== snap.requester) { stale++; continue; }
+        let out = null;
+        try { out = await host.proposalRevoke({ share: s.id, id: p.id }, fence); } catch { out = null; }
+        if (out?.proposal?.status === 'revoked') done++; else stale++;
+        if (!fence()) break;
+      }
+      afterEffect(d, s.id);
+    }
+    if (!done) return fail('stale', TEXT.MOVED);
+    return { ok: true, status: 'rejected', note: stale ? `${done} rejected. ${stale} had already changed; look again.` : `${done === 1 ? 'Proposal' : `${done} proposals`} rejected.` };
   }
   // After an effect the next read is fresh, and that share's proposals are polled again at once.
   function afterEffect(d, shareId = null) {
@@ -379,7 +439,7 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
         let r = null;
         try { r = await w.host.proposalList(id, w.fence); } catch { r = null; }
         if (!w.fence() || polls.get(id) !== entry) continue;
-        entry.proposals = r?.ok === true && Array.isArray(r.proposals) ? r.proposals.filter((p) => plain(p) && typeof p.id === 'string').slice(0, 20) : entry.proposals;
+        entry.proposals = r?.ok === true && Array.isArray(r.proposals) ? r.proposals.filter((p) => plain(p) && typeof p.id === 'string').slice(0, 64) : entry.proposals;
       }
     } finally { polling = false; }
     sweep();
@@ -396,4 +456,4 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
   };
 }
 
-module.exports = { createOwnerThreadActions, ARM_MS, SELECTION_MS, STATE_MIN_MS, POLL_MS, POLL_CAP, LEASE_MS, APPROVE_S, EXPIRY, SCOPES, TEXT, PROPOSAL_STATUS };
+module.exports = { createOwnerThreadActions, EARLIER_MAX, ARM_MS, SELECTION_MS, STATE_MIN_MS, POLL_MS, POLL_CAP, LEASE_MS, APPROVE_S, EXPIRY, SCOPES, TEXT, PROPOSAL_STATUS };

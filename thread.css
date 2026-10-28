@@ -102,6 +102,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .th-own-done { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
 .th-danger-outline { color: var(--danger-text); border-color: var(--danger-text); }
 .th-own-sheet select { font: inherit; max-width: 100%; }
+.th-own-earlier { font-size: var(--text-sm); min-width: 0; max-width: 100%; }
+.th-own-earlier summary { cursor: default; color: var(--muted); }
+.th-own-earlier .th-msgs { margin: var(--space-1) 0 0; }
 .th-stop { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .th-stop-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .th-stop-q { font-size: var(--text-sm); font-weight: 600; }

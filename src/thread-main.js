@@ -679,6 +679,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     inputsChanged,
     // Tests: one poll pass now (main's own checks included).
     ownerTick: () => ownerActs.tick(),
+    ownerSize: () => ownerActs.size(),
     slot: () => (slot ? { ...slot } : null),
     stop() { stopped = true; clearPresence(); shared.stop(); ownerActs.stop(); if (slot) void closeSlot(slot.wcId); },
   };

@@ -68,30 +68,43 @@
     note(noteText, noteKind);
   }
 
+  // Rev 4: one card per teammate per session. Main groups them; the page keeps only main's keys.
   function renderProposals() {
     const host = $('th-own-proposals'), v = view;
-    const list = v && v.shareable === true && Array.isArray(v.proposals) ? v.proposals : [];
-    const cards = list.map((p) => {
-      if (p.status === 'awaiting') {
-        const c = el('section', 'th-card th-own-proposal'); c.setAttribute('role', 'group');
-        const t = el('h2', 'th-card-title', `${p.requester} proposes a message`);
-        c.append(t, el('p', 'th-card-text', p.text), el('p', 'th-card-sub', `Decision version ${p.version}`));
-        const btns = el('div', 'th-card-btns');
-        const yes = button('th-btn th-primary', 'Approve one send · 10 min', () => { void review({ op: 'approve', proposal: p.key }); }); yes.disabled = busy || !!cardOn;
-        const no = button('th-btn th-danger-outline', 'Reject', () => { void act('reject', p.key); }); no.disabled = busy;
-        btns.append(yes, el('span', 'th-own-gap'), no);
-        c.append(btns);
-        return c;
+    const on = v && v.shareable === true;
+    const groups = on && Array.isArray(v.groups) ? v.groups : [], others = on && Array.isArray(v.others) ? v.others : [];
+    const cards = groups.map((g) => {
+      const p = g.latest;
+      const c = el('section', 'th-card th-own-proposal'); c.setAttribute('role', 'group');
+      c.append(el('h2', 'th-card-title', `${g.requester} proposes a message`), el('p', 'th-card-text', p.text), el('p', 'th-card-sub', `Decision version ${p.version}`));
+      const btns = el('div', 'th-card-btns');
+      const yes = button('th-btn th-primary', 'Approve one send · 10 min', () => { void review({ op: 'approve', proposal: p.key }); }); yes.disabled = busy || !!cardOn;
+      const no = button('th-btn th-danger-outline', 'Reject', () => { void act('reject', p.key); }); no.disabled = busy;
+      btns.append(yes, el('span', 'th-own-gap'), no);
+      c.append(btns);
+      const earlier = Array.isArray(g.earlier) ? g.earlier : [];
+      if (earlier.length) {
+        const n = earlier.length + (g.more || 0);
+        const more = el('details', 'th-own-earlier');
+        more.append(el('summary', '', `${n} earlier from ${g.requester}`));
+        const list = el('ul', 'th-msgs');
+        for (const x of earlier) list.append(el('li', 'th-card-sub', x.text));
+        if (g.more) list.append(el('li', 'th-card-sub', `+${g.more} more`));
+        more.append(list);
+        c.append(more);
+        if (g.rejectAll) { const all = button('th-btn th-own-btn', 'Reject all', () => { void act('reject-all', g.rejectAll); }); all.disabled = busy; c.append(all); }
       }
+      return c;
+    });
+    for (const p of others) {
       if (p.status === 'approved') {
         const c = el('div', 'th-own-done');
         c.append(el('span', 'th-card-sub', `${p.requester}: approved for one send${p.expiresAt ? ` until ${clock(p.expiresAt)}` : ''}`));
         const rv = button('th-btn th-own-btn', 'Revoke', () => { void act('revoke', p.key); }); rv.disabled = busy;
         c.append(rv);
-        return c;
-      }
-      return el('p', 'th-card-sub th-own-done', `${p.requester}: ${STATUS[p.status] || 'Unconfirmed'}`);
-    });
+        cards.push(c);
+      } else cards.push(el('p', 'th-card-sub th-own-done', `${p.requester}: ${STATUS[p.status] || 'Unconfirmed'}`));
+    }
     host.replaceChildren(...cards);
   }
 
@@ -199,7 +212,7 @@
     try { r = await api.ownerState(rowId); } catch { r = null; }
     reading = false;
     if (over || !r || typeof r !== 'object') return;
-    view = { shareable: r.shareable === true, available: r.available === true, reason: typeof r.reason === 'string' ? r.reason : '', teams: Array.isArray(r.teams) ? r.teams : [], shares: Array.isArray(r.shares) ? r.shares : [], proposals: Array.isArray(r.proposals) ? r.proposals : [] };
+    view = { shareable: r.shareable === true, available: r.available === true, reason: typeof r.reason === 'string' ? r.reason : '', teams: Array.isArray(r.teams) ? r.teams : [], shares: Array.isArray(r.shares) ? r.shares : [], groups: Array.isArray(r.groups) ? r.groups : [], others: Array.isArray(r.others) ? r.others : [] };
     if (!view.shareable) { sheet = false; closeCard(); }
     render();
   }
