@@ -68,10 +68,10 @@ test('host: a stop names who asked once the turn is interrupted, on its new-turn
     const u = await x.start('second');
     await x.stop(u.tag); x.end(u.id); await flush();
     assert.equal(x.state().deliveries.at(-1).stoppedBy, null);
-    // A teammate then the owner, both while it runs: the last one wins.
+    // A teammate then the owner, both while it runs: the first stop ended it, so it keeps the name.
     const v = await x.start('third');
     await x.stop(v.tag, 'Alex'); await x.stop(v.tag); x.end(v.id); await flush();
-    assert.equal(x.state().deliveries.at(-1).stoppedBy, null);
+    assert.equal(x.state().deliveries.at(-1).stoppedBy, 'Alex');
   } finally { x.hub.stopAll(); }
 });
 
@@ -92,6 +92,32 @@ test('host: no claim for a stop that failed, a turn that completed anyway, a nam
     assert.equal(x.state().deliveries.at(-1).stoppedBy, null);
     const w = await x.start();
     assert.equal((await x.hub.interrupt({ ...x.base, turn: w.tag, by: 'Mallory' }, ACTOR)).status, 'invalid', 'a request never names the stopper');
+  } finally { x.hub.stopAll(); }
+});
+
+test('host (no overwrite): once a stop ended the turn, a later stop never replaces the name, whether refused or answered after', async () => {
+  const x = await hubRig();
+  try {
+    const t = await x.start();
+    // The owner asks too while Alex's stop is still in hand; the turn ends before either answer.
+    let release; x.adapter.hold = new Promise((r) => { release = r; });
+    const alex = x.stop(t.tag, 'Alex'), owner = x.stop(t.tag);
+    await flush();
+    x.end(t.id); await flush();
+    release(); await alex; await owner; x.adapter.hold = null;
+    assert.equal(x.state().deliveries[0].stoppedBy, 'Alex');
+    // After it ended: refused, and nothing changes.
+    assert.equal((await x.stop(t.tag)).status, 'stale');
+    assert.equal(x.state().deliveries[0].stoppedBy, 'Alex');
+    // Alex's request failed, the owner's stood: the owner stopped it (no name).
+    const u = await x.start();
+    x.adapter.hold = new Promise((r) => { release = r; });
+    const a = x.stop(u.tag, 'Alex');
+    await flush();
+    x.adapter.fail = true; release(); assert.equal((await a).status, 'unavailable');
+    x.adapter.fail = false; x.adapter.hold = null;
+    await x.stop(u.tag); x.end(u.id); await flush();
+    assert.equal(x.state().deliveries.at(-1).stoppedBy, null);
   } finally { x.hub.stopAll(); }
 });
 
