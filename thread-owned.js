@@ -8,6 +8,7 @@
   const POLL_MS = 5000;
   const CHIP = { queued: 'Queued', accepted: 'Accepted', acknowledged: 'Received', echoed: 'Echoed', responding: 'Responding', replied: 'Done', completed: 'Done', interrupted: 'Interrupted', unconfirmed: 'Unconfirmed', failed: 'Failed', unknown: 'Unconfirmed' };
   const FOOT = 'Started from Overview. To message it, use Overview.';
+  const FOOT_CHANNEL = 'Connected from Overview. To message it, use Overview.';
   const GONE = { overview: 'This session ended when Overview reloaded.', ended: 'This session has ended.' };
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
   const ago = (ms) => { const s = Math.round(ms / 1000); return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`; };
@@ -56,6 +57,7 @@
     });
     root.querySelector('.th-msgs').replaceChildren(...items);
     root.querySelector('.th-shared-empty').textContent = items.length ? '' : 'No messages have been sent to it yet.';
+    root.querySelector('.th-shared-note').textContent = h.channel ? FOOT_CHANNEL : FOOT;
   }
 
   function gone(reason) {
@@ -91,5 +93,5 @@
     window.addEventListener('pagehide', stop);
     void read();
   }
-  window.ThreadOwned = Object.freeze({ start, FOOT, GONE });
+  window.ThreadOwned = Object.freeze({ start, FOOT, FOOT_CHANNEL, GONE });
 })();

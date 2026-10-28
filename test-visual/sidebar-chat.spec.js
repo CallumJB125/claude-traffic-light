@@ -19,9 +19,16 @@ const ROWS = [
 ];
 
 // One app per test: the gate is read once at boot, and each test needs its own rows.
-async function open({ rows = ROWS, theme = 'dark', env = { CLAUDE_TRAFFIC_LIGHT_CHAT_PREVIEW: '1' }, config = {}, team = null } = {}) {
+async function open({ rows = ROWS, theme = 'dark', env = { CLAUDE_TRAFFIC_LIGHT_CHAT_PREVIEW: '1' }, config = {}, team = null, reads = null } = {}) {
   const h = await launchApp({ env, config });
-  if (rows) {
+  if (reads) {
+    // T4a: one payload per read (the last repeats), so a later read can end an owned row.
+    await h.app.evaluate(({ ipcMain }, reads) => {
+      let n = 0;
+      ipcMain.removeHandler('overview:state');
+      ipcMain.handle('overview:state', (e) => (/\/buddy-window\/sidebar\.html$/.test(e.sender.getURL()) ? reads[Math.min(n++, reads.length - 1)] : null));
+    }, reads);
+  } else if (rows) {
     // Answers the sidebar document only, as main does; nothing else in these shots reads it.
     await h.app.evaluate(({ ipcMain }, rows) => {
       ipcMain.removeHandler('overview:state');
@@ -213,5 +220,20 @@ test('T1 team empty (dark): no team yet, one sentence and Account & team', async
     await expect(side.locator('#sb-team-join')).toBeVisible();
     await side.locator('.sb-filter-opt[data-filter="team"]').blur();
     await shot(side.locator('.sidebar'), 'sidebar-team-empty-dark.png');
+  } finally { await h.cleanup(); }
+});
+
+// T4a: my own Plexiform-held sessions sit with the other rows; an owned row main ended stays in place as a tombstone.
+test('owned rows (dark): a Plexiform channel row, and one that ended when Overview reloaded', async () => {
+  const owned = (n, title, bucket) => ({ id: id(n), bucket, title, project: n === 21 ? 'billing' : '', origin: null, age_ms: 20000, team: false, terminal: false, chat: false, thread: true });
+  const first = [...ROWS.slice(0, 4), owned(20, 'Plexiform channel', 'working'), owned(21, 'Codex session in billing', 'working')];
+  const reads = [{ schema: 1, status: 'complete', sessions: first, ended: [] },
+    { schema: 1, status: 'complete', sessions: first.filter((r) => r.id !== id(21)), ended: [{ id: id(21), reason: 'overview' }] }];
+  const { h, side } = await open({ reads });
+  try {
+    await expect(side.locator('.sb-gone')).toHaveCount(1, { timeout: 15000 });
+    await expect(side.locator('.sb-gone .sb-meta')).toHaveText('Ended when Overview reloaded');
+    await expect(side.locator('.sb-group[data-bucket="working"] .sb-title')).toHaveText(['Refactor the invoice importer', 'Claude session in api', 'Plexiform channel', 'Codex session in billing']);
+    await shot(side.locator('.sidebar'), 'sidebar-owned-row-dark.png');
   } finally { await h.cleanup(); }
 });

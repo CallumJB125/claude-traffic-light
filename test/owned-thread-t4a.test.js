@@ -347,7 +347,7 @@ test('renderer: header, activity, messages, footer and no prompt box; textConten
     p.$('th-ow-overview').click(); await tick();
     assert.deepEqual(p.calls, ['overview']);
     const ch = page([{ ...VIEW, header: { title: OwnedThread.CHANNEL_TITLE, provider: 'Claude Code', channel: true } }]);
-    try { ch.start(); await tick(10); assert.equal(ch.$('th-title').textContent, 'Plexiform channel'); assert.equal(ch.$('th-meta').textContent, 'Claude Code in your terminal · Connected from Overview'); } finally { ch.w.close(); }
+    try { ch.start(); await tick(10); assert.equal(ch.$('th-title').textContent, 'Plexiform channel'); assert.equal(ch.$('th-meta').textContent, 'Claude Code in your terminal · Connected from Overview'); assert.equal(ch.$('th-owned').querySelector('.th-shared-note').textContent, 'Connected from Overview. To message it, use Overview.'); } finally { ch.w.close(); }
   } finally { p.w.close(); }
   const src = read('thread-owned.js');
   assert.ok(!/innerHTML|insertAdjacentHTML|outerHTML/.test(src));
