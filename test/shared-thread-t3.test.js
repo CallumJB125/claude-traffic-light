@@ -817,6 +817,9 @@ test('T3b: the window is tied to the share it opened on: a changed expiry return
     y.expires(new Date(Date.now() + 86_400_000).toISOString());
     const seen = await seenOf(y);
     assert.equal((await rev(y, { op: 'send', text: 'a', seen })).status, 'review', 'review sees the new identity');
+    const after = await rev(y, { askEach: false });
+    assert.equal(after.window, undefined, 'the window ended, so the composer line goes');
+    y.later(2100); assert.equal((await y.state()).window, 0);
   } finally { y.close(); }
 });
 

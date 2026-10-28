@@ -164,7 +164,8 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
       const selection = mint(c, auth, { op, text, inner: r.selection, generation: r.state.generation, turn, expires, direct: true, window: held.window });
       return { ok: true, status: 'direct', selection };
     }
-    if (held?.window && !windowLive(held)) held.window = null;
+    // An expired window, or one whose share changed (id, effective scope, expiry), ends here; the card shows and the page stops saying "straight away".
+    if (held?.window && (!windowLive(held) || !sameIdentity(held.window.share, identity(t)))) held.window = null;
     const selection = mint(c, auth, { op, text, inner: r.selection, generation: r.state.generation, turn, expires: now() + SELECTION_MS });
     return { ok: true, status: 'review', selection, card: card(op, owner, line(r.state.provider?.label, 60) || 'AI', op === 'stop' ? '' : text.trim()) };
   }
