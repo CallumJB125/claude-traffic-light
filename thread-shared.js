@@ -83,7 +83,8 @@
   function renderFoot(foot, v) {
     const h = v.header;
     if (h.scope !== 'interact' || !v.controls) {
-      if (layout === 'interact') { clearDraft(); closeCard(); myProposals = []; }
+      // The box itself goes, so no private text stays in a box that can no longer send.
+      if (layout === 'interact') { closeCard(); myProposals = []; }
       if (layout !== 'watch') { layout = 'watch'; foot.replaceChildren(el('p', 'th-shared-note', WATCH)); }
       return;
     }

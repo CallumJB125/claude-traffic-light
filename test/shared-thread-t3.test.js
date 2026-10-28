@@ -407,6 +407,9 @@ test('proposal name: the account\'s display name for this viewer; email-like, "Y
 test('retirement: close, a reopened document and a turn change drop selections; nothing dispatches', async () => {
   const x = await rig();
   try {
+    const h = await x.review('send', 'Hidden'); x.later();
+    x.tm.retire(7);
+    assert.equal((await x.confirm(h.selection, 'Hidden')).status, 'stale', 'hidden and shown again: the same document, but its cards are gone');
     const r = await x.review('send', 'Old'); x.later();
     x.reopen();
     assert.equal((await x.confirm(r.selection, 'Old')).status, 'stale');
