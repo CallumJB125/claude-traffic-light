@@ -83,7 +83,7 @@ test('finding 2: one native dialog at a time across Home, Tasks and Setups, both
   w.ctx.show('tasks');
   assert.equal(await w.api.tasksConfirm(async () => ({ response: 1 })), null, 'Tasks refuses while Home’s is open');
   w.ctx.show('setups');
-  assert.equal(await w.api.setupsConfirm(async () => ({ response: 1 })), null, 'Setups refuses while Home’s is open');
+  assert.equal((await w.api.setupsConfirm(async () => ({ response: 1 })))?.busy, true, 'Setups refuses while Home’s is open');
   release({ response: 1 });
   assert.equal(await pending, null, 'and Home’s own answer is void: the page changed');
   const t = world(); t.ctx.show('tasks');
@@ -101,7 +101,7 @@ test('finding 2: one native dialog at a time across Home, Tasks and Setups, both
   const tsp = ts.api.tasksConfirm(() => new Promise((r) => { release = r; }));
   ts.ctx.show('setups');
   let asked = 0;
-  assert.equal(await ts.api.setupsConfirm(async () => { asked++; return { response: 1 }; }), null, 'Setups refuses while Tasks’ is open');
+  assert.equal((await ts.api.setupsConfirm(async () => { asked++; return { response: 1 }; }))?.busy, true, 'Setups refuses while Tasks’ is open');
   assert.equal(asked, 0, 'no second dialog was shown');
   release({ response: 0 }); await tsp;
   assert.deepEqual(await ts.api.setupsConfirm(async () => ({ response: 1 })), { response: 1 }, 'Setups asks again once Tasks’ is closed');
@@ -231,7 +231,7 @@ test('native approve or discard open, then a Setups confirmation: null, no secon
     assert.deepEqual(owners, [w.win], `${info.action}: one dialog, parented by the Tasks window`);
     w.ctx.show('setups');
     let asked = 0;
-    assert.equal(await w.api.setupsConfirm(async () => { asked++; return { response: 1 }; }), null, `${info.action}: Setups refuses while it is open`);
+    assert.equal((await w.api.setupsConfirm(async () => { asked++; return { response: 1 }; }))?.busy, true, `${info.action}: Setups refuses while it is open`);
     assert.equal(asked, 0);
     release({ response: 0 });
     assert.equal(await pending, false, 'answered Cancel (and the page moved): false');

@@ -54,6 +54,8 @@ function world({ chatFirst = true, busy = () => false, chats = true } = {}) {
   return { ctx, api: ctx.api, state, views, win, disposed, retired, nc: () => ctx.api.newChatWebContents() };
 }
 
+// L16: Setups answers {busy:true} (not null) when another dialog is open, so its page can say so; every other page still answers null.
+const refusal = (r) => (r && r.busy === true ? 'busy' : r);
 test('gate off: the new chat has no context, document or webContents, and never opens', () => {
   const w = world({ chatFirst: false });
   assert.equal(w.api.openNewChat(), false);
@@ -109,7 +111,7 @@ test('one native dialog at a time: the new chat against Tasks, Home and Setups, 
     let release, asked = 0;
     const pending = a.api.newChatConfirm(() => new Promise((r) => { release = r; }));
     a.ctx.show(other);
-    assert.equal(await a.api[confirmOf](async () => { asked++; return { response: 1 }; }), null, `${other} refuses while the new chat's is open`);
+    assert.equal(refusal(await a.api[confirmOf](async () => { asked++; return { response: 1 }; })), other === 'setups' ? 'busy' : null, `${other} refuses while the new chat's is open`);
     assert.equal(asked, 0);
     release({ response: 0 }); await pending;
     assert.deepEqual(await a.api[confirmOf](async () => ({ response: 1 })), { response: 1 }, `${other} asks again once it closed`);
@@ -139,7 +141,7 @@ test('gate off: the whole confirm matrix runs with newChatModalTicket null at ev
       const pending = w.api[confirms[page]](() => new Promise((r) => { release = r; }));
       check(`${page} open, ${other} asks`);
       w.ctx.show(other);
-      assert.equal(await w.api[confirms[other]](async () => ({ response: 1 })), null, `${other} refuses while ${page}'s is open`);
+      assert.equal(refusal(await w.api[confirms[other]](async () => ({ response: 1 }))), other === 'setups' ? 'busy' : null, `${other} refuses while ${page}'s is open`);
       release({ response: 1 });
       assert.equal(await pending, null, `${page}'s answer is void: the page changed`);
       check(`${page} and ${other} done`);
@@ -229,7 +231,7 @@ test('the four confirms refuse while the thread\'s dialog is held, and ask again
     if (page === 'newchat') w.api.openNewChat(); else w.ctx.show(page);
     let held = true, asked = 0;
     w.api.threadHeld = () => held;
-    assert.equal(await w.api[confirmOf](async () => { asked++; return { response: 1 }; }), null, `${page} refuses during a thread dialog`);
+    assert.equal(refusal(await w.api[confirmOf](async () => { asked++; return { response: 1 }; })), page === 'setups' ? 'busy' : null, `${page} refuses during a thread dialog`);
     assert.equal(asked, 0);
     held = false;
     assert.deepEqual(await w.api[confirmOf](async () => ({ response: 1 })), { response: 1 }, `${page} asks again`);
