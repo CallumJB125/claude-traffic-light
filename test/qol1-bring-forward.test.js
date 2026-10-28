@@ -105,7 +105,13 @@ test('B3: Warp and Alacritty are opened by bundle id and the note says the tab w
   // Another machine's session: nothing at all.
   { const { jump, calls } = jumper({ focus: none, openApp: async () => true }); assert.equal(await jump(sess({ hostApp: 'Warp', remote: true }), 'proj'), null); assert.deepEqual(calls.open, []); }
   // Opening failed: the plain notes.
-  { const { jump } = jumper({ focus: none, openApp: async () => false, liveness: async () => 'gone' }); assert.equal((await jump(sess({ hostApp: 'Warp' }), 'proj')).cant, NOTES.NOTE_ENDED); }
+  { const { jump, calls } = jumper({ focus: none, openApp: async () => false }); assert.equal((await jump(sess({ hostApp: 'Warp' }), 'proj')).cant, NOTES.NOTE_MAYBE_CLOSED); assert.deepEqual(calls.open, ['dev.warp.Warp-Stable']); }
+  // An ended session says so, and no app is opened for it (recorded or not).
+  for (const terminal of [undefined, sess().terminal]) {
+    const { jump, calls } = jumper({ focus: none, openApp: async () => true, liveness: async () => 'gone' });
+    assert.equal((await jump(sess({ hostApp: 'Alacritty', terminal }), 'proj')).cant, NOTES.NOTE_ENDED);
+    assert.deepEqual(calls.open, []);
+  }
 });
 
 // ── liveness (src/terminal.js) ─────────────────────────────────────────────

@@ -63,16 +63,18 @@ function createJumper({ localHost, platform, focus, activate, explainer, adopt =
       return { app: null, exact: false, cant: `There are ${r.ambiguous} ${app} tabs in ${base(Ids.launchCwd(session))}, so Plexiform didn't guess. Switch to it in ${app}.` };
     }
     const id = Object.hasOwn(OPEN_ONLY, session.hostApp) && !Ids.inTmux(session) ? OPEN_ONLY[session.hostApp] : null;
-    if (id && openApp && (!r || r.reason === 'no adapter for this terminal')) {
+    const openable = !!id && !!openApp && (!r || r.reason === 'no adapter for this terminal');
+    if (r && !openable && !NOT_FOUND.has(r.reason)) return cantJump(r, session);
+    // An ended session is said to have ended, before any app is opened for it.
+    const alive = await aliveness(session);
+    if (stale()) return null;
+    if (alive === 'gone') return { app: null, exact: false, cant: NOTE_ENDED };
+    if (openable) {
       let opened = false;
       try { opened = await openApp(id); } catch { opened = false; }
       if (stale()) return null;
       if (opened) return { app: session.hostApp, exact: false, cant: `Opened ${session.hostApp}. Plexiform can't pick its tab.` };
     }
-    if (r && !NOT_FOUND.has(r.reason)) return cantJump(r, session);
-    const alive = await aliveness(session);
-    if (stale()) return null;
-    if (alive === 'gone') return { app: null, exact: false, cant: NOTE_ENDED };
     // Nothing recorded: where its window was was never known, so not "closed".
     if (!r) return cantJump(null, session);
     return { app: null, exact: false, cant: alive === 'alive' ? NOTE_NO_WINDOW : NOTE_MAYBE_CLOSED };
