@@ -110,6 +110,9 @@ test('read outcomes: forbidden/stale/ended end the thread and drop the route; un
   const off = await x.svc.sharedThreadRead(id);
   assert.deepEqual([off.unavailable, off.offline, typeof off.owner], [true, true, 'string'], 'L35: owner offline keeps the route and names the owner');
   assert.equal(x.svc.threadTarget(id).kind, 'shared', 'L35: offline never unbinds');
+  x.setInspect({ ok: false, status: 'unavailable', signIn: true, error: 'x' });
+  assert.deepEqual(await x.svc.sharedThreadRead(id), { unavailable: true, signIn: true }, 'L35: an expired sign-in keeps the route');
+  assert.equal(x.svc.threadTarget(id).kind, 'shared');
   x.setInspect({ ok: true, status: 'ok', state: state({ observed_at: 1 }), share: { scope: 'watch', expiresAt: null } });
   assert.equal((await x.svc.sharedThreadRead(id)).header.scope, 'watch', 'L35: recovers on the same route');
   x.setInspect({ ok: false, status: 'unavailable', error: 'x' });
@@ -365,6 +368,13 @@ test('L35 renderer: owner offline names the owner, with or without a last view, 
   kept.w.document.dispatchEvent(new kept.w.Event('visibilitychange')); await tick(); await tick();
   assert.equal(kept.$('th-shared').querySelector('.th-activity').textContent, "Bob's computer is offline. Showing the last known state.");
   assert.equal(kept.$('th-shared').querySelectorAll('.th-msg').length, 1);
+});
+test('L35 renderer: an expired sign-in asks to sign in again and recovers', async () => {
+  const p = page({ unavailable: true, signIn: true }, view());
+  p.ready(); await tick(); await tick();
+  assert.equal(p.$('th-shared').querySelector('.th-activity').textContent, 'Sign in again to see this session.');
+  p.w.document.dispatchEvent(new p.w.Event('visibilitychange')); await tick(); await tick();
+  assert.match(p.$('th-shared').querySelector('.th-activity').textContent, /^Now: /);
 });
 test('renderer: an unavailable read keeps the last view and says so; thread.js stops its own reads for a shared row', async () => {
   const p = page(view(), { unavailable: true });

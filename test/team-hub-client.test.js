@@ -595,3 +595,18 @@ test('L35: a listed share whose call answers 404 is "offline" (unavailable), not
   await gone410.hub.teams({ id: 'u-me' });
   assert.equal((await gone410.hub.inspect({ id: 'u-me' }, 't1', SHARED)).status, 'stale', '410 is still gone');
 });
+
+test('L35: a 401 on a shared call is "sign in again" (unavailable), never forbidden; 403 stays forbidden; it recovers', async () => {
+  const { r, hub } = mk({ shared: [share()], callStatus: 401, callBody: { error: { message: 'HUB-SECRET-TEXT' } } });
+  await hub.teams({ id: 'u-me' });
+  const out = await hub.inspect({ id: 'u-me' }, 't1', SHARED);
+  assert.deepEqual([out.ok, out.status, out.signIn], [false, 'unavailable', true]);
+  assert.equal(out.reason, 'Sign in again to continue.');
+  assert.equal(JSON.stringify(out).includes('HUB-SECRET'), false);
+  const act = await hub.act({ id: 'u-me' }, 't1', SHARED, { operation: 'send', generation: 3, turn: null, text: 'hi' });
+  assert.notEqual(act.status, 'forbidden', 'an expired token never reads as a changed share');
+  r.state.callStatus = 403;
+  assert.equal((await hub.inspect({ id: 'u-me' }, 't1', SHARED)).status, 'forbidden');
+  r.state.callStatus = 200; r.state.callBody = stateOk();
+  assert.equal((await hub.inspect({ id: 'u-me' }, 't1', SHARED)).ok, true, 'recovers after signing in again');
+});

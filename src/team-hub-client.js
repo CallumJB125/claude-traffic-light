@@ -22,6 +22,7 @@ const REASONS = Object.freeze({
   forbidden: 'This session is not shared with you to send.',
   unavailable: 'The team hub did not accept the request just now.',
   offline: "The owner's computer is offline.",
+  signIn: 'Sign in again to continue.',
   unreadable: 'The team hub sent an unreadable answer.',
   invalid: 'Check the message and try again.',
 });
@@ -141,7 +142,8 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
   // A shared call is made only for a share the hub just listed. The hub answers 404 for a listed share whose owner's computer is offline
   // (interaction-shares.js: no live host), so 404 here is "offline", not "revoked": a share that is really gone is delisted or expired (sharedTarget).
   const offlineFailure = () => ({ ...failed('unavailable', REASONS.offline), offline: true });
-  const sharedFailure = (code) => (code === 404 ? offlineFailure() : failed(mapStatus(code), reasonFor(mapStatus(code))));
+  // A 401 is an expired or rotated sign-in, not a change to the share: unavailable, never a tombstone.
+  const sharedFailure = (code) => (code === 404 ? offlineFailure() : code === 401 ? { ...failed('unavailable', REASONS.signIn), signIn: true } : failed(mapStatus(code), reasonFor(mapStatus(code))));
   const reasonFor = (status) => REASONS[status] ?? REASONS.unavailable;
   const CHANGED = 'The session changed; try again.';
   // send() only: a generation race or any other named refusal means the session moved on, which is retryable.
@@ -219,7 +221,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     if (!object(r) || typeof r.status !== 'number') return mutating ? uncertain() : failed('unavailable', REASONS.unavailable);
     if (r.status !== 200) {
       if (mutating && (r.status >= 500 || r.status <= 0)) return uncertain();
-      if (r.status === 404) return offlineFailure();
+      if (r.status === 404 || r.status === 401) return sharedFailure(r.status);
       const status = r.status === 409 ? 'stale' : mapStatus(r.status);
       return failed(status, status === 'stale' ? CHANGED : reasonFor(status));
     }
