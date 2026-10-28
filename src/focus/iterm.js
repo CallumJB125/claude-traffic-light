@@ -29,7 +29,7 @@ const SCRIPT = `on run argv
                 end if
               end repeat
             end repeat
-            return "ok"
+            return "lost"
           end if
         end repeat
       end repeat

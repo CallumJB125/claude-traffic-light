@@ -24,6 +24,10 @@ test('B1: Terminal and iTerm2 pin the window by id, activate, restore a minimise
   const order = (script, lines) => { const ix = lines.map((l) => at(script, l)); assert.deepEqual([...ix].sort((a, b) => a - b), ix, lines.join(' → ')); };
   order(TerminalApp.SCRIPT, ['set w to window id (id of w)', 'activate', 'if miniaturized of w then set miniaturized of w to false', 'set selected tab of w to (first tab of w whose tty is wantTty)', 'set index of w to 1']);
   order(ITerm.SCRIPT, ['set wid to id of w', 'set sid to id of s', 'activate', 'set w to window id wid', 'if miniaturized of w then set miniaturized of w to false', 'select w', 'if id of s2 is sid then', 'select t2', 'select s2']);
+  // F-M1: the session not found again in its pinned window is a miss, never "ok" with only the window raised.
+  const it = ITerm.SCRIPT.split('\n').map((l) => l.trim());
+  assert.deepEqual(it.filter((l) => l.startsWith('return ')), ['return "not-running"', 'return "ok"', 'return "lost"', 'return "no match"']);
+  assert.equal(it[it.indexOf('return "ok"') - 1], 'select s2', 'the only "ok" follows selecting the session');
   for (const s of [Ghostty.SCRIPT, Dock.SCRIPT]) assert.ok(at(s, 'activate') < at(s, 'focus (item 1 of hits)'), 'Ghostty: activate, then focus');
 });
 
@@ -61,8 +65,8 @@ test('B3: a window not found says ended, still running, or maybe closed, from th
       assert.equal(calls.activate, 0, 'nothing activated');
     }
   }
-  // A refused permission or a timeout is not a missing window: the old note, and no process check.
-  for (const r0 of [{ ok: false, adapter: 'terminal-app', denied: 'automation', reason: 'automation not allowed' }, { ok: false, adapter: 'terminal-app', reason: 'jump deadline passed' }]) {
+  // A refused permission, a timeout or iTerm2's session lost from its pinned window is not a missing window: the old note, and no process check.
+  for (const r0 of [{ ok: false, adapter: 'terminal-app', denied: 'automation', reason: 'automation not allowed' }, { ok: false, adapter: 'terminal-app', reason: 'jump deadline passed' }, { ok: false, adapter: 'iterm', reason: 'lost' }]) {
     const { jump, calls } = jumper({ focus: async () => r0, liveness: async () => 'gone' });
     assert.match((await jump(sess(), 'proj')).cant, /Can't tell which terminal window/);
     assert.equal(calls.live, 0);
