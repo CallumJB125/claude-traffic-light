@@ -8,9 +8,13 @@
 // 600 ms after it delivered the card. It's consumed before the first await. A retired, expired or foreign
 // selection is refused and nothing is dispatched. Nothing here retries.
 const crypto = require('node:crypto');
+const { turnTag } = require('./shared-thread-view');
 
 const ARM_MS = 600;
 const SELECTION_MS = 45_000;
+// T3b (plan-t3b): after one carded send, steer or stop is accepted, later ones in this thread skip the card.
+const WINDOW_MS = 30 * 60_000; // absolute, from the first accepted send
+const DIRECT_MS = 5_000;       // a card-less selection is confirmed at once or not at all
 const PROPOSALS_MIN_MS = 10_000;
 const MAX_TEXT = 4000;
 const MAX_BYTES = 8192;
@@ -27,6 +31,8 @@ const TEXT = Object.freeze({
   UNAVAILABLE: 'This action is unavailable for this shared session right now.',
   INVALID: 'Check the message and try again.',
   NOT_READY: 'Take a moment to read the card, then confirm.',
+  REVIEW_AGAIN: 'Review needed again. Your draft is kept.',
+  IN_FLIGHT: 'Still sending your last message.',
   STEER_NOTE: 'This does not confirm the requested change was applied.',
 });
 // The hub's proposal statuses, as the requester sees them (board/hub/interaction-proposals.js).
@@ -50,6 +56,7 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
   const auths = new Map(); // `${wcId}:${generation}` → { boundId, auth }
   const selections = new Map(); // selection → record
   const proposalReads = new Map(); // docKey → { at, pending, result }
+  let askEach = false; // T3b: "Ask me each time" (this run of the app; off by default). On, no window opens.
   const docKey = (c) => `${c.contents.id}:${c.generation}`;
 
   function drop(key) {
@@ -103,9 +110,21 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
     return { op, title: C.title, text, target: C.target, notes: C.notes, confirm: C.confirm, armMs: ARM_MS };
   }
 
-  // thread:shared-review [boundId, {op, text}]
-  async function review(c, req, still) {
-    if (!plain(req) || Object.keys(req).sort().join(',') !== 'op,text' || !OPS.includes(req.op) || typeof req.text !== 'string') return fail('invalid', TEXT.INVALID);
+  // The window's identity: the bound row (fixed per authority), the effective scope and the expiry the share had when it opened.
+  const identity = (t) => ({ ref: t.ref, scope: t.scope, expiresAt: t.expiresAt ?? null });
+  const sameIdentity = (a, b) => !!a && !!b && a.ref === b.ref && a.scope === b.scope && a.expiresAt === b.expiresAt;
+  const windowLive = (held) => !!held?.window && held.window.until > now() && !askEach;
+  const seenOk = (v) => plain(v) && Object.keys(v).sort().join(',') === 'generation,turn' && ['string', 'number'].includes(typeof v.generation) && (v.turn === null || ['string', 'number'].includes(typeof v.turn));
+
+  // thread:shared-review [boundId, {op, text[, seen]} | {askEach: boolean}]
+  async function reviewInner(c, req, still) {
+    if (plain(req) && Object.keys(req).join(',') === 'askEach' && typeof req.askEach === 'boolean') {
+      askEach = req.askEach;
+      if (askEach) for (const h of auths.values()) h.window = null;
+      return { ok: true, status: 'ask-each', askEach };
+    }
+    const keys = plain(req) ? Object.keys(req).sort().join(',') : '';
+    if (!plain(req) || (keys !== 'op,text' && keys !== 'op,seen,text') || !OPS.includes(req.op) || typeof req.text !== 'string' || (keys === 'op,seen,text' && !seenOk(req.seen))) return fail('invalid', TEXT.INVALID);
     const { op, text } = req;
     if (op === 'stop' ? text !== '' : !textOk(text)) return fail('invalid', TEXT.INVALID);
     const auth = authOf(c, still);
@@ -114,7 +133,7 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
     try { t = await auth.resolve(); } catch { t = null; }
     if (!still(c)) return null;
     if (!t?.hub) return mapped(t);
-    if (t.scope !== 'interact') return fail('forbidden', TEXT.WATCH);
+    if (t.scope !== 'interact') { const h = auths.get(docKey(c)); if (h) h.window = null; return fail('forbidden', TEXT.WATCH); }
     const owner = line(auth.owner, 80) || 'Teammate';
     if (op === 'propose') {
       let p;
@@ -133,32 +152,63 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
     if (r?.ok !== true || typeof r.selection !== 'string') return mapped(r);
     const cap = r.capabilities?.[op === 'stop' ? 'interrupt' : op];
     if (cap?.available !== true) return fail('unavailable', line(cap?.reason, 300) || TEXT.UNAVAILABLE);
-    const selection = mint(c, auth, { op, text, inner: r.selection, generation: r.state.generation, turn: r.state.activeTurn ?? null, expires: now() + SELECTION_MS });
+    // T3b: inside the window a send, steer or stop skips the card, but only when the page's own view of the session
+    // (generation and turn) equals the fresh one; anything else gets the card.
+    const held = auths.get(docKey(c));
+    const turn = r.state.activeTurn ?? null;
+    if (windowLive(held) && keys === 'op,seen,text' && sameIdentity(held.window.share, identity(t))
+      && req.seen.generation === r.state.generation && req.seen.turn === turnTag(turn)) {
+      if (held.busyUntil > now()) return fail('busy', TEXT.IN_FLIGHT);
+      const expires = now() + DIRECT_MS;
+      held.busyUntil = expires;
+      const selection = mint(c, auth, { op, text, inner: r.selection, generation: r.state.generation, turn, expires, direct: true, window: held.window });
+      return { ok: true, status: 'direct', selection };
+    }
+    if (held?.window && !windowLive(held)) held.window = null;
+    const selection = mint(c, auth, { op, text, inner: r.selection, generation: r.state.generation, turn, expires: now() + SELECTION_MS });
     return { ok: true, status: 'review', selection, card: card(op, owner, line(r.state.provider?.label, 60) || 'AI', op === 'stop' ? '' : text.trim()) };
   }
 
+  // An answer says when the window ends while there is one (no key = no window), so the page's composer line follows main, never its own clock.
+  const withWindow = (c, res) => { const held = auths.get(docKey(c)); return res && typeof res === 'object' && windowLive(held) ? { ...res, window: held.window.until } : res; };
+  const review = async (c, req, still) => withWindow(c, await reviewInner(c, req, still));
+  const confirm = async (c, req, still) => withWindow(c, await confirmInner(c, req, still));
   // thread:shared-confirm [boundId, {selection, text}]
-  async function confirm(c, req, still) {
+  async function confirmInner(c, req, still) {
     if (!plain(req) || Object.keys(req).sort().join(',') !== 'selection,text' || typeof req.selection !== 'string' || !UUID.test(req.selection) || typeof req.text !== 'string') return fail('invalid', TEXT.INVALID);
     const rec = selections.get(req.selection), key = docKey(c);
     const held = auths.get(key);
     if (!rec || rec.doc !== key || rec.boundId !== c.boundId || rec.expires < now() || !held || held.auth !== rec.auth || !safeLive(rec.auth)) { if (rec && rec.doc === key) selections.delete(req.selection); return fail('stale', TEXT.MOVED); }
-    if (now() - rec.deliveredAt < ARM_MS) return fail('not-ready', TEXT.NOT_READY);
+    // A card-less selection is honoured only while the very window it was minted under is still open (M2).
+    if (rec.direct && (held.window !== rec.window || !windowLive(held))) { selections.delete(req.selection); held.busyUntil = 0; if (held.window === rec.window) held.window = null; return fail('stale', TEXT.REVIEW_AGAIN); }
+    if (!rec.direct && now() - rec.deliveredAt < ARM_MS) return fail('not-ready', TEXT.NOT_READY);
     if (req.text !== rec.text) return fail('invalid', TEXT.INVALID);
     // One use, before the first await.
     selections.delete(req.selection);
+    if (rec.direct) held.busyUntil = Infinity;
+    try { return await run(c, rec, still, held); } finally { if (rec.direct) held.busyUntil = 0; }
+  }
+  async function run(c, rec, still, held) {
     const auth = rec.auth, op = rec.op;
     // The scope, read fresh (a share downgraded to watch since review refuses here, before any dispatch).
     let t;
     try { t = await auth.resolve(); } catch { t = null; }
     if (!still(c, true)) return fail('stale', TEXT.MOVED);
     if (!t?.hub) return mapped(t, TEXT.MOVED);
-    if (t.scope !== 'interact') return fail('forbidden', TEXT.WATCH);
+    if (t.scope !== 'interact') { held.window = null; return fail('forbidden', TEXT.WATCH); }
+    // The share is the one the window opened on, with the same scope and expiry; otherwise the card comes back.
+    if (rec.direct && !sameIdentity(rec.window.share, identity(t))) { held.window = null; return fail('stale', TEXT.REVIEW_AGAIN); }
     let out;
     if (op === 'send' || op === 'steer' || op === 'stop') {
       try { out = await auth.act(rec.inner, op === 'stop' ? 'interrupt' : op, op === 'stop' ? '' : rec.text); } catch { return fail('unconfirmed', TEXT.UNCONFIRMED); }
       if (!still(c)) return fail('unconfirmed', TEXT.UNCONFIRMED);
-      if (out?.ok !== true) return out?.status === 'stale' ? fail('stale', TEXT.MOVED) : mapped(out);
+      if (out?.ok !== true) {
+        // An answer that says access changed ends the window (T3b); an offline owner or a plain failure does not.
+        if (out?.status === 'forbidden' || out?.status === 'unauthenticated' || out?.status === 'gone') held.window = null;
+        return out?.status === 'stale' ? fail('stale', TEXT.MOVED) : mapped(out);
+      }
+      // The first accepted card opens the window (not one opened by it, not with Ask me each time on).
+      if (!rec.direct && !askEach && !windowLive(held)) held.window = { openedAt: now(), until: now() + WINDOW_MS, share: identity(t) };
       const d = out.delivery;
       return { ok: true, status: 'sent', receipt: d && typeof d.id === 'string' ? { id: line(d.id, 100), state: line(d.state, 40) || 'unknown' } : null, ...(op === 'steer' ? { note: TEXT.STEER_NOTE } : {}) };
     }
@@ -236,12 +286,14 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
   // After each thread:shared-state read: a card whose session moved on (generation, turn) or went to watch retires.
   function afterRead(c, result) {
     const key = docKey(c), held = auths.get(key);
+    // What the page needs to show the composer line: when the window ends (0 = none) and the setting.
+    if (result && result.gone !== true) { result.window = windowLive(held) ? held.window.until : 0; result.askEach = askEach; }
     if (!held) return;
     if (!result || result.gone === true) { forget(key); return; }
     let seen = null;
     try { seen = held.auth.seen(); } catch { seen = null; }
     if (!seen) return;
-    if (seen.scope !== 'interact') { drop(key); proposalReads.delete(key); return; }
+    if (seen.scope !== 'interact') { drop(key); proposalReads.delete(key); held.window = null; return; }
     for (const [s, rec] of selections) {
       if (rec.doc !== key || rec.generation === undefined) continue;
       if (rec.generation !== seen.generation || rec.turn !== seen.turn) selections.delete(s);
@@ -256,4 +308,4 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
   };
 }
 
-module.exports = { createSharedThreadActions, ARM_MS, SELECTION_MS, PROPOSALS_MIN_MS, TEXT, PROPOSAL_STATUS, OPS };
+module.exports = { createSharedThreadActions, ARM_MS, SELECTION_MS, WINDOW_MS, DIRECT_MS, PROPOSALS_MIN_MS, TEXT, PROPOSAL_STATUS, OPS };

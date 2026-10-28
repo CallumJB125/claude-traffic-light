@@ -10,6 +10,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const ROW_ID = /^[0-9a-f]{64}$/;
 const id = (v) => (typeof v === 'string' && ROW_ID.test(v) ? v : '');
+const sharedReviewCall = (row, req) => ipcRenderer.invoke('thread:shared-review', id(row), req);
 
 contextBridge.exposeInMainWorld('threadApi', {
   open: (row) => ipcRenderer.invoke('thread:open', id(row)),
@@ -44,7 +45,11 @@ contextBridge.exposeInMainWorld('threadApi', {
   openTeam: (row) => ipcRenderer.invoke('thread:open-team', id(row)),
   // T3: an interact share's review card, its confirm, and my own proposals. The page sends only the op, the
   // exact text and main's selection; main resolves everything else.
-  sharedReview: (row, op, text) => ipcRenderer.invoke('thread:shared-review', id(row), { op: String(op), text: String(text) }),
+  // T3b: inside the confirmed window the page also sends what it is showing (generation and turn), and main decides whether
+  // that skips the card. "Ask me each time" is its own closed shape.
+  sharedReview: (row, op, text, seen) => sharedReviewCall(row, seen && typeof seen === 'object'
+    ? { op: String(op), text: String(text), seen: { generation: seen.generation, turn: seen.turn ?? null } } : { op: String(op), text: String(text) }),
+  sharedAskEach: (row, on) => sharedReviewCall(row, { askEach: on === true }),
   sharedConfirm: (row, selection, text) => ipcRenderer.invoke('thread:shared-confirm', id(row), { selection: String(selection), text: String(text) }),
   sharedProposals: (row) => ipcRenderer.invoke('thread:shared-proposals', id(row)),
   // T4a: one of my own Plexiform-held sessions (read-only): its projection, and the way to Overview.

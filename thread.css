@@ -157,5 +157,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .th-sh-chip { font-size: var(--text-sm); }
 .th-sh-menu { bottom: calc(100% + 4px); top: auto; left: 0; right: auto; min-width: 240px; }
 .th-sh-quota { margin: 0; font-size: var(--text-xs); color: var(--muted); }
+.th-sh-window { margin: 0; font-size: var(--text-xs); color: var(--muted); }
+.th-sh-ask-row { display: flex; align-items: center; gap: 6px; font-size: var(--text-xs); color: var(--muted); }
 .th-sh-stop { justify-self: start; }
 .th-sh-proposal .th-btn { justify-self: start; }

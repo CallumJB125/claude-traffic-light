@@ -1,4 +1,5 @@
 'use strict';
+const crypto = require('node:crypto');
 // T2: the thread document's whole view of a teammate's shared session. A fixed
 // projection of one relayed `state` read (team-hub-client inspect) plus the share's
 // current terms. Nothing here is a ref, card id, entry id, selection, capability
@@ -10,7 +11,10 @@ const MAX_RESPONSE = 16000; // the relay's own bound for a response
 const STALE_MS = 90_000;
 const STATES = Object.freeze(['queued', 'accepted', 'acknowledged', 'echoed', 'responding', 'replied', 'completed', 'interrupted', 'unconfirmed', 'failed', 'unknown']);
 const CATEGORIES = Object.freeze(['Thinking', 'Running a command', 'Editing files', 'Reading files', 'Searching', 'Using a tool', 'Coordinating agents']);
-const TOP_KEYS = Object.freeze(['header', 'banner', 'activity', 'deliveries', 'status', 'generation', 'canSendLater', 'controls']);
+// The page never holds a provider turn id; it holds this opaque tag of it and hands it back so main can tell whether the turn the
+// user was looking at is still the one running (T3b).
+const turnTag = (t) => (typeof t === 'string' && t ? crypto.createHash('sha256').update(`turn:${t}`).digest('hex').slice(0, 16) : null);
+const TOP_KEYS = Object.freeze(['header', 'banner', 'activity', 'deliveries', 'status', 'generation', 'turn', 'canSendLater', 'controls']);
 // T3: what the interact layout may offer, as booleans and fixed reasons only. Main checks every one again.
 const CONTROL_KEYS = Object.freeze(['send', 'steer', 'interrupt', 'propose']);
 const HEADER_KEYS = Object.freeze(['title', 'owner', 'initials', 'provider', 'scope', 'expiresAt', 'fake']);
@@ -63,9 +67,10 @@ function project({ state, share, route, now }) {
     deliveries,
     status: ['ready', 'working', 'compacting', 'ended'].includes(s.status) ? s.status : 'ready',
     generation: Number.isSafeInteger(s.generation) ? s.generation : 0,
+    turn: turnTag(s.activeTurn),
     canSendLater: scope === 'interact',
     controls: controlsOf(scope, s, owner),
   };
 }
 
-module.exports = { project, activityOf, deliveriesOf, prose, line, TOP_KEYS, CONTROL_KEYS, HEADER_KEYS, DELIVERY_KEYS, MAX_DELIVERIES, MAX_TEXT, MAX_RESPONSE, STALE_MS, STATES, CATEGORIES };
+module.exports = { turnTag, project, activityOf, deliveriesOf, prose, line, TOP_KEYS, CONTROL_KEYS, HEADER_KEYS, DELIVERY_KEYS, MAX_DELIVERIES, MAX_TEXT, MAX_RESPONSE, STALE_MS, STATES, CATEGORIES };

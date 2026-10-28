@@ -27,13 +27,13 @@ async function rig({ accountName = null, adapterCaps = {} } = {}) {
   };
   const hub = createInteractionHub({ adapters: { codex: adapter }, boardCurrent: () => true });
   const launched = await hub.launch({ provider: 'codex', board: 'private-board' }, actor), session = launched.state.session;
-  let shared = true, scope = 'interact', hold = null, failSend = false, offline = false, expired = false;
+  let shared = true, scope = 'interact', expiresAt = null, hold = null, failSend = false, offline = false, expired = false;
   const proposals = [], net = [];
   const json = (body, status = 200) => ({ status, headers: { get: () => null }, body: null, text: async () => JSON.stringify(body) });
   const client = createTeamHubClient({ baseUrl: 'https://synthetic.invalid', token: () => 'test-only-token', viewer: { id: 'viewer', name: 'You' }, fetch: async (url, init) => {
     const u = new URL(url), method = init?.method ?? 'GET';
     net.push([method, u.pathname]);
-    if (u.pathname.endsWith('/shared')) return json({ shared: shared ? [{ id: share, session, scope, team: { id: 'team', name: 'Team' }, owner: { id: 'owner', name: 'Bob' }, online: !offline, expires_at: null }] : [] });
+    if (u.pathname.endsWith('/shared')) return json({ shared: shared ? [{ id: share, session, scope, team: { id: 'team', name: 'Team' }, owner: { id: 'owner', name: 'Bob' }, online: !offline, expires_at: expiresAt }] : [] });
     if (!shared) return json({}, 404);
     if (expired) return json({}, 401);
     if (offline) return json({}, 404); // the hub answers 404 for a listed share whose owner's computer is offline
@@ -93,6 +93,7 @@ async function rig({ accountName = null, adapterCaps = {} } = {}) {
     // Review, wait out the arm, confirm.
     async send(op, text) { const r = await x.review(op, text); assert.equal(r?.ok, true, JSON.stringify(r)); x.later(); return x.confirm(r.selection, op === 'stop' ? '' : text); },
     emit: (event) => ee.emit('event', { target: 'private-native-thread', ...event }),
+    expires: (v) => { expiresAt = v; },
     watch: () => { scope = 'watch'; }, interact: () => { scope = 'interact'; }, revoke: () => { shared = false; }, setOffline: (v = true) => { offline = v; }, setExpired: (v = true) => { expired = v; },
     blur: () => { foreground = false; }, focus: () => { foreground = true; }, overviewBlur: () => { overviewFocus = false; },
     reopen: () => { generation++; tm.retire(wc.id); },
@@ -461,7 +462,8 @@ function page(views, api = {}) {
   const seq = Array.isArray(views) ? views : [views];
   w.threadApi = { open: async () => ({ kind: 'shared', header: null }), state: async () => ({}), close: async () => true,
     sharedState: async () => seq[Math.min(i++, seq.length - 1)], openTeam: async () => true,
-    sharedReview: async (id, op, text) => { calls.push(['review', op, text]); return api.review ? api.review(op, text) : { ok: true, status: 'review', selection: crypto.randomUUID(), card: { op, title: 'From main', text, target: "Bob's Codex session", notes: ['a note'], confirm: 'Send', armMs: 600 } }; },
+    sharedReview: async (id, op, text, seen) => { calls.push(seen ? ['review', op, text, seen] : ['review', op, text]); return api.review ? api.review(op, text) : { ok: true, status: 'review', selection: crypto.randomUUID(), card: { op, title: 'From main', text, target: "Bob's Codex session", notes: ['a note'], confirm: 'Send', armMs: 600 } }; },
+    sharedAskEach: async (id, on) => { calls.push(['ask-each', on]); return api.askEach ? api.askEach(on) : { ok: true, status: 'ask-each', askEach: on }; },
     sharedConfirm: async (id, sel, text) => { calls.push(['confirm', sel, text]); return api.confirm ? api.confirm() : { ok: true, status: 'sent', receipt: { id: 'r', state: 'acknowledged' } }; },
     sharedProposals: async () => { calls.push(['proposals']); return api.proposals ? api.proposals() : { ok: true, status: 'ready', proposals: [] }; },
     board: () => {}, onReady: (cb) => { ready = cb; }, onEvent() {} };
@@ -662,4 +664,288 @@ test('L35: with the owner offline the proposal paths say offline too (list, requ
     x.setOffline(false); x.later(10_000);
     assert.equal((await x.list()).ok, true, 'recovers');
   } finally { x.close(); }
+});
+
+// ---- T3b (plan-t3b): review once per session ----
+const MIN = 60_000;
+// The page's own view of the session, as it would send it back.
+async function seenOf(x) { x.later(2100); const v = await x.state(); return { generation: v.generation, turn: v.turn }; }
+const rev = (x, req) => { x.later(501); return x.handlers.get('thread:shared-review')(x.ev, x.id, req); };
+// One carded send, accepted: opens the window.
+async function settle(x) { const sent = x.calls.filter((c) => !c.interrupt).length; for (let i = 1; i <= sent; i++) x.emit({ kind: 'turn-completed', turnId: `private-native-turn-${i}`, status: 'completed' }); await tick(); }
+async function openWindow(x, text = 'first') { const r = await x.send('send', text); assert.equal(r.ok, true, JSON.stringify(r)); await settle(x); return r; }
+
+test('T3b: the first send is carded and opens a 30 minute window; the next send skips the card, yet mints and consumes its own token', async () => {
+  const x = await rig();
+  try {
+    const first = await x.review('send', 'first');
+    assert.equal(first.status, 'review'); assert.ok(first.card); assert.equal(first.window, undefined, 'no window before a send is accepted');
+    x.later(); const done = await x.confirm(first.selection, 'first');
+    assert.equal(done.ok, true); await settle(x); assert.equal(done.window, 1_000_000 + 501 + 700 + 30 * MIN, 'absolute 30 minutes from the accepted send');
+    const seen = await seenOf(x);
+    const d = await rev(x, { op: 'send', text: 'second', seen });
+    assert.deepEqual([d.ok, d.status, d.card], [true, 'direct', undefined]);
+    // No arm: confirm at once; the same exact text; one use.
+    const sent = await x.confirm(d.selection, 'second');
+    assert.equal(sent.ok, true); await settle(x);
+    assert.equal(x.calls.length, 2, 'both dispatched, once each');
+    assert.equal((await x.confirm(d.selection, 'second')).status, 'stale', 'one use');
+    assert.equal(x.calls.length, 2);
+    const d2 = await rev(x, { op: 'send', text: 'third', seen });
+    assert.equal((await x.confirm(d2.selection, 'other text')).status, 'invalid', 'exact text');
+    assert.equal(x.calls.length, 2);
+  } finally { x.close(); }
+});
+
+test('T3b: a refused, unconfirmed or stale first send opens no window', async () => {
+  const x = await rig();
+  try {
+    x.failSend(true);
+    const lost = await x.send('send', 'lost');
+    assert.equal(lost.ok, false);
+    x.failSend(false);
+    const seen = await seenOf(x);
+    assert.equal((await rev(x, { op: 'send', text: 'again', seen })).status, 'review', 'still carded');
+  } finally { x.close(); }
+});
+
+test('T3b: seen is required for every op; missing, malformed or different goes to the card, never direct', async () => {
+  const x = await rig();
+  try {
+    await openWindow(x);
+    const seen = await seenOf(x);
+    assert.equal((await rev(x, { op: 'send', text: 'a' })).status, 'review', 'missing seen');
+    assert.equal((await rev(x, { op: 'send', text: 'a', seen: { generation: seen.generation + 1, turn: seen.turn } })).status, 'review', 'another generation');
+    assert.equal((await rev(x, { op: 'send', text: 'a', seen: { generation: seen.generation, turn: 'abcdef0123456789' } })).status, 'review', 'a turn that is not running');
+    for (const bad of [{ generation: 1 }, { generation: {}, turn: null }, { generation: 1, turn: 5, extra: 1 }, 'x', null, []]) assert.equal((await rev(x, { op: 'send', text: 'a', seen: bad })).status, 'invalid', JSON.stringify(bad));
+    assert.equal((await rev(x, { op: 'send', text: 'a', seen })).status, 'direct');
+  } finally { x.close(); }
+});
+
+test('T3b: steer and stop are turn-bound; a turn that changed since the page last read returns the card', async () => {
+  const x = await rig();
+  try {
+    await openWindow(x);
+    await x.send('send', 'go'); // a turn is now running
+    const seen = await seenOf(x);
+    assert.ok(typeof seen.turn === 'string' && seen.turn.length === 16 && !seen.turn.includes('native'), 'an opaque tag, not the provider turn id');
+    const stop = await rev(x, { op: 'stop', text: '', seen });
+    assert.equal(stop.status, 'direct');
+    assert.equal((await x.confirm(stop.selection, '')).ok, true);
+    assert.ok(x.calls.some((c) => c.interrupt), 'the stop was dispatched');
+    // The page still shows the old (idle) view while a turn runs: not direct.
+    const stale = await rev(x, { op: 'stop', text: '', seen: { generation: seen.generation, turn: null } });
+    assert.equal(stale.status, 'review'); assert.ok(stale.card);
+  } finally { x.close(); }
+});
+
+test('T3b: propose, approved sends and withdrawals are always carded and never open or use the window', async () => {
+  const x = await rig();
+  try {
+    await openWindow(x);
+    const seen = await seenOf(x);
+    const p = await rev(x, { op: 'propose', text: 'please', seen });
+    assert.equal(p.status, 'review'); assert.ok(p.card);
+    const fresh = await rig();
+    try {
+      const pr = await fresh.send('propose', 'please');
+      assert.equal(pr.status, 'awaiting'); assert.equal(pr.window, undefined, 'a proposal opens no window');
+    } finally { fresh.close(); }
+  } finally { x.close(); }
+});
+
+test('T3b: the window ends at 30 minutes (just before, just after), and the next send is carded again with the draft kept for the page', async () => {
+  const x = await rig();
+  try {
+    await openWindow(x);
+    const seen = await seenOf(x);
+    x.later(29 * MIN);
+    assert.equal((await rev(x, { op: 'send', text: 'a', seen })).status, 'direct', 'just before');
+    x.later(MIN);
+    const after = await rev(x, { op: 'send', text: 'a', seen });
+    assert.equal(after.status, 'review'); assert.equal(after.window, undefined);
+  } finally { x.close(); }
+});
+
+test('T3b: every early end: watch downgrade, share gone, thread reopened, owner offline stays but 401 and forbidden end it', async () => {
+  const x = await rig();
+  try {
+    await openWindow(x);
+    let seen = await seenOf(x);
+    x.watch();
+    assert.equal((await rev(x, { op: 'send', text: 'a', seen })).status, 'forbidden');
+    x.interact();
+    assert.equal((await rev(x, { op: 'send', text: 'a', seen })).status, 'review', 'a flip back does not revive the window');
+    x.revoke();
+    assert.notEqual((await rev(x, { op: 'send', text: 'a', seen })).status, 'direct');
+  } finally { x.close(); }
+  const y = await rig();
+  try {
+    await openWindow(y);
+    const seen = await seenOf(y);
+    y.reopen();
+    assert.equal((await rev(y, { op: 'send', text: 'a', seen })).status === 'direct', false, 'a new document has no window');
+  } finally { y.close(); }
+  const z = await rig();
+  try {
+    await openWindow(z);
+    const seen = await seenOf(z);
+    z.setOffline(true);
+    assert.notEqual((await rev(z, { op: 'send', text: 'a', seen })).status, 'direct', 'offline cannot dispatch');
+    z.setOffline(false);
+    z.later(2100);
+  } finally { z.close(); }
+});
+
+test('T3b: the window is tied to the share it opened on: a changed expiry returns the card, also between review and confirm', async () => {
+  const x = await rig();
+  try {
+    await openWindow(x);
+    let seen = await seenOf(x);
+    const d = await rev(x, { op: 'send', text: 'a', seen });
+    assert.equal(d.status, 'direct');
+    x.expires(new Date(Date.now() + 86_400_000).toISOString());
+    const gone = await x.confirm(d.selection, 'a');
+    assert.equal(gone.status, 'stale'); assert.match(gone.error, /Review needed again/);
+    assert.equal(x.calls.length, 1, 'nothing dispatched');
+    seen = await seenOf(x);
+    assert.equal((await rev(x, { op: 'send', text: 'a', seen })).status, 'review', 'the window is gone');
+  } finally { x.close(); }
+  const y = await rig();
+  try {
+    await openWindow(y);
+    y.expires(new Date(Date.now() + 86_400_000).toISOString());
+    const seen = await seenOf(y);
+    assert.equal((await rev(y, { op: 'send', text: 'a', seen })).status, 'review', 'review sees the new identity');
+  } finally { y.close(); }
+});
+
+test('T3b: a window that was ended is not revived: another window object, Ask me each time off, a watch read', async () => {
+  const x = await rig();
+  try {
+    await openWindow(x);
+    let seen = await seenOf(x);
+    // A direct selection from the old window is refused once another window stands in its place.
+    const d = await rev(x, { op: 'send', text: 'a', seen });
+    await rev(x, { askEach: true }); await rev(x, { askEach: false });
+    assert.equal((await rev(x, { op: 'send', text: 'a', seen })).status, 'review', 'Ask me each time ended the window; turning it off does not bring it back');
+    const c = await x.send('send', 'new window'); assert.ok(c.window > 0); await settle(x);
+    assert.equal((await x.confirm(d.selection, 'a')).status, 'stale', 'not the window it was minted under');
+    assert.equal(x.calls.length, 2);
+  } finally { x.close(); }
+  const y = await rig();
+  try {
+    await openWindow(y);
+    y.watch(); y.later(2100); await y.state(); // the thread's own read sees the downgrade
+    y.interact();
+    const seen = await seenOf(y);
+    assert.equal((await rev(y, { op: 'send', text: 'a', seen })).status, 'review', 'a flip back after a watch read does not revive the window');
+  } finally { y.close(); }
+});
+
+test('T3b: a direct selection is honoured only under the window it was minted under (Ask me each time, expiry and 5 s)', async () => {
+  const x = await rig();
+  try {
+    await openWindow(x);
+    const seen = await seenOf(x);
+    const d = await rev(x, { op: 'send', text: 'a', seen });
+    const ask = await rev(x, { askEach: true });
+    assert.deepEqual([ask.ok, ask.status, ask.askEach], [true, 'ask-each', true]);
+    const gone = await x.confirm(d.selection, 'a');
+    assert.equal(gone.status, 'stale'); assert.match(gone.error, /Review needed again/);
+    assert.equal(x.calls.length, 1, 'nothing dispatched');
+    assert.equal((await rev(x, { op: 'send', text: 'a', seen })).status, 'review', 'with Ask me each time on every send is carded');
+    const c = await x.send('send', 'carded'); assert.equal(c.ok, true); assert.equal(c.window, undefined, 'and no window opens'); await settle(x);
+    await rev(x, { askEach: false });
+    assert.equal((await rev(x, { op: 'send', text: 'a', seen })).status, 'review', 'a window never opens while Ask me each time is on');
+    const again = await x.send('send', 'opens'); assert.ok(again.window > 0, 'off again: the next accepted card opens one'); await settle(x);
+    const seen2 = await seenOf(x);
+    const d2 = await rev(x, { op: 'send', text: 'b', seen: seen2 });
+    x.later(5001);
+    assert.equal((await x.confirm(d2.selection, 'b')).status, 'stale', 'a direct selection lives about 5 s');
+    for (const bad of [{ askEach: 'yes' }, { askEach: true, op: 'send' }, { end: true }]) assert.equal((await rev(x, bad)).status, 'invalid', JSON.stringify(bad));
+  } finally { x.close(); }
+});
+
+test('T3b: one effect in flight per thread; busy is released on every confirm exit', async () => {
+  const x = await rig();
+  try {
+    await openWindow(x);
+    const seen = await seenOf(x);
+    const d = await rev(x, { op: 'send', text: 'a', seen });
+    assert.equal((await rev(x, { op: 'send', text: 'b', seen })).status, 'busy', 'a second card-less review while the first is unconfirmed');
+    // A refused confirm (wrong text) leaves the selection and the busy flag until it is used or expires; exact text first.
+    const g = gate(); x.hold((req) => (req.op === 'send' ? g.wait : undefined));
+    const inflight = x.confirm(d.selection, 'a');
+    await tick();
+    assert.equal((await rev(x, { op: 'send', text: 'c', seen })).status, 'busy', 'while dispatching');
+    g.release(); assert.equal((await inflight).ok, true); await settle(x);
+    x.hold(null);
+    const c3 = await rev(x, { op: 'send', text: 'c', seen: await seenOf(x) });
+    assert.equal(c3.status, 'direct', 'released after success');
+    assert.equal((await x.confirm(c3.selection, 'c')).ok, true); await settle(x);
+    // An unconfirmed dispatch releases it too.
+    x.failSend(true);
+    const lost = await rev(x, { op: 'send', text: 'e', seen: await seenOf(x) });
+    assert.equal((await x.confirm(lost.selection, 'e')).status, 'unconfirmed');
+    x.failSend(false);
+    assert.equal((await rev(x, { op: 'send', text: 'f', seen: await seenOf(x) })).status, 'direct');
+  } finally { x.close(); }
+});
+
+test('T3b: every per-message check still runs inside the window: focus, scope, exact text, expiry', async () => {
+  const x = await rig();
+  try {
+    await openWindow(x);
+    const seen = await seenOf(x);
+    const d = await rev(x, { op: 'send', text: 'a', seen });
+    x.blur();
+    assert.equal(await x.confirm(d.selection, 'a'), null, 'an unfocused window is refused (Guard T)');
+    x.focus();
+    x.watch();
+    const w = await x.confirm(d.selection, 'a');
+    assert.equal(w.status, 'forbidden', 'scope is read fresh at confirm');
+    assert.equal(x.calls.length, 1);
+  } finally { x.close(); }
+});
+
+test('T3b: the window is memory only and the state read says when it ends', async () => {
+  const x = await rig();
+  try {
+    await openWindow(x);
+    x.later(2100);
+    const v = await x.state();
+    assert.equal(v.window, 1_000_000 + 501 + 700 + 30 * MIN); assert.equal(v.askEach, false);
+  } finally { x.close(); }
+  const src = read('src/thread-shared-main.js');
+  assert.ok(!/writeFile|appendFile|localStorage|safeStorage/.test(src), 'no disk write in the thread actions');
+  assert.match(read('thread-preload.js'), /sharedAskEach/);
+});
+
+test('T3b renderer: the composer line, a Send button and Ask me each time follow main; a card-less send shows "Sent to Bob."', async () => {
+  const until = Date.now() + 20 * MIN;
+  const p = page(pv({}), { review: () => ({ ok: true, status: 'direct', selection: crypto.randomUUID(), window: until }), confirm: () => ({ ok: true, status: 'sent', receipt: { id: 'r', state: 'acknowledged' }, window: until }) });
+  const view = { ...pv(), window: until, askEach: false };
+  const q = page(view, { review: () => ({ ok: true, status: 'direct', selection: crypto.randomUUID(), window: until }), confirm: () => ({ ok: true, status: 'sent', receipt: { id: 'r', state: 'acknowledged' }, window: until }) });
+  q.ready(); await tick(); await tick();
+  assert.equal(q.$('th-sh-window').hidden, false);
+  assert.equal(q.$('th-sh-window').textContent, "Messages to Bob's session send straight away for 30 minutes.");
+  assert.equal(q.$('th-sh-go').textContent, 'Send');
+  q.$('th-sh-text').value = 'hello';
+  q.$('th-sh-form').requestSubmit(); await tick(); await tick(); await tick();
+  const rv = q.calls.find((c) => c[0] === 'review');
+  assert.deepEqual(rv.slice(0, 3), ['review', 'send', 'hello']); assert.deepEqual(Object.keys(rv[3]), ['generation', 'turn']);
+  assert.ok(q.calls.some((c) => c[0] === 'confirm'), 'confirmed at once with no card');
+  assert.equal(q.$('th-sh-card').children.length, 0);
+  assert.equal(q.$('th-sh-note').textContent, 'Sent to Bob.');
+  assert.equal(q.$('th-sh-text').value, '');
+  // Ask me each time: the checkbox calls main, and the line goes.
+  q.$('th-sh-ask').checked = true; q.$('th-sh-ask').dispatchEvent(new q.w.Event('change')); await tick(); await tick();
+  assert.deepEqual(q.calls.find((c) => c[0] === 'ask-each'), ['ask-each', true]);
+  assert.equal(q.$('th-sh-window').hidden, true); assert.equal(q.$('th-sh-go').textContent, 'Review');
+  // Without a window: the Review button and the card, with no seen.
+  p.ready(); await tick(); await tick();
+  assert.equal(p.$('th-sh-window').hidden, true); assert.equal(p.$('th-sh-go').textContent, 'Review');
+  p.$('th-sh-text').value = 'x'; p.$('th-sh-form').requestSubmit(); await tick(); await tick();
+  assert.equal(p.calls.find((c) => c[0] === 'review').length, 3);
 });
