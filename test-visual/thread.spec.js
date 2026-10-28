@@ -542,10 +542,16 @@ const SHARED_BASE = {
     { id: 'b', by: 'Alice', text: 'Thanks. Ping me when it passes.', state: 'acknowledged', response: '', at: 2 },
   ],
 };
+// T4b: a teammate's steer, and a stop that names who asked.
+const SHARED_WATCH = { ...SHARED_BASE, deliveries: [
+  SHARED_BASE.deliveries[0],
+  { ...SHARED_BASE.deliveries[1], state: 'interrupted', stoppedBy: 'Sam' },
+  { id: 'c', by: 'Sam', mode: 'steer', text: 'Wrong branch. Use release/1.4.', state: 'interrupted', response: '', stoppedBy: null, at: 3 },
+] };
 const sharedOpen = (theme, shared) => open({ fixture: { kind: 'shared', header: null }, theme, shared });
 for (const theme of ['light', 'dark']) {
   test(`shared thread, watch (${theme}): header line, the privacy banner first, activity, messages with receipts, a watch-only footer`, async () => {
-    const { h, side } = await sharedOpen(theme, SHARED_BASE);
+    const { h, side } = await sharedOpen(theme, SHARED_WATCH);
     try {
       const page = await openThread(h, side, theme);
       // L32: the owner can see who has it open, said from the first paint.
@@ -657,13 +663,19 @@ const OWNED_CODEX = {
     { id: 'b', by: null, text: 'Now log each retry.', state: 'acknowledged', response: '', at: 2 },
   ],
 };
+// T4b: a teammate's steer and their stop on my own session's thread.
+const OWNED_ATTR = { ...OWNED_CODEX, deliveries: [
+  OWNED_CODEX.deliveries[0],
+  { ...OWNED_CODEX.deliveries[1], state: 'interrupted', stoppedBy: 'Alex' },
+  { id: 'c', by: 'Alex', mode: 'steer', text: 'Skip the 404 retries.', state: 'interrupted', response: '', stoppedBy: null, at: 3 },
+] };
 const OWNED_CHANNEL = {
   header: { title: 'Plexiform channel', provider: 'Claude Code', channel: true },
   activity: { category: null, ageMs: null, stale: false }, status: 'ready', deliveries: [],
 };
 const ownedOpen = (theme, owned) => open({ fixture: { kind: 'owned', header: null }, theme, owned });
 test('owned thread, Codex (dark): Started from Overview, activity, messages with receipts, no prompt box', async () => {
-  const { h, side } = await ownedOpen('dark', OWNED_CODEX);
+  const { h, side } = await ownedOpen('dark', OWNED_ATTR);
   try {
     const page = await openThread(h, side, 'dark');
     await expect(page.locator('#th-meta')).toHaveText('Codex session · Started from Overview');
