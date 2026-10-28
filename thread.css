@@ -147,7 +147,11 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .th-shared-note { margin: 0; color: var(--muted); font-size: var(--text-sm); }
 
 /* T3: an interact share's composer, action chip, review card and my proposals. */
-.th-sh { display: grid; gap: var(--space-2); min-width: 0; }
+.th-sh { display: grid; gap: var(--space-2); min-width: 0; justify-self: stretch; }
+/* The composer is the thread's own prompt box, not a note: no panel around it, full column width. */
+.th-shared-foot:has(.th-sh) { padding: 0; border: 0; background: none; justify-items: stretch; }
+.th-sh-box, .th-sh-review { box-sizing: border-box; width: 100%; }
+.th-sh-box .th-reply-note { text-align: start; }
 .th-sh-proposals:empty, .th-sh-card-host:empty { display: none; }
 .th-sh-chip-wrap { flex: none; }
 .th-sh-chip { font-size: var(--text-sm); }

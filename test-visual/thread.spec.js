@@ -70,7 +70,7 @@ const ENDED = {
   replay: CHAT.replay.slice(0, 12),
 };
 
-async function open({ fixture = null, theme = 'light', env = GATE, shared = null } = {}) {
+async function open({ fixture = null, theme = 'light', env = GATE, shared = null, sharedReview = null, sharedProposals = null } = {}) {
   const h = await launchApp({ env, files: { 'sessions/thread-fixture.json': session() } });
   if (fixture) {
     // Answers the thread document only, as main does.
@@ -85,6 +85,12 @@ async function open({ fixture = null, theme = 'light', env = GATE, shared = null
       const mine = (e) => { try { return new URL(e.sender.getURL()).pathname.endsWith('/thread.html'); } catch { return false; } };
       ipcMain.removeHandler('thread:shared-state'); ipcMain.handle('thread:shared-state', (e) => (mine(e) ? shared : null));
     }, shared);
+    // T3: main's review card and my proposals, as src/thread-shared-main.js returns them (main's checks: test/shared-thread-t3.test.js).
+    await h.app.evaluate(({ ipcMain }, { review, proposals }) => {
+      const mine = (e) => { try { return new URL(e.sender.getURL()).pathname.endsWith('/thread.html'); } catch { return false; } };
+      ipcMain.removeHandler('thread:shared-review'); ipcMain.handle('thread:shared-review', (e, id, req) => (mine(e) && review ? { ok: true, status: 'review', selection: '11111111-1111-4111-8111-111111111111', card: { ...review, op: req.op, text: req.op === 'stop' ? '' : req.text } } : null));
+      ipcMain.removeHandler('thread:shared-proposals'); ipcMain.handle('thread:shared-proposals', (e) => (mine(e) ? proposals ?? { ok: true, status: 'ready', proposals: [] } : null));
+    }, { review: sharedReview, proposals: sharedProposals });
   }
   const widget = await windowByFile(h.app, 'index.html');
   await widget.evaluate(() => window.trafficLight.openHelp());
@@ -528,18 +534,86 @@ for (const theme of ['light', 'dark']) {
       await expect(page.locator('#th-banner')).toHaveText('You see messages sent since it was shared, and its current activity. Earlier history stays private.');
       await expect(page.locator('#th-meta')).toHaveText("Bob's Claude Code session · Shared with you to watch");
       await expect(page.locator('#th-reply')).toBeHidden();
-      await expect(page.locator('.th-shared-foot')).toContainText('Ask Bob to allow sending.');
+      await expect(page.locator('.th-shared-foot')).toHaveText('Shared with you to watch only. The owner can choose Allow sending.');
+      await expect(page.locator('#th-sh-form')).toHaveCount(0);
       await shot(page, `thread-shared-watch-${theme}.png`);
     } finally { await h.cleanup(); }
   });
 }
-test('shared thread, interact (dark): the watch layout plus Open in Team sessions', async () => {
-  const { h, side } = await sharedOpen('dark', { ...SHARED_BASE, header: { ...SHARED_BASE.header, scope: 'interact' }, canSendLater: true });
+// T3: an interact share. Controls are the projection's booleans and fixed reasons (src/shared-thread-view.js controlsOf).
+const yes = { available: true, reason: '' }, no = (reason) => ({ available: false, reason });
+const BUSY_SEND = no('A turn is running. Steer it where supported, or wait for it to finish.'), BUSY_PROPOSE = no("Bob's session is busy. Propose when it's idle.");
+const interact = (provider, status, controls) => ({ ...SHARED_BASE, header: { ...SHARED_BASE.header, provider, scope: 'interact' }, status, canSendLater: true, controls });
+const IDLE = interact('Codex', 'ready', { send: yes, steer: no('No current turn is available to steer.'), interrupt: no('No current turn is available to interrupt.'), propose: yes });
+const BUSY_CODEX = interact('Codex', 'working', { send: BUSY_SEND, steer: yes, interrupt: yes, propose: BUSY_PROPOSE });
+const BUSY_CLAUDE = interact('Claude Code', 'working', { send: BUSY_SEND, steer: no('This provider does not support steering a running turn.'), interrupt: yes, propose: BUSY_PROPOSE });
+for (const theme of ['dark', 'light']) {
+  test(`shared thread, interact idle (${theme}): the composer with Send as the default, the quota line, no Stop`, async () => {
+    const { h, side } = await sharedOpen(theme, IDLE);
+    try {
+      const page = await openThread(h, side, theme);
+      await expect(page.locator('#th-reply')).toBeHidden();
+      await expect(page.locator('#th-sh-chip')).toHaveText('Send ▾');
+      await expect(page.locator('#th-sh-text')).toHaveAttribute('placeholder', "Message Bob's session");
+      await expect(page.locator('#th-sh-quota')).toHaveText("Runs on Bob's Codex account and quota.");
+      await expect(page.locator('#th-sh-stop')).toBeHidden();
+      await shot(page, `thread-shared-interact-idle-${theme}.png`);
+    } finally { await h.cleanup(); }
+  });
+}
+test('shared thread, busy Codex (dark): Steer is the default, Stop is offered, the chip menu shows why the rest are off', async () => {
+  const { h, side } = await sharedOpen('dark', BUSY_CODEX);
   try {
     const page = await openThread(h, side, 'dark');
-    await expect(page.locator('#th-reply')).toBeHidden();
-    await expect(page.getByRole('button', { name: 'Open in Team sessions' })).toBeVisible();
-    await shot(page, 'thread-shared-interact-dark.png');
+    await expect(page.locator('#th-sh-chip')).toHaveText('Steer this turn ▾');
+    await expect(page.locator('#th-sh-stop')).toBeVisible();
+    await page.locator('#th-sh-chip').click();
+    await expect(page.locator('#th-sh-menu')).toContainText("Bob's session is busy. Propose when it's idle.");
+    await shot(page, 'thread-shared-interact-busy-codex-dark.png');
+  } finally { await h.cleanup(); }
+});
+test('shared thread, busy Claude (dark): no steering, so no default; the box is off with the reason and Stop stays', async () => {
+  const { h, side } = await sharedOpen('dark', BUSY_CLAUDE);
+  try {
+    const page = await openThread(h, side, 'dark');
+    await expect(page.locator('#th-sh-text')).toBeDisabled();
+    await expect(page.locator('#th-sh-note')).toHaveText('A turn is running. Steer it where supported, or wait for it to finish.');
+    await expect(page.locator('#th-sh-stop')).toBeVisible();
+    await shot(page, 'thread-shared-interact-busy-claude-dark.png');
+  } finally { await h.cleanup(); }
+});
+test('shared thread, review card (dark): main\'s card for the exact text, armed before Send', async () => {
+  const { h, side } = await open({ fixture: { kind: 'shared', header: null }, theme: 'dark', shared: IDLE,
+    sharedReview: { title: "Send to Bob's session", target: "Bob's Codex session", notes: [], confirm: 'Send', armMs: 600 } });
+  try {
+    const page = await openThread(h, side, 'dark');
+    await page.locator('#th-sh-text').fill('Please also run the logout test before you push.');
+    await page.locator('#th-sh-go').click();
+    await expect(page.locator('#th-sh-card .th-card-title')).toHaveText("Send to Bob's session");
+    await expect(page.locator('#th-sh-yes')).toBeEnabled();
+    await shot(page, 'thread-shared-review-card-dark.png');
+  } finally { await h.cleanup(); }
+});
+test('shared thread, stop card (dark): this current turn only, no text', async () => {
+  const { h, side } = await open({ fixture: { kind: 'shared', header: null }, theme: 'dark', shared: BUSY_CODEX,
+    sharedReview: { title: "Stop Bob's current turn", target: "Bob's Codex session · this current turn only", notes: ['Asks the provider to stop the current turn. Work already done stays.'], confirm: 'Stop turn', armMs: 600 } });
+  try {
+    const page = await openThread(h, side, 'dark');
+    await page.locator('#th-sh-stop').click();
+    await expect(page.locator('#th-sh-card .th-card-title')).toHaveText("Stop Bob's current turn");
+    await expect(page.locator('#th-sh-yes')).toBeEnabled();
+    await shot(page, 'thread-shared-stop-card-dark.png');
+  } finally { await h.cleanup(); }
+});
+test('shared thread, approved proposal (dark): my proposal\'s chip and [Send approved message]', async () => {
+  const card = { op: 'send-approved', title: "Send Bob's approved message", text: 'Run the migration on staging.', target: "Bob's Codex session", notes: [], confirm: 'Send approved message', armMs: 600 };
+  const { h, side } = await open({ fixture: { kind: 'shared', header: null }, theme: 'dark', shared: IDLE, sharedProposals: { ok: true, status: 'ready', proposals: [
+    { status: 'approved', title: 'From Alice', text: 'Run the migration on staging.', expiresAt: null, receipt: null, action: { selection: '22222222-2222-4222-8222-222222222222', card } }] } });
+  try {
+    const page = await openThread(h, side, 'dark');
+    await expect(page.locator('#th-sh-proposals .th-chip')).toHaveText('Approved, one send');
+    await expect(page.getByRole('button', { name: 'Send approved message' })).toBeEnabled();
+    await shot(page, 'thread-shared-proposal-approved-dark.png');
   } finally { await h.cleanup(); }
 });
 test('shared thread, gone (dark): the body is dropped and the way back is offered', async () => {
