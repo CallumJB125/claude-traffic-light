@@ -62,6 +62,9 @@ const MATRIX = {
   'POST /api/interaction/v1/shares': { kind: 'cross', status: 403, path: () => '/api/interaction/v1/shares', body: f => ({ session: randomUUID(), team: f.B.team, scope: 'interact' }) },
   'DELETE /api/interaction/v1/shares/:share_id': { kind: 'cross', path: f => `/api/interaction/v1/shares/${f.B.share}` },
   'DELETE /api/teams/:team_id/interaction-shares/:share_id': { kind: 'cross', path: f => `/api/teams/${f.B.team}/interaction-shares/${f.B.share}` },
+  // Only the owner's host device grants or stops an allowance (403 for every other caller); the share is B's.
+  'PUT /api/interaction/v1/shares/:share_id/allowances/:user_id': { kind: 'cross', status: 403, path: f => `/api/interaction/v1/shares/${f.B.share}/allowances/${f.users.s.id}`, body: () => ({ expires_in_s: 600 }) },
+  'DELETE /api/interaction/v1/shares/:share_id/allowances/:user_id': { kind: 'cross', status: 403, path: f => `/api/interaction/v1/shares/${f.B.share}/allowances/${f.users.s.id}` },
   'GET /api/interaction/v1/shared': { kind: 'self' },
   'GET /api/interaction/v1/shared/:share_id/proposals': { kind: 'cross', path:f=>`/api/interaction/v1/shared/${f.B.share}/proposals` },
   'POST /api/interaction/v1/shared/:share_id/proposals': { kind: 'cross', bare:true, path:f=>`/api/interaction/v1/shared/${f.B.share}/proposals`, body:()=>({id:randomUUID(),decision:randomUUID(),version:1,generation:1,title:'Foreign request',text:'Do not execute'}) },

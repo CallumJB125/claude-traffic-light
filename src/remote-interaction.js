@@ -261,13 +261,19 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   }
   const liveShare = (sh) => !!sh && shares.get(sh.id) === sh && (sh.expiresAt === null || clock() < sh.expiresAt);
 
+  // T4d: the owner's Mac is the only authority for a per-teammate send allowance. It counts only on a watch share,
+  // only while this Mac's own record is unexpired and the hub names that exact grant, and only for send/interrupt.
+  const allowHeld = (sh, user) => { const a = sh.scope === 'watch' && sh.allowOk === true ? sh.allow?.get(user) : null; return a && clock() < a.until ? a : null; };
+  const allowGranted = (sh, user, claimed) => { const a = allowHeld(sh, user); return a && claimed === a.iso ? a : null; };
+  const sharedScope = (sh, s) => (sh.scope === 'watch' && s.allowance_until !== undefined && allowGranted(sh, s.user, s.allowance_until) ? 'interact' : sh.scope);
+
   // A relayed teammate call: served only against this Mac's own copy of the share.
   async function runShared(frame) {
     const s = frame.share, args = frame.args;
-    if (!closed(s, ['id', 'team', 'user', 'name', 'scope', 'proposal']) || typeof s.id !== 'string' || typeof s.team !== 'string' || typeof s.user !== 'string' || typeof args.session !== 'string') return REFUSED.invalid;
+    if (!closed(s, ['id', 'team', 'user', 'name', 'scope', 'proposal', 'allowance_until']) || typeof s.id !== 'string' || typeof s.team !== 'string' || typeof s.user !== 'string' || typeof args.session !== 'string') return REFUSED.invalid;
     const sh = shares.get(s.id);
     const member = sh?.users.get(s.user);
-    if (!sh || s.user === userId || sh.team !== s.team || !member || sh.session !== args.session || !SCOPE_OPS[member.act ? sh.scope : 'watch'].includes(frame.op)) return REFUSED.notShared;
+    if (!sh || s.user === userId || sh.team !== s.team || !member || sh.session !== args.session || !SCOPE_OPS[member.act ? sharedScope(sh, s) : 'watch'].includes(frame.op)) return REFUSED.notShared;
     if (!liveShare(sh)) { dropShare(sh.id); return REFUSED.gone; }
     const t = targetFor(sh.session);
     if (!t) { dropShare(sh.id); return REFUSED.gone; }
@@ -292,7 +298,9 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
         if (!persisted || persisted.status !== 'dispatching' || persisted.digest !== grant.digest || persisted.version !== grant.version || !liveShare(sh) || proposalGrants.get(p.id) !== grant || grant.used) return REFUSED.notShared;
         grant.used = true;
       }
+      const allow = sh.scope === 'watch' ? allowGranted(sh, s.user, s.allowance_until) : null;
       const fresh = () => liveShare(sh) && targetFor(sh.session)?.hub === t.hub && sh.users.get(s.user)?.act === true
+        && (sh.scope === 'interact' || !!allow && allowHeld(sh, s.user) === allow)
         && (!grant || proposalGrants.get(s.proposal.id) === grant && clock() < grant.expiresAt);
       const st = t.hub.state({ session: sh.session }, t.actor);
       const req = { session: sh.session, generation: args.generation, board: st.board, text: args.text };
@@ -375,7 +383,8 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   }
   const freshViewers = (sh) => (Array.isArray(sh.viewers) && Number.isFinite(sh.viewersAt) && clock() - sh.viewersAt < VIEWERS_FRESH_MS ? [...sh.viewers] : []);
   const shareView = (sh) => ({ id: sh.id, session: sh.session, team: { id: sh.team, name: sh.teamName }, scope: sh.scope, expiresAt: sh.expiresAt,
-    members: [...sh.users].map(([id, u]) => ({ id, name: u.name, canSend: sh.scope === 'interact' && u.act })), viewers: freshViewers(sh) });
+    allowOk: sh.allowOk === true,
+    members: [...sh.users].map(([id, u]) => ({ id, name: u.name, acts: u.act, canSend: u.act && (sh.scope === 'interact' || !!allowHeld(sh, id)), allowedUntil: u.act ? allowHeld(sh, id)?.until ?? null : null })), viewers: freshViewers(sh) });
   const hubError = (r, fallback) => refuse('unavailable', (typeof r?.body?.error?.message === 'string' ? r.body.error.message : '') || fallback);
 
   // Creating a share replaces the live one for the same session and team at the hub, so two creates for one
@@ -417,15 +426,67 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     // The session may have ended while the hub answered.
     if (!targetFor(session)) { dropShare(s.id); return refuse('stale', 'This session has ended and cannot be shared.'); }
     for (const x of [...shares.values()]) if (x.session === session && x.team === team) dropShare(x.id, { tellHub: false });
-    const sh = { id: s.id, session, team, teamName: typeof s.team.name === 'string' ? s.team.name.slice(0, 120) : 'Team', scope, createdAt, expiresAt: expiresInS === null ? null : clock() + expiresInS * 1000, ownerName: s.owner?.name, users: usersOf(s.members, s.owner?.name) };
+    const sh = { id: s.id, session, team, teamName: typeof s.team.name === 'string' ? s.team.name.slice(0, 120) : 'Team', scope, createdAt, expiresAt: expiresInS === null ? null : clock() + expiresInS * 1000, ownerName: s.owner?.name, users: usersOf(s.members, s.owner?.name), allow: new Map(), allowOk: Array.isArray(s.allowances) };
     shares.set(sh.id, sh);
     return { ok: true, share: shareView(sh) };
+  }
+
+  const allowKey = (id) => `allow\n${id}`;
+  const ALLOW_SECONDS = [900, 1800, 3600, 14_400];
+  const delAllowance = (id, user) => hubCall('DELETE', `/api/interaction/v1/shares/${encodeURIComponent(id)}/allowances/${encodeURIComponent(user)}`, {}).catch(() => {});
+
+  /** Reconcile this Mac's allowances with the hub's list (same list response as the share). Runs inside the share's allowance lock. */
+  function reconcileAllowances(sh, x, startedAt) {
+    if (!liveShare(sh) || shares.get(sh.id) !== sh) return;
+    sh.allowOk = Array.isArray(x.allowances);
+    if (!sh.allowOk || sh.scope !== 'watch') { sh.allow.clear(); return; }
+    const onHub = new Map(x.allowances.filter((a) => object(a) && typeof a.user_id === 'string' && typeof a.expires_at === 'string').map((a) => [a.user_id, a.expires_at]));
+    for (const [user, a] of [...sh.allow]) {
+      if (clock() >= a.until) { sh.allow.delete(user); continue; }
+      // Recorded after this list began: the list may predate it, so leave it for the next one.
+      if (a.at > startedAt) continue;
+      if (onHub.get(user) !== a.iso) { sh.allow.delete(user); if (onHub.has(user)) delAllowance(sh.id, user); }
+    }
+    // The hub names an allowance this Mac never granted: never honoured, removed at the hub.
+    for (const user of onHub.keys()) if (!sh.allow.has(user)) delAllowance(sh.id, user);
+  }
+
+  /** Owner (main only): let one acting teammate send, steer and stop in a watch share for 15 min, 30 min, 1 h or 4 h. */
+  function grantAllowance({ share, user, seconds } = {}) {
+    if (typeof share !== 'string' || typeof user !== 'string' || !ALLOW_SECONDS.includes(seconds)) return Promise.resolve(REFUSED.invalid);
+    return serialised(allowKey(share), async () => {
+      const sh = shares.get(share);
+      if (!sh || !liveShare(sh) || !targetFor(sh.session)) return REFUSED.gone;
+      if (sh.scope !== 'watch') return refuse('exists', 'This session already lets the team send.');
+      if (sh.allowOk !== true) return refuse('unavailable', 'Your team hub needs an update before you can allow one teammate to send.');
+      if (sh.users.get(user)?.act !== true) return refuse('forbidden', 'That teammate cannot be allowed to send.');
+      let r;
+      try { r = await hubCall('PUT', `/api/interaction/v1/shares/${encodeURIComponent(share)}/allowances/${encodeURIComponent(user)}`, { expires_in_s: seconds }); } catch { r = null; }
+      // The hub advertised the route, so a 404 means the share is gone or the hub was rolled back.
+      if (r?.status === 404) return refuse('stale', 'This share changed. Look again.');
+      const a = r?.body?.allowance, until = typeof a?.expires_at === 'string' ? Date.parse(a.expires_at) : NaN;
+      if (r?.status !== 200 || !object(a) || a.user_id !== user || !Number.isFinite(until) || until <= clock() || until > clock() + (seconds + 60) * 1000) return hubError(r, 'The hub did not accept that.');
+      if (!liveShare(sh) || shares.get(share) !== sh) return REFUSED.gone;
+      // Only after the hub said yes, and with the hub's own expiry (never a time computed here).
+      sh.allow.set(user, { until, iso: a.expires_at, at: clock() });
+      return { ok: true, share: shareView(sh) };
+    });
+  }
+
+  /** Owner (main only): stop allowing. Local first, so it ends at once even if the hub is slow. */
+  function revokeAllowance({ share, user } = {}) {
+    if (typeof share !== 'string' || typeof user !== 'string') return Promise.resolve(REFUSED.invalid);
+    const sh = shares.get(share);
+    if (!sh) return Promise.resolve(REFUSED.gone);
+    sh.allow.delete(user);
+    return serialised(allowKey(share), async () => { await delAllowance(share, user); return { ok: true, share: shareView(sh) }; });
   }
 
   /** Owner: the hub's view of this Mac's shares, reconciled with this Mac's own; and the teams it may share with. */
   async function listShares() {
     if (!running?.baseUrl) return refuse('unavailable', 'This Mac is not connected to your team hub.');
     let r;
+    const startedAt = clock();
     try { r = await hubCall('GET', '/api/interaction/v1/shares'); } catch { r = null; }
     if (r?.status !== 200 || !Array.isArray(r.body?.shares)) return hubError(r, 'The hub did not answer.');
     const onHub = new Map(r.body.shares.filter((x) => object(x) && typeof x.id === 'string').map((x) => [x.id, x]));
@@ -437,6 +498,8 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
       sh.users = usersOf(x.members, sh.ownerName);
       // An older hub sends no viewers: none, never an error.
       sh.viewers = viewersOf(x.viewers); sh.viewersAt = clock();
+      // T4d: an older hub sends no allowances: hide Allow and drop anything held.
+      await serialised(allowKey(id), () => reconcileAllowances(sh, x, startedAt));
     }
     // Revoked by a team admin, expired or deleted at the hub: gone here too.
     for (const id of [...shares.keys()]) if (!onHub.has(id)) dropShare(id, { tellHub: false });
@@ -703,7 +766,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
   // `hub` is a main-only seam (tests and proof logs), never exposed remotely.
   const onState = (fn) => { stateListeners.add(fn); return () => stateListeners.delete(fn); };
   // forgetDevice(dev): drop a revoked device's end-to-end sessions now (its peer() should already return null).
-  return { handle, connect, enable, disable, status, disconnect, close, onState, hub, actor, connected: () => socket?.readyState === 1, shareSession, shareSessionAutomatic, listShares, stopSharing, proposalList, proposalApprove, proposalRevoke, shared: () => [...shares.values()].map(shareView), forgetDevice: (dev) => channel?.forget(dev) };
+  return { handle, connect, enable, disable, status, disconnect, close, onState, hub, actor, connected: () => socket?.readyState === 1, shareSession, shareSessionAutomatic, listShares, stopSharing, grantAllowance, revokeAllowance, proposalList, proposalApprove, proposalRevoke, shared: () => [...shares.values()].map(shareView), forgetDevice: (dev) => channel?.forget(dev) };
 }
 
 /** PUT role=client with this token, bounded. → true once the hub has no host role for it. */

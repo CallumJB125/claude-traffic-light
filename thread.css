@@ -93,6 +93,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .th-own-share { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .th-own-share-text { min-width: 0; }
 .th-own-btn { font-size: var(--text-sm); }
+.th-own-select { font: inherit; font-size: var(--text-sm); color: inherit; background: transparent; border: 1px solid var(--border, currentColor); border-radius: var(--radius-sm, 6px); padding: 2px 6px; }
 .th-own { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
 .th-own[hidden] { display: none; }
 /* Nothing to show (no note, sheet, card or proposals): no box and no margin, so an unshared thread is unchanged. */

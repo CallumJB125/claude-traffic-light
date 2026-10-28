@@ -41,6 +41,31 @@
   }
   function note(text, kind = '') { noteText = text || ''; noteKind = kind; const n = $('th-own-note'); if (n) { n.textContent = noteText; n.dataset.kind = noteKind; } }
 
+  // T4d: per teammate on a watch share: who can send until when (Stop allowing), and who could be allowed (a time and a button).
+  const ALLOW = [['900', '15 min'], ['1800', '30 min'], ['3600', '1 hour'], ['14400', '4 hours']];
+  function allowRows(s) {
+    if (s.scope !== 'watch') return [];
+    const out = [];
+    if (typeof s.allowNote === 'string' && s.allowNote) out.push(el('p', 'th-own-share', s.allowNote));
+    for (const a of (Array.isArray(s.allowed) ? s.allowed : []).slice(0, 50)) {
+      const row = el('div', 'th-own-share');
+      row.append(el('span', 'th-own-share-text', `${a.name} can send until ${clock(a.until)}`));
+      const b = button('th-btn th-own-btn', `Stop allowing ${a.name}`, () => { void act('stop-allow', a.key); }); b.disabled = busy; row.append(b);
+      out.push(row);
+    }
+    for (const m of (Array.isArray(s.allowable) ? s.allowable : []).slice(0, 50)) {
+      const row = el('div', 'th-own-share');
+      const sel = el('select', 'th-own-select'); sel.setAttribute('aria-label', `How long ${m.name} can send`);
+      for (const [v, label] of ALLOW) { const o = el('option', '', label); o.value = v; if (v === '1800') o.selected = true; sel.append(o); }
+      const label = () => `Allow ${m.name} to send · ${ALLOW.find(([v]) => v === sel.value)[1]}`;
+      const b = button('th-btn th-own-btn', label(), () => { void review({ op: 'allow-send', share: s.key, member: m.key, seconds: sel.value }); });
+      sel.addEventListener('change', () => { b.textContent = label(); });
+      b.disabled = busy; sel.disabled = busy; row.append(sel, b);
+      out.push(row);
+    }
+    return out;
+  }
+
   function render() {
     const { line, item } = parts(), v = view;
     const on = !!v && v.shareable === true;
@@ -62,6 +87,7 @@
       if (s.scope === 'watch') { const b = button('th-btn th-own-btn', 'Allow sending', () => { void review({ op: 'allow-sending', share: s.key }); }); b.disabled = busy; row.append(b); }
       const stop = button('th-btn th-own-btn', 'Stop sharing', () => { void act('stop', s.key); }); stop.disabled = busy; row.append(stop);
       rows.push(row);
+      for (const r of allowRows(s)) rows.push(r);
     }
     if (shares.length > 3) rows.push(el('p', 'th-own-share', `+${shares.length - 3} more`));
     line.replaceChildren(...rows);
@@ -167,6 +193,7 @@
     if (c.text) card.append(el('p', 'th-card-text', c.text));
     if (c.scope) card.append(el('p', 'th-card-sub', c.scope));
     for (const n of Array.isArray(c.notes) ? c.notes : []) card.append(el('p', 'th-card-sub', n));
+    if (Object.hasOwn(c, 'until')) card.append(el('p', 'th-card-sub', `They can send until ${clock(c.until)}.`));
     if (Object.hasOwn(c, 'keeps')) card.append(el('p', 'th-card-sub', `Keeps the time left: ${until(c.keeps)}`));
     const btns = el('div', 'th-card-btns');
     const yes = el('button', 'th-btn th-primary', c.confirm); yes.type = 'button'; yes.id = 'th-own-yes';
