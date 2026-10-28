@@ -161,7 +161,7 @@ test('sidebar:team-rows guard: other senders, preview off, args, a document chan
   assert.equal(await x.handlers.get('sidebar:team-rows')(x.over), null, 'the Overview document is not the sidebar');
   assert.equal(await x.rows('extra'), null);
   const off = sidebarRig({ chatPreview: false });
-  assert.equal(await off.rows(), null, 'preview off');
+  assert.equal(off.handlers.has('sidebar:team-rows'), false, 'preview off: not registered at all');
   let reads = 0; const hub = createFakeTeamHub(FIXTURE), inner = hub.passiveSessions.bind(hub);
   hub.passiveSessions = async (v) => { reads++; return inner(v); };
   const y = sidebarRig({ hub });
@@ -291,4 +291,38 @@ test('an account switch whose first read fails answers unavailable with the new 
   assert.notEqual(failed.viewer, first.viewer, 'the renderer can tell the account changed');
   x.signOut(); x.tick(15_001);
   assert.equal((await x.rows()).viewer, null, 'signed out: no viewer');
+});
+
+// The gate-off app keeps main's channels from before R2b (test-visual/ipc-channels.spec.js): T1's two channels are
+// registered only with the chat-first preview on.
+test('T1 channels: sidebar:team-rows and overview:open-hint exist only with the chat-first preview on', () => {
+  const names = (chatPreview) => { const m = createOverviewMain({ buddy: () => null, sessions: () => [], ...(chatPreview === undefined ? {} : { chatPreview }) }); const out = new Set(); m.register({ handle: (n) => out.add(n), on: (n) => out.add(n) }); m.stop?.(); return out; };
+  for (const off of [false, undefined, 'true', 1]) {
+    const got = names(off);
+    assert.equal(got.has('sidebar:team-rows'), false, String(off));
+    assert.equal(got.has('overview:open-hint'), false, String(off));
+    assert.equal(got.has('overview:state'), true, 'the rest of Overview is unchanged');
+  }
+  const on = names(true);
+  assert.equal(on.has('sidebar:team-rows'), true);
+  assert.equal(on.has('overview:open-hint'), true);
+});
+
+test('T1: the Overview bridge has openHint only when main started it with the chat-first flag, so gate off it never asks', () => {
+  const bridge = (argv) => {
+    let api; const invoked = [];
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../overview-preload.js'), 'utf8'), { Buffer, Promise, process: { argv }, require: () => ({ contextBridge: { exposeInMainWorld: (_n, v) => { api = v; } }, ipcRenderer: { invoke: (n) => { invoked.push(n); return Promise.resolve(null); }, on() {}, send() {} } }) });
+    return { api, invoked };
+  };
+  for (const argv of [[], ['--other'], ['--plexiform-chat-preview=1']]) assert.equal(typeof bridge(argv).api.openHint, 'undefined', JSON.stringify(argv));
+  const on = bridge(['electron', '--plexiform-chat-preview']);
+  assert.equal(typeof on.api.openHint, 'function');
+  on.api.openHint();
+  assert.deepEqual(on.invoked, ['overview:open-hint']);
+  assert.equal(typeof bridge([]).api.state, 'function', 'the rest of the bridge is unchanged');
+  // Main passes the flag to the Overview view only with the preview on, exactly as for the sidebar.
+  const win = fs.readFileSync(path.join(__dirname, '../buddy-window/index.js'), 'utf8');
+  assert.match(win, /preload: path\.join\(DIR, '\.\.', page\.preload\), \.\.\.\(chatFirst === true && page\.id === 'overview' \? \{ additionalArguments: \['--plexiform-chat-preview'\] \} : \{\}\)/);
+  // Overview's takeHint returns before asking when the bridge has no openHint.
+  assert.match(fs.readFileSync(path.join(__dirname, '../overview-directory.js'), 'utf8'), /async function takeHint\(\) \{\n\s+if \(typeof api\.openHint !== 'function'\) return;/);
 });
