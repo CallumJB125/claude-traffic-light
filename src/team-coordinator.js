@@ -4,6 +4,7 @@
 // a generation/turn-bound review from the existing team-session controls.
 // Proposals and one-use grants belong to the current Overview document only.
 const crypto = require('node:crypto');
+const { withTargetLock } = require('./team-session-controls');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const TEAM = /^[0-9a-f]{32}$/, ENTRY = /^[0-9a-f]{40}$/;
 const REVIEW_MS = 30_000, RETAIN_MS = 10 * 60_000, MAX_ASSIGNMENTS = 6;
@@ -190,7 +191,9 @@ function createTeamCoordinator({ inventory: readInventory, inspect, action, reso
       if(!fresh()||!t.isCurrent()||!read?.ok||read.state?.generation!==chosen.proposal.generation||read.state?.status==='ended'||operation==='send'&&(read.state?.status!=='ready'||read.state?.activeTurn!==null||read.capabilities?.send?.available!==true))return fail('stale',STALE);
     }
     const payload=operation==='replace'?{id:crypto.randomUUID(),decision:chosen.proposal.decision,version:chosen.proposal.version+1,generation:chosen.proposal.generation,title:chosen.proposal.title,text:request.text.trim()}:chosen.proposal;
-    const r=await t.hub.proposals(t.viewer,t.team,t.ref,operation==='replace'?'request':operation,payload,()=>fresh()&&t.isCurrent());
+    const call=()=>t.hub.proposals(t.viewer,t.team,t.ref,operation==='replace'?'request':operation,payload,()=>fresh()&&t.isCurrent());
+    // T3 (plan-t3 §2.2): an approved message's send is a provider dispatch, so it takes the same per-target lock as action().
+    const r=operation==='send'?await withTargetLock(t,call):await call();
     return fresh()?r:fail(operation==='send'?'unconfirmed':'stale','The view changed. Refresh receipts before acting again.');
   }
   function cancel(request) {

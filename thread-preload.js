@@ -42,6 +42,11 @@ contextBridge.exposeInMainWorld('threadApi', {
   // T2: a teammate's shared session (read-only): its projection, and the way back to Team sessions.
   sharedState: (row) => ipcRenderer.invoke('thread:shared-state', id(row)),
   openTeam: (row) => ipcRenderer.invoke('thread:open-team', id(row)),
+  // T3: an interact share's review card, its confirm, and my own proposals. The page sends only the op, the
+  // exact text and main's selection; main resolves everything else.
+  sharedReview: (row, op, text) => ipcRenderer.invoke('thread:shared-review', id(row), { op: String(op), text: String(text) }),
+  sharedConfirm: (row, selection, text) => ipcRenderer.invoke('thread:shared-confirm', id(row), { selection: String(selection), text: String(text) }),
+  sharedProposals: (row) => ipcRenderer.invoke('thread:shared-proposals', id(row)),
   // Back to Board from an ended chat.
   board: () => ipcRenderer.send('thread:board'),
 });

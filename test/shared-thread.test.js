@@ -96,7 +96,7 @@ test('read: inspect only, the fixed projection, the scope refreshed on every rea
   assert.equal((await x.svc.sharedThreadRead(id)).header.scope, 'interact', 'not cached from bind');
   assert.deepEqual(x.sent, [], 'a read never touches presence');
   assert.ok(!JSON.stringify(a).includes(UUID1) && !JSON.stringify(a).includes('team1'));
-  const src = read('src/overview-service.js'), at = src.indexOf('async function sharedThreadRead'), body = src.slice(at, src.indexOf('\n // Message a teammate', at));
+  const src = read('src/overview-service.js'), at = src.indexOf('async function sharedThreadRead'), body = src.slice(at, src.indexOf('\n // T3 (plan-t3 §2.1)', at));
   for (const word of ['routeEpoch', 'teamRefs', 'teamView', 'controls', 'coordinator', 'presenceView', 'holder', 'directoryEpoch']) assert.ok(!body.includes(word), `${word} is not used by a shared-thread read`);
 });
 test('read outcomes: forbidden/stale/ended end the thread and drop the route; unavailable keeps it; a stale read returns null', async () => {
@@ -270,7 +270,7 @@ test('a hub change reaches the thread\'s slot too: clearAll sends the null on th
 // ── wiring ──────────────────────────────────────────────────────────────
 test('wiring: no new authority; main passes the presence owner and the bind; the window opens a thread first and falls back to Overview', () => {
   const main = read('main.js'), win = read('buddy-window/index.js'), tm = read('src/thread-main.js');
-  assert.match(main, /sharedRead: \(id, alive\) => OverviewMain\.sharedThreadRead\(id, alive\),\n    openTeam: \(id\) => buddyWin\?\.openTeamRow\?\.\(id\) \?\? false,\n    presence: PresenceOwner,/);
+  assert.match(main, /sharedRead: \(id, alive\) => OverviewMain\.sharedThreadRead\(id, alive\),\n    sharedAuthority: \(id, live\) => OverviewMain\.sharedThreadAuthority\(id, live\),\n    openTeam: \(id\) => buddyWin\?\.openTeamRow\?\.\(id\) \?\? false,\n    presence: PresenceOwner,/);
   assert.match(main, /threadBindShared: \(id, alive\) => OverviewMain\.sharedThreadBind\(id, alive\),/);
   assert.match(win, /openTeamRow\(id\) \{ if \(typeof id !== 'string' \|\| !ROW_ID\.test\(id\)\) return false;/);
   const body = tm.slice(tm.indexOf('async function sharedState'), tm.indexOf('// "Team overview"'));
@@ -316,23 +316,21 @@ test('renderer: a watch share shows the header line, the banner first, the activ
   assert.match(msgs[1].textContent, /Sent through this share/);
   assert.equal(msgs[1].querySelector('.th-chip').textContent, 'Unconfirmed');
   assert.match(msgs[1].textContent, /Receipt unconfirmed\. The agent may still act; do not resend automatically\./);
-  assert.equal(root.querySelector('.th-shared-foot').textContent, 'Shared with you to watch only. Ask Bob to allow sending.');
+  assert.equal(root.querySelector('.th-shared-foot').textContent, 'Shared with you to watch only. The owner can choose Allow sending.', 'T3 wording');
   for (const id of ['th-reply', 'th-stop', 'th-tx', 'th-waiting', 'th-cards', 'th-hooks', 'th-primary']) assert.equal(p.$(id).hidden, true, id);
   assert.equal(p.$('th-copy').hidden, true, 'no Copy link in T2');
   assert.equal(p.$('th-team').hidden, false);
   p.$('th-team').click(); await tick();
   assert.deepEqual(p.calls.at(-1), ['team', ID]);
 });
-test('renderer: an interact share still has no prompt box; the footer points to Team sessions and the expiry shows', async () => {
+test('renderer: an interact share gets the thread\'s own composer (T3), not the chat reply box; the expiry shows', async () => {
   const iso = '2030-06-01T18:00:00.000Z';
   const p = page(view({ share: { scope: 'interact', expiresAt: iso } }));
   p.ready(); await tick(); await tick();
   assert.match(p.$('th-meta').textContent, /^Bob's Claude Code session · Watch and send · until \d\d:\d\d( [AP]M)?$/);
-  assert.equal(p.$('th-reply').hidden, true);
-  const foot = p.$('th-shared').querySelector('.th-shared-foot');
-  assert.match(foot.textContent, /^To send, steer or interrupt, use Team sessions\.Open in Team sessions$/);
-  foot.querySelector('button').click(); await tick();
-  assert.deepEqual(p.calls.at(-1), ['team', ID]);
+  assert.equal(p.$('th-reply').hidden, true, 'the chat reply box stays hidden');
+  assert.ok(p.$('th-sh-form'), 'the shared composer');
+  assert.doesNotMatch(p.$('th-shared').querySelector('.th-shared-foot').textContent, /use Team sessions/);
 });
 test('renderer: no messages yet says so; a tombstone drops the body, stops reading and offers the way back', async () => {
   const p = page(view({ state: state({ deliveries: [] }) }));

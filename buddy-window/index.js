@@ -1714,6 +1714,13 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     // Main-only (remote interaction host): the active team hub's own device
     // sign-in. The token is read per use through tokenFor, never kept here or
     // sent to a renderer; null when signed out.
+    // T3: main-only. The signed-in hub account's display name and id, for a thread proposal's "From ‹name›".
+    interactionHostName() {
+      const w = getTeamHub();
+      if (!w || !signedIn(w.hub)) return null;
+      const u = userOf(w.hub);
+      return typeof u?.id === 'string' && u.id && typeof u.display_name === 'string' ? { userId: u.id, name: u.display_name.slice(0, 200) } : null;
+    },
     interactionHostIdentity() {
       const w = getTeamHub();
       if (!w || !signedIn(w.hub)) return null;

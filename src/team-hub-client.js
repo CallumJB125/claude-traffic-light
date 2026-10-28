@@ -682,6 +682,17 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     return result;
   }
 
+  // T3: one listed share as a directory hub entry, from the list the last sharedTarget refreshed (an inspect),
+  // with that inspect's cached state applied. Read-only: no list read, and no cache, slot, team or route write.
+  function sharedEntry(viewerArg, teamId, ref) {
+    if (!sameViewer(viewerArg) || typeof teamId !== 'string' || typeof ref !== 'string' || !UUID.test(ref)) return null;
+    const row = cache.find((r) => r.ref === ref);
+    if (!row || row.team.id !== teamId || row.owner.id === viewerArg.id) return null;
+    const entry = baseEntry(row), slot = stateCache.get(row.ref);
+    if (slot && slot.pin === statePin(row, viewerArg)) applyCached(entry, slot);
+    return entry;
+  }
+
   async function send(viewerArg, teamId, ref, text, requestId, fresh = () => true) {
     const message = typeof text === 'string' ? text.trim() : '';
     if (!message || message.includes('\0') || message.length > MAX_TEXT || Buffer.byteLength(message) > MAX_BYTES) return failed('invalid', REASONS.invalid);
@@ -770,7 +781,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     };
   }
 
-  return Object.defineProperty({ teams, sessions, passiveSessions, sharedEntries, inspect, act, send, proposals, onChange, viewer }, 'origin', { value: new URL(base).origin, enumerable: true });
+  return Object.defineProperty({ teams, sessions, passiveSessions, sharedEntries, sharedEntry, inspect, act, send, proposals, onChange, viewer }, 'origin', { value: new URL(base).origin, enumerable: true });
 }
 
 module.exports = { createTeamHubClient, parseBase };

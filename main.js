@@ -1853,6 +1853,8 @@ const OverviewMain=require('./src/overview-main').createOverviewMain({
   buddy:()=>buddyWin,chatPreview:CHAT_PREVIEW,presenceOwner:PresenceOwner,sessions:()=>aggregateState().sessions||[],
   // Burst's loose ends per repository (BurstIpc is created further down; null until then and whenever Burst lacks the check).
   looseEnds:()=>{try{return BurstIpc.looseEndsView();}catch{return null;}},
+  // T3: the signed-in hub account's display name, for "From ‹name›" on a proposal sent from a thread (main-only).
+  accountName:()=>getBuddy().interactionHostName?.()??null,
   presence:team=>{void PresenceLink.refresh();return PresenceLink.latest(team);},presenceView:r=>PresenceLink.view(r),
   // "Share view" from Team sessions: the team's board link with the person's own sign-in (same poster as pins).
   shareView:async({origin,teamId,name,values})=>{const links=devMockReady?(await getBuddy().teamMemoryLinks?.())??[]:[];const link=links.find(l=>l?.route?.hub===origin&&l.route.team_id===teamId&&l.route.board_id)||null;return require('./src/pinboard.js').createPinboard({resolve:async()=>null,fetch:(...a)=>net.fetch(...a),log:m=>console.log(m)}).view({link,name,values});}, // privacy-flow: pinboard
@@ -2463,6 +2465,7 @@ if (CHAT_PREVIEW) {
     buddy: () => buddyWin, chatPreview: CHAT_PREVIEW,
     target: (id) => OverviewMain.threadTarget(id),
     sharedRead: (id, alive) => OverviewMain.sharedThreadRead(id, alive),
+    sharedAuthority: (id, live) => OverviewMain.sharedThreadAuthority(id, live),
     openTeam: (id) => buddyWin?.openTeamRow?.(id) ?? false,
     presence: PresenceOwner,
     header: (t, id) => SidebarRows.headerOf(t, id),
