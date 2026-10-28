@@ -115,6 +115,8 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
   sharedThreadRead:(id,alive)=>stopped?Promise.resolve(null):service.sharedThreadRead(id,()=>!stopped&&(typeof alive!=='function'||alive()===true)),
   // T4a: my own Plexiform-held session as a read-only thread (plan-t4a §2.3).
   ownedThreadRead:id=>stopped?{gone:true,reason:'ended'}:service.ownedThreadRead(id),
+  // T4: the owned session the bound thread's owner controls act on (main-only), or null.
+  ownerTarget:id=>stopped?null:service.ownerTarget(id),
   // R2b-2: main-only, for the new chat's handoff (src/newchat-main.js).
   threadForTask:id=>stopped?null:service.threadForTask(id),
   // R7-1: main-only, for the new chat's Needs-you rows (src/newchat-home-main.js): the sidebar's projection, read with the caller's liveness.

@@ -55,6 +55,15 @@ contextBridge.exposeInMainWorld('threadApi', {
   // T4a: one of my own Plexiform-held sessions (read-only): its projection, and the way to Overview.
   ownedState: (row) => ipcRenderer.invoke('thread:owned-state', id(row)),
   openOverview: (row) => ipcRenderer.invoke('thread:open-overview', id(row)),
+  // T4: owner controls on my own thread. The page sends only main's opaque keys and selection; main resolves the rest.
+  ownerState: (row) => ipcRenderer.invoke('thread:owner-state', id(row)),
+  ownerReview: (row, r) => {
+    const o = r && typeof r === 'object' ? r : {}, out = {};
+    for (const k of ['op', 'team', 'scope', 'expiry', 'share', 'proposal']) if (typeof o[k] === 'string') out[k] = o[k];
+    return ipcRenderer.invoke('thread:owner-review', id(row), out);
+  },
+  ownerConfirm: (row, selection) => ipcRenderer.invoke('thread:owner-confirm', id(row), { selection: String(selection) }),
+  ownerAct: (row, op, key) => ipcRenderer.invoke('thread:owner-act', id(row), { op: String(op), key: String(key) }),
   // Back to Board from an ended chat.
   board: () => ipcRenderer.send('thread:board'),
 });

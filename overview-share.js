@@ -40,7 +40,7 @@
     toggle.setAttribute('aria-expanded', 'false');
     box.append(toggle, status, panel);
     card.append(box);
-    let teams = [], mine = [], busy = false, note = '';
+    let teams = [], mine = [], busy = false, note = '', approveHere = true;
     const proposals = new Map();
 
     function render() {
@@ -66,11 +66,12 @@
               const proposal = el('article', '', 'coordinator-result');
               proposal.append(el('strong', p.title), el('p', `Requested by ${p.requester.name} · decision version ${p.version} · ${p.status}`, 'reason'), el('p', p.text, 'delivery-text'));
               if (p.acknowledgedAt) proposal.append(el('p', `Owner acknowledged version ${p.version}. One send only${p.expiresAt ? `; ${until(Date.parse(p.expiresAt))}` : ''}.`, 'reason'));
-              if (p.status === 'pending') { const approve = button('Approve this message for 10 minutes', () => void proposalAction(s.id, 'approve', p)); approve.disabled = busy; proposal.append(approve); }
+              if (p.status === 'pending' && approveHere) { const approve = button('Approve this message for 10 minutes', () => void proposalAction(s.id, 'approve', p)); approve.disabled = busy; proposal.append(approve); }
               if (['pending','approved'].includes(p.status)) { const revoke = button(p.status === 'pending' ? 'Reject proposal' : 'Revoke grant', () => void proposalAction(s.id, 'revoke', p)); revoke.disabled = busy; proposal.append(revoke); }
               if (p.receipt) proposal.append(el('p', `Provider receipt: ${p.receipt.state}`, 'reason'));
               li.append(proposal);
             }
+            if (!approveHere) li.append(el('p', 'Approve a proposal on the session’s thread in the sidebar. You can still reject or revoke here.', 'reason'));
             li.append(el('p', 'Approval covers this named requester, exact message, session generation and decision version. Budget: one new turn; provider token or cost limits are not enforced. Broad Watch and send access remains. Proposals are stored on your team hub for up to seven days.', 'reason'));
           }
           list.append(li);
@@ -99,6 +100,8 @@
       } catch { r = null; }
       busy = false;
       if (r?.ok && Array.isArray(r.proposals)) {
+        // Main says so when approval moved to the thread's card (chat-first preview); otherwise unchanged.
+        if (r.approve === false) approveHere = false;
         proposals.set(share, r.proposals.filter(x => obj(x) && str(x.id,100) && str(x.title,120) && str(x.text,4000) && obj(x.requester) && str(x.requester.name,200) && Number.isSafeInteger(x.version) && str(x.digest,64) && str(x.status,80)).slice(0,64));
         note = action === 'approve' ? 'Decision acknowledged. The requester can send this exact message once before expiry.' : action === 'revoke' ? actionStatus === 'revoked' ? 'Grant revoked. A send already started cannot be undone.' : 'This request already started or was retired. Check its current receipt; it cannot be undone here.' : 'Review the requester and exact message before approving.';
       } else note = str(r?.error,600) ? r.error : 'Proposals are unavailable on this hub.';

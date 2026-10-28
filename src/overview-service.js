@@ -496,7 +496,26 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
  // T4a: the bound owned row's fixed projection, or {gone, reason} ('overview' | 'ended'). Read-only.
  function ownedThreadRead(rowId){
   if(!ownedThreads||typeof rowId!=='string'||!/^[0-9a-f]{64}$/.test(rowId))return{gone:true,reason:'ended'};
-  return ownedRows.read(rowId,{state:(e,a,x)=>ownedThreads.state(e,a,x),currentEpoch:()=>ownedThreads.epoch()});
+  return ownedRows.read(rowId,{state:(e,a,x)=>ownedThreads.state(e,a,x),currentEpoch:()=>ownedThreads.epoch(),...(typeof ownedThreads.account==='function'?{currentAccount:()=>ownedThreads.account()}:{})});
+ }
+ // T4 (plan-t4 §2.1, Rev 3): the one owned session a thread's owner controls act on, resolved fresh on every call.
+ // An owned row: its own route, still listed in the same epoch. A Codex `session` row: its owned twin, and only when
+ // this epoch folded the twin into that row (so one session has one thread with controls). Anything else: null.
+ // Main-only ({session, provider, title}); never leaves main. Read-only, like ownedThreadRead.
+ function ownerTarget(rowId){
+  if(!ownedThreads||typeof rowId!=='string'||!/^[0-9a-f]{64}$/.test(rowId))return null;
+  const t=threadTarget(rowId);
+  let at=null;
+  if(t?.kind==='owned'){const r=ownedRows.route(rowId);if(r)at={epoch:r.epoch,actor:r.actor,session:r.session};}
+  else if(t?.kind==='session'&&t.source==='codex'&&typeof ownedThreads.twin==='function'){
+   const w=safe(()=>ownedThreads.twin({provider:t.source,nativeSessionId:t.sessionId}),null);
+   if(w&&ownedRows.folded(w.epoch,w.session))at={epoch:w.epoch,actor:w.actor,session:w.session};
+  }
+  if(!at)return null;
+  const s=safe(()=>ownedThreads.state(at.epoch,at.actor,at.session),null);
+  if(!object(s)||s.status==='ended'||s.session!==at.session)return null;
+  const channel=s.provider?.id==='claude-channel';
+  return{session:at.session,provider:channel?'Claude':typeof s.provider?.label==='string'&&s.provider.label?s.provider.label.slice(0,60):'AI'};
  }
  function sharedThreadAuthority(rowId,{read,effect}={}){
   const r=typeof rowId==='string'?sharedRoutes.get(rowId):null;
@@ -566,7 +585,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   if(!alive())return{ok:false,status:'unconfirmed',error:'The view changed. Inspect the receipt before sending again.'};
   return out?.ok===true?out:{ok:false,status:['forbidden','stale','busy','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
- return{snapshot,passiveRows,clearViewing,sharedThreadBind,sharedThreadRead,sharedThreadAuthority,ownedThreadRead,passiveTeamRows,viewerScope,threadTarget,threadForTask,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
+ return{snapshot,passiveRows,clearViewing,sharedThreadBind,sharedThreadRead,sharedThreadAuthority,ownedThreadRead,ownerTarget,passiveTeamRows,viewerScope,threadTarget,threadForTask,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
   followupReview,followupEnqueue,
   coordinatorRequestOwner:coordinator.requestOwner,coordinatorRemoteList:coordinator.remoteList,coordinatorRemoteSend:coordinator.remoteSend,coordinatorRemoteCancel:coordinator.remoteCancel,coordinatorRemoteReplace:coordinator.remoteReplace,
   coordinatorInventory:coordinator.inventory,coordinatorPropose:coordinator.propose,coordinatorConfirm:coordinator.confirm,coordinatorResults:coordinator.results,coordinatorCancel:coordinator.cancel,

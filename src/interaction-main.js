@@ -32,6 +32,7 @@ const MAX_FANOUT = 6;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const noSharing = { ok: false, status: 'unavailable', error: 'To share, sign in to your team hub and enable automatic team sharing or device hosting in Preferences.' };
 const denied = { ok: false, status: 'forbidden', error: 'Focus Plexiform Overview and try again.' };
+const APPROVE_IN_THREAD = Object.freeze({ ok: false, status: 'forbidden', error: 'Approve proposals on the session’s thread in the sidebar.' });
 const BOARD_STALE = 'This session belongs to another board. Switch back to the board it started on to use it.';
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const boardKey = (id) => (typeof id === 'string' && id ? `board:${crypto.createHash('sha256').update(id).digest('hex').slice(0, 16)}` : null);
@@ -79,6 +80,9 @@ function createInteractionMain({ context, readContext = context, adapters: given
   // T4a: moves whenever the owning Overview document changes (replaced, retired or closed), never back.
   // The chat-first sidebar keys its owned rows by it, so a row never outlives the document that held the session.
   let epoch = 0;
+  // T4 (plan-t4 Rev 3 Q5): with the chat-first gate on, a proposal is approved only on its thread's review card,
+  // so Overview's one-click approve is refused here and hidden in its panel. Set once by main, inside the gate.
+  let approveInThread = false;
   const boardCurrent = (b) => b !== null && b === boardKey(currentBoard());
   const actorFor = (c) => `overview:${c.contents.id}:${c.document}`;
   // Workspace folder name per owned session, main-only: lets the Overview
@@ -220,6 +224,23 @@ function createInteractionMain({ context, readContext = context, adapters: given
       return hub.state({ session }, actor);
     },
     ownedEpoch: () => epoch,
+    ownedAccount: () => accountScope(),
+    // T4 (plan-t4 §2.1, Rev 1 S2): the one owned Codex session whose native target is this observed session.
+    // Read-only, like ownedView. Only `codex` maps; a claude-channel target is a grant id and never matches.
+    // Null when two owned sessions share the target, when the target is gone (replaceTarget) or it isn't listed.
+    ownedTwin({ provider, nativeSessionId } = {}) {
+      if (provider !== 'codex' || typeof nativeSessionId !== 'string' || !nativeSessionId) return null;
+      const account = accountScope(), found = [];
+      for (const actor of documents.keys()) for (const state of hub.list(actor)) {
+        if (state.provider?.id !== 'codex' || state.status === 'ended') continue;
+        const target = hub.targetOf(state.session);
+        if (typeof target === 'string' && target === nativeSessionId) found.push({ actor, session: state.session });
+      }
+      if (found.length !== 1 || !listed(found[0].session, found[0].actor, account)) return null;
+      return { epoch, actor: found[0].actor, session: found[0].session };
+    },
+    // Main, inside the chat-first gate only (main.js): Overview's one-click approve stops; the thread card approves.
+    approveInThread() { approveInThread = true; },
     // Session directory: this document's owned sessions (public state + main-only folder name).
     listOwned() { const out = []; for (const actor of documents.keys()) for (const state of hub.list(actor)) out.push({ state, leaf: leaves.get(state.session) ?? null, nativeSessionId: hub.targetOf(state.session), nativeTurnId: hub.reportTurnOf(state.session) }); return out; },
     // Main-only outbox route. Never attach/relaunch, borrow a new generation,
@@ -311,6 +332,8 @@ function createInteractionMain({ context, readContext = context, adapters: given
       ipc.handle(CHANNELS.shareList, async (e) => { const a = await actorOf(e, false); return a ? sharing[CHANNELS.shareList](null, a) : null; });
       for (const [name, method] of [['proposalList', 'proposalList'], ['proposalApprove', 'proposalApprove'], ['proposalRevoke', 'proposalRevoke']]) {
         ipc.handle(CHANNELS[name], async (e, ...args) => {
+          // Gate on: refused before actorOf, so the refusal never reaps or replaces the Overview actor.
+          if (name === 'proposalApprove' && approveInThread) return APPROVE_IN_THREAD;
           const effect = name !== 'proposalList', a = await actorOf(e, effect), req = one(args), host = shares();
           if (!a || !object(req) || typeof req.share !== 'string' || !host || typeof host[method] !== 'function') return denied;
           const sh = host.shared().find(s => s.id === req.share);
@@ -321,7 +344,9 @@ function createInteractionMain({ context, readContext = context, adapters: given
             && currentBoard() === board && accountScope() === account && shares() === host && owns(sh.session, a); };
           if (!fresh()) return denied;
           const out = await host[method](name === 'proposalList' ? req.share : req, fresh);
-          return fresh() ? out : denied;
+          if (!fresh()) return denied;
+          // The panel hides its approve button when told; gate off, the reply is unchanged.
+          return name === 'proposalList' && approveInThread && object(out) && out.ok === true ? { ...out, approve: false } : out;
         });
       }
       for (const ch of [CHANNELS.shareCreate, CHANNELS.shareStop]) {

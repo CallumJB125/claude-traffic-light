@@ -1,7 +1,7 @@
 // One of my own Plexiform-held sessions as a read-only thread (T4a, plan-t4a §3): a session Overview started or
 // connected, shown with T2's layout (activity, the messages sent to it with their receipts and replies). Built from
 // main's fixed projection (src/owned-thread-view.js) with textContent only; it holds no session or route id.
-// No prompt box, Stop or Share: messaging it stays in Overview, and T4 adds the owner controls.
+// No prompt box or Stop: messaging it stays in Overview. T4's owner controls (thread-owner.js) share it from the ⋯ menu.
 (function () {
   'use strict';
   const $ = (id) => document.getElementById(id);
@@ -9,7 +9,7 @@
   const CHIP = { queued: 'Queued', accepted: 'Accepted', acknowledged: 'Received', echoed: 'Echoed', responding: 'Responding', replied: 'Done', completed: 'Done', interrupted: 'Interrupted', unconfirmed: 'Unconfirmed', failed: 'Failed', unknown: 'Unconfirmed' };
   const FOOT = 'Started from Overview. To message it, use Overview.';
   const FOOT_CHANNEL = 'Connected from Overview. To message it, use Overview.';
-  const GONE = { overview: 'This session ended when Overview reloaded.', ended: 'This session has ended.' };
+  const GONE = { overview: 'This session ended when Overview reloaded.', ended: 'This session has ended.', account: 'This session belongs to the account you switched from.' };
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
   const ago = (ms) => { const s = Math.round(ms / 1000); return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`; };
   let api = null, rowId = '', timer = null, reading = false, view = null, over = false;
@@ -30,8 +30,9 @@
     for (const id of ['th-tx', 'th-waiting', 'th-cards', 'th-hooks', 'th-reply', 'th-stop', 'th-ended', 'th-empty', 'th-primary', 'th-tasks', 'th-terminal', 'th-copy', 'th-banner']) { const n = $(id); if (n) n.hidden = true; }
     $('th-bucket').textContent = '';
     $('th-dot').hidden = true;
-    // The ⋯ menu would hold only Copy link, which an owned row doesn't have (its id is per Overview document).
-    $('th-more').hidden = true;
+    // The ⋯ menu holds only Share with team… (T4) when main offers it: an owned row has no Copy link (its id is per Overview document).
+    const share = $('th-share');
+    $('th-more').hidden = !share || share.hidden;
     $('th').classList.add('is-shared', 'is-owned');
   }
 
@@ -62,6 +63,7 @@
 
   function gone(reason) {
     over = true; stop(); view = null;
+    if (window.ThreadOwner) window.ThreadOwner.end();
     hideChat();
     const root = pieces();
     root.hidden = true;
@@ -89,6 +91,7 @@
     api = threadApi; rowId = id; over = false; view = null;
     hideChat(); pieces();
     stop(); timer = setInterval(read, POLL_MS);
+    if (window.ThreadOwner) window.ThreadOwner.start(api, rowId);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) void read(); });
     window.addEventListener('pagehide', stop);
     void read();

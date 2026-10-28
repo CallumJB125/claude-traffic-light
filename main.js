@@ -1866,7 +1866,7 @@ const OverviewMain=require('./src/overview-main').createOverviewMain({
   owned:()=>{InteractionMain.reportHooks(aggregateState().sessions||[]);return InteractionMain.listOwned();},
   // T4a: the chat-first sidebar's owned rows and threads, through interaction-main's read-only accessors (never actorOf).
   // Read only through passiveRows, which only the gated chat-first sidebar and new chat call.
-  ownedThreads:{view:()=>InteractionMain.ownedView(),state:(e,a,s)=>InteractionMain.ownedState(e,a,s),epoch:()=>InteractionMain.ownedEpoch()},
+  ownedThreads:{view:()=>InteractionMain.ownedView(),state:(e,a,s)=>InteractionMain.ownedState(e,a,s),epoch:()=>InteractionMain.ownedEpoch(),account:()=>InteractionMain.ownedAccount(),twin:q=>InteractionMain.ownedTwin(q)},
   // hostSync (declared below) is only read when Overview asks, after startup.
   shares:()=>{const h=hostSync.host(),origin=hostSync.origin();return h&&origin?{origin,list:h.shared()}:null;},
   hubTeams:async()=>{const h=hostSync.host(),origin=hostSync.origin();if(!h||!origin)return null;if(overviewTeams.host===h&&Date.now()-overviewTeams.at<30_000)return overviewTeams.value;
@@ -2473,6 +2473,8 @@ if (CHAT_PREVIEW) {
     // T4a: my own Plexiform-held session's thread: a read, and the way to Overview (navigation only).
     ownedRead: (id) => OverviewMain.ownedThreadRead(id),
     openOverview: () => buddyWin?.openOverviewFromThread?.() ?? false,
+    // T4: owner controls on my own thread (plan-t4). The host directly, never interaction-main's actorOf.
+    owner: { target: (id) => OverviewMain.ownerTarget(id), host: () => hostSync.host(), account: () => InteractionMain.ownedAccount(), automatic: (shareId) => TeamSessionSharing.isAutomatic(shareId) },
     presence: PresenceOwner,
     header: (t, id) => SidebarRows.headerOf(t, id),
     tasks: () => getTasks(),
@@ -2485,6 +2487,8 @@ if (CHAT_PREVIEW) {
     hook: threadHook,
   });
   ThreadMain.register(ipcMain);
+  // T4 (Q5): with the preview on, a proposal is approved only on its thread's card; Overview's approve is refused.
+  InteractionMain.approveInThread();
   // Redesign R2b-2: the new chat, Home's task box bound to its own document (src/newchat-main.js).
   NewChat = require('./src/newchat-main.js').createNewChat({
     ipcMain, buddy: () => buddyWin, service: getTasks, config: loadConfig, homeDir: os.homedir(),

@@ -26,13 +26,18 @@
 // T4a (plan-t4a §2.3) adds the `owned` kind, one of my own Plexiform-held sessions: thread:owned-state reads its
 // fixed projection, and thread:open-overview is navigation only. No send, stop, share or approve here (T4 adds the
 // owner controls); sending into my own owned session stays in Overview.
+// T4 (plan-t4 Rev 3) adds the owner controls of my own thread (an `owned` row, or a Codex `session` row its owned
+// session folded into): thread:owner-state reads them, thread:owner-review and thread:owner-confirm share, allow
+// sending and approve on a review card armed in main, and thread:owner-act stops, rejects or revokes in one click.
+// The rest lives in thread-owner-main; the remote host is called directly, never interaction-main's actorOf.
 // One thread is alive at a time; its Tasks slot lives only while it is shown
 // (index.js retires it, and main closes the slot through retire()).
 
 const { createSharedThreadActions } = require('./thread-shared-main');
+const { createOwnerThreadActions } = require('./thread-owner-main');
 const ROW_ID = /^[0-9a-f]{64}$/;
 const EFFECT_MS = 500;
-const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act', 'thread:inputs', 'thread:answer-input', 'thread:shared-state', 'thread:open-team', 'thread:shared-review', 'thread:shared-confirm', 'thread:shared-proposals', 'thread:owned-state', 'thread:open-overview']);
+const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act', 'thread:inputs', 'thread:answer-input', 'thread:shared-state', 'thread:open-team', 'thread:shared-review', 'thread:shared-confirm', 'thread:shared-proposals', 'thread:owned-state', 'thread:open-overview', 'thread:owner-state', 'thread:owner-review', 'thread:owner-confirm', 'thread:owner-act']);
 // The reply's own bound: guard's (TV.LIMITS.message), checked before any await.
 const MESSAGE_BYTES = 8192;
 const REPLY_TEXT = Object.freeze({
@@ -87,7 +92,7 @@ const INPUT_TEXT = Object.freeze({
 // Provisional, awaiting Callum (plan-r2.md §7 item 3): the link form may change.
 const LINK = (id) => `plexiform://thread/${id}`;
 
-function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, hook = null, copy = () => {}, header = () => null, now = Date.now, sharedRead = null, presence = null, openTeam = null, sharedAuthority = null, ownedRead = null, openOverview = null }) {
+function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, hook = null, copy = () => {}, header = () => null, now = Date.now, sharedRead = null, presence = null, openTeam = null, sharedAuthority = null, ownedRead = null, openOverview = null, owner = null, ownerTimers = undefined }) {
   let slot = null; // { wcId, generation, taskId }
   // Documents that asked the Tasks service for a slot: only these are closed, so a terminal
   // session's thread (or a document that never read) never reaches, or starts, the service.
@@ -166,6 +171,33 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     if (!c || !sharedBound(c)) return null;
     return shared.proposals(c, still);
   }
+  // T4: owner controls, for a bound `owned` or `session` row only (a session row's owned twin is resolved in main).
+  const ownerActs = createOwnerThreadActions({ owner, now, ...(ownerTimers ? { timers: ownerTimers } : {}) });
+  ownerActs.bind(() => ctx());
+  const ownerBound = (c) => { const t = resolve(c.boundId); return !!t && (t.kind === 'owned' || t.kind === 'session'); };
+  async function ownerState(e, args) {
+    const c = guard(e, args);
+    if (!c || !ownerBound(c)) return null;
+    return ownerActs.state(c, still);
+  }
+  async function ownerReview(e, args) {
+    const c = guardWith(e, args, { effect: true });
+    if (!c || !ownerBound(c)) return null;
+    if (!rateOk(c, 'owner-review')) return { ok: false, status: 'busy', error: 'Wait a moment, then try again.' };
+    return ownerActs.review(c, args[1], still);
+  }
+  async function ownerConfirm(e, args) {
+    // No rate floor: a confirm is one-use and armed 600 ms from delivery.
+    const c = guardWith(e, args, { effect: true });
+    if (!c || !ownerBound(c)) return null;
+    return ownerActs.confirm(c, args[1], still);
+  }
+  async function ownerAct(e, args) {
+    const c = guardWith(e, args, { effect: true });
+    if (!c || !ownerBound(c)) return null;
+    if (!rateOk(c, 'owner-act')) return { ok: false, status: 'busy', error: 'Wait a moment, then try again.' };
+    return ownerActs.act(c, args[1], still);
+  }
   const headerOf = (t, id) => { try { return header(t, id) ?? null; } catch { return null; } };
 
   async function closeSlot(wcId) {
@@ -229,6 +261,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     if (!c) return false;
     clearPresence(c.contents.id);
     shared.retire(c.contents.id);
+    ownerActs.retire(c.contents.id);
     await closeSlot(c.contents.id);
     return true;
   }
@@ -569,7 +602,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     let r = null;
     try { r = typeof ownedRead === 'function' ? ownedRead(c.boundId) : null; } catch { r = null; }
     if (!r || typeof r !== 'object') r = { gone: true, reason: 'ended' };
-    if (r.gone === true) r = { gone: true, reason: r.reason === 'overview' ? 'overview' : 'ended' };
+    if (r.gone === true) r = { gone: true, reason: r.reason === 'overview' || r.reason === 'account' ? r.reason : 'ended' };
     ownedReads.set(key, { at, result: r });
     while (ownedReads.size > 16) ownedReads.delete(ownedReads.keys().next().value);
     return r;
@@ -624,6 +657,10 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       ipc.handle('thread:shared-proposals', (e, ...a) => sharedProposals(e, a));
       ipc.handle('thread:owned-state', (e, ...a) => ownedState(e, a));
       ipc.handle('thread:open-overview', (e, ...a) => toOverview(e, a));
+      ipc.handle('thread:owner-state', (e, ...a) => ownerState(e, a));
+      ipc.handle('thread:owner-review', (e, ...a) => ownerReview(e, a));
+      ipc.handle('thread:owner-confirm', (e, ...a) => ownerConfirm(e, a));
+      ipc.handle('thread:owner-act', (e, ...a) => ownerAct(e, a));
     },
     // tasks-service onEvent, before the Tasks pages: true when the event is the thread slot's.
     onEvent(wcId, taskId, event) {
@@ -638,10 +675,12 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       return true;
     },
     // index.js: the thread document is gone, reloaded, hidden or left.
-    retire(wcId) { if (Number.isSafeInteger(wcId)) { clearPresence(wcId); shared.retire(wcId); for (const m of [sharedReads, ownedReads]) for (const k of [...m.keys()]) if (k.startsWith(`${wcId}:`)) m.delete(k); void closeSlot(wcId); } },
+    retire(wcId) { if (Number.isSafeInteger(wcId)) { clearPresence(wcId); shared.retire(wcId); ownerActs.retire(wcId); for (const m of [sharedReads, ownedReads]) for (const k of [...m.keys()]) if (k.startsWith(`${wcId}:`)) m.delete(k); void closeSlot(wcId); } },
     inputsChanged,
+    // Tests: one poll pass now (main's own checks included).
+    ownerTick: () => ownerActs.tick(),
     slot: () => (slot ? { ...slot } : null),
-    stop() { stopped = true; clearPresence(); shared.stop(); if (slot) void closeSlot(slot.wcId); },
+    stop() { stopped = true; clearPresence(); shared.stop(); ownerActs.stop(); if (slot) void closeSlot(slot.wcId); },
   };
 }
 

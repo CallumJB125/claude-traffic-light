@@ -49,6 +49,8 @@ function createTeamSessionSharing({ host, origin, sessions, association, now = D
   const owned = new Map();
   return {
     sync() { if (stopped) return Promise.resolve(); if (!active) active = pass().finally(() => { active = null; }); return active; },
+    // T4 (plan-t4 §2.1): read-only. True when this reconciler created that share (the thread's "Shared automatically").
+    isAutomatic(shareId) { if (typeof shareId !== 'string') return false; for (const r of owned.values()) if (r.id === shareId) return true; return false; },
     stop() { stopped = true; for (const r of owned.values()) r.host.stopSharing(r.id); owned.clear(); },
   };
 }

@@ -202,6 +202,7 @@
       "thread.js",
       "thread-shared.js",
       "thread-owned.js",
+      "thread-owner.js",
       "thread.css",
       "thread-transcript.css",
       "thread-preload.js",
