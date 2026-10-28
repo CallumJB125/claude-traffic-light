@@ -61,7 +61,9 @@
     const a = e.ageMs + Math.max(0, Date.now() - data.observed_at);
     return { freshness: a > 90_000 ? 'stale' : 'recent', ageMs: a };
   };
-  const stateText = (e, f) => { const s = typeof e.detail === 'string' && e.detail ? `${e.state} (${e.detail.toLowerCase()})` : e.state; return f.freshness === 'recent' ? s : `${s} · ${f.freshness === 'stale' ? 'Stale' : 'Freshness unknown'}`; };
+  // QoL2b: " · 4m" for a row waiting on you, from a minute (the widget chip's steps); never on a stale row.
+  const waitShort = (ms) => { if (!Number.isSafeInteger(ms) || ms < 60000) return ''; const m = Math.floor(ms / 60000); if (m < 60) return `${m}m`; const h = Math.floor(m / 60); return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`; };
+  const stateText = (e, f) => { const s = typeof e.detail === 'string' && e.detail ? `${e.state} (${e.detail.toLowerCase()})` : e.state; if (f.freshness !== 'recent') return `${s} · ${f.freshness === 'stale' ? 'Stale' : 'Freshness unknown'}`; const w = e.input === true ? waitShort(e.waitingMs) : ''; return w ? `${s} · ${w}` : s; };
   const tone = (e, f) => f.freshness !== 'recent' ? f.freshness : e.input ? 'waiting' : isWorking(e) ? 'working' : '';
   // Optional page helpers (src/session-pulse.js etc.); each feature is absent when its script is not loaded.
   const Pulse = window.PlexiformPulse || null, Pins = window.PlexiformPins || null, Follow = window.PlexiformFollow || null, Requests = window.PlexiformRequests || null, Presence = window.PlexiformPresence || null, Palette = window.PlexiformPalette || null, Availability = window.PlexiformAvailability || null;

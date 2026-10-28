@@ -730,9 +730,39 @@ function readBounds() {
   } catch {
     return null;
   }
+  // QoL2b: the file's top level is the last spot (v1 and v2 alike); the per-display spots sit beside it.
+  if (!saved || typeof saved !== 'object' || !['x', 'y', 'width', 'height'].every((k) => Number.isFinite(saved[k]))) return null;
+  saved = { x: saved.x, y: saved.y, width: saved.width, height: saved.height };
   // Bounds saved while a different (e.g. larger external) display was connected can sit outside every
   // current display; WidgetPlacement puts those back on screen, clear of the main window's title bar.
   return WidgetPlacement.visibleOrDefault(screen, saved, buddyWin?.bounds?.() ?? null);
+}
+
+// QoL2b: where the widget sat on each display (src/widget-display-spots.js), and putting it back when a display
+// goes and returns. Created on first use: `screen` is only usable once the app is ready.
+const DisplaySpots = require('./src/widget-display-spots.js');
+let displaySpots = null;
+function spots() {
+  displaySpots = displaySpots || DisplaySpots.createKeeper({
+    screen,
+    read: () => JSON.parse(fs.readFileSync(BOUNDS_FILE, 'utf8')),
+    write: (file) => fs.writeFileSync(BOUNDS_FILE, JSON.stringify(file, null, 2)),
+    bounds: () => (win && !win.isDestroyed() ? WidgetStrip.baseOf(win.getBounds(), strip) : null),
+    move: ({ x, y }) => { if (win && !win.isDestroyed()) win.setPosition(x, y); },
+    commit: () => saveBounds(),
+    busy: () => !!glideTimer || !!gardenRun || roamState.busy || applyingStrip,
+    main: () => buddyWin?.bounds?.() ?? null,
+  });
+  return displaySpots;
+}
+let displayEventsOn = false;
+function watchDisplays() {
+  if (displayEventsOn) return;
+  displayEventsOn = true;
+  screen.on('display-removed', (_e, d) => { stopGlide(); spots().displayRemoved(d); });
+  screen.on('display-added', (_e, d) => { stopGlide(); spots().displayAdded(d); });
+  // Scale or Dock changes: only the settle window, so the system's own nudge is not saved as the person's spot.
+  screen.on('display-metrics-changed', () => spots().metricsChanged());
 }
 
 let gardenRun = null;
@@ -740,7 +770,7 @@ function saveBounds() {
   if (!win || gardenRun || roamState.busy) return;
   // The widget's own size, without the bubble or the recap under it.
   if (applyingStrip) return; // applyStrip saves the base once it is done
-  fs.writeFileSync(BOUNDS_FILE, JSON.stringify(WidgetStrip.baseOf(win.getBounds(), strip), null, 2));
+  spots().save(WidgetStrip.baseOf(win.getBounds(), strip));
 }
 
 function readManualOverride() {
@@ -1355,6 +1385,7 @@ function createWindow() {
   const defaultWidth = 100;
   const defaultHeight = Math.round(defaultWidth / WIDGET_ASPECT);
   const spot = saved || WidgetPlacement.defaultBounds(screen, { width: defaultWidth, height: defaultHeight }, buddyWin?.bounds?.() ?? null);
+  spots().seen(spot);
 
   const w = win = new BrowserWindow({
     width: spot.width || defaultWidth,
@@ -1407,7 +1438,10 @@ function createWindow() {
   w.webContents.on('did-finish-load', () => { if (!current()) return; stateMemo = { at: 0, key: null, value: null }; broadcastStatus(); });
 
   w.on('resize', () => { if (current()) saveBounds(); });
-  w.on('move', () => { if (current() && !glideTimer) saveBounds(); });
+  // QoL2b: a move is saved once it has stood a moment with no display change (the system moves the widget itself
+  // when a display goes); drag-end and a glide's landing still save at once.
+  w.on('move', () => { if (current() && !glideTimer) spots().moveEvent(); });
+  watchDisplays();
   // Each event re-reads both from the window: a restore can bring back a
   // window that was hidden before it was minimised, with no 'show' at all.
   const syncVisibility = (visible) => {
