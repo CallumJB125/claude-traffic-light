@@ -503,6 +503,7 @@
   }
   function showGone() {
     gone = true;
+    if (window.ThreadOwner) window.ThreadOwner.end();
     review = null;
     stopPoll();
     kind = null;
@@ -725,7 +726,12 @@
       const r = await api.open(rowId);
       if (r && r.kind === 'shared' && window.ThreadShared) { kind = 'shared'; window.ThreadShared.start(api, rowId); return; }
       if (r && r.kind === 'owned' && window.ThreadOwned) { kind = 'owned'; window.ThreadOwned.start(api, rowId); return; }
-      if (apply(r)) { if (!gone) { renderAll(); startPoll(); readInputs(); } return; }
+      if (apply(r)) {
+        if (!gone) { renderAll(); startPoll(); readInputs(); }
+        // T4: a session row whose owned session folded into it carries the owner controls; main decides (owner-state).
+        if (!gone && kind === 'session' && window.ThreadOwner) window.ThreadOwner.start(api, rowId);
+        return;
+      }
       await new Promise((res) => setTimeout(res, 250));
     }
   }

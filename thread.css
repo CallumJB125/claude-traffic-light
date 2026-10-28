@@ -85,6 +85,29 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .th-review-part pre { margin: var(--space-1) 0 0; padding: var(--space-2); max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--text-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 480px) { .th-facts { grid-template-columns: minmax(0, 1fr); gap: 0; } .th-facts dd { margin-bottom: var(--space-1); } }
 .th-danger { color: var(--danger-text); }
+/* T4: owner controls in my own thread. The share line sits under the title; proposals and the sheet above the messages. */
+.th-own-line { display: grid; gap: var(--space-1); margin-top: var(--space-1); }
+.th-own-line[hidden] { display: none; }
+.th-own-share { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.th-own-share-text { min-width: 0; }
+.th-own-btn { font-size: var(--text-sm); }
+.th-own { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
+.th-own[hidden] { display: none; }
+/* Nothing to show (no note, sheet, card or proposals): no box and no margin, so an unshared thread is unchanged. */
+.th-own:not(:has(> :not(:empty))) { display: none; }
+.th-own-note { margin: 0; font-size: var(--text-sm); color: var(--muted); overflow-wrap: anywhere; }
+.th-own-note:empty { display: none; }
+.th-own-note[data-kind="error"] { color: var(--danger-text); }
+.th-own-proposals, .th-own-card-host, .th-own-sheet-host { display: grid; gap: var(--space-2); }
+.th-own-proposals:empty, .th-own-card-host:empty, .th-own-sheet-host:empty { display: none; }
+.th-own-gap { flex: 1 1 var(--space-4); }
+.th-own-done { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
+.th-danger-outline { color: var(--danger-text); border-color: var(--danger-text); }
+.th-own-sheet select { font: inherit; max-width: 100%; }
+.th-own-earlier { font-size: var(--text-sm); min-width: 0; max-width: 100%; }
+.th-own-earlier summary { cursor: default; color: var(--muted); }
+.th-own-earlier-list { list-style: none; margin: var(--space-1) 0 var(--space-2); padding: 0 0 0 var(--space-3); display: grid; gap: var(--space-1); border-left: 1px solid var(--line-strong); }
+.th-own-earlier-list li { margin: 0; overflow-wrap: anywhere; }
 .th-stop { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .th-stop-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .th-stop-q { font-size: var(--text-sm); font-weight: 600; }
