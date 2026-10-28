@@ -113,6 +113,7 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
   sharedThreadBind:(id,alive)=>stopped?Promise.resolve(false):service.sharedThreadBind(id,()=>!stopped&&(typeof alive!=='function'||alive()===true)),
   // T3: the thread's own effect authority for its bound share (plan-t3 §2.1); null when it can't bind.
   sharedThreadAuthority:(id,live)=>stopped?null:service.sharedThreadAuthority(id,{read:()=>!stopped&&live?.read?.()===true,effect:()=>!stopped&&live?.effect?.()===true}),
+  sharedViewRoute:id=>stopped?null:service.sharedViewRoute(id),
   sharedThreadRead:(id,alive)=>stopped?Promise.resolve(null):service.sharedThreadRead(id,()=>!stopped&&(typeof alive!=='function'||alive()===true)),
   // T4a: my own Plexiform-held session as a read-only thread (plan-t4a §2.3).
   ownedThreadRead:id=>stopped?{gone:true,reason:'ended'}:service.ownedThreadRead(id),

@@ -229,3 +229,27 @@ test('T4 Q5: with the chat-first gate on, the panel shows no approve button and 
     assert.ok(host.calls.some((c) => c[0] === 'revoke'));
   } finally { s.close(); }
 });
+
+test('L32: the card shows who has my shared session open ("Bob watching", "Bob and 1 more watching"), names only, none when no one is', async () => {
+  const host = fakeHost(); const seen = new Map();
+  host.shared = () => [...host.shares.values()].map((x) => ({ ...x, viewers: seen.get(x.id) ?? [] }));
+  const s = stack({ host });
+  try {
+    await s.ready(); await s.start();
+    const chip = () => s.card().querySelector('.share-watching');
+    assert.equal(chip().hidden, true, 'not shared: no chip');
+    s.btn('Share…').click(); await tick(); s.btn('Share').click(); await tick();
+    const id = [...host.shares.keys()][0];
+    seen.set(id, ['Bob']);
+    s.doc.dispatchEvent(new s.dom.window.Event('visibilitychange')); await tick(); await tick();
+    assert.equal(chip().hidden, false);
+    assert.equal(chip().textContent, 'Bob watching');
+    seen.set(id, ['Bob', '<img src=x>']);
+    s.doc.dispatchEvent(new s.dom.window.Event('visibilitychange')); await tick(); await tick();
+    assert.equal(chip().textContent, 'Bob and 1 more watching');
+    assert.equal(s.card().querySelector('img'), null);
+    seen.set(id, []);
+    s.doc.dispatchEvent(new s.dom.window.Event('visibilitychange')); await tick(); await tick();
+    assert.equal(chip().hidden, true, 'no one: no chip');
+  } finally { s.close(); }
+});

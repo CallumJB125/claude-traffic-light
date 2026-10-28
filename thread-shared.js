@@ -13,8 +13,12 @@
   const clock = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
 
   const WATCH = 'Shared with you to watch only. The owner can choose Allow sending.';
+  // L32: the owner can see who has their shared session open. Said from the first paint, before main sends anything
+  // (main starts only after sharedPainted), and taken down when main says the hub isn't taking it (watching:'off').
+  const SEEN = (owner) => `${owner} can see you're watching.`;
   const PROPOSALS_MS = 10000;
   const STATUS_CHIP = { awaiting: 'Awaiting', approved: 'Approved', expired: 'Expired', rejected: 'Rejected', sending: 'Sending', sent: 'Sent', refused: 'Refused', unconfirmed: 'Unconfirmed' };
+  let painted = false;
   let api = null, rowId = '', timer = null, reading = false, view = null, stale = false, over = false, offline = '', signIn = false;
   // T3: the composer's own state. The draft lives in the textarea itself and survives every re-render.
   let sticky = '', windowEnds = 0, askEach = false, layout = '', chosen = null, cardOn = null, cardTimer = null, busy = false, proposalsAt = 0, proposalsReading = false, myProposals = [];
@@ -52,7 +56,16 @@
     document.title = h.title;
     $('th-title').textContent = h.title;
     $('th-meta').textContent = `${h.owner}'s ${h.provider} session · ${h.scope === 'interact' ? 'Watch and send' : 'Shared with you to watch'}${h.expiresAt ? ` · until ${clock(h.expiresAt)}` : ''}${h.fake ? ' (test data)' : ''}`;
-    const banner = $('th-banner'); banner.hidden = false; banner.textContent = BANNER;
+    const banner = $('th-banner'); banner.hidden = false;
+    const seen = v.watching !== 'off';
+    const watch = el('span', 'th-watch', SEEN(h.owner)); watch.id = 'th-watch'; watch.hidden = !seen;
+    banner.replaceChildren(el('span', '', BANNER), ' ', watch);
+    if (seen && !painted) {
+      painted = true;
+      // Once it is on screen: a hidden document never paints, so it never starts the beat.
+      const go = () => { if (!over && typeof api.sharedPainted === 'function') void Promise.resolve(api.sharedPainted(rowId)).catch(() => {}); };
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => requestAnimationFrame(go)); else go();
+    }
     const a = v.activity;
     root.querySelector('.th-activity').textContent = stale ? (offline ? `${offline}'s computer is offline. Showing the last known state.` : signIn ? 'Sign in again to refresh. Showing the last known state.' : 'Showing the last known state.') : a.category ? `${a.stale ? 'Last reported' : 'Now'}: ${a.category} · ${ago(a.ageMs)}` : 'No activity reported yet.';
     const list = root.querySelector('.th-msgs'), items = v.deliveries.map((d) => {
@@ -304,7 +317,7 @@
   function stop() { if (timer) clearInterval(timer); timer = null; }
 
   function start(threadApi, id) {
-    api = threadApi; rowId = id; over = false; view = null; stale = false; offline = ''; signIn = false;
+    api = threadApi; rowId = id; over = false; view = null; stale = false; offline = ''; signIn = false; painted = false;
     windowEnds = 0; askEach = false; layout = ''; chosen = null; cardOn = null; busy = false; proposalsAt = 0; myProposals = [];
     hideChat(); pieces(); menu();
     stop(); timer = setInterval(read, POLL_MS);
@@ -313,5 +326,5 @@
     window.addEventListener('pagehide', stop);
     void read();
   }
-  window.ThreadShared = Object.freeze({ start, BANNER, WATCH });
+  window.ThreadShared = Object.freeze({ start, BANNER, WATCH, SEEN });
 })();

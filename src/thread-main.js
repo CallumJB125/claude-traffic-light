@@ -37,7 +37,8 @@ const { createSharedThreadActions } = require('./thread-shared-main');
 const { createOwnerThreadActions } = require('./thread-owner-main');
 const ROW_ID = /^[0-9a-f]{64}$/;
 const EFFECT_MS = 500;
-const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act', 'thread:inputs', 'thread:answer-input', 'thread:shared-state', 'thread:open-team', 'thread:shared-review', 'thread:shared-confirm', 'thread:shared-proposals', 'thread:owned-state', 'thread:open-overview', 'thread:owner-state', 'thread:owner-review', 'thread:owner-confirm', 'thread:owner-act']);
+const { createShareView } = require('./share-view');
+const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act', 'thread:inputs', 'thread:answer-input', 'thread:shared-state', 'thread:open-team', 'thread:shared-review', 'thread:shared-confirm', 'thread:shared-proposals', 'thread:owned-state', 'thread:open-overview', 'thread:owner-state', 'thread:owner-review', 'thread:owner-confirm', 'thread:owner-act', 'thread:shared-painted']);
 // The reply's own bound: guard's (TV.LIMITS.message), checked before any await.
 const MESSAGE_BYTES = 8192;
 const REPLY_TEXT = Object.freeze({
@@ -92,7 +93,7 @@ const INPUT_TEXT = Object.freeze({
 // Provisional, awaiting Callum (plan-r2.md §7 item 3): the link form may change.
 const LINK = (id) => `plexiform://thread/${id}`;
 
-function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, hook = null, copy = () => {}, header = () => null, now = Date.now, sharedRead = null, presence = null, openTeam = null, sharedAuthority = null, ownedRead = null, openOverview = null, owner = null, ownerTimers = undefined }) {
+function createThreadMain({ buddy, chatPreview = false, target, tasks, activity, openInTasks, goToTerminal, hook = null, copy = () => {}, header = () => null, now = Date.now, sharedRead = null, sharedView = null, viewTimers = undefined, openTeam = null, sharedAuthority = null, ownedRead = null, openOverview = null, owner = null, ownerTimers = undefined }) {
   let slot = null; // { wcId, generation, taskId }
   // Documents that asked the Tasks service for a slot: only these are closed, so a terminal
   // session's thread (or a document that never read) never reaches, or starts, the service.
@@ -130,18 +131,29 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
   const GONE = Object.freeze({ gone: true });
   const GONE_SHARED = Object.freeze({ gone: true, reason: 'unavailable' });
   // T2: a teammate's shared session. Read-only: main holds the route, this file only asks for the fixed projection.
-  // Presence (ledger 30/31) is one slot in main's presence owner, set while this document shows the share.
   const SHARED_MIN_MS = 2000;
   const sharedReads = new Map(); // `${wcId}:${generation}` -> { at, pending, result }
-  let presenceDoc = null; // `${wcId}:${generation}` of the document that holds the thread's presence slot
-  function setPresence(c, t) {
-    if (!presence || !t || typeof t.cardId !== 'string' || !t.cardId || typeof t.teamId !== 'string') return;
-    try { presence.set('thread', { team: t.teamId, card: t.cardId }); presenceDoc = `${c.contents.id}:${c.generation}`; } catch { /* presence is best effort */ }
+  // L32 (plan-l32 App PR delta): the owner sees who has their shared session open. Beats go only after this document
+  // painted "‹Owner› can see you're watching" (thread:shared-painted), and only while main sees it bound to that share,
+  // visible and not minimised. Replaces T2's card-keyed presence slot, which a share never carried.
+  const docOf = (c) => `${c.contents.id}:${c.generation}`;
+  function showing(key) {
+    const c = ctx();
+    if (!c || docOf(c) !== key) return false;
+    let vis = false, min = true;
+    try { vis = c.window.isVisible() === true; min = c.window.isMinimized() !== false; } catch { return false; }
+    return vis && !min && resolve(c.boundId)?.kind === 'shared';
   }
-  function clearPresence(wcId = null) {
-    if (presenceDoc === null || (wcId !== null && !presenceDoc.startsWith(`${wcId}:`))) return;
-    presenceDoc = null;
-    try { presence?.set('thread', null); } catch { /* best effort */ }
+  const views = typeof sharedView === 'function' ? createShareView({ showing, ...(viewTimers ?? {}) }) : null;
+  const viewRoute = (id) => { try { return sharedView(id) ?? null; } catch { return null; } };
+  function openView(c) {
+    if (!views) return;
+    const route = viewRoute(c.boundId);
+    if (route) views.open(docOf(c), route); else views.close(docOf(c));
+  }
+  function closeView(wcId = null) {
+    const k = views?.key();
+    if (k && (wcId === null || k.startsWith(`${wcId}:`))) views.close(k);
   }
   // T3 (plan-t3 §2): send, steer, stop and propose for a bound interact share. Guard T here; the rest in thread-shared-main.
   const shared = createSharedThreadActions({ authority: sharedAuthority, now });
@@ -211,6 +223,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     const c = guard(e, args);
     if (!c) return null;
     const t = resolve(c.boundId);
+    if (!t || t.kind !== 'shared') closeView(c.contents.id);
     if (!t) return GONE;
     const head = headerOf(t, c.boundId);
     if (t.kind === 'task') {
@@ -232,7 +245,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       return { kind: 'session', header: head, origin: t.origin ?? null, activity: a };
     }
     if (t.kind === 'shared') {
-      setPresence(c, t);
+      openView(c);
       return { kind: 'shared', header: null };
     }
     if (t.kind === 'owned') return { kind: 'owned', header: null };
@@ -259,7 +272,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
   async function close(e, args) {
     const c = guard(e, args);
     if (!c) return false;
-    clearPresence(c.contents.id);
+    closeView(c.contents.id);
     shared.retire(c.contents.id);
     ownerActs.retire(c.contents.id);
     await closeSlot(c.contents.id);
@@ -572,7 +585,10 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     if (t.kind !== 'shared') return null;
     if (typeof sharedRead !== 'function') return GONE_SHARED;
     const key = `${c.contents.id}:${c.generation}`, last = sharedReads.get(key), at = now();
-    if (last && (last.pending || at - last.at < SHARED_MIN_MS)) return last.pending ? last.pending : last.result;
+    views?.poke(key);
+    // What the thread may say about the owner seeing it (D2a): 'pending' | 'on' | 'off', current, not cached.
+    const withWatching = (r) => (r && typeof r === 'object' && r.gone !== true && r.unavailable !== true ? { ...r, watching: views ? views.watching(key) : 'off' } : r);
+    if (last && (last.pending || at - last.at < SHARED_MIN_MS)) return last.pending ? last.pending.then(withWatching) : withWatching(last.result);
     const entry = { at, pending: null, result: null };
     sharedReads.set(key, entry);
     entry.pending = (async () => {
@@ -580,12 +596,24 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       try { r = await sharedRead(c.boundId, () => still(c)); } catch { r = null; }
       entry.pending = null;
       if (!still(c) || r === null) { sharedReads.delete(key); return null; }
-      if (r.gone === true) { clearPresence(c.contents.id); r = { gone: true, reason: typeof r.reason === 'string' ? r.reason : 'ended' }; }
+      if (r.gone === true) { closeView(c.contents.id); r = { gone: true, reason: typeof r.reason === 'string' ? r.reason : 'ended' }; }
       if (r.unavailable !== true) shared.afterRead(c, r);
       entry.result = r;
       return r;
     })();
-    return entry.pending;
+    return entry.pending.then(withWatching);
+  }
+  // thread:shared-painted (L32, S2): this document now shows "‹Owner› can see you're watching". Read-only: it can only
+  // start the beat main already holds for this document's own share (and only once); it names nothing.
+  function sharedPainted(e, args) {
+    const c = guard(e, args);
+    if (!c || !views) return false;
+    const t = resolve(c.boundId);
+    if (!t || t.kind !== 'shared') return false;
+    const route = viewRoute(c.boundId);
+    if (!route) return false;
+    views.open(docOf(c), route);
+    return views.painted(docOf(c), route.ref);
   }
 
   // thread:owned-state (T4a): the bound owned row's projection, or {gone, reason}. The read is synchronous and
@@ -661,6 +689,7 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       ipc.handle('thread:owner-review', (e, ...a) => ownerReview(e, a));
       ipc.handle('thread:owner-confirm', (e, ...a) => ownerConfirm(e, a));
       ipc.handle('thread:owner-act', (e, ...a) => ownerAct(e, a));
+      ipc.handle('thread:shared-painted', (e, ...a) => sharedPainted(e, a));
     },
     // tasks-service onEvent, before the Tasks pages: true when the event is the thread slot's.
     onEvent(wcId, taskId, event) {
@@ -675,13 +704,16 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       return true;
     },
     // index.js: the thread document is gone, reloaded, hidden or left.
-    retire(wcId) { if (Number.isSafeInteger(wcId)) { clearPresence(wcId); shared.retire(wcId); ownerActs.retire(wcId); for (const m of [sharedReads, ownedReads]) for (const k of [...m.keys()]) if (k.startsWith(`${wcId}:`)) m.delete(k); void closeSlot(wcId); } },
+    retire(wcId) { if (Number.isSafeInteger(wcId)) { closeView(wcId); shared.retire(wcId); ownerActs.retire(wcId); for (const m of [sharedReads, ownedReads]) for (const k of [...m.keys()]) if (k.startsWith(`${wcId}:`)) m.delete(k); void closeSlot(wcId); } },
     inputsChanged,
     // Tests: one poll pass now (main's own checks included).
     ownerTick: () => ownerActs.tick(),
     ownerSize: () => ownerActs.size(),
     slot: () => (slot ? { ...slot } : null),
-    stop() { stopped = true; clearPresence(); shared.stop(); ownerActs.stop(); if (slot) void closeSlot(slot.wcId); },
+    // Account switch or sign-out: viewing:false (fire and forget) and nothing kept.
+    viewClear() { views?.clearAll(); },
+    viewKey: () => views?.key() ?? null,
+    stop() { stopped = true; views?.clearAll(); shared.stop(); ownerActs.stop(); if (slot) void closeSlot(slot.wcId); },
   };
 }
 

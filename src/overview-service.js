@@ -481,6 +481,13 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   const raw=plainName(safe(()=>hub?.viewer?.(),null)?.name);
   return usableName(raw)?raw:'a teammate';
  }
+ // L32: how a thread document says it has this share open. Main-only; the fake hub never says anything.
+ // `live()` is false once the route moved (another hub, viewer or a re-bind), and the beat then stops.
+ function sharedViewRoute(rowId){
+  const r=sharedRoutes.get(rowId);
+  if(!sharedLive(r)||r.fake||typeof r.hub?.view!=='function')return null;
+  return{ref:r.ref,live:()=>sharedRoutes.get(rowId)===r&&sharedLive(r),beat:viewing=>r.hub.view(viewerOf(r.hub),r.team,r.ref,viewing===true)};
+ }
  // T4a: the bound owned row's fixed projection, or {gone, reason} ('overview' | 'ended'). Read-only.
  function ownedThreadRead(rowId){
   if(!ownedThreads||typeof rowId!=='string'||!/^[0-9a-f]{64}$/.test(rowId))return{gone:true,reason:'ended'};
@@ -573,7 +580,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
   if(!alive())return{ok:false,status:'unconfirmed',error:'The view changed. Inspect the receipt before sending again.'};
   return out?.ok===true?out:{ok:false,status:['forbidden','stale','busy','unavailable','unconfirmed'].includes(out?.status)?out.status:'unavailable',error:clean(out?.error,300)||'The team hub did not accept the message.'};
  }
- return{snapshot,passiveRows,clearViewing,sharedThreadBind,sharedThreadRead,sharedThreadAuthority,ownedThreadRead,ownerTarget,passiveTeamRows,viewerScope,threadTarget,threadForTask,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
+ return{snapshot,passiveRows,clearViewing,sharedThreadBind,sharedThreadRead,sharedViewRoute,sharedThreadAuthority,ownedThreadRead,ownerTarget,passiveTeamRows,viewerScope,threadTarget,threadForTask,viewing,directory:async request=>{const out=await directory(request);return{...out,followupScope:followupScope()};},teamMessage,teamInspect:controls.inspect,teamAction:controls.action,teamIdentity,
   followupReview,followupEnqueue,
   coordinatorRequestOwner:coordinator.requestOwner,coordinatorRemoteList:coordinator.remoteList,coordinatorRemoteSend:coordinator.remoteSend,coordinatorRemoteCancel:coordinator.remoteCancel,coordinatorRemoteReplace:coordinator.remoteReplace,
   coordinatorInventory:coordinator.inventory,coordinatorPropose:coordinator.propose,coordinatorConfirm:coordinator.confirm,coordinatorResults:coordinator.results,coordinatorCancel:coordinator.cancel,

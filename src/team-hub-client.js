@@ -282,6 +282,16 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     // T2: the share's current terms ride with a good read, so a thread never shows a cached scope.
     return out.ok ? { ...out, share: { scope: target.row.scope, expiresAt: target.row.expiresAt } } : out;
   }
+  // L32: a grantee says it has this share open (viewing:true) or closed (false). The hub answers one 404 for every
+  // case where this person may not (revoked, expired, not a member, the owner) and an older hub answers 404/405 too:
+  // 'unsupported' either way, and the caller stops for that share. Never surfaced; never blocks the thread.
+  async function view(viewerArg, teamId, ref, viewing) {
+    if (!sameViewer(viewerArg) || typeof teamId !== 'string' || !teamId || typeof ref !== 'string' || !UUID.test(ref) || typeof viewing !== 'boolean') return { ok: false, status: 'invalid' };
+    let r;
+    try { r = await request(`${base}/api/interaction/v1/shared/${encodeURIComponent(ref)}/view`, { method: 'POST', body: { viewing } }); } catch { return { ok: false, status: 'network' }; }
+    if (r.status === 200 && object(r.body) && typeof r.body.viewing === 'boolean') return { ok: true, viewing: r.body.viewing };
+    return { ok: false, status: r.status === 404 || r.status === 405 ? 'unsupported' : r.status === 401 ? 'sign-in' : 'failed' };
+  }
   async function act(viewerArg, teamId, ref, action, requestId, fresh = () => true) {
     const who = viewerArg?.id;
     const current = () => { try { return viewerArg?.id === who && sameViewer(viewerArg) && fresh() === true; } catch { return false; } };
@@ -792,7 +802,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     };
   }
 
-  return Object.defineProperty({ teams, sessions, passiveSessions, sharedEntries, sharedEntry, inspect, act, send, proposals, onChange, viewer }, 'origin', { value: new URL(base).origin, enumerable: true });
+  return Object.defineProperty({ teams, sessions, passiveSessions, sharedEntries, sharedEntry, inspect, act, send, proposals, view, onChange, viewer }, 'origin', { value: new URL(base).origin, enumerable: true });
 }
 
 module.exports = { createTeamHubClient, parseBase };

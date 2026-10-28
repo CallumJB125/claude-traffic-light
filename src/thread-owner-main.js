@@ -136,7 +136,10 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
     d.held = true;
     const host = hostNow();
     if (!host) { dropInterest(d); return { shareable: true, available: false, reason: TEXT.NO_SHARING }; }
-    const cat = await readCatalog(host);
+    // L32 (D4): the catalog's listShares also brings who is watching, so it is fetched only while main sees this
+    // thread shown (visible, not minimised). A hidden thread reuses what it has; its viewers age out (35 s).
+    const shown = safe(() => c.window.isVisible(), false) === true && safe(() => c.window.isMinimized(), true) === false;
+    const cat = shown ? await readCatalog(host) : catalog && catalog.host === host ? catalog.value : null;
     if (!still(c) || docs.get(docKey(c)) !== d) return null;
     if (targetOf(c.boundId)?.session !== tgt.session || hostNow() !== host) return null;
     // The poll's interest: this document, this session, this host and account. Main re-checks all of it every pass.
@@ -146,6 +149,7 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
     const shares = mine.slice(0, 8).map((s) => ({
       key: mac(d, 's', s.id), team: line(s.team?.name, 120) || 'Team', scope: s.scope === 'interact' ? 'interact' : 'watch',
       expiresAt: s.expiresAt, automatic: automatic(s.id), members: Array.isArray(s.members) ? s.members.length : 0,
+      viewers: Array.isArray(s.viewers) ? s.viewers.slice(0, 50).map((n) => line(n, 80) || 'Teammate') : [],
     }));
     const { groups, others } = groupsOf(d, tgt.session, mine, host);
     const teams = cat ? cat.teams.filter((x) => plain(x) && typeof x.id === 'string').slice(0, 40).map((x) => ({ key: mac(d, 't', x.id), name: line(x.name, 120) || 'Team' })) : [];

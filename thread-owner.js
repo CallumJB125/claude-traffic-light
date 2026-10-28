@@ -55,7 +55,10 @@
       const row = el('div', 'th-own-share');
       const scope = SCOPE[s.scope] || SCOPE.watch;
       const text = s.automatic ? `Shared automatically with ${s.team} (team workspace) · ${scope}` : `Shared with ${s.team} · ${scope} · ${until(s.expiresAt)} · ${s.members} ${s.members === 1 ? 'member' : 'members'}`;
-      row.append(el('span', 'th-own-share-text', text));
+      // L32: who has it open right now (names only, from main).
+      const seen = Array.isArray(s.viewers) ? s.viewers.filter((n) => typeof n === 'string' && n) : [];
+      const watching = seen.length === 1 ? ` · ${seen[0]} is watching` : seen.length > 1 ? ` · ${seen[0]} and ${seen.length - 1} ${seen.length === 2 ? 'other' : 'others'} are watching` : '';
+      row.append(el('span', 'th-own-share-text', text + watching));
       if (s.scope === 'watch') { const b = button('th-btn th-own-btn', 'Allow sending', () => { void review({ op: 'allow-sending', share: s.key }); }); b.disabled = busy; row.append(b); }
       const stop = button('th-btn th-own-btn', 'Stop sharing', () => { void act('stop', s.key); }); stop.disabled = busy; row.append(stop);
       rows.push(row);

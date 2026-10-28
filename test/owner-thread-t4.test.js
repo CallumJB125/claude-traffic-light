@@ -34,7 +34,8 @@ function fakeHost() {
   const h = {
     calls, shares, proposals, setConnected: (v) => { connected = v; },
     connected: () => connected,
-    shared: () => [...shares.values()].map((s) => ({ ...s })),
+    viewers: new Map(), // L32: share id → names the hub's owner list carries
+    shared: () => [...shares.values()].map((s) => ({ ...s, viewers: [...(h.viewers.get(s.id) ?? [])] })),
     async listShares() { calls.push(['list']); return { ok: true, teams: [{ id: 'team-1', name: 'Design team' }, { id: 'team-2', name: 'Ops' }], shares: h.shared() }; },
     async shareSession(req) {
       calls.push(['share', req]);
@@ -73,14 +74,16 @@ function fakeHost() {
 }
 
 function rig({ codexTargets = null } = {}) {
-  let scope = 'acct-a', doc = 1, n = 0, time = Date.now(), visible = true, minimized = false, foreground = true, generation = 1, boundId = null;
+  let scope = 'acct-a', doc = 1, n = 0, time = Date.now(), visible = true, minimized = false, foreground = true, generation = 1, boundId = null, ovShown = true;
   const ovWc = { id: 1, mainFrame: {}, isDestroyed: () => false, send() {} };
-  const ovCtx = () => ({ contents: ovWc, document: doc, generation: 1, foreground: true });
+  // buddy-window's overviewReadContext is null unless Overview is the page shown in a visible, unminimised window.
+  const ovCtx = () => (ovShown ? { contents: ovWc, document: doc, generation: 1, foreground: true } : null);
   const host = fakeHost();
   const x = createInteractionMain({
     owned: null, localModels: null, context: ovCtx, readContext: ovCtx, currentBoard: () => 'local', accountScope: () => scope, shares: () => host,
     workspace: (id) => `/private/tmp/proj-${id.slice(-4)}`,
     adapters: { codex: memAdapter('Codex', codexTargets ?? (() => `native-${++n}`)), claude: memAdapter('Claude Code', () => `claude-${++n}`) },
+    now: () => time,
   });
   const ix = new Map();
   x.register({ handle: (ch, fn) => ix.set(ch, fn) });
@@ -112,6 +115,7 @@ function rig({ codexTargets = null } = {}) {
     setScope: (v) => { scope = v; },
     rows: async () => svc.passiveRows(() => true),
     bind: (id) => { boundId = id; },
+    overviewShown: (v) => { ovShown = v; },
     set: (o) => { if ('visible' in o) visible = o.visible; if ('minimized' in o) minimized = o.minimized; if ('foreground' in o) foreground = o.foreground; if ('generation' in o) generation = o.generation; },
     advance: (ms) => { time += ms; },
     call: (ch, ...a) => handlers[ch](ev, boundId, ...a),
@@ -135,7 +139,7 @@ test('the four owner channels: Guard T, only an owned or session row, effects ne
   try {
     await ownedRow(r);
     for (const c of ['thread:owner-state', 'thread:owner-review', 'thread:owner-confirm', 'thread:owner-act']) assert.ok(CHANNELS.includes(c), c);
-    assert.equal(CHANNELS.length, 21);
+    assert.equal(CHANNELS.length, 22); // + L32's thread:shared-painted
     assert.equal(await r.handlers['thread:owner-state']({ sender: {}, senderFrame: {} }, 'a'.repeat(64)), null, 'another sender');
     assert.equal(await r.handlers['thread:owner-state']({ sender: { id: 7 }, senderFrame: {} }, 'b'.repeat(64)), null);
     const st = await r.call('thread:owner-state');
@@ -592,4 +596,68 @@ test('renderer: not held → the reason and no Share item; a session thread keep
     assert.equal(p.$('th-share').hidden, true);
     assert.equal(p.$('th-owner-line').textContent, Owner.TEXT.NOT_HELD);
   } finally { p.w.close(); }
+});
+
+// ── L32: who is watching (plan-l32 App PR delta D3/D4) ──────────────────
+const lists = (r) => r.host.calls.filter(([k]) => k === 'list').length;
+test('L32 owner thread: the share line names who is watching; the catalog (and so the viewers) is fetched only while main sees it shown', async () => {
+  const r = rig();
+  try {
+    const { s } = await ownedRow(r);
+    await r.host.shareSession({ session: s.session, team: 'team-1', scope: 'watch', expiresInS: null });
+    const share = [...r.host.shares.values()][0];
+    r.host.viewers.set(share.id, ['Alice', 'Sam']);
+    const st = await r.call('thread:owner-state');
+    assert.deepEqual(st.shares[0].viewers, ['Alice', 'Sam']);
+    assert.ok(!JSON.stringify(st).includes(share.id));
+    assert.equal(lists(r), 1);
+    // Hidden: reads go on (the page polls) but never fetch; the floor alone would have allowed one by now.
+    r.set({ visible: false });
+    for (let i = 0; i < 3; i++) { r.advance(16_000); await r.call('thread:owner-state'); }
+    assert.equal(lists(r), 1, 'no listShares while hidden');
+    r.set({ visible: true, minimized: true }); r.advance(16_000); await r.call('thread:owner-state');
+    assert.equal(lists(r), 1, 'minimised: none either');
+    r.set({ minimized: false }); r.advance(16_000); await r.call('thread:owner-state');
+    assert.equal(lists(r), 2, 'shown: one');
+    // A-S1: an effect's fresh list is not floored or gated: Stop sharing while hidden still re-lists.
+    const key = (await r.call('thread:owner-state')).shares[0].key;
+    r.set({ visible: false }); r.advance(600);
+    const out = await r.call('thread:owner-act', { op: 'stop', key });
+    assert.equal(out.ok, true);
+    assert.equal(lists(r), 3, 'the effect listed fresh');
+  } finally { r.close(); }
+});
+
+test('L32 Overview: interaction:share-viewers only while Overview is shown, one listShares per 15 s, only my sessions, names only', async () => {
+  const r = rig();
+  try {
+    const { s } = await ownedRow(r);
+    await r.host.shareSession({ session: s.session, team: 'team-1', scope: 'watch', expiresInS: null });
+    const share = [...r.host.shares.values()][0];
+    r.host.viewers.set(share.id, ['Alice']);
+    // Someone else's share on the same host: never mine to show.
+    r.host.shares.set('share-x', { id: 'share-x', session: '10000000-0000-4000-8000-0000000000aa', team: { id: 'team-2', name: 'Ops' }, scope: 'watch', expiresAt: null, members: [] });
+    r.host.viewers.set('share-x', ['Mallory']);
+    const before = lists(r);
+    const out = await r.ix('interaction:share-viewers');
+    assert.deepEqual(out, { ok: true, sessions: { [s.session]: ['Alice'] } });
+    assert.equal(lists(r), before + 1);
+    await r.ix('interaction:share-viewers'); r.advance(10_000); await r.ix('interaction:share-viewers');
+    assert.equal(lists(r), before + 1, 'inside 15 s: from the host copy');
+    r.advance(6_000); await r.ix('interaction:share-viewers');
+    assert.equal(lists(r), before + 2);
+    // Overview not the page shown (or the window hidden or minimised): refused before anything is read.
+    r.overviewShown(false); r.advance(16_000);
+    assert.equal(await r.ix('interaction:share-viewers'), null);
+    assert.equal(lists(r), before + 2);
+  } finally { r.close(); }
+});
+
+test('L32 renderer: the share line says who is watching', async () => {
+  const one = page({ ...OWNER, shares: [{ ...OWNER.shares[0], viewers: ['Alice'] }] });
+  try { await one.start(); assert.match(one.$('th-owner-line').textContent, /4 members|3 members · Alice is watching/); assert.match(one.$('th-owner-line').textContent, /· Alice is watching/); } finally { one.w.close(); }
+  const three = page({ ...OWNER, shares: [{ ...OWNER.shares[0], viewers: ['Alice', '<b>Sam</b>', 'Kim'] }] });
+  try { await three.start(); assert.match(three.$('th-owner-line').textContent, /· Alice and 2 others are watching/); assert.equal(three.$('th-owner-line').querySelector('b'), null); } finally { three.w.close(); }
+  const none = page(OWNER);
+  try { await none.start(); assert.doesNotMatch(none.$('th-owner-line').textContent, /watching/); } finally { none.w.close(); }
 });

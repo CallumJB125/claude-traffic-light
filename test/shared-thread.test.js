@@ -142,18 +142,19 @@ test('a different viewer, a replaced hub, a sign-out or invalidate ends access a
 });
 
 // ── thread-main ─────────────────────────────────────────────────────────
-function threadRig({ target = { kind: 'shared', teamId: 'team1', cardId: 'card-1' }, sharedRead = async () => ({ header: { title: 'T' } }) } = {}) {
+function threadRig({ target = { kind: 'shared', teamId: 'team1', cardId: 'card-1' }, sharedRead = async () => ({ header: { title: 'T' } }), route = 'default' } = {}) {
   let time = 100000, gen = 1, boundId = ID;
   const contents = { id: 7, isDestroyed: () => false, mainFrame: {}, send() {} };
-  const win = { isDestroyed: () => false };
+  const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false };
   const buddy = { threadContext: () => ({ window: win, contents, frame: contents.mainFrame, generation: gen, boundId, foreground: true, account: 'a', workspace: 'w' }) };
   const calls = { read: 0, copy: 0, tasks: 0, act: 0, hook: 0, team: [], terminal: 0, openInTasks: 0, presence: [] };
-  const presence = { set: (tag, v) => calls.presence.push([tag, v]) };
+  // L32: the share beat (src/share-view.js) replaced T2's card slot; `presence` records what the hub was told.
+  const viewRoute = route === 'default' ? { ref: '11111111-1111-4111-8111-111111111111', live: () => true, beat: async (v) => { calls.presence.push(v); return { ok: true, viewing: v }; } } : route;
   const handlers = {};
   const tm = createThreadMain({ buddy: () => buddy, chatPreview: true, target: () => target, tasks: () => ({ act: async () => { calls.act++; return { ok: true }; }, openTask: async () => { calls.tasks++; return { ok: false }; }, closeTask: async () => {} }),
     activity: async () => null, openInTasks: async () => { calls.openInTasks++; return true; }, goToTerminal: async () => { calls.terminal++; return { ok: true }; },
     hook: { inputs: () => { calls.hook++; return { items: [] }; }, checkMore: () => true, prepare: () => { calls.hook++; return null; } }, copy: () => { calls.copy++; },
-    now: () => time, sharedRead: (id, alive) => { calls.read++; return sharedRead(id, alive); }, presence, openTeam: async (id) => { calls.team.push(id); return true; } });
+    now: () => time, sharedRead: (id, alive) => { calls.read++; return sharedRead(id, alive); }, sharedView: () => viewRoute, viewTimers: { setTimeout: () => ({ unref() {} }), clearTimeout() {} }, openTeam: async (id) => { calls.team.push(id); return true; } });
   tm.register({ handle: (ch, fn) => { handlers[ch] = fn; } });
   const ev = { sender: contents, senderFrame: contents.mainFrame };
   return { tm, handlers, ev, calls, contents, tick: (ms) => { time += ms; }, bump: () => { gen++; }, setTarget: (t) => { target = t; }, call: (ch, ...a) => handlers[ch](ev, ...a) };
@@ -226,23 +227,27 @@ test('open-team: navigation only, shared rows only, foreground, rate-limited', a
   assert.equal(await x.call('thread:open-team', ID), false);
   assert.equal(x.calls.team.length, 1);
 });
-test('presence: set on open when the share has a card, cleared on close, retire and a share that ended; none without a card', async () => {
+test('presence (L32): open records; beats only after painted; close, retire and a share that ended say viewing:false; no route, nothing', async () => {
   const x = threadRig();
   assert.deepEqual(await x.call('thread:open', ID), { kind: 'shared', header: null });
-  assert.deepEqual(x.calls.presence, [['thread', { team: 'team1', card: 'card-1' }]]);
+  assert.deepEqual(x.calls.presence, [], 'nothing before the banner is painted');
+  assert.equal(await x.call('thread:shared-painted', ID), true); await tick();
+  assert.deepEqual(x.calls.presence, [true]);
+  assert.equal(await x.call('thread:shared-painted', ID), false, 'once');
   await x.call('thread:close', ID);
-  assert.deepEqual(x.calls.presence.at(-1), ['thread', null]);
-  await x.call('thread:open', ID); x.tm.retire(7);
-  assert.deepEqual(x.calls.presence.slice(-2), [['thread', { team: 'team1', card: 'card-1' }], ['thread', null]]);
+  assert.deepEqual(x.calls.presence, [true, false]);
+  await x.call('thread:open', ID); await x.call('thread:shared-painted', ID); await tick(); x.tm.retire(7);
+  assert.deepEqual(x.calls.presence.slice(-2), [true, false]);
   const y = threadRig({ sharedRead: async () => ({ gone: true, reason: 'ended' }) });
-  await y.call('thread:open', ID);
+  await y.call('thread:open', ID); await y.call('thread:shared-painted', ID); await tick();
   assert.deepEqual(await y.call('thread:shared-state', ID), { gone: true, reason: 'ended' });
-  assert.deepEqual(y.calls.presence.at(-1), ['thread', null]);
-  const z = threadRig({ target: { kind: 'shared', teamId: 'team1', cardId: null } });
-  await z.call('thread:open', ID); await z.call('thread:close', ID);
-  assert.deepEqual(z.calls.presence, [], 'no card, no presence, and nothing to clear');
-  const before = x.calls.presence.length; await x.call('thread:shared-state', ID); x.tm.retire(7);
-  assert.equal(x.calls.presence.length, before, 'a read never touches presence');
+  assert.deepEqual(y.calls.presence, [true, false]);
+  const z = threadRig({ route: null });
+  await z.call('thread:open', ID); assert.equal(await z.call('thread:shared-painted', ID), false); await z.call('thread:close', ID);
+  assert.deepEqual(z.calls.presence, [], 'no route (a fake hub), nothing sent and nothing to clear');
+  const w = threadRig();
+  await w.call('thread:open', ID); await w.call('thread:shared-state', ID); w.tm.retire(7);
+  assert.deepEqual(w.calls.presence, [], 'a read never beats and nothing was sent to take back');
 });
 
 // ── presence through the shared owner ───────────────────────────────────
@@ -255,7 +260,7 @@ test('the owner: Overview A -> a thread (attach clears Overview) B -> the thread
   owner.set('overview', { team: 't', card: 'A' });   // overview:ready re-announce
   assert.deepEqual(sent, ['A', null, 'B', null, 'A']);
 });
-test('a hub change reaches the thread\'s slot too: clearAll sends the null on the old hub\'s open socket before it closes', async () => {
+test('a hub change clears Overview\'s card slot on the old hub\'s open socket before it closes; the thread\'s share beat ends with viewClear', async () => {
   class WS extends EventEmitter { constructor() { super(); this.sent = []; WS.all.push(this); } send(s) { this.sent.push(JSON.parse(s)); } close(code) { this.closedAfter = this.sent.length; this.closed = code; } }
   WS.all = [];
   let links = [{ route: { hub: 'https://hub.example', team_id: 'team1', board_id: 'b1' }, token: () => 'tok' }], link = null;
@@ -263,24 +268,24 @@ test('a hub change reaches the thread\'s slot too: clearAll sends the null on th
   link = createPresenceLink({ links: async () => links, WebSocket: WS, setTimeout: () => ({ unref() {} }), clearTimeout() {}, onRouteDropped: () => owner.clearAll() });
   await link.refresh();
   const ws = WS.all[0]; ws.emit('open'); ws.emit('message', Buffer.from(JSON.stringify({ type: 'snapshot', board_id: 'b1', board: {}, cards: [], members: [] })));
-  const WIN = { isDestroyed: () => false };
-  const x = threadRig({ target: { kind: 'shared', teamId: 'team1', cardId: 'card-1' } });
-  const tm = createThreadMain({ buddy: () => ({ threadContext: () => ({ window: WIN, contents: x.contents, frame: x.contents.mainFrame, generation: 1, boundId: ID, foreground: true, account: 'a', workspace: 'w' }) }), chatPreview: true,
-    target: () => ({ kind: 'shared', teamId: 'team1', cardId: 'card-1' }), tasks: () => null, activity: async () => null, openInTasks: async () => false, goToTerminal: async () => null, presence: owner });
-  const h = {}; tm.register({ handle: (ch, fn) => { h[ch] = fn; } });
-  await h['thread:open'](x.ev, ID);
+  owner.set('overview', { team: 'team1', card: 'card-1' });
   assert.deepEqual(ws.sent.filter((f) => f.type === 'presence.view').map((f) => f.card_id), ['card-1']);
   links = [];
   await link.refresh();
   assert.deepEqual(ws.sent.filter((f) => f.type === 'presence.view').map((f) => f.card_id), ['card-1', null]);
   assert.equal(ws.closedAfter, ws.sent.length, 'nothing was sent after the close');
   assert.equal(ws.closed, 1000);
+  // The thread's share beat is not on the board socket: an account switch or quit ends it (viewing:false, once).
+  const x = threadRig();
+  await x.call('thread:open', ID); await x.call('thread:shared-painted', ID); await tick();
+  x.tm.viewClear(); x.tm.viewClear();
+  assert.deepEqual(x.calls.presence, [true, false]);
 });
 
 // ── wiring ──────────────────────────────────────────────────────────────
 test('wiring: no new authority; main passes the presence owner and the bind; the window opens a thread first and falls back to Overview', () => {
   const main = read('main.js'), win = read('buddy-window/index.js'), tm = read('src/thread-main.js');
-  assert.match(main, /sharedRead: \(id, alive\) => OverviewMain\.sharedThreadRead\(id, alive\),\n    sharedAuthority: \(id, live\) => OverviewMain\.sharedThreadAuthority\(id, live\),\n    openTeam: \(id\) => buddyWin\?\.openTeamRow\?\.\(id\) \?\? false,\n    \/\/ T4a[^\n]*\n    ownedRead: \(id\) => OverviewMain\.ownedThreadRead\(id\),\n    openOverview: \(\) => buddyWin\?\.openOverviewFromThread\?\.\(\) \?\? false,\n    \/\/ T4[^\n]*\n    owner: \{ target: \(id\) => OverviewMain\.ownerTarget\(id\), [^\n]*\},\n    presence: PresenceOwner,/);
+  assert.match(main, /sharedRead: \(id, alive\) => OverviewMain\.sharedThreadRead\(id, alive\),\n    sharedAuthority: \(id, live\) => OverviewMain\.sharedThreadAuthority\(id, live\),\n    openTeam: \(id\) => buddyWin\?\.openTeamRow\?\.\(id\) \?\? false,\n    \/\/ T4a[^\n]*\n    ownedRead: \(id\) => OverviewMain\.ownedThreadRead\(id\),\n    openOverview: \(\) => buddyWin\?\.openOverviewFromThread\?\.\(\) \?\? false,\n    \/\/ T4[^\n]*\n    owner: \{ target: \(id\) => OverviewMain\.ownerTarget\(id\), [^\n]*\},\n    \/\/ L32[^\n]*\n    sharedView: \(id\) => OverviewMain\.sharedViewRoute\(id\),/);
   assert.match(main, /threadBindShared: \(id, alive\) => OverviewMain\.sharedThreadBind\(id, alive\),/);
   assert.match(win, /openTeamRow\(id\) \{ if \(typeof id !== 'string' \|\| !ROW_ID\.test\(id\)\) return false;/);
   const body = tm.slice(tm.indexOf('async function sharedState'), tm.indexOf('// "Team overview"'));
@@ -297,13 +302,34 @@ function page(first, later = first) {
   const w = dom.window; opened.push(w);
   const calls = []; let ready = null, reads = 0;
   w.threadApi = { open: async (id) => { calls.push(['open', id]); return { kind: 'shared', header: null }; }, state: async () => { calls.push(['state']); return { kind: 'shared', header: null }; }, close: async () => true,
-    sharedState: async (id) => { calls.push(['shared', id]); return reads++ === 0 ? first : later; }, openTeam: async (id) => { calls.push(['team', id]); return true; },
+    sharedState: async (id) => { calls.push(['shared', id]); return reads++ === 0 ? first : later; }, sharedPainted: async (id) => { calls.push(['painted', id]); return true; }, openTeam: async (id) => { calls.push(['team', id]); return true; },
     openInTasks: async () => { calls.push(['tasks']); return true; }, goToTerminal: async () => ({ ok: true }), copyLink: async () => { calls.push(['copy']); return true; }, message: async () => ({ ok: true }), act: async () => ({ ok: true }),
     board: () => calls.push(['board']), onReady: (cb) => { ready = cb; }, onEvent() {} };
   for (const f of ['brand.js', 'src/tasks-view.js', 'src/transcript-md.js', 'src/transcript-dom.js', 'thread-shared.js', 'thread.js']) w.eval(read(f));
   return { w, calls, $: (id) => w.document.getElementById(id), ready: () => ready(ID) };
 }
 const view = (over = {}) => SharedView.project({ state: state(), share: { scope: 'watch', expiresAt: null }, route, now: 2000, ...over });
+
+// L32 (D2/D2a): "‹Owner› can see you're watching" from the first paint; main starts the beat only once it is on
+// screen, and the line comes down when main says the hub isn't taking it.
+test("renderer L32: the watching line shows on first paint, then the page tells main; off (a 404 on the first beat) takes it down", async () => {
+  const p = page({ ...view(), watching: 'pending' }, { ...view(), watching: 'off' });
+  p.ready(); await tick(); await tick();
+  assert.equal(p.$('th-watch').hidden, false);
+  assert.equal(p.$('th-watch').textContent, "Bob can see you're watching.");
+  await new Promise((r) => p.w.requestAnimationFrame(() => p.w.requestAnimationFrame(r))); await tick();
+  assert.deepEqual(p.calls.filter((c) => c[0] === 'painted'), [['painted', ID]], 'after it is on screen, once');
+  // Main reports the first beat was refused (an older hub): the next read takes the line down, and it stays down.
+  p.w.document.dispatchEvent(new p.w.Event('visibilitychange')); await tick(); await tick();
+  assert.equal(p.$('th-watch').hidden, true);
+  assert.equal(p.calls.filter((c) => c[0] === 'painted').length, 1, 'never asks again');
+  // Off from the very first read (the beat already stopped): no line and nothing asked.
+  const q = page({ ...view(), watching: 'off' });
+  q.ready(); await tick(); await tick();
+  await new Promise((r) => q.w.requestAnimationFrame(() => q.w.requestAnimationFrame(r))); await tick();
+  assert.equal(q.$('th-watch').hidden, true);
+  assert.equal(q.calls.filter((c) => c[0] === 'painted').length, 0);
+});
 
 test('renderer: a watch share shows the header line, the banner first, the activity, the messages and a watch-only footer; no prompt box', async () => {
   const p = page(view({ state: state({ deliveries: [
@@ -313,7 +339,8 @@ test('renderer: a watch share shows the header line, the banner first, the activ
   assert.deepEqual(p.calls[0], ['open', ID]); assert.deepEqual(p.calls[1], ['shared', ID]);
   assert.equal(p.$('th-title').textContent, 'Fix login');
   assert.equal(p.$('th-meta').textContent, "Bob's Claude Code session · Shared with you to watch");
-  assert.equal(p.$('th-banner').textContent, 'You see messages sent since it was shared, and its current activity. Earlier history stays private.');
+  // L32: the owner sees who has it open, said from the first paint.
+  assert.equal(p.$('th-banner').textContent, "You see messages sent since it was shared, and its current activity. Earlier history stays private. Bob can see you're watching.");
   assert.equal(p.$('th-banner').hidden, false);
   const root = p.$('th-shared');
   assert.match(root.querySelector('.th-activity').textContent, /^Now: Editing files · /);
