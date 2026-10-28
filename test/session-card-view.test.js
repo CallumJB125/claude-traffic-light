@@ -6,9 +6,10 @@ const V = require('../src/session-card-view.js');
 const NOW = Date.parse('2026-10-19T12:00:00Z');
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
 
-test('the title is the project folder name, never the path', () => {
-  const c = V.sessionCard({ sessionId: 's1', cwd: '/Users/me/work/plexiform', signal: 'tool-use', tool: 'Bash' }, { now: NOW });
+test('the title is the project folder name, never the path; the folder line has home as ~ (QoL2)', () => {
+  const c = V.sessionCard({ sessionId: 's1', cwd: '/Users/me/work/plexiform', signal: 'tool-use', tool: 'Bash' }, { now: NOW, home: '/Users/me' });
   assert.equal(c.title, 'plexiform');
+  assert.equal(c.folder, '~/work/plexiform');
   assert.ok(!JSON.stringify(c).includes('/Users/me'));
   assert.equal(V.sessionCard({ cwd: '/' }, { now: NOW }).title, 'Other work');
 });
@@ -16,14 +17,15 @@ test('the title is the project folder name, never the path', () => {
 test('a working session says its tool and how long it has run, in words', () => {
   const c = V.sessionCard({ sessionId: 's1', cwd: '/p/a', signal: 'tool-use', tool: 'Edit', startedAt: ago(75) }, { now: NOW });
   assert.equal(c.state, 'Edit · running for 1 h 15');
-  assert.deepEqual(c.actions, ['open', 'pin']);
+  assert.deepEqual(c.actions, ['open', 'finder', 'editor', 'pin']);
 });
 
 test('a waiting session says since when and offers Answer', () => {
   const c = V.sessionCard({ sessionId: 's1', cwd: '/p/a', signal: 'permission-ask', tool: 'Bash', updatedAt: ago(7) }, { now: NOW });
   assert.match(c.state, /^Needs you since 7 min/);
   assert.equal(c.waiting, true);
-  assert.deepEqual(c.actions, ['open', 'answer', 'pin']);
+  assert.deepEqual(c.actions, ['open', 'answer', 'finder', 'editor', 'pin']);
+  assert.equal(c.waitFor, '7m');
 });
 
 test('spend shows when known, with unpriced requests counted', () => {

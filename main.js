@@ -2230,7 +2230,19 @@ ipcMain.handle('team-hint', (e) => widgetOnly(e) ? teamHint() : null);
 require('./src/widget-cards-main.js').install({ ipcMain, allowed: widgetOnly, getSessions: () => ({ sessions: aggregateState().sessions || [] }), getSpend: async (id) => WorkCost.sessionSpend(await getUsageTurns(), { provider: 'claude', session_id: id }), config: { load: loadConfig, save: saveConfig },
   getExplain: (sess) => explainSvc?.cardFor(sess), getDeploy: (cwd) => (deployStatus?.store.enabled() ? deployStatus.status().find((d) => d.cwd === cwd) : null),
   nudgesPaused: (id) => spendSafety?.nudgesPaused(id), resumeNudges: (id) => spendSafety?.resumeNudges(id) ?? { ok: false },
-  copyHelp: (h) => explainSvc?.copy(h) ?? { ok: false } }); // privacy-flow: widget-session-card
+  copyHelp: (h) => explainSvc?.copy(h) ?? { ok: false },
+  // QoL2: the card's own actions, on the row main re-found by id.
+  home: os.homedir(), platform: process.platform, copyText: (t) => clipboard.writeText(t),
+  liveness: (s) => Terminal.sessionLiveness(s, LOCAL_HOST, (pid, provider) => AgentAwareness.isAiProcess(pid, provider)),
+  openSession: (how, s) => (how === 'terminal' ? openSessionTerminal(s) : RowActions.openFolder(how, s.cwd, folderDeps, savedEditor())) }); // privacy-flow: widget-session-card
+// The card's Open is that session's terminal (not the needing queue's head).
+async function openSessionTerminal(s) {
+  const folder = Rules.folderOf(s.cwd);
+  const a = await jumpToSession(s, folder);
+  if (!a) return { ok: false, feedback: `${folder}: no terminal found for this session.` };
+  if (a.cant) return { ok: false, feedback: a.cant };
+  return { ok: true, feedback: a.exact ? `→ ${folder} · tab found` : a.byFolder ? `→ ${folder} · the one ${a.app} tab in that folder` : `Opened ${a.app}. Plexiform couldn't pick the tab.` };
+}
 ipcMain.handle('team-hint-done', (e, open) => {
   if (!widgetOnly(e)) return false;
   const hint = teamHint();
@@ -4602,6 +4614,14 @@ utilityHandle('get-spend', settingsPane('spend'), () => {
 let snoozeTimer = null;
 let cycleIndex = 0;
 const LinuxActions = require('./src/linux-actions.js');
+const RowActions = require('./src/session-row-actions.js');
+const folderDeps = { platform: process.platform, fs, execFile, shell, editorCommand: (arg) => LinuxActions.editorCommand(arg) };
+// The editor a gesture of yours names (Lights → On click), else the default. Never from a request.
+function savedEditor() {
+  const clicks = aggregateState().look?.clicks || {};
+  const a = Object.values(clicks).find((x) => x && x.type === 'editor' && typeof x.arg === 'string' && x.arg.trim() && x.arg.length <= 200);
+  return a ? a.arg : null;
+}
 async function runAction(action, st) {
   const local = localSessions(st.sessions);
   const needing = local.filter((s) => WAITING_SIGNALS.has(s.signal)).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
@@ -4642,7 +4662,8 @@ async function runAction(action, st) {
     case 'feed': return { react: { pose: 'munch', eyes: 'happy' }, ms: 1800, feedback: 'nom' };
     case 'lights': createLightsWindow(); return { feedback: 'Lights' };
     case 'stats': openBuddy('stats'); return { feedback: 'Stats' };
-    case 'finder': if (!cwd) return { feedback: 'no session folder' }; shell.openPath(cwd); return { feedback: `${IS_WIN ? 'Explorer' : 'Finder'} → ${folderHint}` };
+    // QoL2: on macOS the folder is revealed (open -R), so a folder named x.app is shown, never launched.
+    case 'finder': if (!cwd) return { feedback: 'no session folder' }; return { feedback: RowActions.openFolder('finder', cwd, folderDeps).feedback };
     case 'editor': {
       if (!cwd) return { feedback: 'no session folder' };
       if (IS_WIN) execFile('cmd', ['/c', 'start', '', action.arg || 'code', cwd], () => {});

@@ -784,8 +784,11 @@ function chipFor(row) {
   b.dataset.id = row.id || '';
   const dot = document.createElement('i'); dot.className = 'dot';
   const label = document.createElement('span');
+  label.className = 'chip-title';
   label.textContent = row.team && c.teammate ? c.teammate.initials : c.title;
   b.append(dot, label);
+  // QoL2: how long it has waited (" · 4m"). The title gives way, never the time; the accessible name has it in the state.
+  if (c.waiting && c.waitFor) { const w = document.createElement('span'); w.className = 'chip-wait'; w.textContent = ` · ${c.waitFor}`; b.append(w); }
   b.setAttribute('aria-label', `${c.title}: ${c.state}`);
   const show = () => { clearTimeout(cardTimer); cardTimer = setTimeout(() => showCard(row, b), CARD_DELAY_MS); };
   b.addEventListener('mouseenter', show);
@@ -813,8 +816,13 @@ function cardButton(label, onClick) {
   b.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
   return b;
 }
+// QoL2: Open, the folder buttons and copy-resume act on this card's own session, by id.
+const sessionAct = (fn) => async () => { const r = await fn().catch(() => null); if (r && r.feedback) showFeedback(r.feedback); hideCard(); };
 const CARD_ACTIONS = {
-  open: () => cardButton('Open', async () => { const r = await window.trafficLight.goToNeedingSession().catch(() => null); if (r && r.feedback) showFeedback(r.feedback); hideCard(); }),
+  open: (c) => cardButton('Open', sessionAct(() => window.trafficLight.sessionOpen(c.id, 'terminal'))),
+  finder: (c) => cardButton(c.folderApp, sessionAct(() => window.trafficLight.sessionOpen(c.id, 'finder'))),
+  editor: (c) => cardButton('Editor', sessionAct(() => window.trafficLight.sessionOpen(c.id, 'editor'))),
+  'copy-resume': (c) => cardButton('Copy resume', sessionAct(() => window.trafficLight.copyResume(c.id))),
   answer: (c) => cardButton('Answer', async () => {
     const input = lastInputs.find((i) => i && i.session === c.id);
     const r = input ? await window.trafficLight.openInput(input.id).catch(() => null) : await window.trafficLight.goToNeedingSession().catch(() => null);
@@ -832,6 +840,7 @@ function showCard(row, anchor) {
   if (c.teammate) { const av = document.createElement('span'); av.className = 'avatar'; av.textContent = c.teammate.initials; av.title = c.teammate.name; head.append(av); }
   const t = document.createElement('span'); t.className = 'card-title'; t.textContent = c.title; head.append(t);
   const lines = [head];
+  if (c.folder) { const fo = document.createElement('div'); fo.className = 'card-spend card-folder'; fo.textContent = c.folder; lines.push(fo); }
   const st = document.createElement('div'); st.className = 'card-state'; st.textContent = c.state; lines.push(st);
   if (c.spend) { const sp = document.createElement('div'); sp.className = 'card-spend'; sp.textContent = c.spend; lines.push(sp); }
   if (c.teammate) { const who = document.createElement('div'); who.className = 'card-spend'; who.textContent = c.teammate.name; lines.push(who); }

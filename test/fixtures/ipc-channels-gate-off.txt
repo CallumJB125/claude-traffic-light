@@ -545,6 +545,8 @@ handle widget:pin-session
 handle widget:recent-projects
 handle widget:resume-nudges
 handle widget:session-cards
+handle widget:session-copy-resume
+handle widget:session-open
 handle widget:sprite-packs
 handle widget:use-sprite-pack
 handle work-cost

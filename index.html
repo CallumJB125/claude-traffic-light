@@ -151,6 +151,8 @@
   #strip .strip-row { display: flex; flex-wrap: wrap; gap: 2px; }
   #strip .chip { display: inline-flex; align-items: center; gap: 3px; max-width: 70px; height: 14px; padding: 0 4px; border: none; border-radius: 7px; background: rgba(20, 20, 22, 0.88); color: rgba(255, 255, 255, 0.9); font: 500 8px -apple-system, system-ui, sans-serif; cursor: pointer; }
   #strip .chip span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  #strip .chip .chip-title { min-width: 0; }
+  #strip .chip .chip-wait { flex: none; overflow: visible; margin-left: -2px; }
   #strip .chip .dot { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
   #strip .chip.waiting .dot { background: var(--red); }
   #strip .chip.idle .dot { background: var(--idle); }
@@ -167,8 +169,7 @@
   #session-card .avatar { flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font: 700 7px/14px -apple-system, system-ui, sans-serif; text-align: center; }
   #session-card .card-state, #session-card .card-spend { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   #session-card .card-spend { opacity: 0.7; }
-  #session-card .card-acts { display: flex; gap: 3px; margin-top: 3px; }
-  #session-card .card-acts.card-help { flex-wrap: wrap; }
+  #session-card .card-acts { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
   #session-card .card-paused { color: #ffb84d; opacity: 1; }
   #session-card .card-recap { margin-top: 2px; padding-top: 2px; border-top: 1px solid rgba(255, 255, 255, 0.15); }
   #session-card .card-recap > div { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; opacity: 0.85; }
