@@ -104,7 +104,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
       provider, device: { label: str(row.device?.label, 80) || 'Unknown device', local: row.device?.local === true }, project: str(row.project, 100) || null,
       looseEnds: looseEndsOf(row.looseEnds),
       task: taskOf({ human: m.humanTitle, card: row.task?.status === 'tracked' && kind !== 'reported' ? row.task.title : null, reported: row.task?.status === 'tracked' && kind === 'reported' ? row.task.title : null }),
-      ...st, input: st.bucket === 'needs', ...t, nativeSessionId:m.nativeSessionId,nativeTurnId:m.nativeTurnId,selfReported: null,
+      ...st, input: st.bucket === 'needs', waitingMs: st.bucket === 'needs' && Number.isSafeInteger(row.waiting_ms) && row.waiting_ms >= 0 ? row.waiting_ms : null, ...t, nativeSessionId:m.nativeSessionId,nativeTurnId:m.nativeTurnId,selfReported: null,
       provenance: kind === 'reported' ? ['observed'] : kind === 'board' ? ['board'] : ['plexiform-tasks'],
       capabilities: capabilities({
         discovery: cap(true), telemetry: cap(true),
@@ -185,7 +185,7 @@ function createSessionDirectory({ now = Date.now, staleMs = STALE_MS, secret = c
     if (!owned.children.length) owned.children = observed.children.map((c) => ({ ...c, parent: owned.id }));
     const rank = { unknown: 0, reported: 1, board: 2, human: 3 };
     if ((rank[observed.task.source] ?? 0) > (rank[owned.task.source] ?? 0)) owned.task = observed.task;
-    if (observed.input && ['working', 'needs'].includes(owned.bucket)) { owned.input = true; owned.state = observed.state; owned.bucket = observed.bucket; delete owned.detail; }
+    if (observed.input && ['working', 'needs'].includes(owned.bucket)) { owned.input = true; owned.state = observed.state; owned.bucket = observed.bucket; owned.waitingMs = observed.waitingMs ?? null; delete owned.detail; }
   }
 
   function mine({ work = [], meta = new Map(), owned = [], shares = [] } = {}) {
