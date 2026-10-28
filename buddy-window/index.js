@@ -589,7 +589,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     let v = localViews.get(page.id);
     if (v && v.webContents.isDestroyed()) { localViews.delete(page.id); v = null; } // a crashed renderer is rebuilt, not re-attached
     if (!v) {
-      v = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, preload: path.join(DIR, '..', page.preload) } });
+      // T1: Overview learns the chat-first preview is on the same way the sidebar does (its preload reads the flag).
+      v = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, preload: path.join(DIR, '..', page.preload), ...(chatFirst === true && page.id === 'overview' ? { additionalArguments: ['--plexiform-chat-preview'] } : {}) } });
       v.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#1c1a1f' : '#eceaf0');
       lockLocal(v);
       localViews.set(page.id, v);

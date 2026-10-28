@@ -307,3 +307,22 @@ test('T1 channels: sidebar:team-rows and overview:open-hint exist only with the 
   assert.equal(on.has('sidebar:team-rows'), true);
   assert.equal(on.has('overview:open-hint'), true);
 });
+
+test('T1: the Overview bridge has openHint only when main started it with the chat-first flag, so gate off it never asks', () => {
+  const bridge = (argv) => {
+    let api; const invoked = [];
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../overview-preload.js'), 'utf8'), { Buffer, Promise, process: { argv }, require: () => ({ contextBridge: { exposeInMainWorld: (_n, v) => { api = v; } }, ipcRenderer: { invoke: (n) => { invoked.push(n); return Promise.resolve(null); }, on() {}, send() {} } }) });
+    return { api, invoked };
+  };
+  for (const argv of [[], ['--other'], ['--plexiform-chat-preview=1']]) assert.equal(typeof bridge(argv).api.openHint, 'undefined', JSON.stringify(argv));
+  const on = bridge(['electron', '--plexiform-chat-preview']);
+  assert.equal(typeof on.api.openHint, 'function');
+  on.api.openHint();
+  assert.deepEqual(on.invoked, ['overview:open-hint']);
+  assert.equal(typeof bridge([]).api.state, 'function', 'the rest of the bridge is unchanged');
+  // Main passes the flag to the Overview view only with the preview on, exactly as for the sidebar.
+  const win = fs.readFileSync(path.join(__dirname, '../buddy-window/index.js'), 'utf8');
+  assert.match(win, /preload: path\.join\(DIR, '\.\.', page\.preload\), \.\.\.\(chatFirst === true && page\.id === 'overview' \? \{ additionalArguments: \['--plexiform-chat-preview'\] \} : \{\}\)/);
+  // Overview's takeHint returns before asking when the bridge has no openHint.
+  assert.match(fs.readFileSync(path.join(__dirname, '../overview-directory.js'), 'utf8'), /async function takeHint\(\) \{\n\s+if \(typeof api\.openHint !== 'function'\) return;/);
+});

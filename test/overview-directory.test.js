@@ -62,7 +62,8 @@ function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed
   overview.register({ handle: (ch, fn) => handlers.set(ch, fn) });
   teamHub?.onChange(() => overview.directoryChanged());
   let api;
-  vm.runInNewContext(bridge, { Buffer, Promise, require: () => ({ contextBridge: { exposeInMainWorld(_n, v) { api = v; } }, ipcRenderer: {
+  // Main starts Overview with the chat-first flag only while the preview is on (buddy-window/index.js).
+  vm.runInNewContext(bridge, { Buffer, Promise, process: { argv: chatPreview === true ? ['--plexiform-chat-preview'] : [] }, require: () => ({ contextBridge: { exposeInMainWorld(_n, v) { api = v; } }, ipcRenderer: {
     invoke: async (ch, ...args) => { const fn = handlers.get(ch); assert.ok(fn, `no handler ${ch}`); const r = await fn({ sender: contents, senderFrame: contents.mainFrame }, ...structuredClone(args)); results.push([ch, r]); return structuredClone(r); },
     on: (ch, fn) => { if (!listeners.has(ch)) listeners.set(ch, new Set()); listeners.get(ch).add(fn); },
     removeListener: (ch, fn) => listeners.get(ch)?.delete(fn),

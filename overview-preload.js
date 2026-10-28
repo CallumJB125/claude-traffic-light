@@ -9,10 +9,13 @@ const messageText = text => {
   const trimmed = text.trim();
   return trimmed && trimmed.length <= 4000 && Buffer.byteLength(trimmed, 'utf8') <= 8192 ? trimmed : null;
 };
+// T1: main starts this document with the flag only while the chat-first preview is on (buddy-window/index.js).
+// Gate off there is no overview:open-hint handler, so the bridge has no openHint and the page never asks.
+const chatFirst = typeof process === 'object' && Array.isArray(process?.argv) && process.argv.includes('--plexiform-chat-preview');
 contextBridge.exposeInMainWorld('overviewApi', {
   state: () => ipcRenderer.invoke('overview:state'),
   // T1: a teammate row the sidebar asked to open (consumed once; navigation only).
-  openHint: () => ipcRenderer.invoke('overview:open-hint'),
+  ...(chatFirst ? { openHint: () => ipcRenderer.invoke('overview:open-hint') } : {}),
   openSearch: () => ipcRenderer.invoke('search:open-page'),
   onReady: callback => {
     if (typeof callback !== 'function') return () => {};
