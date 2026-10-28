@@ -72,7 +72,7 @@ async function cancelSetup(t){const f=await setup(t),clock={t:Date.now()};const 
 const untouched=f=>assert.equal(fs.readFileSync(f.filename,'utf8'),'Keep synthetic notes.\n');
 test('L16: Cancel writes nothing, says cancelled, and the same reviewed handle applies once afterwards',async t=>{
  const f=await cancelSetup(t);f.control.dialog=()=>({cancelled:true});
- const c=await f.rt.apply(f.p.handle,f.p.plan_hash);assert.equal(c.ok,false);assert.equal(c.status,'cancelled');assert.equal(f.writes,0);untouched(f);assert.equal(fs.existsSync(f.parent+'/setups-transactions'),false);
+ const c=await f.rt.apply(f.p.handle,f.p.plan_hash);assert.equal(c.ok,false);assert.equal((await f.rt.check(f.p.handle)).ok,true,'Cancel keeps the reviewed plan alive in the runtime');assert.equal(c.status,'cancelled');assert.equal(f.writes,0);untouched(f);assert.equal(fs.existsSync(f.parent+'/setups-transactions'),false);
  const again=await f.rt.apply(f.p.handle,f.p.plan_hash);assert.equal(again.status,'cancelled');assert.equal(f.writes,0);
  f.control.dialog=null;const a=await f.rt.apply(f.p.handle,f.p.plan_hash);assert.equal(a.ok,true,JSON.stringify(a));assert.equal(fs.readFileSync(f.filename,'utf8'),f.file.content);assert.ok(fs.existsSync(f.parent+'/setups-transactions'));const writes=f.writes;
  assert.equal((await f.rt.apply(f.p.handle,f.p.plan_hash)).ok,false);assert.equal(f.writes,writes);assert.equal(fs.readdirSync(f.parent+'/setups-transactions').length,1);
@@ -89,13 +89,13 @@ test('L16: a concurrent second Apply during the dialog is refused, then Cancel s
 test('L16: every non-Cancel outcome leaves the handle gone',async t=>{
  const wrong=[['null',()=>null,'unavailable'],['busy marker',()=>({busy:true}),'busy'],['approved:false',d=>({approved:false,plan_hash:d.plan_hash}),'unavailable'],['cancelled not true',()=>({cancelled:'yes'}),'unavailable'],['cancelled plus extra key',()=>({cancelled:true,extra:1}),'unavailable'],['wrong hash',()=>({approved:true,plan_hash:'0'.repeat(64)}),'unavailable'],['throws',()=>{throw new Error('x');},'unavailable']];
  for(const [name,dialog,status] of wrong){const f=await cancelSetup(t);f.control.dialog=dialog;const r=await f.rt.apply(f.p.handle,f.p.plan_hash);assert.equal(r.ok,false,name);if(status==='busy')assert.equal(r.status,'busy',name);else assert.notEqual(r.status,'cancelled',name);
-  f.control.dialog=null;assert.equal((await f.rt.apply(f.p.handle,f.p.plan_hash)).ok,false,name+' handle must be consumed');assert.equal(f.writes,0,name);untouched(f);}
+  assert.equal((await f.rt.check(f.p.handle)).ok,false,name+' runtime store must not keep the handle');f.control.dialog=null;assert.equal((await f.rt.apply(f.p.handle,f.p.plan_hash)).ok,false,name+' handle must be consumed');assert.equal(f.writes,0,name);untouched(f);}
  const f=await cancelSetup(t);assert.equal((await f.rt.apply(f.p.handle,'f'.repeat(64))).ok,false);assert.equal((await f.rt.apply(f.p.handle,f.p.plan_hash)).ok,false,'wrong expected hash consumes');
 });
 test('L16: Cancel after authority loss, invalidate() or expiry is unavailable and the handle is gone',async t=>{
  for(const [name,lose] of [['foreground',f=>{f.state.foreground=false;}],['generation',f=>{f.state.generation++;}],['invalidate',f=>f.rt.invalidate()],['expiry',f=>{f.clock.t+=24*3600*1000;}]]){
   const f=await cancelSetup(t);f.control.dialog=()=>{lose(f);return {cancelled:true};};const r=await f.rt.apply(f.p.handle,f.p.plan_hash);assert.equal(r.ok,false,name);assert.notEqual(r.status,'cancelled',name);
-  f.state.foreground=true;f.state.generation=1;f.clock.t=Date.now();f.control.dialog=null;assert.equal((await f.rt.apply(f.p.handle,f.p.plan_hash)).ok,false,name);assert.equal(f.writes,0,name);untouched(f);}
+  f.state.foreground=true;f.state.generation=1;f.clock.t=Date.now();f.control.dialog=null;assert.equal((await f.rt.check(f.p.handle)).ok,false,name+' runtime store');assert.equal((await f.rt.apply(f.p.handle,f.p.plan_hash)).ok,false,name);assert.equal(f.writes,0,name);untouched(f);}
 });
 test('L16: Undo and Recovery Cancel say cancelled and stay one-use',async t=>{
  const f=await setup(t),{a}=await apply(f),fresh=f.make();f.state.actor=null;
