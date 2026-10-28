@@ -45,16 +45,22 @@ function parseBase(raw) {
   return `${u.origin}${u.pathname.replace(/\/+$/, '')}`;
 }
 
-function shareRow(x) {
+function shareRow(x, nowMs = Date.now()) {
   if (!object(x)) return null;
   const id = str(x.id, 100), session = str(x.session, 100);
   const scope = x.scope === 'interact' || x.scope === 'watch' ? x.scope : '';
   const team = object(x.team) ? { id: str(x.team.id, 100), name: str(x.team.name, 80) || 'Team' } : null;
   const ownerId = object(x.owner) && typeof x.owner.id === 'string' ? x.owner.id.replace(HIDDEN, "").trim() : '';
   if (!UUID.test(id) || !UUID.test(session) || !scope || !team || !team.id || !ownerId || ownerId.length > 100) return null;
+  let expiresAt = typeof x.expires_at === 'string' && x.expires_at.length <= 60 ? x.expires_at : null;
+  // T4d: on a watch share the owner has allowed this teammate to send for a while. It reads as interact until the earlier
+  // of the allowance's end and the share's own, and `via` lets the thread say so and hide Propose (proposals need a real interact share).
+  const until = object(x.allowance) && typeof x.allowance.expires_at === 'string' && x.allowance.expires_at.length <= 60 ? Date.parse(x.allowance.expires_at) : NaN;
+  const allowed = scope === 'watch' && Number.isFinite(until) && until > nowMs;
+  if (allowed) expiresAt = expiresAt !== null && Date.parse(expiresAt) < until ? expiresAt : new Date(until).toISOString();
   return {
-    ref: id, session, scope, team,
-    expiresAt: typeof x.expires_at === 'string' && x.expires_at.length <= 60 ? x.expires_at : null,
+    ref: id, session, scope: allowed ? 'interact' : scope, team, ...(allowed ? { via: 'allowance' } : {}),
+    expiresAt,
     owner: { id: ownerId, name: str(x.owner.name, 80) || 'Teammate' },
     online: x.online === true,
   };
@@ -128,7 +134,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     if (r.status !== 200 || !object(r.body) || !Array.isArray(r.body.shared)) throw new Error('the team hub shared list is unreadable');
     const out = [], seen = new Set();
     for (const x of r.body.shared.slice(0, MAX_SHARED)) {
-      const row = shareRow(x);
+      const row = shareRow(x, atNow());
       if (row && !seen.has(row.ref)) { seen.add(row.ref); out.push(row); }
     }
     for (const ref of stateCache.keys()) if (!seen.has(ref)) stateCache.delete(ref);
@@ -281,7 +287,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     const out = await readShared(target.row, viewerArg);
     if (!(viewerArg?.id === who && sameViewer(viewerArg))) return failed('forbidden', REASONS.forbidden);
     // T2: the share's current terms ride with a good read, so a thread never shows a cached scope.
-    return out.ok ? { ...out, share: { scope: target.row.scope, expiresAt: target.row.expiresAt } } : out;
+    return out.ok ? { ...out, share: { scope: target.row.scope, expiresAt: target.row.expiresAt, ...(target.row.via ? { via: target.row.via } : {}) } } : out;
   }
   // L32: a grantee says it has this share open (viewing:true) or closed (false). The hub answers one 404 for every
   // case where this person may not (revoked, expired, not a member, the owner) and an older hub answers 404/405 too:
@@ -756,7 +762,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
 
   const listeners = new Set();
   let scheduled = null, running = false, last = '', failures = 0;
-  const fingerprint = (rows) => JSON.stringify(rows.map((r) => [r.ref, r.session, r.scope, r.expiresAt, r.team, r.owner.id, r.owner.name, r.online]));
+  const fingerprint = (rows) => JSON.stringify(rows.map((r) => [r.ref, r.session, r.scope, r.via ?? null, r.expiresAt, r.team, r.owner.id, r.owner.name, r.online]));
   async function poll() {
     running = true;
     try {

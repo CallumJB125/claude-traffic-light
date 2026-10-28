@@ -26,6 +26,8 @@ const LEASE_MS = 20_000;
 const POLL_CAP = 8;
 const MAX_PER_DOC = 8;
 const APPROVE_S = 600;
+// T4d: how long the owner may let one teammate send (host remote-interaction.js ALLOW_SECONDS).
+const ALLOW_FOR = Object.freeze({ 900: '15 min', 1800: '30 min', 3600: '1 hour', 14400: '4 hours' });
 const EARLIER_MAX = 20;
 const GROUPS_MAX = 10;
 const KEY = /^[0-9a-f]{32}$/;
@@ -48,6 +50,9 @@ const TEXT = Object.freeze({
   UNAVAILABLE: 'Sharing is unavailable right now.',
   SHARED: 'Shared. Members see what happens from now on.',
   ALLOWED: 'Sending allowed. The time left is unchanged.',
+  ALLOWED_ONE: 'Allowed. They can send until the time shown.',
+  ALLOW_STOPPED: 'Stopped. They can only watch now.',
+  OLD_HUB: 'Your team hub needs an update before you can allow one teammate to send.',
   APPROVED: 'Decision acknowledged. The requester can send this exact message once before expiry.',
   STOPPED: 'Stopped sharing. Teammates can no longer see or send to this session.',
   REJECTED: 'Proposal rejected.',
@@ -150,10 +155,23 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
       key: mac(d, 's', s.id), team: line(s.team?.name, 120) || 'Team', scope: s.scope === 'interact' ? 'interact' : 'watch',
       expiresAt: s.expiresAt, automatic: automatic(s.id), members: Array.isArray(s.members) ? s.members.length : 0,
       viewers: Array.isArray(s.viewers) ? s.viewers.slice(0, 50).map((n) => line(n, 80) || 'Teammate') : [],
+      ...allowView(d, s),
     }));
     const { groups, others } = groupsOf(d, tgt.session, mine, host);
     const teams = cat ? cat.teams.filter((x) => plain(x) && typeof x.id === 'string').slice(0, 40).map((x) => ({ key: mac(d, 't', x.id), name: line(x.name, 120) || 'Team' })) : [];
     return { shareable: true, available: true, provider: tgt.provider, teams, shares, groups, others, reason: cat && !teams.length ? TEXT.NO_TEAMS : '', observedAt: t };
+  }
+  // T4d: on a watch share, each acting teammate can be allowed to send for a while. `allowNote` (main's own words) says Allow can't be offered yet.
+  function allowView(d, s) {
+    if (s.scope === 'interact') return {};
+    if (s.allowOk !== true) return { allowNote: TEXT.OLD_HUB, allowed: [], allowable: [] };
+    const members = Array.isArray(s.members) ? s.members.filter((m) => plain(m) && typeof m.id === 'string' && m.acts === true).slice(0, 50) : [];
+    const entry = (m) => ({ key: mac(d, 'm', s.id, m.id), name: line(m.name, 80) || 'Teammate' });
+    return {
+      allowNote: '',
+      allowed: members.filter((m) => Number.isFinite(m.allowedUntil)).map((m) => ({ ...entry(m), until: m.allowedUntil })),
+      allowable: members.filter((m) => !Number.isFinite(m.allowedUntil)).map(entry),
+    };
   }
   // Rev 4 (Callum, ledger 36): one card per teammate per session, not per proposal. The newest pending proposal from
   // that teammate is the card; their older pending ones fold under it, with Reject all. Approved and finished ones are
@@ -219,6 +237,7 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
     const op = plain(req) ? req.op : null;
     if (!(op === 'share' ? exact(req, ['op', 'team', 'scope', 'expiry']) && KEY.test(req.team) && Object.hasOwn(SCOPES, req.scope) && typeof req.expiry === 'string' && Object.hasOwn(EXPIRY, req.expiry)
       : op === 'allow-sending' ? exact(req, ['op', 'share']) && KEY.test(req.share)
+        : op === 'allow-send' ? exact(req, ['op', 'share', 'member', 'seconds']) && KEY.test(req.share) && KEY.test(req.member) && Object.hasOwn(ALLOW_FOR, req.seconds)
         : op === 'approve' ? exact(req, ['op', 'proposal']) && KEY.test(req.proposal) : false)) return fail('invalid', TEXT.INVALID);
     const d = docOf(c);
     if (d.busy) return fail('busy', TEXT.BUSY);
@@ -251,6 +270,19 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
         const name = line(s.team?.name, 120) || 'Team';
         const selection = mint(c, { op, session: tgt.session, host, account, share: s.id, team: s.team?.id });
         return { ok: true, status: 'review', selection, card: card(op, `Allow ${name} to send`, '', [interactLine(tgt.provider)], 'Allow sending', { keeps: s.expiresAt }) };
+      }
+      if (op === 'allow-send') {
+        const s = mine.find((x) => mac(d, 's', x.id) === req.share);
+        if (!s || s.scope !== 'watch') return fail('stale', TEXT.MOVED);
+        if (s.allowOk !== true) return fail('unavailable', TEXT.OLD_HUB);
+        const m = Array.isArray(s.members) ? s.members.find((x) => plain(x) && typeof x.id === 'string' && x.acts === true && mac(d, 'm', s.id, x.id) === req.member) : null;
+        if (!m) return fail('stale', TEXT.MOVED);
+        const who = line(m.name, 80) || 'A teammate', secs = Number(req.seconds);
+        const left = s.expiresAt === null ? null : Math.floor((s.expiresAt - now()) / 1000);
+        if (left !== null && left < 60) return fail('refused', TEXT.SOON);
+        const until = now() + Math.min(secs, left ?? secs) * 1000;
+        const selection = mint(c, { op, session: tgt.session, host, account, share: s.id, team: s.team?.id, user: m.id, seconds: secs });
+        return { ok: true, status: 'review', selection, card: card(op, `Allow ${who} to send`, '', [`${who} can send, steer and stop in this session for ${ALLOW_FOR[secs]}, using your ${tgt.provider} account and quota.`, 'You can stop it any time. It also ends when Plexiform quits on your Mac.'], `Allow · ${ALLOW_FOR[secs]}`, { until }) };
       }
       // approve: a fresh proposalList of this session's live interact shares, never the poll cache.
       const found = await findProposal(d, host, mine, req.proposal, fence);
@@ -309,6 +341,14 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
         afterEffect(d);
         return out?.ok === true ? { ok: true, status: 'allowed', note: TEXT.ALLOWED } : hostError(out, 'Not changed. Try again.');
       }
+      if (rec.op === 'allow-send') {
+        const m = Array.isArray(s.members) ? s.members.find((x) => plain(x) && x.id === rec.user && x.acts === true) : null;
+        if (s.scope !== 'watch' || s.team?.id !== rec.team || !m) return fail('stale', TEXT.MOVED);
+        let out = null;
+        try { out = await host.grantAllowance({ share: s.id, user: rec.user, seconds: rec.seconds }); } catch { out = null; }
+        afterEffect(d, s.id);
+        return out?.ok === true ? { ok: true, status: 'allowed-one', note: TEXT.ALLOWED_ONE } : hostError(out, 'Not changed. Try again.');
+      }
       if (rec.op === 'approve') {
         if (s.scope !== 'interact') return fail('stale', TEXT.MOVED);
         let r = null;
@@ -327,7 +367,7 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
 
   // ── thread:owner-act [boundId, {op, key}]: stop, reject, revoke (only narrow access; one click) ──
   async function act(c, req, still) {
-    if (!exact(req, ['op', 'key']) || !['stop', 'reject', 'revoke', 'reject-all'].includes(req.op) || typeof req.key !== 'string' || !KEY.test(req.key)) return fail('invalid', TEXT.INVALID);
+    if (!exact(req, ['op', 'key']) || !['stop', 'reject', 'revoke', 'reject-all', 'stop-allow'].includes(req.op) || typeof req.key !== 'string' || !KEY.test(req.key)) return fail('invalid', TEXT.INVALID);
     const d = docs.get(docKey(c));
     if (!d || d.boundId !== c.boundId) return fail('stale', TEXT.MOVED);
     if (d.busy) return fail('busy', TEXT.BUSY);
@@ -348,6 +388,17 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
         try { out = host.stopSharing(s.id); } catch { out = null; }
         afterEffect(d, s.id);
         return out?.ok === true ? { ok: true, status: 'stopped', note: TEXT.STOPPED } : hostError(out, 'Could not stop sharing. Try again.');
+      }
+      if (req.op === 'stop-allow') {
+        for (const s of mine) {
+          const m = Array.isArray(s.members) ? s.members.find((x) => plain(x) && typeof x.id === 'string' && mac(d, 'm', s.id, x.id) === req.key) : null;
+          if (!m) continue;
+          let out = null;
+          try { out = await host.revokeAllowance({ share: s.id, user: m.id }); } catch { out = null; }
+          afterEffect(d, s.id);
+          return out?.ok === true ? { ok: true, status: 'allow-stopped', note: TEXT.ALLOW_STOPPED } : hostError(out, 'Could not stop that. Try again.');
+        }
+        return fail('stale', TEXT.MOVED);
       }
       if (req.op === 'reject-all') return await rejectAll(d, host, mine, req.key, tgt.session, fence);
       const found = await findProposal(d, host, mine, req.key, fence);

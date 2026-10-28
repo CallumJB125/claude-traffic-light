@@ -63,7 +63,7 @@ contextBridge.exposeInMainWorld('threadApi', {
   ownerState: (row) => ipcRenderer.invoke('thread:owner-state', id(row)),
   ownerReview: (row, r) => {
     const o = r && typeof r === 'object' ? r : {}, out = {};
-    for (const k of ['op', 'team', 'scope', 'expiry', 'share', 'proposal']) if (typeof o[k] === 'string') out[k] = o[k];
+    for (const k of ['op', 'team', 'scope', 'expiry', 'share', 'proposal', 'member', 'seconds']) if (typeof o[k] === 'string') out[k] = o[k];
     return ipcRenderer.invoke('thread:owner-review', id(row), out);
   },
   ownerConfirm: (row, selection) => ipcRenderer.invoke('thread:owner-confirm', id(row), { selection: String(selection) }),

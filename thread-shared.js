@@ -56,7 +56,7 @@
     const h = v.header;
     document.title = h.title;
     $('th-title').textContent = h.title;
-    $('th-meta').textContent = `${h.owner}'s ${h.provider} session · ${h.scope === 'interact' ? 'Watch and send' : 'Shared with you to watch'}${h.expiresAt ? ` · until ${clock(h.expiresAt)}` : ''}${h.fake ? ' (test data)' : ''}`;
+    $('th-meta').textContent = `${h.owner}'s ${h.provider} session · ${h.via === 'allowance' ? `${h.owner} let you send` : h.scope === 'interact' ? 'Watch and send' : 'Shared with you to watch'}${h.expiresAt ? ` · until ${clock(h.expiresAt)}` : ''}${h.fake ? ' (test data)' : ''}`;
     const banner = $('th-banner'); banner.hidden = false;
     const seen = v.watching !== 'off';
     if (!seen) painted = false;
@@ -86,12 +86,14 @@
   }
 
   // ── T3: the interact layout ──
+  // T4d: when the owner allowed this teammate to send on a watch share, proposals do not exist (they need a real interact share).
+  let viaAllowance = false;
   const OPTIONS = (owner) => [
     { op: 'send', label: 'Send', sub: '' },
     { op: 'steer', label: 'Steer this turn', sub: '' },
     { op: 'queue', label: 'Queue for when idle', sub: 'Sent once, when the session is idle.' },
     { op: 'propose', label: `Propose to ${owner}`, sub: `${owner} reviews this exact text before it runs.` },
-  ];
+  ].filter((o) => !(viaAllowance && o.op === 'propose'));
   const capOf = (v, op) => (op === 'steer' ? v.controls.steer : op === 'propose' ? v.controls.propose : op === 'queue' ? v.controls.queue : v.controls.send);
   // Only these can skip the card inside T3b's window; a queued message and a proposal always get one.
   const WINDOW_OPS = ['send', 'steer', 'stop'];
@@ -108,7 +110,7 @@
       return;
     }
     if (layout !== 'interact') { layout = 'interact'; foot.replaceChildren(buildComposer(h)); }
-    const owner = h.owner;
+    const owner = h.owner; viaAllowance = h.via === 'allowance';
     const opt = chosen && capOf(v, chosen).available ? chosen : defaultOp(v);
     chosen = opt;
     const t = $('th-sh-text'), go = $('th-sh-go'), chip = $('th-sh-chip');

@@ -37,6 +37,8 @@ export class InteractionProposals {
   requester(ident, p) {
     if (!p || p.requester_user_id !== ident.user.id) throw missing();
     const auth = this.shares.authorize(ident, p.share_id, 'send');
+    // T4d: a send allowance on a watch share is not a proposal right (proposals exist only on interact shares).
+    if (auth.row.scope !== 'interact') throw new HubError('FORBIDDEN', 'this session is shared with you to watch only', { reason: 'SCOPE' });
     return auth;
   }
   activeVersion(p) {
@@ -47,6 +49,7 @@ export class InteractionProposals {
     if (!closed(body, ['id', 'decision', 'version', 'generation', 'title', 'text']) || !UUID.test(body.id) || !UUID.test(body.decision) || !Number.isSafeInteger(body.version) || body.version < 1
       || !Number.isSafeInteger(body.generation) || body.generation < 1 || !validText(body.title, 120) || !validText(body.text, 4000) || Buffer.byteLength(body.text) > 8192) throw invalid();
     const { row: share } = this.shares.authorize(ident, shareId, 'send');
+    if (share.scope !== 'interact') throw new HubError('FORBIDDEN', 'this session is shared with you to watch only', { reason: 'SCOPE' });
     limitOrThrow(this.hub, 'share_write_user', ident.user.id);
     const digest = createHash('sha256').update(JSON.stringify([shareId, ident.user.id, body.decision, body.version, body.generation, body.title, body.text, 'send', 1])).digest('hex');
     const old = this.row(body.id);

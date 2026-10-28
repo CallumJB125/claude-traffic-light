@@ -42,6 +42,8 @@ import { PRESENCE_MIN_MS, PRESENCE_TTL_MS } from '../shared/liveness.js';
 
 export const SCOPES = Object.freeze({ watch: ['state', 'watch'], interact: ['state', 'watch', 'send', 'interrupt'] });
 export const SHARE_LIMITS = Object.freeze({ perHost: 64, minExpiryS: 60, maxExpiryS: 30 * 86_400, viewersPerShare: 50 });
+// T4d: the owner lets one acting teammate send, steer and stop in a watch share for a set time.
+export const ALLOWANCE_LIMITS = Object.freeze({ minS: 60, maxS: 4 * 3600, perShare: 50 });
 // Team roles that may send/steer/interrupt on an interact share; any other role watches only.
 export const ACTING_ROLES = Object.freeze(['owner', 'admin', 'member']);
 const MUTATING = new Set(['send', 'interrupt']);
@@ -105,6 +107,8 @@ export class InteractionShares {
     const owner = this.db.get('SELECT display_name AS name FROM users WHERE id = ?', row.owner_user_id);
     return {
       id: row.id, session: row.session_id, team: { id: row.org_id, name: team?.name ?? 'Team' }, scope: row.scope,
+      // Always present on a hub that has T4d (an older hub omits it), so the desktop app can tell the two apart.
+      allowances: this.allowancesOf(row),
       // The owner's own label, so the host can keep a teammate's "Sent by" distinct from it.
       owner: { name: owner?.name ?? '' },
       created_at: row.created_at, expires_at: row.expires_at,
@@ -112,6 +116,52 @@ export class InteractionShares {
       // Who has access: the team's active members other than the owner, with their role (a viewer only watches).
       members: this.members(row.org_id).filter((m) => m.id !== row.owner_user_id),
     };
+  }
+
+  /** Live allowances of a share, newest first (expired rows are never reported). */
+  allowancesOf(row) {
+    if (row.scope !== 'watch') return [];
+    return this.db.all(`SELECT a.user_id, a.expires_at FROM interaction_allowances a WHERE a.share_id = ? AND a.expires_at > ? ORDER BY a.expires_at DESC, a.user_id`, row.id, this.now())
+      .filter((a) => this.member(row.org_id, a.user_id) && ACTING_ROLES.includes(this.member(row.org_id, a.user_id).role));
+  }
+
+  /** The caller's live allowance on a watch share, or null. Role and membership are the caller's, checked by authorize. */
+  allowanceFor(row, userId) {
+    if (row.scope !== 'watch') return null;
+    return this.db.get('SELECT expires_at FROM interaction_allowances WHERE share_id = ? AND user_id = ? AND expires_at > ?', row.id, userId, this.now()) ?? null;
+  }
+
+  /** PUT (owner's host device): let one acting teammate send, steer and stop in this watch share until a set time. Replaces an earlier grant. */
+  allow(ident, shareId, userId, body) {
+    this.asHost(ident);
+    if (!closed(body, ['expires_in_s']) || !Number.isSafeInteger(body.expires_in_s) || body.expires_in_s < ALLOWANCE_LIMITS.minS || body.expires_in_s > ALLOWANCE_LIMITS.maxS) throw invalid();
+    const row = typeof shareId === 'string' && UUID.test(shareId) ? this.db.get('SELECT * FROM interaction_shares WHERE id = ?', shareId) : null;
+    if (!this.live(row) || row.owner_user_id !== ident.user.id || row.host_device_id !== ident.cred.id || !this.member(row.org_id, ident.user.id)) throw noShare();
+    if (typeof userId !== 'string' || !UUID.test(userId)) throw invalid();
+    limitOrThrow(this.hub, 'share_write_user', ident.user.id);
+    if (row.scope !== 'watch') throw new HubError('VALIDATION', 'this session is already shared to send; an allowance is for watch-only shares');
+    const them = userId !== ident.user.id ? this.member(row.org_id, userId) : null;
+    if (!them || !ACTING_ROLES.includes(them.role)) throw new HubError('NOT_FOUND', 'that teammate cannot be allowed to send');
+    const now = this.now();
+    const until = new Date(Math.min(this.hub.wallMs() + body.expires_in_s * 1000, row.expires_at ? Date.parse(row.expires_at) : Infinity)).toISOString();
+    this.hub.txn(() => {
+      this.db.run('DELETE FROM interaction_allowances WHERE expires_at <= ?', now);
+      this.db.run('DELETE FROM interaction_allowances WHERE share_id = ? AND user_id = ?', row.id, userId);
+      if (this.db.get('SELECT COUNT(*) AS n FROM interaction_allowances WHERE share_id = ?', row.id).n >= ALLOWANCE_LIMITS.perShare) throw new HubError('QUOTA_EXCEEDED', 'stop allowing someone else first');
+      this.db.insert('interaction_allowances', { share_id: row.id, user_id: userId, granted_at: now, expires_at: until, granted_by: ident.user.id });
+    });
+    this.hub.log.info('session send allowed', { share: row.id, team: row.org_id });
+    return { allowance: { user_id: userId, expires_at: until } };
+  }
+
+  /** DELETE (owner's host device): stop allowing. Idempotent. */
+  disallow(ident, shareId, userId) {
+    this.asHost(ident);
+    const row = typeof shareId === 'string' && UUID.test(shareId) ? this.db.get('SELECT * FROM interaction_shares WHERE id = ?', shareId) : null;
+    if (!row || row.owner_user_id !== ident.user.id || row.host_device_id !== ident.cred.id) throw noShare();
+    if (typeof userId !== 'string' || !UUID.test(userId)) throw invalid();
+    this.db.run('DELETE FROM interaction_allowances WHERE share_id = ? AND user_id = ?', row.id, userId);
+    return { revoked: true };
   }
 
   /** GET: this host's live shares and the teams it may share with. */
@@ -166,6 +216,7 @@ export class InteractionShares {
     if (row.revoked_at === null) {
       this.db.run('UPDATE interaction_shares SET revoked_at = ?, revoked_by = ? WHERE id = ? AND revoked_at IS NULL', this.now(), by, row.id);
       this.db.run('DELETE FROM interaction_proposals WHERE share_id = ?', row.id);
+      this.db.run('DELETE FROM interaction_allowances WHERE share_id = ?', row.id);
       this.viewing.delete(row.id);
       this.hub.log.info('session share stopped', { share: row.id });
     }
@@ -227,6 +278,8 @@ export class InteractionShares {
   dropViewer(memberId) {
     const userId = this.db.get('SELECT user_id FROM members WHERE id = ?', memberId)?.user_id;
     if (!userId) return;
+    // A later re-add or promotion must not revive an allowance this member held in this team.
+    this.db.run('DELETE FROM interaction_allowances WHERE user_id = ? AND share_id IN (SELECT id FROM interaction_shares WHERE org_id = (SELECT org_id FROM members WHERE id = ?))', userId, memberId);
     for (const [id, held] of this.viewing) { held.delete(userId); if (!held.size) this.viewing.delete(id); }
   }
 
@@ -242,7 +295,8 @@ export class InteractionShares {
     for (const r of rows) {
       const me = this.member(r.org_id, ident.user.id);
       if (!this.live(r) || !me || !this.member(r.org_id, r.owner_user_id)) continue;
-      out.push({ id: r.id, session: r.session_id, scope: ACTING_ROLES.includes(me.role) ? r.scope : 'watch', expires_at: r.expires_at, team: { id: r.org_id, name: r.team_name }, owner: { id: r.owner_user_id, name: r.owner_name },
+      const allowance = ACTING_ROLES.includes(me.role) ? this.allowanceFor(r, ident.user.id) : null;
+      out.push({ id: r.id, session: r.session_id, scope: ACTING_ROLES.includes(me.role) ? r.scope : 'watch', ...(allowance ? { allowance: { expires_at: allowance.expires_at } } : {}), expires_at: r.expires_at, team: { id: r.org_id, name: r.team_name }, owner: { id: r.owner_user_id, name: r.owner_name },
         online: !!this.relay.liveHost(r.owner_user_id, r.host_device_id) });
     }
     return { shared: out };
@@ -261,15 +315,19 @@ export class InteractionShares {
     if (!me || !this.member(row.org_id, row.owner_user_id)) throw noShare();
     const host = this.relay.liveHost(row.owner_user_id, row.host_device_id);
     if (!host) throw noShare();
-    if (!SCOPES[row.scope].includes(op) || (MUTATING.has(op) && !ACTING_ROLES.includes(me.role))) throw new HubError('FORBIDDEN', 'this session is shared with you to watch only', { reason: 'SCOPE' });
-    return { row, host, scope: ACTING_ROLES.includes(me.role) ? row.scope : 'watch' };
+    // T4d: on a watch share an acting teammate the owner has allowed holds interact until the allowance ends. `row.scope`
+    // stays the share's own scope: proposals (which exist only on interact shares) check that, never this.
+    const acts = ACTING_ROLES.includes(me.role), allowance = acts ? this.allowanceFor(row, ident.user.id) : null;
+    const scope = allowance ? 'interact' : acts ? row.scope : 'watch';
+    if (!SCOPES[scope].includes(op) || (MUTATING.has(op) && !acts)) throw new HubError('FORBIDDEN', 'this session is shared with you to watch only', { reason: 'SCOPE' });
+    return { row, host, scope, allowance };
   }
 
   async call(ident, shareId, body, proposal = null) {
     if (!closed(body, ['request_id', 'op', 'args']) || typeof body.request_id !== 'string' || !UUID.test(body.request_id)
       || !Object.hasOwn(ARGS, body.op) || !closed(body.args, ARGS[body.op])) throw invalid();
     if (Buffer.byteLength(JSON.stringify(body.args)) > this.relay.limits.argsBytes) throw new HubError('PAYLOAD_TOO_LARGE', 'message too large');
-    const { row, host, scope } = this.authorize(ident, shareId, body.op);
+    const { row, host, scope, allowance } = this.authorize(ident, shareId, body.op);
     // A share names one session: any other id is not shared, whatever it is.
     if (body.args.session !== row.session_id) throw noShare();
     limitOrThrow(this.hub, 'share_call_user', ident.user.id);
@@ -283,7 +341,7 @@ export class InteractionShares {
     const name = this.db.get('SELECT display_name FROM users WHERE id = ?', ident.user.id)?.display_name ?? 'Teammate';
     const frame = {
       type: 'relay.request', rid: body.request_id, user: row.owner_user_id, from: ident.cred.id, op: body.op, args: body.args,
-      share: { id: row.id, team: row.org_id, user: ident.user.id, name: name.slice(0, 80), scope, ...(proposal ? { proposal } : {}) },
+      share: { id: row.id, team: row.org_id, user: ident.user.id, name: name.slice(0, 80), scope, ...(allowance && MUTATING.has(body.op) ? { allowance_until: allowance.expires_at } : {}), ...(proposal ? { proposal } : {}) },
     };
     const result = await this.relay.dispatch(host, frame, () => this.relay.unburn(ident.user.id, body.request_id));
     // Revoked, removed or expired while the host answered: the answer is withheld.
@@ -299,6 +357,8 @@ export class InteractionShares {
     route('POST', '/api/interaction/v1/shares', ({ ident, body }) => this.create(ident, body), { auth: 'user', replay: false, strictBody: true });
     route('DELETE', '/api/interaction/v1/shares/:share_id', ({ ident, params }) => this.revoke(ident, params.share_id), { auth: 'user', replay: false });
     route('DELETE', '/api/teams/:team_id/interaction-shares/:share_id', ({ member, params }) => this.adminRevoke(member, params.share_id), { replay: false });
+    route('PUT', '/api/interaction/v1/shares/:share_id/allowances/:user_id', ({ ident, params, body }) => this.allow(ident, params.share_id, params.user_id, body), { auth: 'user', replay: false, strictBody: true });
+    route('DELETE', '/api/interaction/v1/shares/:share_id/allowances/:user_id', ({ ident, params }) => this.disallow(ident, params.share_id, params.user_id), { auth: 'user', replay: false });
     route('GET', '/api/interaction/v1/shared', ({ ident }) => this.shared(ident), { auth: 'user', replay: false });
     route('POST', '/api/interaction/v1/shared/:share_id/view', ({ ident, params, body }) => this.view(ident, params.share_id, body), { auth: 'user', replay: false, strictBody: true });
     route('POST', '/api/interaction/v1/shared/:share_id/call', ({ ident, params, body }) => this.call(ident, params.share_id, body), { auth: 'user', replay: false, strictBody: true, ...size });
