@@ -179,6 +179,27 @@ test('Team sessions: explicit shares only, grouped by person, filters, reasons, 
   } finally { s.close(); }
 });
 
+// Ledger 37 (L-M1): the history list shows who stopped a turn, through the hub's rows and the real session-directory projection.
+test('Team sessions (ledger 37): an interrupted message says "‹name› stopped this turn." as text, bounded; nothing otherwise', async () => {
+  const s = stack();
+  try {
+    await s.ready(); await s.team();
+    s.teamHub.update('bob-1', { deliveries: [
+      { id: 'd-1', text: 'try it', by: 'Me', state: 'interrupted', response: '', stoppedBy: `Cara ${HOSTILE}` },
+      { id: 'd-2', text: 'and this', by: 'Me', state: 'replied', response: 'ok', stoppedBy: 'Nobody' },
+      { id: 'd-3', text: 'long', by: 'Me', state: 'interrupted', response: '', stoppedBy: 'Z'.repeat(300) },
+      { id: 'd-4', text: 'old host', by: 'Me', state: 'interrupted', response: '' }] });
+    await wait(400); await tick();
+    const items = [...s.row('team-list', /Fix login/).querySelectorAll('.deliveries > li')];
+    assert.equal(items.length, 4);
+    assert.equal(items[0].querySelector('.reason').textContent, `Cara ${HOSTILE} stopped this turn.`);
+    assert.equal(s.doc.querySelector('img'), null, 'text only');
+    assert.equal(items[1].querySelector('.reason'), null, 'not interrupted: no line');
+    assert.equal(items[2].querySelector('.reason').textContent, `${'Z'.repeat(80)} stopped this turn.`, 'bounded at 80 by the projection');
+    assert.equal(items[3].querySelector('.reason'), null, 'an older host sends none');
+  } finally { s.close(); }
+});
+
 test('Team sessions: message → acknowledged → reply arrives live; watch-only and forged requests refuse', async () => {
   const s = stack();
   try {

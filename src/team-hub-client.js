@@ -163,7 +163,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
   }
 
   const deliveryOf = (d) => object(d) && typeof d.id === 'string' && d.id ? {
-    id: str(d.id, 80), text: prose(d.text, 4000), by: typeof d.by === 'string' && d.by ? str(d.by, 80) : null,
+    id: str(d.id, 80), text: prose(d.text, 4000), by: typeof d.by === 'string' && d.by ? str(d.by, 80) : null, stoppedBy: str(d.stoppedBy, 80) || null,
     state: DELIVERY_STATES.includes(d.state) ? d.state : 'unknown', response: prose(d.response, 4000),
   } : null;
 
