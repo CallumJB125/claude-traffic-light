@@ -45,7 +45,7 @@ function parseBase(raw) {
   return `${u.origin}${u.pathname.replace(/\/+$/, '')}`;
 }
 
-function shareRow(x) {
+function shareRow(x, nowMs = Date.now()) {
   if (!object(x)) return null;
   const id = str(x.id, 100), session = str(x.session, 100);
   const scope = x.scope === 'interact' || x.scope === 'watch' ? x.scope : '';
@@ -56,7 +56,7 @@ function shareRow(x) {
   // T4d: on a watch share the owner has allowed this teammate to send for a while. It reads as interact until the earlier
   // of the allowance's end and the share's own, and `via` lets the thread say so and hide Propose (proposals need a real interact share).
   const until = object(x.allowance) && typeof x.allowance.expires_at === 'string' && x.allowance.expires_at.length <= 60 ? Date.parse(x.allowance.expires_at) : NaN;
-  const allowed = scope === 'watch' && Number.isFinite(until) && until > Date.now();
+  const allowed = scope === 'watch' && Number.isFinite(until) && until > nowMs;
   if (allowed) expiresAt = expiresAt !== null && Date.parse(expiresAt) < until ? expiresAt : new Date(until).toISOString();
   return {
     ref: id, session, scope: allowed ? 'interact' : scope, team, ...(allowed ? { via: 'allowance' } : {}),
@@ -134,7 +134,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     if (r.status !== 200 || !object(r.body) || !Array.isArray(r.body.shared)) throw new Error('the team hub shared list is unreadable');
     const out = [], seen = new Set();
     for (const x of r.body.shared.slice(0, MAX_SHARED)) {
-      const row = shareRow(x);
+      const row = shareRow(x, atNow());
       if (row && !seen.has(row.ref)) { seen.add(row.ref); out.push(row); }
     }
     for (const ref of stateCache.keys()) if (!seen.has(ref)) stateCache.delete(ref);
