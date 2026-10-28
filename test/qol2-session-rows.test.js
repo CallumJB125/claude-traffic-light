@@ -111,12 +111,12 @@ test('card: own local sessions get the folder and the folder buttons; a teammate
   assert.equal(V.sessionCard({ sessionId: 's', cwd: '/p' }, { now: NOW, platform: 'linux' }).folderApp, 'Files');
 });
 
-test('card: copy-resume only on an idle card main called resumable; the waiting time only on a waiting card, from a minute', () => {
+test('card: copy-resume only when main found the session ended; the waiting time only on a waiting card, from a minute', () => {
   const idle = (o) => V.sessionCard({ sessionId: 's', cwd: '/p', signal: 'session-end' }, { now: NOW, ...o }).actions;
   assert.deepEqual(idle({ resumable: true }), ['open', 'copy-resume', 'finder', 'editor', 'pin']);
   assert.deepEqual(idle({ resumable: false }), ['open', 'finder', 'editor', 'pin']);
   assert.deepEqual(idle({ resumable: 'yes' }), ['open', 'finder', 'editor', 'pin']);
-  const waiting = V.sessionCard({ sessionId: 's', cwd: '/p', signal: 'permission-ask', signalSince: ago(4) }, { now: NOW, resumable: true });
+  const waiting = V.sessionCard({ sessionId: 's', cwd: '/p', signal: 'permission-ask', signalSince: ago(4) }, { now: NOW });
   assert.ok(!waiting.actions.includes('copy-resume'));
   assert.equal(waiting.waitFor, '4m');
   assert.equal(V.sessionCard({ sessionId: 's', signal: 'permission-ask', signalSince: new Date(NOW - 30_000).toISOString() }, { now: NOW }).waitFor, '');
@@ -124,12 +124,16 @@ test('card: copy-resume only on an idle card main called resumable; the waiting 
 });
 
 // ── IPC, through the real handlers ─────────────────────────────────────────
-function rig({ sessions, alive = 'gone', allowed = () => true, clock } = {}) {
+const HOST = 'my-mac';
+const LIVE = new Set([4242, 5151]);
+// kill(pid, 0): a live pid answers, a gone one is ESRCH, 1234 belongs to someone else (EPERM: not gone).
+const kill = (pid) => { if (LIVE.has(pid)) return true; const e = new Error('x'); e.code = pid === 1234 ? 'EPERM' : 'ESRCH'; throw e; };
+function rig({ sessions, allowed = () => true, clock } = {}) {
   const handlers = new Map(), copied = [], opened = [], exec = [];
   let t = NOW;
   const api = Cards.install({ ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) }, config: { load: () => ({}), save: () => {} }, allowed, now: clock || (() => (t += 1000)),
-    getSessions: () => sessions, home: '/Users/me', platform: 'darwin',
-    liveness: async (row) => (typeof alive === 'function' ? alive(row) : alive),
+    getSessions: () => sessions, home: '/Users/me', platform: 'darwin', collapseAfter: 99,
+    ended: (row) => A.sessionEnded(row, HOST, kill),
     copyText: (s) => copied.push(s), openSession: async (how, row) => { opened.push([how, row.sessionId]); return { ok: true, feedback: `${how} ${row.sessionId}` }; } });
   const sender = (id = 1) => ({ sender: { id } });
   return { handlers, copied, opened, exec, api, call: (ch, req, e = sender()) => handlers.get(ch)(e, req) };
@@ -145,7 +149,10 @@ test('copy-resume copies the quoted command for your own ended session and says 
 });
 
 test('copy-resume refuses a session that is still running, a remote or unknown id, a bad shape, another sender, and a second click within half a second', async () => {
-  assert.deepEqual(await rig({ sessions: [ENDED], alive: 'alive' }).call('widget:session-copy-resume', { id: 'c1' }), { ok: false, feedback: "It's still running. Open it instead." });
+  const open = { sessionId: 'o1', cwd: '/p', signal: 'stop', host: HOST, claudePid: 4242 };
+  const refused = rig({ sessions: [open] });
+  assert.deepEqual(await refused.call('widget:session-copy-resume', { id: 'o1' }), { ok: false, feedback: "This session hasn't ended, so there's nothing to resume. Open it instead." });
+  assert.deepEqual(refused.copied, []);
   const r = rig({ sessions: [ENDED, { sessionId: 'x1', cwd: '/p', signal: 'idle', remote: true }] });
   for (const req of [{ id: 'x1' }, { id: 'nope' }]) assert.equal((await r.call('widget:session-copy-resume', req)).ok, false);
   for (const req of [{ id: 'c1', text: 'rm -rf ~' }, 'c1', ['c1'], null, { id: '../c1' }, Object.assign(Object.create({ x: 1 }), { id: 'c1' })]) assert.deepEqual(await r.call('widget:session-copy-resume', req), { ok: false, feedback: '' });
@@ -176,17 +183,28 @@ test('session-open: a fixed set of hows, on your own row re-found by id; nothing
   assert.equal(r.opened.length, 3);
 });
 
-test('cards: copy-resume is offered for an idle session not known to be running, never for a running or waiting one', async () => {
-  const rows = [ENDED, { sessionId: 'w1', cwd: '/p', signal: 'permission-ask', signalSince: ago(4) }, { sessionId: 'k1', cwd: '/q', signal: 'idle', source: 'codex' }];
-  const actions = async (alive) => Object.fromEntries((await rig({ sessions: rows, alive }).handlers.get('widget:session-cards')({})).rows.map((x) => [x.id, x.card.actions]));
-  const gone = await actions('gone');
-  assert.ok(gone.c1.includes('copy-resume'));
-  assert.ok(gone.k1.includes('copy-resume'), "Codex is never called alive, so an idle Codex session is offered");
-  assert.ok(!gone.w1.includes('copy-resume'));
-  const running = await actions('alive');
-  assert.ok(!running.c1.includes('copy-resume') && !running.k1.includes('copy-resume'));
-  const slow = await actions(() => new Promise(() => {}));
-  assert.ok(slow.c1.includes('copy-resume'), 'a liveness check that never answers is bounded and counts as unknown');
+test('ended: session-end, or the recorded process gone on this computer; Stop, idle and unknown never count (C2-M1)', () => {
+  const e = (row) => A.sessionEnded(row, HOST, kill);
+  assert.equal(e({ signal: 'session-end' }), true);
+  assert.equal(e({ signal: 'stop', host: HOST, claudePid: 4242 }), false, 'Stop fires after every turn; the process is at its prompt');
+  assert.equal(e({ signal: 'idle', host: HOST, claudePid: 999 }), true, 'claudePid gone');
+  assert.equal(e({ signal: 'idle', host: HOST, source: 'codex', codexServerPid: 5151 }), false, 'its Codex server is alive');
+  assert.equal(e({ signal: 'idle', host: HOST, source: 'codex', codexServerPid: 998 }), true, 'its Codex server is gone');
+  assert.equal(e({ signal: 'idle', host: HOST, source: 'codex', claudePid: 999 }), false, "Codex is judged by its server's pid only");
+  for (const row of [{ signal: 'idle' }, { signal: 'stop', host: HOST }, { signal: 'idle', host: 'other', claudePid: 999 }, { signal: 'idle', host: HOST, claudePid: 1234 }, { signal: 'idle', host: HOST, claudePid: 1 }, { signal: 'idle', host: HOST, claudePid: '999x' }, { signal: 'idle', host: HOST, source: 'gemini', claudePid: 999 }, { signal: 'session-end', remote: true }, null]) assert.equal(e(row), false, JSON.stringify(row));
+});
+
+test('cards: copy-resume is offered only for a session that has clearly ended, never an open idle one', async () => {
+  const rows = [ENDED,
+    { sessionId: 'st1', cwd: '/p', signal: 'stop', host: HOST, claudePid: 4242 },
+    { sessionId: 'id1', cwd: '/p', signal: 'idle', host: HOST },
+    { sessionId: 'k1', cwd: '/q', signal: 'idle', source: 'codex', host: HOST, codexServerPid: 5151 },
+    { sessionId: 'k2', cwd: '/q', signal: 'idle', source: 'codex', host: HOST, codexServerPid: 998 },
+    { sessionId: 'g1', cwd: '/q', signal: 'stop', host: HOST, claudePid: 999 },
+    { sessionId: 'w1', cwd: '/p', signal: 'permission-ask', signalSince: ago(4), host: HOST, claudePid: 4242 }];
+  const m = await rig({ sessions: rows }).handlers.get('widget:session-cards')({});
+  const offered = m.rows.filter((x) => x.card.actions.includes('copy-resume')).map((x) => x.id).sort();
+  assert.deepEqual(offered, ['c1', 'g1', 'k2']);
 });
 
 // ── the widget, its own code in JSDOM ──────────────────────────────────────

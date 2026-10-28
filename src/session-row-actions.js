@@ -49,6 +49,19 @@ function waitShort(ms) {
   return `${Math.floor(h / 24)}d`;
 }
 
+// Has this session ended? Only a clear answer counts: its hooks said session-end, or the process it recorded on this
+// computer is gone (ESRCH from kill(pid, 0); claudePid for Claude, codexServerPid for Codex). Claude's Stop fires
+// after every turn with the process still at its prompt, so idle or stop never counts, and neither does unknown.
+function sessionEnded(row, host, kill = process.kill.bind(process)) {
+  if (!row || typeof row !== 'object' || row.remote) return false;
+  if (row.signal === 'session-end') return true;
+  if (typeof host !== 'string' || row.host !== host) return false;
+  const source = row.source ?? 'claude';
+  const pid = Number(source === 'claude' ? row.claudePid : source === 'codex' ? row.codexServerPid : NaN);
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try { kill(pid, 0); return false; } catch (e) { return !!e && e.code === 'ESRCH'; }
+}
+
 const FOLDER_APP = { darwin: 'Finder', win32: 'Explorer' };
 const folderApp = (platform) => FOLDER_APP[platform] || 'Files';
 const DEFAULT_EDITOR = 'Visual Studio Code';
@@ -80,4 +93,4 @@ function openFolder(how, cwd, { platform, fs, execFile, shell, editorCommand = n
   return { ok: true, feedback: `${app || DEFAULT_EDITOR} → ${name}` };
 }
 
-module.exports = { resumeCommand, folderLabel, waitShort, openFolder, folderApp, shellQuote, ADAPTER, DEFAULT_EDITOR };
+module.exports = { sessionEnded, resumeCommand, folderLabel, waitShort, openFolder, folderApp, shellQuote, ADAPTER, DEFAULT_EDITOR };

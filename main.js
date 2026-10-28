@@ -2233,7 +2233,7 @@ require('./src/widget-cards-main.js').install({ ipcMain, allowed: widgetOnly, ge
   copyHelp: (h) => explainSvc?.copy(h) ?? { ok: false },
   // QoL2: the card's own actions, on the row main re-found by id.
   home: os.homedir(), platform: process.platform, copyText: (t) => clipboard.writeText(t),
-  liveness: (s) => Terminal.sessionLiveness(s, LOCAL_HOST, (pid, provider) => AgentAwareness.isAiProcess(pid, provider)),
+  ended: (s) => RowActions.sessionEnded(s, LOCAL_HOST),
   openSession: (how, s) => (how === 'terminal' ? openSessionTerminal(s) : RowActions.openFolder(how, s.cwd, folderDeps, savedEditor())) }); // privacy-flow: widget-session-card
 // The card's Open is that session's terminal (not the needing queue's head).
 async function openSessionTerminal(s) {

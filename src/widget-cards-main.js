@@ -17,7 +17,7 @@
 // Everything read here is local session metadata and the person's own usage
 // record; nothing leaves the computer. // privacy-flow: widget-session-card
 const Strip = require('./widget-strip.js');
-const { sessionCard, IDLE } = require('./session-card-view.js');
+const { sessionCard } = require('./session-card-view.js');
 const Actions = require('./session-row-actions.js');
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
@@ -31,16 +31,16 @@ const idOf = (v) => (typeof v === 'string' && ID.test(v) ? v : null);
  */
 /* getExplain(session) → card slice | null; getDeploy(cwd) → deploy row | null;
  * nudgesPaused(id) → bool; copyHelp(handle) → {ok}; resumeNudges(id) → {ok}. All optional.
- * QoL2: home, platform; liveness(row) → 'alive'|'gone'|'unknown' (bounded here); openSession(how, row) → {feedback}
+ * QoL2: home, platform; ended(row) → true only when the session has clearly ended (session-row-actions sessionEnded,
+ * cheap: no process listing); openSession(how, row) → {feedback}
  * for how 'terminal'|'finder'|'editor'; copyText(text). */
 const HOW = new Set(['terminal', 'finder', 'editor']);
-const LIVENESS_MS = 1500;
 const ACTION_GAP_MS = 500;
 const closed = (req, keys) => !!req && typeof req === 'object' && !Array.isArray(req) && Object.getPrototypeOf(req) === Object.prototype
   && Object.keys(req).length === keys.length && keys.every((k) => Object.hasOwn(req, k));
 function install({ ipcMain, getSessions = () => [], getSpend = () => null, config, allowed = () => true, now = Date.now, collapseAfter,
   getExplain = () => null, getDeploy = () => null, nudgesPaused = () => false, copyHelp = () => ({ ok: false }), resumeNudges = () => ({ ok: false }),
-  home = null, platform = process.platform, liveness = null, openSession = null, copyText = null } = {}) {
+  home = null, platform = process.platform, ended = () => false, openSession = null, copyText = null } = {}) {
   if (!config || typeof config.load !== 'function' || typeof config.save !== 'function') throw new Error('widget-cards-main: config {load, save} required');
   const pinned = () => idOf(config.load().widgetPinnedSession);
   const sessionsOf = async () => {
@@ -48,15 +48,9 @@ function install({ ipcMain, getSessions = () => [], getSpend = () => null, confi
     try { got = await getSessions(); } catch { got = []; }
     return { got, sessions: Array.isArray(got) ? got : Array.isArray(got?.sessions) ? got.sessions : [] };
   };
-  // Is the session still running? Bounded; anything but a clear answer is 'unknown'.
-  async function aliveness(row) {
-    if (typeof liveness !== 'function') return 'unknown';
-    let timer;
-    try { return await Promise.race([liveness(row), new Promise((r) => { timer = setTimeout(() => r('unknown'), LIVENESS_MS); })]); } catch { return 'unknown'; } finally { clearTimeout(timer); }
-  }
-  // Offered only for an idle session of your own that is not known to be running: resuming a running one would
-  // start a second process on the same conversation.
-  const resumable = async (row) => !!(row && !row.remote && IDLE.has(row.signal) && Actions.resumeCommand(row) && (await aliveness(row)) !== 'alive');
+  // Offered only for a session of your own that has clearly ended: resuming one that is still open would start a
+  // second process on the same conversation. The same rule is checked again on the click.
+  const resumable = (row) => { try { return !!(row && !row.remote && Actions.resumeCommand(row) && ended(row) === true); } catch { return false; } };
 
   async function cards() {
     const { got, sessions } = await sessionsOf();
@@ -71,7 +65,7 @@ function install({ ipcMain, getSessions = () => [], getSpend = () => null, confi
       const own = !r.team && r.session;
       const quiet = (fn) => { try { return fn() || null; } catch { return null; } };
       const card = sessionCard(r.session, { now: at, spend, teammate: r.team ? { name: r.name } : null, home, platform,
-        resumable: !!(own && copyText && (await resumable(r.session))),
+        resumable: !!(own && copyText && resumable(r.session)),
         explain: own ? quiet(() => getExplain(r.session)) : null,
         deploy: own && typeof r.session.cwd === 'string' ? quiet(() => getDeploy(r.session.cwd)) : null,
         nudgesPaused: !!(own && r.id && quiet(() => nudgesPaused(r.id))) });
@@ -118,7 +112,7 @@ function install({ ipcMain, getSessions = () => [], getSpend = () => null, confi
     if (!row || typeof copyText !== 'function') return GONE;
     const text = Actions.resumeCommand(row);
     if (!text) return { ok: false, feedback: "Plexiform can't make a resume command for this session." };
-    if ((await aliveness(row)) === 'alive') return { ok: false, feedback: "It's still running. Open it instead." };
+    if (!resumable(row)) return { ok: false, feedback: "This session hasn't ended, so there's nothing to resume. Open it instead." };
     copyText(text);
     return { ok: true, feedback: 'Copied the resume command.' };
   }

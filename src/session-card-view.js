@@ -63,8 +63,8 @@ function deployLine(deploy) {
  * explain: {recap:{headline, line}|null, help:[{label, handle}], why} from explain mode, or null.
  * deploy: the project's deploy row (see deployLine), or null. nudgesPaused: a
  * "pause nudges" rule holds this burning session's nudges.
- * QoL2: home (the home folder, for `~`), platform (names the file manager), resumable (main found the session not
- * running and has a resume command for it: only then is copy-resume offered, and only on an idle card).
+ * QoL2: home (the home folder, for `~`), platform (names the file manager), resumable (main found the session has
+ * ended and has a resume command for it: only then is copy-resume offered).
  * → {id, title, state, model, spend, teammate, actions, waiting, idle, remote, recap, deploy, help, helpWhy, nudgesPaused,
  *    folder, folderApp, waitFor}
  */
@@ -101,7 +101,7 @@ function sessionCard(session, { now = Date.now(), spend = null, teammate = null,
   const actions = [];
   if (own) actions.push('open');
   if (own && waiting) actions.push('answer');
-  if (own && idle && resumable === true) actions.push('copy-resume');
+  if (own && resumable === true) actions.push('copy-resume');
   if (own && folder) actions.push('finder', 'editor');
   if (!mate) actions.push(s.pinned ? 'unpin' : 'pin');
   const paused = !mate && nudgesPaused === true;
