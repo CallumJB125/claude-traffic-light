@@ -681,7 +681,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
   // from this: one relay call (listShared), the same entries a sidebar row id is derived from.
   async function sharedEntries(viewerArg) {
     const result = { teams: [] };
-    if (!sameViewer(viewerArg)) return result;
+    if (!sameViewer(viewerArg)) return { ...result, viewerChanged: true };
     const all = await listShared();
     // Every listed team: a sidebar row's team is chosen by teamsOf's order, and the row id doesn't depend on order.
     const ids = [];

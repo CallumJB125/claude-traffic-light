@@ -174,7 +174,7 @@ function createSessionFollowups({ file, storage, scope, now = Date.now, onChange
           if (item.schedule?.atMs > now()) continue;
           let target;
           try { target = await resolve(copy(item.target)); } catch { target = null; }
-          // The resolver may hold a per-session lock until this item is finished.
+          let release = null;
           try {
           if (!current(s)) return;
           if (!target?.ok || target.current?.() !== true || typeof target.send !== 'function') {
@@ -195,6 +195,8 @@ function createSessionFollowups({ file, storage, scope, now = Date.now, onChange
             continue;
           }
           if (!target.ready) { if (item.status !== 'queued') await update(item, { status: 'queued', reason: 'Waiting for the original session to finish its current turn.' }, s); continue; }
+          // Another action on this session holds its lock: stay queued, never refused.
+          if (typeof target.acquire === 'function') { release = target.acquire(); if (typeof release !== 'function') continue; }
           const authorityCurrent = () => current(s) && now() < item.createdAt + MAX_AGE_MS && (!item.schedule?.atMs || now() >= item.schedule.atMs) && target.current() === true;
           const fresh = () => authorityCurrent() && evidenceCurrent();
           await update(item, { status: 'sending', reason: 'Dispatching; provider acknowledgement has not arrived.' }, s, fresh);
@@ -213,7 +215,7 @@ function createSessionFollowups({ file, storage, scope, now = Date.now, onChange
           // Save the receipt in its original account even if the UI switched.
           // No subsequent entry is dispatched under the new account.
           await update(item, fields, s, () => !closed);
-          } finally { try { target?.release?.(); } catch { /* lock already gone */ } }
+          } finally { try { release?.(); } catch { /* lock already gone */ } }
         }
       } catch { /* Preserve ciphertext and pending intent; list reports vault errors. */ }
     });},

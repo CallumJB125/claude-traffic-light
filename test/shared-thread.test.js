@@ -412,7 +412,7 @@ test('hub client: sharedEntries is one list read (no state, account or board rea
   assert.deepEqual(calls, ['/api/interaction/v1/shared'], 'one relay list call');
   assert.deepEqual(got.teams.map((t) => [t.id, t.name, t.entries.length]), [['team-1', 'One', 1]]);
   assert.equal(got.teams[0].entries[0].ref, UUID1);
-  assert.deepEqual(await hub.sharedEntries({ id: 'someone-else' }), { teams: [] }, 'another viewer gets nothing');
+  assert.deepEqual(await hub.sharedEntries({ id: 'someone-else' }), { teams: [], viewerChanged: true }, 'another viewer gets nothing, and the caller can tell why');
   const out = await hub.inspect(hub.viewer(), 'team-1', UUID1);
   assert.equal(out.ok, true);
   assert.deepEqual(out.share, { scope: 'watch', expiresAt: '2030-01-01T00:00:00.000Z' });

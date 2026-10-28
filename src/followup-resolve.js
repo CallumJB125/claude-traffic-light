@@ -11,6 +11,7 @@ const MSG = {
   signIn: 'Sign in to continue.',
   signInAgain: 'Sign in again to continue.',
   other: "Signed in as someone else; this follow-up won't be sent.",
+  wrongAccount: 'Signed in as someone else. Waiting for the original account.',
   gone: 'The share is no longer available. Nothing will be sent.',
   watch: "The owner changed this share to watch only; this follow-up won't be sent.",
   offline: "The owner's computer is offline. Waiting.",
@@ -27,7 +28,8 @@ async function resolveFollowup(t, { teamHub, local, scope, gate = () => true, no
   if (t.kind === 'owned') return local?.resolve?.(t, fresh) ?? { ok: false, terminal: true, error: 'The original session is no longer held by Plexiform.' };
   const r = t.route, hub = safe(teamHub, null), viewer = viewerOf(hub);
   if (!hub || hub.origin !== r.origin || !viewer) return { ok: false, error: MSG.signIn };
-  if (viewer.id !== r.viewer) return { ok: false, terminal: true, error: MSG.other };
+  // Not terminal here: one reading is not proof (an account switch passes through it). The stable two-pass sweep is the only terminal path.
+  if (viewer.id !== r.viewer) return { ok: false, error: MSG.wrongAccount };
   const current = () => fresh() && safe(teamHub, null) === hub && viewerOf(hub)?.id === r.viewer;
   let out;
   try { out = await hub.inspect(viewer, r.team, r.ref); } catch { return { ok: false, error: 'The shared session is temporarily unavailable.' }; }
@@ -38,7 +40,7 @@ async function resolveFollowup(t, { teamHub, local, scope, gate = () => true, no
     // A 404 also means the owner's computer is offline: only the hub's own list says whether the share is gone.
     let entry = null, listed;
     try { listed = await hub.sharedEntries(viewer); } catch { return { ok: false, error: clean(out?.error, 400) || MSG.offline }; }
-    if (!current()) return { ok: false, error: 'The view or account changed.' };
+    if (!current() || listed?.viewerChanged === true) return { ok: false, error: 'The view or account changed.' };
     for (const team of Array.isArray(listed?.teams) ? listed.teams : []) for (const e of Array.isArray(team?.entries) ? team.entries : []) if (e?.ref === r.ref) entry = { ...e, teamId: team.id };
     if (!entry || entry.teamId !== r.team || entry.owner?.id === viewer.id || expired(entry.share?.expiresAt, now)) return { ok: false, terminal: true, error: MSG.gone };
     return { ok: false, error: MSG.offline };
@@ -50,11 +52,10 @@ async function resolveFollowup(t, { teamHub, local, scope, gate = () => true, no
   if (s.capabilities?.newTurn !== true || typeof hub.act !== 'function') return { ok: false, terminal: true, error: MSG.newTurn };
   // Idle only: a working session keeps the item queued; a queued item never steers or interrupts.
   const idle = s.status === 'ready' && s.activeTurn === null;
-  // The lock is held from here until the pump is done with this item (release), so no other action on the session
-  // can start between the durable marker and the send; if another action holds it, the item waits.
-  const release = idle ? takeLock({ hub, viewer, team: r.team, ref: r.ref }) : null;
+  // Nothing is locked here (Overview's review and enqueue call this too). The pump calls acquire() right before the
+  // durable marker and releases in its finally, so no other action starts between marker and send; null = waits.
   return {
-    ok: true, ready: idle && release !== null, current, release: release ?? undefined,
+    ok: true, ready: idle, current, acquire: () => takeLock({ hub, viewer, team: r.team, ref: r.ref }),
     send: (text, id, keep) => hub.act(viewer, r.team, r.ref, { operation: 'send', generation: t.generation, turn: null, text }, id, () => current() && keep()),
   };
 }

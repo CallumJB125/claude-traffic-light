@@ -44,12 +44,12 @@ function world(over = {}) {
   w.resolve = t => resolveFollowup(t, { teamHub: () => w.hub, local: null, scope: () => w.scope, now: () => Date.parse('2025-01-01T00:00:00Z') });
   return w;
 }
-const run = async (w, t = teamTarget()) => { const r = await w.resolve(t); r.release?.(); return r; };
+const run = async (w, t = teamTarget()) => w.resolve(t);
 
-test('resolver: a different account on the same hub is terminal, signed out only waits', async () => {
+test('resolver: a different account on the same hub waits (the sweep drops it), signed out only waits', async () => {
   const w = world({ viewer: { id: 'mallory' } });
   const r = await run(w);
-  assert.equal(r.ok, false); assert.equal(r.terminal, true); assert.equal(r.error, MSG.other); assert.deepEqual(w.calls, []);
+  assert.equal(r.ok, false); assert.notEqual(r.terminal, true, 'one reading is not proof; the sweep decides'); assert.equal(r.error, MSG.wrongAccount); assert.deepEqual(w.calls, []);
   w.viewer = null; const out = await run(w);
   assert.equal(out.ok, false); assert.notEqual(out.terminal, true); assert.equal(out.error, MSG.signIn);
   w.viewer = { id: 'alice' }; w.hub.origin = 'https://other.example';
@@ -87,11 +87,13 @@ test('resolver: watch-only or expired share, and a changed session, are terminal
 
 test('resolver: only an idle session is ready, and an action already running on it makes the item wait', async () => {
   const w = world(); w.state = { ...w.state, status: 'working', activeTurn: SESSION_STATE };
-  let r = await w.resolve(teamTarget()); assert.equal(r.ok, true); assert.equal(r.ready, false); assert.equal(r.release, undefined);
+  let r = await w.resolve(teamTarget()); assert.equal(r.ok, true); assert.equal(r.ready, false);
   w.state = { ...w.state, status: 'ready', activeTurn: null };
-  const first = await w.resolve(teamTarget()); assert.equal(first.ready, true);
-  const second = await w.resolve(teamTarget()); assert.equal(second.ready, false, 'lock held by the first');
-  first.release(); const third = await w.resolve(teamTarget()); assert.equal(third.ready, true); third.release();
+  // resolving (Overview review/enqueue do this) takes no lock
+  for (let i = 0; i < 3; i++) assert.equal((await w.resolve(teamTarget())).ready, true);
+  const first = (await w.resolve(teamTarget())).acquire(); assert.equal(typeof first, 'function');
+  assert.equal((await w.resolve(teamTarget())).acquire(), null, 'held by the first');
+  first(); const again = (await w.resolve(teamTarget())).acquire(); assert.equal(typeof again, 'function'); again();
   assert.equal(w.acts.length, 0);
 });
 
@@ -108,7 +110,7 @@ test('dispatch: one send, lock released, and a flip after the durable marker is 
 });
 
 test('terminal identity or permission refusals clear the text at once; a waiting item keeps it', async t => {
-  const v = vault(t), q = v.open(), w = world({ viewer: { id: 'mallory' } });
+  const v = vault(t), q = v.open(), w = world({ share: { scope: 'watch', expiresAt: null } });
   await q.enqueue(req(teamTarget(), 'SECRET-TEXT')); await q.advance(w.resolve);
   let d = await v.disk(); assert.equal(d.entries[0].status, 'refused'); assert.equal(d.entries[0].text, '');
   const v2 = vault(t), q2 = v2.open(), w2 = world(); w2.state = { ...w2.state, status: 'working', activeTurn: SESSION_STATE };
@@ -242,4 +244,20 @@ test('the review notice says what the main pump does only when it is the one run
   const svc = read('src/overview-service.js'), om = read('src/overview-main.js');
   assert.match(svc, /\$\{backgroundFollowups\?'Sent once, when the session is idle, while Plexiform is running and you are signed in as you\. If the share ends, becomes watch-only or you sign in as someone else, it is dropped and not sent\.':'Keep Plexiform open/);
   assert.match(om, /backgroundFollowups:chatPreview===true/);
+});
+
+test('a held session lock keeps the item queued with the text; the lock is released after the send', async t => {
+  const v = vault(t), q = v.open(), w = world();
+  await q.enqueue(req(teamTarget()));
+  const held = (await w.resolve(teamTarget())).acquire();
+  await q.advance(w.resolve);
+  assert.equal(w.acts.length, 0); const d = await v.disk(); assert.equal(d.entries[0].status, 'queued'); assert.equal(d.entries[0].text, 'PRIVATE canary');
+  held(); await q.advance(w.resolve); assert.equal(w.acts.length, 1);
+  const free = (await w.resolve(teamTarget())).acquire(); assert.equal(typeof free, 'function'); free();
+});
+
+test('a viewer change seen by the list read never reads as "share gone"', async () => {
+  const w = world({ inspectResult: { ok: false, status: 'stale', error: 'x' } });
+  w.listed = () => ({ teams: [], viewerChanged: true });
+  const r = await run(w); assert.notEqual(r.terminal, true);
 });
