@@ -14,7 +14,7 @@ const Tmux = require('./focus/tmux.js');
 const Permission = require('./focus/permission.js');
 const Jump = require('./focus/jump.js');
 const GhosttyDock = require('./ghostty-dock.js');
-const { writeJsonAtomic } = require('../hooks/session-state.js');
+const { writeJsonAtomic, processGone } = require('../hooks/session-state.js');
 const PowerShell = require('./powershell.js');
 const LinuxActivate = require('./linux-activate.js');
 
@@ -210,7 +210,25 @@ async function adoptIntoDock(s, { mode, dock: Dock = GhosttyDock, detect = Dock.
 
 // Getters, because main.js requires this module before it has worked out its
 // home folder (a demo run moves it) or its host tag.
-module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = () => 'auto' }) => {
+// QoL1: is the session's own long-lived process still running? Claude only: Codex's app-server can outlive its
+// thread, so it is never called alive. Gone is ESRCH on a pid recorded on this computer (processGone); alive also
+// needs that pid to still be a real claude process (agent-awareness's checks), so a reused pid is never alive.
+async function sessionLiveness(s, localHost, isAiProcess) {
+  if (!s || (s.source ?? 'claude') !== 'claude' || s.host !== localHost) return 'unknown';
+  if (processGone(s, localHost)) return 'gone';
+  const pid = Number(s.claudePid);
+  if (!Number.isInteger(pid) || pid <= 1 || typeof isAiProcess !== 'function') return 'unknown';
+  return (await isAiProcess(pid, 'claude')) ? 'alive' : 'unknown';
+}
+
+// Open-only terminals (src/focus/jump.js OPEN_ONLY): by bundle id, bounded.
+function openBundle(id) {
+  return new Promise((resolve) => {
+    execFile('/usr/bin/open', ['-b', id], { timeout: 2500, killSignal: 'SIGKILL' }, (err) => resolve(!err)); // privacy-flow: terminal-jump
+  });
+}
+
+module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = () => 'auto', isAiProcess = null }) => {
   // ── Jump to the exact tab ─────────────────────────────────────────────────
   // The session file says where the session's tab is (hooks/terminal-id.js);
   // src/focus/ has one adapter per terminal. On macOS, anything short of a
@@ -234,6 +252,8 @@ module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = 
       focus: (s, over) => Focus.focusSession(s, { ...over, ghosttyDock: s && s.hostApp === GhosttyDock.APP && getGhosttyDockMode() !== 'off' ? GhosttyDock.detect() : null }),
       adopt: (s) => adoptIntoDock(s, { mode: getGhosttyDockMode() }),
       activate: activateTerminalApp,
+      liveness: (s) => sessionLiveness(s, getLocalHost(), isAiProcess),
+      openApp: openBundle,
       explainer,
       log: (msg) => console.log(`[jump] ${msg}`),
     });
@@ -255,6 +275,8 @@ module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = 
   }
 
   return {
+    sessionLiveness,
+    showNote,
     TERMINAL_APPS,
     escapeForAppleScript,
     activateTerminalApp,

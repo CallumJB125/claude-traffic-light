@@ -201,7 +201,7 @@ test('Ghostty: focuses the one terminal in the folder the session started in, pa
   assert.equal((await Ghostty.focus(s, { exec })).ok, true);
   assert.deepEqual(calls[0].args, ['-e', Ghostty.SCRIPT, '/Users/me/my "quoted" proj']);
   const { exec: exec2 } = fakeExec(() => ({ ok: true, stdout: 'matches: 2' }));
-  assert.deepEqual(await Ghostty.focus(s, { exec: exec2 }), { ok: false, reason: 'matches: 2' });
+  assert.deepEqual(await Ghostty.focus(s, { exec: exec2 }), { ok: false, reason: 'matches: 2', ambiguous: 2 }, 'QoL1: several tabs in that folder, counted');
   for (const bad of ['relative/dir', '/a/../b', '/a\nb', '-n', '', null]) {
     assert.equal(Ghostty.canHandle({ ...s, terminal: { ...s.terminal, cwd: bad } }, ctxOf()), false, String(bad));
   }

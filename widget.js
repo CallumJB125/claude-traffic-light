@@ -611,7 +611,8 @@ function laneRow(r) {
   b.addEventListener('click', async (e) => {
     e.stopPropagation();
     if (!LANE_GO.has(r.kind)) return;
-    if (r.inputId) { window.trafficLight.openInput(r.inputId); return; }
+    // QoL1: the input's own jump says why when it switched nothing, like every other click here.
+    if (r.inputId) { const o = await window.trafficLight.openInput(r.inputId).catch(() => null); if (o && o.note) showFeedback(o.note); return; }
     const res = await window.trafficLight.goToNeedingSession().catch(() => null);
     if (res && res.feedback) showFeedback(res.feedback);
   });

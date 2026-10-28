@@ -1247,7 +1247,9 @@ function boardAnswer(board) {
   // GET /status and other AI-facing listings: is this session's folder shown? Unresolved is not.
   const visible = (s) => !!s && verdicts.get(`${String(s.source || 'claude')}|${s.sessionId}`) === true;
 
-  return { gitInfo, build, refresh, schedule, start, stop, invalidate, visible, rosterFile, classify, bindCaller, busOp, relay, syncNotes, peersForTask, ackNotices: () => ackNotices(lastRoster ? lastRoster.self : {}) };
+  // QoL1: a click's "is this session still running?" check (src/terminal.js): the same process checks, as a yes/no.
+  const isAiProcess = (pid, provider) => (Number.isInteger(pid) && pid > 1 && ['claude', 'codex'].includes(provider) ? aiProcess(pid, provider).then(Boolean, () => false) : Promise.resolve(false));
+  return { isAiProcess, gitInfo, build, refresh, schedule, start, stop, invalidate, visible, rosterFile, classify, bindCaller, busOp, relay, syncNotes, peersForTask, ackNotices: () => ackNotices(lastRoster ? lastRoster.self : {}) };
 }
 
 module.exports = { create, CARD_LIMITS, REAL_WORK_MS, normalize, handleFor, allowedExe, parseLsof, lsofFiles, statusOf, interactiveOf, DEFAULTS, SESSION_FIELDS, HEARTBEAT_MS, DEBOUNCE_MS, BUILD_TIMEOUT_MS, BURST_WINDOW_MS, GROUP_BUMP_MS };

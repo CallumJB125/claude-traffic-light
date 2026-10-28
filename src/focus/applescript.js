@@ -10,4 +10,10 @@ async function runScript(exec, script, args) {
   return { ok: false, reason: out || 'no match' };
 }
 
-module.exports = { runScript };
+// Ghostty's folder match: "matches: N" with N > 1 is several tabs in one folder, said as such (QoL1).
+function folderMatches(r) {
+  const m = !r.ok && /^matches: (\d{1,4})$/.exec(r.reason || '');
+  return m && Number(m[1]) > 1 ? { ...r, ambiguous: Number(m[1]) } : r;
+}
+
+module.exports = { runScript, folderMatches };
