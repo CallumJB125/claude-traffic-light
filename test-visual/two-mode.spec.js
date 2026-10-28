@@ -12,10 +12,9 @@ const { launchApp, windowByFile, embedded, openSettingsPane } = require('./app')
 const GATE = { CLAUDE_TRAFFIC_LIGHT_CHAT_PREVIEW: '1' };
 const ROW = { provider: 'Claude Code', project: 'website', group: { key: 'k', heading: 'website', sub: null }, bucket: 'working', status: 'Working', freshness: 'recent', age_ms: 60000 };
 const STILL = '*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }';
-// The one element left out, with why: Overview's interaction-host line. Every Settings save re-syncs that host (the
-// old page names every key, remoteInteractionHost included), and whether the line then reads "unavailable" depends on
-// when the host is back, not on this toggle. Its text is blanked and the element hidden in both A and B alike.
-const MASK = ['#owned-status'];
+// Nothing is masked any more: Overview's interaction-host line used to read "unavailable" after a Settings save and
+// never cleared (L25); it now needs two failed reads in a row and clears on the first good one.
+const MASK = [];
 
 async function settle(page) {
   await page.emulateMedia({ reducedMotion: 'reduce' });

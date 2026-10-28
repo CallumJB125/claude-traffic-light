@@ -4,6 +4,7 @@ For macOS (Apple silicon and Intel) and Linux (x64).
 
 What changed
 
+- Overview no longer sticks on "Plexiform session state is unavailable right now" after a Settings save: it appears only after two failed reads in a row and goes away on the first good one.
 - A teammate's shared session now opens as a watch-only chat when you click it under Shared with you in the sidebar (chat-first preview): who shared it, what it is doing now, and the messages sent through the share with each reply. You can't send from it yet; use Team sessions for that.
 - Your teammates no longer see you as viewing a session after you minimise Plexiform, leave Team sessions or sign out.
 - When you open a teammate's shared session, its owner can see you're watching while it's open and on screen; the session's thread says so. As the owner, you see who is watching on the session in Overview and on its thread (chat-first preview). Nothing about who watched is kept. On a team hub that doesn't support this yet, nobody is shown as watching and the thread doesn't say it.

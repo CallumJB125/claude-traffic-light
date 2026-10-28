@@ -184,7 +184,9 @@ test('Owned UI: rows never vanish — unreadable state keeps the card; a reloade
     s.type('hello'); s.btn('Send').click(); await tick();
     s.setReadable(false); await s.poll();
     assert.ok(s.card(), 'card kept when state cannot be read');
-    assert.match(s.doc.getElementById('owned-status').textContent, /Showing the last known state/);
+    assert.doesNotMatch(s.doc.getElementById('owned-status').textContent, /Showing the last known state/, 'one failed read says nothing yet');
+    await s.poll();
+    assert.match(s.doc.getElementById('owned-status').textContent, /Showing the last known state/, 'two in a row do');
     s.setReadable(true);
     s.ctx.document = 2; // a new document of the same contents: the old actor is reaped
     await s.poll();
@@ -524,4 +526,34 @@ test('Bridge: fan-out is a closed projection — duplicates, >6 targets, forged 
   for (const r of [{ sessions: [t(1), t(1)], text: 'x' }, { sessions: [1, 2, 3, 4, 5, 6, 7].map(t), text: 'x' }, { sessions: [], text: 'x' }, { sessions: [t(1)], text: 'x', board: 'b' },
     { sessions: [{ ...t(1), actor: 'a' }], text: 'x' }, { sessions: [{ session: 'nope', generation: 1 }], text: 'x' }, { sessions: [t(1)], text: ' ' }, { sessions: [t(1)], text: 'a'.repeat(4001) }, { sessions: t(1), text: 'x' }, null]) assert.equal((await ix.fanout(r)).status, 'invalid');
   assert.equal(calls.length, before);
+});
+
+test('L25: the unavailable sentence clears on the first good read, and a good read never wipes another message', async () => {
+  const s = stack();
+  try {
+    const status = () => s.doc.getElementById('owned-status').textContent;
+    await s.ready(); await s.start();
+    s.setReadable(false); await s.poll(); await s.poll();
+    assert.match(status(), /unavailable right now/);
+    s.setReadable(true); await s.poll();
+    assert.equal(status(), '', 'cleared by one good read');
+    // A single blip after a good read is silent again; a good read leaves other messages alone.
+    s.setReadable(false); await s.poll();
+    assert.equal(status(), '');
+    s.setReadable(true); await s.poll();
+    s.btn('Close session').click(); await tick();
+    assert.match(status(), /Session closed/);
+    await s.poll(); await s.poll();
+    assert.match(status(), /Session closed/, 'a good read does not wipe "Session closed."');
+    // unavailable sentence, then another message, then a good read: the other message stays.
+    s.setReadable(false); await s.poll(); await s.poll();
+    assert.match(status(), /unavailable right now/);
+    await s.start(); // "Starting a …" / "… started." overwrites the sentence
+    s.setReadable(true); await s.poll();
+    assert.doesNotMatch(status(), /unavailable right now/);
+    assert.notEqual(status(), '', 'a good read does not wipe the start message');
+    // Failures must be consecutive: a good read in between resets the count.
+    s.setReadable(false); await s.poll(); s.setReadable(true); await s.poll(); s.setReadable(false); await s.poll();
+    assert.match(status(), /session started/, 'not consecutive, so not shown');
+  } finally { s.close(); }
 });
