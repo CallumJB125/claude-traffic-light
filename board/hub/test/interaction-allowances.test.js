@@ -184,6 +184,18 @@ test('T4d host authority: an allowance the hub invents is never honoured and is 
     assert.notEqual(res.body?.result?.ok, true);
     await r.mac.listShares();
     await until(() => rows(r, share.id).length === 0);
+    // Interrupt has no later re-check: the Mac's admission check is its only gate. A held turn must not be stopped by an invented row.
+    await r.ownerSend(s, 'HOLD');
+    const turn = await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).activeTurn);
+    r.h.db.insert('interaction_allowances', { share_id: share.id, user_id: r.bob.user, granted_at: r.h.hub.iso(), expires_at: new Date(r.h.hub.wallMs() + 600000).toISOString(), granted_by: r.macA.user });
+    const stop = await r.call(r.bob, share.id, 'interrupt', { session: s.session, generation: s.generation, turn });
+    assert.notEqual(stop.body?.result?.status, 'interrupt-requested', JSON.stringify(stop.body));
+    await new Promise((res) => setTimeout(res, 150));
+    assert.equal(r.mac.hub.state({ session: s.session }, r.mac.actor).activeTurn, turn, 'the turn is still running');
+    assert.ok(!r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.some((d) => d.state === 'interrupted'));
+    r.h.db.run('DELETE FROM interaction_allowances WHERE share_id = ?', share.id);
+    await r.mac.hub.interrupt({ session: s.session, generation: s.generation, turn }, r.mac.actor);
+    await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).activeTurn === null);
     // A real grant, then a revoke that does not wait for the hub.
     assert.equal((await r.mac.grantAllowance({ share: share.id, user: r.bob.user, seconds: 900 })).ok, true);
     assert.equal((await r.call(r.bob, share.id, 'send', SEND(s, 'one'))).status, 200);

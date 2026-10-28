@@ -465,7 +465,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
       // The hub advertised the route, so a 404 means the share is gone or the hub was rolled back.
       if (r?.status === 404) return refuse('stale', 'This share changed. Look again.');
       const a = r?.body?.allowance, until = typeof a?.expires_at === 'string' ? Date.parse(a.expires_at) : NaN;
-      if (r?.status !== 200 || !object(a) || a.user_id !== user || !Number.isFinite(until) || until <= clock() || until > clock() + (seconds + 60) * 1000) return hubError(r, 'The hub did not accept that.');
+      if (r?.status !== 200 || !object(a) || a.user_id !== user || !Number.isFinite(until) || until <= clock() || until > clock() + seconds * 1000 + 600_000) return hubError(r, 'The hub did not accept that.');
       if (!liveShare(sh) || shares.get(share) !== sh) return REFUSED.gone;
       // Only after the hub said yes, and with the hub's own expiry (never a time computed here).
       sh.allow.set(user, { until, iso: a.expires_at, at: clock() });
