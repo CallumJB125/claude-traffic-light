@@ -166,8 +166,11 @@ test('main: channels are Settings › Terminal only, Test is gated to the four n
   assert.match(mainSrc, /which !== 'automation' && which !== 'accessibility'/);
   assert.match(mainSrc, /isTrustedAccessibilityClient\(false\)/);
   assert.doesNotMatch(mainSrc, /isTrustedAccessibilityClient\(true\)/, 'reading never prompts');
-  assert.match(mainSrc, /if \(id === 'terminal-access-open'\) \{ openBuddy\('settings:terminal'\);/);
-  assert.match(mainSrc, /if \(d === 'terminal-access'\) \{ if \(!IS_MAC\) return false; openBuddy\('settings:terminal'\); return true; \}/);
+  assert.match(mainSrc, /if \(id === 'terminal-access-open'\) \{ openSettingsAt\('terminal-access'\);/);
+  assert.match(mainSrc, /if \(d === 'terminal-access'\) \{ if \(!IS_MAC\) return false; openSettingsAt\('terminal-access'\); return true; \}/);
+  // Preview on: the Terminal pane; off: the old page's Advanced section (settings.js onShowSection).
+  assert.match(mainSrc, /'terminal-access': 'terminal' \}\);/);
+  assert.match(read('settings.js'), /if \(id === 'terminal-access'\) \{ showSection\('advanced'\); window\.loadTerminalAccess\?\.\(\);/);
   const term = read('src/terminal.js');
   assert.match(term, /execFile\('\/usr\/bin\/lsappinfo', \['info', '-only', 'pid', '-app', bundle\]/);
   assert.match(term, /access: \(app, state\) => access\.record\(app, state\)/);
@@ -182,6 +185,8 @@ test('renderer: rows are built with textContent, Test only where the row offers 
   assert.match(block, /if \(acts\.includes\('test'\)\)/);
   assert.match(block, /'terminal-access', 'terminal-access-title'\]\) document\.getElementById\(id\)\.hidden = !list\.childElementCount/);
   const html = read('settings.html');
-  assert.match(html, /<h2 data-pane="terminal" id="terminal-access-title">Terminal access<\/h2>/);
+  // Hidden until rows arrive, so a page that never asks (the old Preferences page, other OSes) shows nothing.
+  assert.match(html, /<h2 data-pane="terminal" id="terminal-access-title" hidden>Terminal access<\/h2>/);
+  assert.match(html, /<div class="field" data-pane="terminal" id="terminal-access" hidden>/);
   assert.match(read('onboarding.html'), /id="terminal-access-box" hidden/);
 });

@@ -2309,7 +2309,7 @@ ipcMain.handle('team-hint-done', (e, open) => {
 
 // Preferences at one of its sections. Dev chat preview: the pane that holds the section (a closed table, so a
 // caller can only name a pane through it). Otherwise exactly the old page and its show-section push.
-const SECTION_PANE = Object.freeze({ widget: 'widget', health: 'advanced' });
+const SECTION_PANE = Object.freeze({ widget: 'widget', health: 'advanced', 'terminal-access': 'terminal' });
 function openSettingsAt(section) {
   const pane = CHAT_PREVIEW === true && Object.prototype.hasOwnProperty.call(SECTION_PANE, section) ? SECTION_PANE[section] : null;
   if (pane) { openBuddy(`settings:${pane}`); if (section === 'health') buddyWin?.sendToPage(`settings:${pane}`, 'show-section', section); return; }
@@ -2928,12 +2928,12 @@ ipcMain.handle('onboarding:budget', (e, dollars) => {
   return commitConfig({ spend: { ...loadConfig().spend, dailyBudget: dollars } }).spend.dailyBudget;
 });
 // The pages setup may open: Home (which also ends setup), AI tools, the two team flows and (QoL4b) Settings › Terminal,
-// which only shows what macOS has allowed: opening it asks macOS nothing.
+// (Preferences › Advanced on the old page), which only shows what macOS has allowed: opening it asks macOS nothing.
 ipcMain.handle('onboarding:navigate', (e, ...args) => {
   if (!onboardingOnly(e) || args.length !== 1 || typeof args[0] !== 'string') return false;
   const d = args[0];
   if (/^aitools(:[a-z]{2,12})?$/.test(d)) return aiToolsOpen(d);
-  if (d === 'terminal-access') { if (!IS_MAC) return false; openBuddy('settings:terminal'); return true; }
+  if (d === 'terminal-access') { if (!IS_MAC) return false; openSettingsAt('terminal-access'); return true; }
   if (!['home', 'join', 'create-team'].includes(d)) return false;
   openBuddy(d === 'home' ? homePage() : d);
   if (d === 'home') onboardingWin?.close();
@@ -5477,17 +5477,20 @@ GhosttyDockInstall.register({ utilityHandle, allowed: (e) => settingsPane('termi
 // Settings › Terminal → Terminal access (QoL4b, src/terminal-access.js). Reading it never brings up a macOS prompt: files on
 // disk, isTrustedAccessibilityClient(false), and what jumps have seen. Only Test can, on a click, for a running app.
 const TerminalAccess = require('./src/terminal-access.js');
+// A visual run shows the same rows on every machine: Terminal only (every Mac has it), Accessibility off.
+const TERMINAL_ACCESS_FIXED = DEMO === 'visual' && !app.isPackaged;
 function terminalAccessRows() {
   if (!IS_MAC) return [];
   const home = os.homedir();
   const onDisk = (p) => { try { return fs.existsSync(p.startsWith('~/') ? path.join(home, p.slice(2)) : p); } catch { return false; } };
   const installed = (app) => {
+    if (TERMINAL_ACCESS_FIXED) return app === 'Terminal';
     if (app === GhosttyDock.APP) return !!(GhosttyDock.current() || {}).installed;
     const paths = TerminalAccess.AUTOMATION[app] ? TerminalAccess.AUTOMATION[app].paths : TerminalAccess.NO_PERMISSION[app] || [];
     return paths.some(onDisk);
   };
   let trusted = false;
-  try { trusted = systemPreferences.isTrustedAccessibilityClient(false) === true; } catch { trusted = false; }
+  try { trusted = !TERMINAL_ACCESS_FIXED && systemPreferences.isTrustedAccessibilityClient(false) === true; } catch { trusted = false; }
   return TerminalAccess.view({ installed, trusted, seen: Terminal.terminalAccess.seen() });
 }
 utilityHandle('terminal-access:view', settingsPane('terminal'), () => ({ rows: terminalAccessRows() }));
@@ -5585,7 +5588,7 @@ ipcMain.handle('health-fix', (e, id) => {
       .then((error) => { console.log(`[health] fix "connect-hermes"${error ? ` failed: ${error}` : ''}`); return { error, report: healthReport() }; });
   }
   // Navigation only: the Terminal access section says what to turn on and has its own Open settings.
-  if (id === 'terminal-access-open') { openBuddy('settings:terminal'); return { error: null, report: healthReport() }; }
+  if (id === 'terminal-access-open') { openSettingsAt('terminal-access'); return { error: null, report: healthReport() }; }
   if (id === 'ghostty-dock-install' || id === 'ghostty-dock-recheck') {
     return ghosttyDockInstaller.act(id === 'ghostty-dock-install' ? 'install' : 'recheck').then((r) => {
       const error = r.error || null;

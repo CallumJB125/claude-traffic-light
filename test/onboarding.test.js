@@ -56,6 +56,8 @@ function rig({ claudeAuto = false } = {}) {
     accountSummary: () => null,
     broadcastStatus() {},
     onboardingWin: null,
+    IS_MAC: true,
+    openSettingsAt: (section) => opened.push(`at:${section}`),
   };
   ctx.onboardingWin = { webContents: contents(), closed: false, close() { this.closed = true; } };
   vm.runInNewContext(slice('const onboardingOnly =', '\nfunction maybeAutoShowHelp()'), ctx);
@@ -168,11 +170,17 @@ test('budget writes the Spend daily budget; navigation is a short allow-list and
   for (const bad of ['settings', 'https://x', 'aitools:../x', 'Home', '']) assert.equal(await r.call('onboarding:navigate', bad), false);
   assert.equal(await r.call('onboarding:navigate', 'home', 'extra'), false);
   assert.equal(await r.call('onboarding:navigate', 'aitools:codex'), true);
+  // QoL4b: Settings › Terminal, navigation only.
+  assert.equal(await r.call('onboarding:navigate', 'terminal-access'), true);
+  assert.equal(r.opened.at(-1), 'at:terminal-access');
+  r.ctx.IS_MAC = false;
+  assert.equal(await r.call('onboarding:navigate', 'terminal-access'), false);
+  r.ctx.IS_MAC = true;
   assert.deepEqual(r.toolsOpened, ['aitools:codex']);
   for (const d of ['join', 'create-team']) assert.equal(await r.call('onboarding:navigate', d), true);
   assert.equal(r.ctx.onboardingWin.closed, false);
   assert.equal(await r.call('onboarding:navigate', 'home'), true);
-  assert.deepEqual(r.opened, ['join', 'create-team', BuddyPages.pageById('home') ? 'home' : BuddyPages.SECTIONS[0].default]);
+  assert.deepEqual(r.opened, ['at:terminal-access', 'join', 'create-team', BuddyPages.pageById('home') ? 'home' : BuddyPages.SECTIONS[0].default]);
   assert.equal(r.ctx.onboardingWin.closed, true);
 });
 

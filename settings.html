@@ -154,8 +154,10 @@
   #remote-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
   #remote-list li { display: flex; align-items: center; gap: var(--space-2); padding: 6px var(--space-2); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
   #remote-list .who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #terminal-access[hidden], #terminal-access-title[hidden] { display: none; }
   #terminal-access-list { list-style: none; margin: 0 0 var(--space-2); padding: 0; display: flex; flex-direction: column; gap: 6px; }
   #terminal-access-list li { display: flex; align-items: center; gap: var(--space-2); padding: 6px var(--space-2); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  #terminal-access-list li > strong { min-width: 7.5em; }
   #terminal-access-list li > span { flex: 1; min-width: 0; }
   #terminal-access-list li[data-state="denied"] strong { color: var(--amber); }
   #remote-list .who span:last-child { font-size: var(--text-xs); color: var(--muted); }
@@ -822,8 +824,8 @@
     <div class="hint" id="connect-hint">Connect Cursor, Codex, Gemini CLI and Hermes from AI tools in the sidebar. Anything else can run <code id="emit-path">emit.js</code>, or POST to <code id="endpoint">http://127.0.0.1:47172/signal</code> with an <code>x-buddy-token</code> header set to the contents of <code id="token-path">~/.claude-traffic-light/token</code>.</div>
   </div>
 
-  <h2 data-pane="terminal" id="terminal-access-title">Terminal access</h2>
-  <div class="field" data-pane="terminal" id="terminal-access">
+  <h2 data-pane="terminal" id="terminal-access-title" hidden>Terminal access</h2>
+  <div class="field" data-pane="terminal" id="terminal-access" hidden>
     <ul id="terminal-access-list" aria-label="Terminal access"></ul>
     <div class="hint" id="terminal-access-note" role="status" aria-live="polite"></div>
     <div class="hint">macOS asks once per terminal before Plexiform can switch to one of its tabs. Plexiform shows what it saw the last time it tried, and never asks macOS on its own: Test does, only when you press it.</div>

@@ -142,3 +142,21 @@ test('health panel: Copy diagnostics puts a scrubbed report on the clipboard', a
     await h.app.evaluate(({ clipboard }, t) => clipboard.writeText(t), saved);
   }
 });
+
+// QoL4b: Health's "Open Terminal settings" lands on Terminal access (the old page's Advanced). A visual run shows the
+// same rows everywhere (main.js TERMINAL_ACCESS_FIXED): Terminal, never asked, and Accessibility off. Test is never
+// pressed here: it is the one control that may bring up a macOS prompt.
+test('terminal access: what macOS allowed, read without asking, with Test only where macOS can still ask', async () => {
+  await h.app.evaluate(({ webContents }) => {
+    webContents.getAllWebContents().find((w) => w.getURL().split('?')[0].endsWith('settings.html')).send('show-section', 'terminal-access');
+  });
+  const rows = settings.locator('#terminal-access-list li');
+  await expect(rows).toHaveCount(2);
+  await expect(settings.locator('#terminal-access-title')).toBeVisible();
+  await expect(rows.nth(0)).toContainText('Terminal Not asked yet.');
+  await expect(rows.nth(0).locator('button')).toHaveText(['Test', 'Open settings']);
+  await expect(rows.nth(1)).toContainText('Accessibility Off.');
+  await expect(rows.nth(1).locator('button')).toHaveText(['Open settings']);
+  await settings.waitForTimeout(300);
+  await expect(settings.locator('#terminal-access')).toHaveScreenshot('terminal-access.png');
+});

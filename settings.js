@@ -363,7 +363,9 @@
       }
       for (const id of ['terminal-access', 'terminal-access-title']) document.getElementById(id).hidden = !list.childElementCount;
     };
-    if (inPane('terminal')) window.settingsApi.terminalAccess('view').then((res) => showAccess(res && res.rows), () => showAccess([]));
+    const loadAccess = () => window.settingsApi.terminalAccess('view').then((res) => showAccess(res && res.rows), () => showAccess([]));
+    if (inPane('terminal')) loadAccess();
+    window.loadTerminalAccess = loadAccess;
     // Ghostty Dock: Install only where it can be installed and isn't yet; Check again when installed but not usable.
     const showDock = (r, note) => {
       if (!r) return;
@@ -559,6 +561,8 @@
     });
     window.settingsApi.onShowSection((id) => {
       if (id === 'widget') { showSection('widget'); return; }
+      // QoL4b: Health's "Open Terminal settings" and setup's link, on the old page: Advanced, read afresh.
+      if (id === 'terminal-access') { showSection('advanced'); window.loadTerminalAccess?.(); document.getElementById('terminal-access-title').scrollIntoView({ block: 'start' }); return; }
       if (id !== 'health') return;
       showSection('advanced');
       refreshHealth();
