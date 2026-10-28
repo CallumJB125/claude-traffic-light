@@ -545,8 +545,15 @@ test('L25: the unavailable sentence clears on the first good read, and a good re
     assert.match(status(), /Session closed/);
     await s.poll(); await s.poll();
     assert.match(status(), /Session closed/, 'a good read does not wipe "Session closed."');
+    // unavailable sentence, then another message, then a good read: the other message stays.
+    s.setReadable(false); await s.poll(); await s.poll();
+    assert.match(status(), /unavailable right now/);
+    await s.start(); // "Starting a …" / "… started." overwrites the sentence
+    s.setReadable(true); await s.poll();
+    assert.doesNotMatch(status(), /unavailable right now/);
+    assert.notEqual(status(), '', 'a good read does not wipe the start message');
     // Failures must be consecutive: a good read in between resets the count.
     s.setReadable(false); await s.poll(); s.setReadable(true); await s.poll(); s.setReadable(false); await s.poll();
-    assert.match(status(), /Session closed/, 'not consecutive, so not shown');
+    assert.match(status(), /session started/, 'not consecutive, so not shown');
   } finally { s.close(); }
 });

@@ -765,7 +765,7 @@
   $('refresh').addEventListener('click', () => { void refresh(); void dir?.refresh(); });
   for (const filter of filters) $(`${filter}-filter`).addEventListener('change', () => { clearInteractions(); if (snapshot) renderWork(); });
   $('clear-filters').addEventListener('click', () => { filters.forEach(filter => { $(`${filter}-filter`).value = ''; }); clearInteractions(); if (snapshot) renderWork(); });
-  document.addEventListener('visibilitychange', () => { ++readGeneration; expanded.clear(); clearPage('Checking reported activity…'); if (!document.hidden && ready) { void refresh(); void refreshOwned(); void dir?.refresh(); } });
+  document.addEventListener('visibilitychange', () => { ++readGeneration; ixFails = 0; expanded.clear(); clearPage('Checking reported activity…'); if (!document.hidden && ready) { void refresh(); void refreshOwned(); void dir?.refresh(); } });
   setInterval(() => { if (!document.hidden && ready) { if (snapshot) { renderConnections(); renderWork(); } void refresh(); void refreshOwned(); void dir?.refresh(); } }, 5000);
   if (!document.hidden && ready) { void refresh(); void refreshOwned(); void dir?.refresh(); }
 })();
