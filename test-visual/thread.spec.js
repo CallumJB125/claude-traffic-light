@@ -731,7 +731,7 @@ test('owner: one card for a teammate, earlier ones folded, Reject all (dark)', a
     await expect(page.locator('.th-own-proposal .th-card-title')).toHaveText('Alex proposes a message');
     await expect(page.locator('.th-own-earlier summary')).toHaveText('2 earlier from Alex');
     await page.locator('.th-own-earlier summary').click();
-    await expect(page.getByRole('button', { name: 'Reject all' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Reject all 3 from Alex' })).toBeVisible();
     await shot(page, 'thread-owner-proposal-dark.png');
   } finally { await h.cleanup(); }
 });

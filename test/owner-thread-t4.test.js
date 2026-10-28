@@ -429,7 +429,7 @@ test('Rev 4: one card per teammate; Reject all revokes only what was rendered, s
     const out = await r.call('thread:owner-act', { op: 'reject-all', key: alex.rejectAll });
     assert.equal(out.ok, true);
     const revoked = r.host.calls.filter(([k]) => k === 'revoke').map(([, q]) => q.id).sort();
-    assert.deepEqual(revoked, [old1.id, latest.id].sort());
+    assert.deepEqual(revoked, [old1.id, latest.id].sort(), 'the carded one is in the snapshot: the button says "Reject all 3 from Alex"');
     assert.equal(late.status, 'pending', 'never one that arrived after the render');
     assert.equal(old2.status, 'pending', 'a changed one reports stale');
     assert.match(out.note, /^2 rejected\. 1 had already changed/);
@@ -572,7 +572,10 @@ test('renderer: one card per teammate with earlier folded, Reject all, approved 
     assert.equal(card.querySelector('i'), null);
     assert.equal(card.querySelector('summary').textContent, '1 earlier from Alex');
     const btn = (label) => [...p.$('th-owner').querySelectorAll('button')].find((b) => b.textContent === label);
-    btn('Reject all').click(); await tick();
+    // C-S1: it rejects the carded one too, so it says how many and sits with Reject, outside the fold.
+    const all = btn('Reject all 2 from Alex');
+    assert.ok(all && all.closest('.th-card-btns') && !all.closest('details'));
+    all.click(); await tick();
     assert.equal(JSON.stringify(p.calls.at(-1)), JSON.stringify(['act', 'reject-all', KEY('7')]));
     assert.match(p.$('th-own-proposals').textContent, /Sam: approved for one send/);
     btn('Revoke').click(); await tick();

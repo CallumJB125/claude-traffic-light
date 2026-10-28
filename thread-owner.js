@@ -83,6 +83,9 @@
       btns.append(yes, no);
       c.append(btns);
       const earlier = Array.isArray(g.earlier) ? g.earlier : [];
+      // C-S1: main's Reject all snapshot holds every pending one from this teammate, the carded one included, so the
+      // button says so and sits with Reject, not inside the fold of earlier ones.
+      if (earlier.length && g.rejectAll) { const all = button('th-btn th-own-btn', `Reject all ${earlier.length + (g.more || 0) + 1} from ${g.requester}`, () => { void act('reject-all', g.rejectAll); }); all.disabled = busy; btns.append(all); }
       if (earlier.length) {
         const n = earlier.length + (g.more || 0);
         const more = el('details', 'th-own-earlier');
@@ -92,7 +95,6 @@
         if (g.more) list.append(el('li', 'th-card-sub', `+${g.more} more`));
         more.append(list);
         c.append(more);
-        if (g.rejectAll) { const all = button('th-btn th-own-btn', 'Reject all', () => { void act('reject-all', g.rejectAll); }); all.disabled = busy; c.append(all); }
       }
       return c;
     });
