@@ -1914,7 +1914,7 @@ const PresenceOwner=require('./src/presence-owner').createPresenceOwner({presenc
 // QoL4a: the one folder name a notification's "Show in Overview" hands My sessions' search (10 s, taken once).
 const OverviewMineHint=require('./src/overview-mine-hint.js').createMineHint();
 const OverviewMain=require('./src/overview-main').createOverviewMain({
-  buddy:()=>buddyWin,chatPreview:CHAT_PREVIEW,mineHint:OverviewMineHint,presenceOwner:PresenceOwner,sessions:()=>aggregateState().sessions||[],
+  buddy:()=>buddyWin,chatPreview:CHAT_PREVIEW,presenceOwner:PresenceOwner,mineHint:OverviewMineHint,sessions:()=>aggregateState().sessions||[],
   // Burst's loose ends per repository (BurstIpc is created further down; null until then and whenever Burst lacks the check).
   looseEnds:()=>{try{return BurstIpc.looseEndsView();}catch{return null;}},
   // T3: the signed-in hub account's display name, for "From ‹name›" on a proposal sent from a thread (main-only).

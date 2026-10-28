@@ -244,7 +244,7 @@ test('main: notifications, the sound and the knock consult the snoozes; the butt
   assert.match(notify, /const buttons = NotifyActions\.actionsFor\(n, \{ row: rowNow\(\), stop: !!stop, isRemote \}\);/);
   assert.match(notify, /actions: buttons\.map\(\(b\) => \(\{ type: 'button', text: b\.text \}\)\)/);
   assert.match(notify, /const b = NotifyActions\.pick\(buttons, details, legacyIndex\);\n\s+if \(!b\) return;/);
-  assert.match(notify, /else if \(b\.run === 'overview'\) openBuddy\('overview'\);\n\s+else if \(b\.run === 'snooze'\) snoozeSession\(n\.sessionId, '1h'\);/);
+  assert.match(notify, /else if \(b\.run === 'overview'\) \{\n(?:[^\n]*\n){2,3}\s+openBuddy\('overview'\);\n\s+\}\n\s+else if \(b\.run === 'snooze'\) snoozeSession\(n\.sessionId, '1h'\);/);
   assert.match(notify, /const plan = NotifyActions\.clickPlan\(n, s, isRemote\);\n\s+if \(plan\.kind === 'note'\) \{ showJumpNote\(\{ title: 'Plexiform', body: plan\.body \}\); return; \}/);
   const snooze = main.slice(main.indexOf('function snoozeSession('), main.indexOf('const liveNotifications'));
   assert.match(snooze, /if \(!row \|\| row\.remote \|\| row\.device \|\| isRemote\(row\)\) return 0;/, 'only a local session, re-found by id');

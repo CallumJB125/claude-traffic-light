@@ -791,7 +791,6 @@
   // the row is opened through this page's own read and openActivity, exactly as a click would.
   let hint = null;
   async function takeHint() {
-    void takeMineHint();
     if (typeof api.openHint !== 'function') return;
     let h; try { h = await api.openHint(); } catch { h = null; }
     if (!h || typeof h !== 'object' || !hex(h.team, 32) || !hex(h.entry, 40)) return;
@@ -867,5 +866,7 @@
   }
   // Main clears presence when the window hides or Overview is left; a panel still open tells it again (ledger 31).
   function reannounce() { for (const v of lists.team.rows.values()) { v.viewingId = null; v.sync(); } }
-  window.OverviewDirectory = Object.freeze({ start, refresh, soon, reannounce, rerender: () => { render('mine'); render('team'); }, index, openFromPalette, takeHint });
+  window.OverviewDirectory = Object.freeze({ start, refresh, soon, reannounce, rerender: () => { render('mine'); render('team'); }, index, openFromPalette,
+    // QoL4a: the My sessions hint first (never gated), then the chat-first team hint (only with its bridge).
+    takeHint: () => { void takeMineHint(); return takeHint(); } });
 })();
