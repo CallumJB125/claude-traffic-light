@@ -1034,6 +1034,7 @@ export class Hub extends EventEmitter {
     this.oauth?.sweep();
     this.sweepIntegrationsPending?.();
     this.interactionShares?.proposals.prune();
+    this.interactionShares?.sweepViewers();
     this.reviews.sweep();
     this.presence.sweep();
     await this.idle();
@@ -1070,6 +1071,7 @@ export class Hub extends EventEmitter {
   }
 
   memberChanged(memberId) {
+    this.interactionShares?.dropViewer(memberId);
     this.recheckBrowsers(memberId);
     this.enrolments?.recheck();
     this.presence.changed();

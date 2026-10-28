@@ -94,6 +94,7 @@ export const DEFAULT_LIMITS = Object.freeze({
   vault_health_conn: { capacity: 1, per_ms: 60_000 },       // 'vault_error' health write + log, per connection
   share_write_user: { capacity: 60, per_ms: 3_600_000 },    // POST /api/interaction/v1/shares (interaction-shares.js)
   share_call_user: { capacity: 240, per_ms: 60_000 },       // shared-session calls, per teammate (a watch long-polls)
+  share_view_user: { capacity: 60, per_ms: 60_000 },        // POST /api/interaction/v1/shared/:id/view, a grantee's open-session beat (a 20 s beat has headroom)
   share_call_team: { capacity: 1200, per_ms: 60_000 },      // … and per team, all its teammates together
   ws_browser: { capacity: 60, per_ms: 10_000 },
   ws_runner: { capacity: 3000, per_ms: 10_000 },
