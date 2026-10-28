@@ -107,7 +107,7 @@ test('sessions: state shapes the entry; broken state still lists; observed_at fr
   assert.equal(e.state, 'working');
   assert.equal(e.observed_at, T0 - 1000, 'M4: the hub stamp, not now');
   assert.deepEqual(e.capabilities, { steer: true, interrupt: false });
-  assert.deepEqual(e.deliveries[0], { id: 'd1', text: 'hi', by: 'Ana', state: 'acknowledged', response: '' });
+  assert.deepEqual(e.deliveries[0], { id: 'd1', text: 'hi', by: 'Ana', stoppedBy: null, state: 'acknowledged', response: '' }); // ledger 37: an older host sends none
   const json = JSON.stringify(e);
   for (const leak of ['thr_1', 'generation', 'extra']) assert.equal(json.includes(leak), false, leak);
   const clamped = mk({ shared: [share()], callBody: { result: { ok: true, state: { session: SESSION, status: 'ready', observed_at: T0 + 5000 } } } });
@@ -126,7 +126,7 @@ test('send: state op then send op; generation fetched fresh; fresh UUID request_
   const { hub, r } = mk({ shared: [share()], callBody: { result: { ok: true, state: { session: SESSION, generation: 7, status: 'ready', observed_at: T0 - 5, deliveries: [receipt] }, delivery: receipt } } });
   await hub.teams({ id: 'u-me' });
   const out = await hub.send({ id: 'u-me' }, 't1', SHARED, '  hello there  ');
-  assert.deepEqual(out, { ok: true, status: 'queued', delivery: { id: 'd1', text: 'hello there', by: 'Me', state: 'queued', response: '' } });
+  assert.deepEqual(out, { ok: true, status: 'queued', delivery: { id: 'd1', text: 'hello there', by: 'Me', stoppedBy: null, state: 'queued', response: '' } });
   const sends = r.state.calls.filter((c) => c.body?.op === 'send');
   assert.equal(sends.length, 1, 'no automatic retry');
   assert.match(sends[0].body.request_id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);

@@ -231,7 +231,7 @@
   const stamp = value => Number.isFinite(value) && value >= 0;
   const turnRef = value => value === null || uuid(value);
   const providerId = value => typeof value === 'string' && /^[a-z][a-z0-9-]{0,79}$/.test(value);
-  const validDelivery = d => obj(d) && uuid(d.id) && text(d.text, 4000) && ['new-turn', 'steer'].includes(d.mode) && Object.hasOwn(DELIVERY, d.state) && typeof d.recorded === 'boolean' && turnRef(d.turn) && text(d.response, 16000) && (d.error === null || text(d.error, 1000)) && Array.isArray(d.notices) && d.notices.length <= 5 && d.notices.every(n => text(n, 300)) && stamp(d.sentAt) && (d.finishedAt === null || stamp(d.finishedAt));
+  const validDelivery = d => obj(d) && uuid(d.id) && text(d.text, 4000) && ['new-turn', 'steer'].includes(d.mode) && Object.hasOwn(DELIVERY, d.state) && typeof d.recorded === 'boolean' && turnRef(d.turn) && text(d.response, 16000) && (d.error === null || text(d.error, 1000)) && Array.isArray(d.notices) && d.notices.length <= 5 && d.notices.every(n => text(n, 300)) && stamp(d.sentAt) && (d.finishedAt === null || stamp(d.finishedAt)) && (d.stoppedBy == null || text(d.stoppedBy, 80));
   const validProvider = p => obj(p) && text(p.id, 80) && text(p.label, 120);
   const validState = s => obj(s) && uuid(s.session) && Number.isSafeInteger(s.generation) && s.generation >= 0 && validProvider(s.provider) && ['plexiform-owned', 'existing-unmanaged'].includes(s.ownership) && (s.ownership === 'plexiform-owned' || obj(s.thread) && text(s.thread.title, 120) && text(s.thread.project, 120)) && text(s.label, 200) && STATUSES.includes(s.status) && turnRef(s.activeTurn) && obj(s.capabilities) && Array.isArray(s.deliveries) && s.deliveries.length <= 20 && s.deliveries.every(validDelivery);
   const validCap = c => obj(c) && providerId(c.provider) && text(c.label, 120) && typeof c.available === 'boolean' && text(c.reason, 600) && obj(c.capabilities);
@@ -259,6 +259,7 @@
     if (d.error) lines.push(`${label} reported: ${d.error}`);
     lines.push(...d.notices);
     if (d.state === 'refused') lines.push(`Plexiform could not confirm ${label} accepted this message.`);
+    if (d.state === 'interrupted' && d.stoppedBy) lines.push(`${d.stoppedBy} stopped this turn.`); // ledger 37
     const sig = JSON.stringify(lines);
     if (v.sig !== sig) { v.sig = sig; v.details.replaceChildren(...lines.map(t => node('p', t, 'reason'))); }
   }

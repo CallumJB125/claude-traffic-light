@@ -167,7 +167,7 @@
     // A card handed to a person and not yet answered reads as the sender sees it on the board.
     const hs = (e.handoffs ?? []).map(h => el('li', h.direction === 'out' && h.state === 'offered' ? `Handed to ${h.with}, waiting${h.summary ? ` · ${h.summary}` : ''}` : `${h.direction === 'out' ? 'Handoff to' : 'Handoff from'} ${h.with} · ${h.state}${h.summary ? ` · ${h.summary}` : ''}`));
     const hsig = JSON.stringify(e.handoffs ?? []); if (v.hsig !== hsig) { v.hsig = hsig; v.handoffs.replaceChildren(...hs); } v.handoffs.hidden = !hs.length;
-    const ds = (e.deliveries ?? []).map(d => { const li = el('li', '', 'delivery'), h = el('div', '', 'delivery-head'); h.append(el('strong', d.by ? `Sent by ${d.by}` : 'You'), el('span', d.state, `tag ${d.state}`)); li.append(h, el('p', d.text, 'delivery-text')); if (d.response) li.append(el('p', d.response, 'delivery-response')); return li; });
+    const ds = (e.deliveries ?? []).map(d => { const li = el('li', '', 'delivery'), h = el('div', '', 'delivery-head'); h.append(el('strong', d.by ? `Sent by ${d.by}` : 'You'), el('span', d.state, `tag ${d.state}`)); li.append(h, el('p', d.text, 'delivery-text')); if (d.state === 'interrupted' && str(d.stoppedBy, 80) && d.stoppedBy) li.append(el('p', `${d.stoppedBy} stopped this turn.`, 'reason')); if (d.response) li.append(el('p', d.response, 'delivery-response')); return li; });
     const dsig = JSON.stringify(e.deliveries ?? []); if (v.dsig !== dsig) { v.dsig = dsig; v.deliveries.replaceChildren(...ds); } v.deliveries.hidden = !ds.length; v.history.hidden = !ds.length && !hs.length;
     const csig = JSON.stringify(CAPS.map(k => [k, e.capabilities[k]]));
     if (v.csig !== csig) { v.csig = csig; v.capList.replaceChildren(...CAPS.map(k => el('li', `${CAP_LABEL[k]}: ${e.capabilities[k].available ? 'available' : `unavailable. ${e.capabilities[k].reason}`}`, e.capabilities[k].available ? '' : 'muted'))); }
@@ -384,6 +384,7 @@
       const li = el('li', '', 'delivery'), head = el('div', '', 'delivery-head');
       head.append(el('strong', `${d.by ? `Sent by ${d.by}` : 'Message'}${d.mode === 'steer' ? ' (steer)' : ''}`), el('span', d.state, `tag ${d.state}`));
       li.append(head, el('p', d.text, 'delivery-text'));
+      if (d.state === 'interrupted' && str(d.stoppedBy, 80) && d.stoppedBy) li.append(el('p', `${d.stoppedBy} stopped this turn.`, 'reason')); // ledger 37
       if (d.recorded === true) li.append(el('p', 'The provider echoed this exact message text.', 'reason'));
       else if (d.state === 'acknowledged') li.append(el('p', 'The provider accepted this message; its exact text has not been echoed yet.', 'reason'));
       if (d.response) {

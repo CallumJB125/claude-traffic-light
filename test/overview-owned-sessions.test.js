@@ -109,6 +109,42 @@ test('Owned UI: start, send a literal message and see ack → recorded → respo
   } finally { s.close(); }
 });
 
+// Ledger 37: a teammate's stop (session-interaction's {by}, as remote-interaction sends it) names them on the owner card, as text.
+test('Owned UI (ledger 37): "‹name› stopped this turn." on an interrupted delivery; nothing for the owner\'s own stop; a bad name is refused', async () => {
+  for (const [by, want] of [['<b>Alex</b>', '<b>Alex</b> stopped this turn.'], [undefined, null]]) {
+    const s = stack();
+    try {
+      await s.ready(); await s.start();
+      s.type('go'); s.btn('Send').click(); await tick();
+      s.adapter.emit({ kind: 'turn-started', target: 'target-1', turnId: 'turn-1' }); await tick();
+      const [{ state }] = s.main.listOwned();
+      const { hub, actor } = s.main.sharedTarget(state.session);
+      await hub.interrupt({ session: state.session, generation: state.generation, turn: state.activeTurn }, actor, by === undefined ? undefined : { by });
+      s.adapter.emit({ kind: 'turn-completed', target: 'target-1', turnId: 'turn-1', status: 'interrupted' }); await tick(6);
+      const lines = [...s.card().querySelectorAll('.delivery li, .delivery p, .delivery div')].map((n) => n.textContent);
+      if (want) {
+        assert.ok(s.card().textContent.includes(want), s.card().textContent);
+        assert.equal(s.card().querySelector('.delivery b'), null, 'text only');
+      } else assert.equal(/stopped this turn/.test(s.card().textContent), false, `the owner's own stop names no one: ${lines.join('|')}`);
+    } finally { s.close(); }
+  }
+  // L-S1: a stoppedBy that is not a string of at most 80 makes the state unreadable, like any bad delivery field:
+  // the card keeps its last known state (here, not Working), where a good name lets the same update through.
+  for (const [bad, applied] of [['Alex', true], ['Q'.repeat(81), false], [7, false]]) {
+    const s = stack();
+    try {
+      await s.ready(); await s.start();
+      s.type('go'); s.btn('Send').click(); await tick();
+      const taint = (st) => { for (const d of st?.deliveries ?? []) d.stoppedBy = bad; };
+      for (const [ch, fn] of [...s.handlers]) s.handlers.set(ch, async (...a) => { const r = await fn(...a); if (Array.isArray(r)) r.forEach(taint); else taint(r?.state); return r; });
+      const send = s.contents.send; s.contents.send = (ch, x) => { const c = structuredClone(x); taint(c?.state ?? c); send(ch, c); };
+      s.adapter.emit({ kind: 'turn-started', target: 'target-1', turnId: 'turn-1' }); await tick(); await s.poll();
+      assert.equal(/Working/.test(s.card().querySelector('.tag').textContent), applied, String(bad));
+      assert.equal(/QQQ|stopped this turn/.test(s.card().textContent), false);
+    } finally { s.close(); }
+  }
+});
+
 test('Owned UI: focus changes keep the session; a stale board refusal is shown with its reason', async () => {
   const s = stack();
   try {

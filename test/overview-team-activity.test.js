@@ -5,6 +5,7 @@ const ORGANISE = require('node:fs').readFileSync(require('node:path').join(__dir
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
 const { JSDOM } = require('jsdom');
+const { createTeamHubClient } = require('../src/team-hub-client');
 const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const tick = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };
 const token = '12000000-0000-4000-8000-000000000001', nextToken = '12000000-0000-4000-8000-000000000002';
@@ -42,6 +43,34 @@ function harness({ inspect = inspection(), legacy = false } = {}) {
     setInspection: v => { current = v; }, setEntries: v => { entries = v; }, setPending: v => { pending = v; }, setAction: v => { actionResult = v; },
     calls: () => inspectCalls, close: () => dom.window.close() };
 }
+
+// Ledger 37: the grantee's own client (inspect → interactionDelivery; its cached row → deliveryOf) keeps who stopped a
+// turn, bounded, and the conversation panel says so as text, for an interrupted delivery only.
+async function granteeRead(deliveries) {
+  const SHARE = '11111111-2222-4333-8444-555555555555', SESSION = '10000000-0000-4000-8000-000000000001', AT = 1_800_000_000_000;
+  const st = { session: SESSION, generation: 4, activeTurn: null, status: 'ready', provider: { id: 'codex', label: 'Codex' }, capabilities: {}, deliveries: deliveries.map((d, i) => ({ id: `40000000-0000-4000-8000-00000000000${i + 1}`, text: 'hello', by: 'Me', mode: 'new-turn', turn: turn, response: '', notices: [], sentAt: AT - 1, ...d })) };
+  const hub = createTeamHubClient({ baseUrl: 'https://hub.test', token: () => 't', viewer: { id: 'alice', name: 'Alice' }, fetch: async (url) => {
+    const body = url.endsWith('/shared') ? { shared: [{ id: SHARE, session: SESSION, scope: 'interact', expires_at: null, team: { id: 'team', name: 'Team' }, owner: { id: 'bob', name: 'Bob' }, online: true }] } : { result: { ok: true, state: st } };
+    return { status: 200, headers: { get: () => null }, body: null, text: async () => JSON.stringify(body) };
+  } }, { now: () => AT });
+  const v = { id: 'alice', name: 'Alice' };
+  const live = (await hub.inspect(v, 'team', SHARE)).state.deliveries;
+  const listed = (await hub.sessions(v, 'team'))[0].deliveries;
+  return { live, listed };
+}
+test('ledger 37: the conversation panel says "‹name› stopped this turn." from the real inspect DTO; the client\'s row keeps it, bounded', async () => {
+  const { live, listed } = await granteeRead([
+    { state: 'interrupted', stoppedBy: `Cara ${HOSTILE}` }, { state: 'completed', stoppedBy: 'Nobody' }, { state: 'interrupted', stoppedBy: 'Z'.repeat(300) }, { state: 'interrupted' }]);
+  assert.deepEqual(listed.map((d) => d.stoppedBy), [`Cara ${HOSTILE}`, 'Nobody', 'Z'.repeat(80), null], 'deliveryOf keeps it, bounded; an older host: none');
+  const s = harness({ inspect: inspection({ deliveries: live }) });
+  try {
+    await s.open();
+    const items = [...s.doc.querySelector('.team-conversation').querySelectorAll('li.delivery')];
+    const said = (li) => [...li.querySelectorAll('.reason')].map((n) => n.textContent).filter((t) => /stopped this turn/.test(t));
+    assert.deepEqual(items.map(said), [[`Cara ${HOSTILE} stopped this turn.`], [], [`${'Z'.repeat(80)} stopped this turn.`], []]);
+    assert.equal(s.doc.querySelector('img'), null, 'text only');
+  } finally { s.close(); }
+});
 
 test('watch a selected teammate session: current activity, honest live receipts and response text', async () => {
   const s = harness({ inspect: inspection({ available: false, deliveries: [{ id: 'msg', text: `Question ${HOSTILE}`, by: 'Alice', state: 'queued', response: '' }] }) });
