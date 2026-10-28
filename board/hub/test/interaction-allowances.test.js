@@ -263,3 +263,37 @@ test('T4d H2: after the hub advertised the route, a 404 on the grant says the sh
     assert.equal(stale.ok, false); assert.match(stale.error, /This share changed\. Look again\./);
   } finally { await r.close(); }
 });
+
+test('T4d clamp: a hub whose expiry runs later than the chosen time never lengthens it on the Mac (send, interrupt, and the owner label)', async () => {
+  const r = await rig();
+  try {
+    const { s, share } = await watchShare(r);
+    const ish = r.h.hub.interactionShares, orig = ish.allow.bind(ish);
+    // The hub row and its answer are 5 minutes past the chosen time (a fast hub clock or a bad hub).
+    ish.allow = (...a) => {
+      const out = orig(...a);
+      const later = new Date(Date.parse(out.allowance.expires_at) + 300_000).toISOString();
+      r.h.db.run('DELETE FROM interaction_allowances WHERE share_id = ?', share.id);
+      r.h.db.insert('interaction_allowances', { share_id: share.id, user_id: a[2], granted_at: r.h.hub.iso(), expires_at: later, granted_by: r.macA.user });
+      return { allowance: { user_id: a[2], expires_at: later } };
+    };
+    const t0 = r.h.clock.wall();
+    const granted = await r.mac.grantAllowance({ share: share.id, user: r.bob.user, seconds: 900 });
+    assert.equal(granted.ok, true, JSON.stringify(granted));
+    assert.equal(granted.share.members.find((m) => m.id === r.bob.user).allowedUntil, t0 + 900_000, 'the owner label shows the clamped cutoff');
+    assert.equal((await r.call(r.bob, share.id, 'send', SEND(s, 'inside'))).status, 200);
+    await r.ownerSend(s, 'HOLD');
+    const turn = await until(() => r.mac.hub.state({ session: s.session }, r.mac.actor).activeTurn);
+    r.h.clock.advance(900_000 + 1000);   // past the chosen time, still before the hub's later expiry
+    assert.ok(Date.parse(rows(r, share.id)[0].expires_at) > r.h.clock.wall(), 'the hub still honours it');
+    const before = r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.length;
+    const late = await r.call(r.bob, share.id, 'send', SEND(s, 'too late'));
+    assert.notEqual(late.body?.result?.ok, true, JSON.stringify(late.body));
+    assert.equal(r.mac.hub.state({ session: s.session }, r.mac.actor).deliveries.length, before, 'nothing was sent');
+    const stop = await r.call(r.bob, share.id, 'interrupt', { session: s.session, generation: s.generation, turn });
+    assert.notEqual(stop.body?.result?.status, 'interrupt-requested', JSON.stringify(stop.body));
+    assert.equal(r.mac.hub.state({ session: s.session }, r.mac.actor).activeTurn, turn, 'the turn is still running');
+    assert.equal(r.mac.shared()[0].members.find((m) => m.id === r.bob.user).canSend, false);
+    await r.mac.hub.interrupt({ session: s.session, generation: s.generation, turn }, r.mac.actor);
+  } finally { await r.close(); }
+});
