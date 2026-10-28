@@ -83,9 +83,13 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
     // Recompute focus after the final await; this changes only public controls.
     if(!same(before))for(const row of result.sessions)for(const action of ['open','message'])if(row.capabilities[action].enabled)row.capabilities[action]={...row.capabilities[action],enabled:false,reason:'Focus Plexiform and refresh before acting.'};
     return result;});
-   ipc.handle('sidebar:team-rows',async(e,...args)=>{const side=fromSidebarDoc(e);return side?sidebarTeamState(side,args):null;});
-   // T1: the Overview document consumes a teammate-row hint (once; 10 s; same viewer).
-   ipc.handle('overview:open-hint',(e,...args)=>{const before=owner(true);if(!allowed(e,before)||args.length!==0)return null;return takeHint();});
+   // T1: the sidebar's Team filter and the Overview hint it arms exist only with the chat-first preview on; gate off
+   // they are not registered at all, so the gate-off app keeps main's channels from before R2b.
+   if(chatPreview===true){
+    ipc.handle('sidebar:team-rows',async(e,...args)=>{const side=fromSidebarDoc(e);return side?sidebarTeamState(side,args):null;});
+    // T1: the Overview document consumes a teammate-row hint (once; 10 s; same viewer).
+    ipc.handle('overview:open-hint',(e,...args)=>{const before=owner(true);if(!allowed(e,before)||args.length!==0)return null;return takeHint();});
+   }
    ipc.handle('overview:directory',async(e,...args)=>{const before=owner(true);if(!allowed(e,before)||args.length!==1)return null;
     adopt(before);const result=await service.directory(args[0]);return same(before,true)?result:null;});
    ipc.handle('overview:viewing',async(e,...args)=>{const before=owner(true);if(!allowed(e,before)||args.length!==1)return response('unavailable');adopt(before);return service.viewing(args[0]);});

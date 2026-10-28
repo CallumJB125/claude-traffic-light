@@ -286,8 +286,8 @@ handle interaction:proposal-revoke
 handle interaction:send
 handle interaction:share-create
 handle interaction:share-list
-handle interaction:share-viewers
 handle interaction:share-stop
+handle interaction:share-viewers
 handle interaction:state
 handle keepawake:get
 handle keepawake:mac
