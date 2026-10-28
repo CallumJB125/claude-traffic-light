@@ -153,9 +153,9 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     return shared.review(c, args[1], still);
   }
   async function sharedConfirm(e, args) {
+    // No rate floor: a confirm is one-use, armed 600 ms from delivery, and checks the exact text first.
     const c = guardWith(e, args, { effect: true });
     if (!c || !sharedBound(c)) return null;
-    if (!rateOk(c, 'shared-confirm')) return { ok: false, status: 'busy', error: 'Wait a moment, then try again.' };
     return shared.confirm(c, args[1], still);
   }
   async function sharedProposals(e, args) {
