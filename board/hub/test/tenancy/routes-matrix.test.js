@@ -77,6 +77,7 @@ const MATRIX = {
   'GET /api/push/v1/key': { kind: 'self' },
   'PUT /api/push/v1/subscription': { kind: 'self' },
   'DELETE /api/push/v1/subscription': { kind: 'self' },
+  'POST /api/interaction/v1/shared/:share_id/view': { kind: 'cross', bare: true, path: f => `/api/interaction/v1/shared/${f.B.share}/view`, body: () => ({ viewing: true }) },
   'POST /api/interaction/v1/shared/:share_id/call': { kind: 'cross', path: f => `/api/interaction/v1/shared/${f.B.share}/call`, body: f => ({ op: 'state', args: { session: f.B.shareSession } }) },
   // Messaging (MESSAGING.md): a message is visible only to its sender and recipient; B's message ids, targets and team are unknown to A.
   'GET /api/messaging/v1/targets': { kind: 'self' },

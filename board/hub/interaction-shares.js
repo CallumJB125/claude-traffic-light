@@ -38,9 +38,10 @@ import { randomUUID } from 'node:crypto';
 import { InteractionProposals } from './interaction-proposals.js';
 import { HubError } from './db.js';
 import { limitOrThrow } from './ratelimit.js';
+import { PRESENCE_MIN_MS, PRESENCE_TTL_MS } from '../shared/liveness.js';
 
 export const SCOPES = Object.freeze({ watch: ['state', 'watch'], interact: ['state', 'watch', 'send', 'interrupt'] });
-export const SHARE_LIMITS = Object.freeze({ perHost: 64, minExpiryS: 60, maxExpiryS: 30 * 86_400 });
+export const SHARE_LIMITS = Object.freeze({ perHost: 64, minExpiryS: 60, maxExpiryS: 30 * 86_400, viewersPerShare: 50 });
 // Team roles that may send/steer/interrupt on an interact share; any other role watches only.
 export const ACTING_ROLES = Object.freeze(['owner', 'admin', 'member']);
 const MUTATING = new Set(['send', 'interrupt']);
@@ -50,6 +51,8 @@ const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const closed = (v, keys) => object(v) && Object.keys(v).every((k) => keys.includes(k));
 const invalid = () => new HubError('VALIDATION', 'invalid share request');
 const noShare = () => new HubError('NOT_FOUND', 'that shared session is not available');
+// eslint-disable-next-line no-control-regex
+const HIDDEN = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff\u2028\u2029\u2060-\u2064]/g;
 // Deliveries sent before the share was created never leave the hub (the host filters too).
 // A steer after the share joins a turn that may have begun before it: that turn's
 // response carries pre-share output, so it is withheld unless the turn began after.
@@ -70,6 +73,8 @@ export class InteractionShares {
     this.hub = hub;
     this.relay = relay;
     this.proposals = new InteractionProposals(this);
+    // Who has a shared session open right now: share id → (grantee user id → {at, wall}). Memory only, never stored or journaled.
+    this.viewing = new Map();
   }
 
   get db() { return this.hub.db; }
@@ -103,6 +108,7 @@ export class InteractionShares {
       // The owner's own label, so the host can keep a teammate's "Sent by" distinct from it.
       owner: { name: owner?.name ?? '' },
       created_at: row.created_at, expires_at: row.expires_at,
+      viewers: this.viewersOf(row),
       // Who has access: the team's active members other than the owner, with their role (a viewer only watches).
       members: this.members(row.org_id).filter((m) => m.id !== row.owner_user_id),
     };
@@ -160,8 +166,68 @@ export class InteractionShares {
     if (row.revoked_at === null) {
       this.db.run('UPDATE interaction_shares SET revoked_at = ?, revoked_by = ? WHERE id = ? AND revoked_at IS NULL', this.now(), by, row.id);
       this.db.run('DELETE FROM interaction_proposals WHERE share_id = ?', row.id);
+      this.viewing.delete(row.id);
       this.hub.log.info('session share stopped', { share: row.id });
     }
+  }
+
+  /**
+   * The owner's view of who is watching: grantees whose last beat is inside the TTL, still active members of
+   * the share's team, newest first (at most viewersPerShare: view() refuses more). Staleness is filtered here on read; the 1 s reaper only ages entries out.
+   */
+  viewersOf(row) {
+    const held = this.viewing.get(row.id);
+    if (!held) return [];
+    const now = this.hub.mono(), out = [];
+    for (const [userId, v] of held) {
+      if (now - v.at > PRESENCE_TTL_MS || !this.member(row.org_id, userId)) continue;
+      const name = this.db.get('SELECT display_name AS name FROM users WHERE id = ? AND deleted_at IS NULL', userId)?.name;
+      if (typeof name !== 'string') continue;
+      out.push({ at: v.at, user_id: userId, name: name.replace(HIDDEN, '').trim().slice(0, 80) || 'Teammate', wall: v.wall });
+    }
+    return out.sort((a, b) => b.at - a.at).map((v) => ({ user_id: v.user_id, name: v.name, at: v.wall }));
+  }
+
+  /**
+   * POST: a grantee of a live share says it has the session open (or closed). Same gate as a shared call
+   * (device token, live share, caller and owner active in the team, caller is not the owner); anything else is
+   * the same 404. The owner's host need not be online. Idempotent; a repeat inside PRESENCE_MIN_MS/2 is dropped.
+   */
+  view(ident, shareId, body) {
+    if (!this.relay.credValid(ident.cred)) throw new HubError('UNAUTHENTICATED', 'device token unknown or revoked: sign in again');
+    this.relay.asSharedClient(ident);
+    if (!closed(body, ['viewing']) || typeof body.viewing !== 'boolean') throw invalid();
+    const row = typeof shareId === 'string' && UUID.test(shareId) ? this.db.get('SELECT * FROM interaction_shares WHERE id = ?', shareId) : null;
+    const me = this.live(row) && row.owner_user_id !== ident.user.id ? this.member(row.org_id, ident.user.id) : null;
+    if (!me || !this.member(row.org_id, row.owner_user_id)) throw noShare();
+    limitOrThrow(this.hub, 'share_view_user', ident.user.id);
+    const held = this.viewing.get(row.id) ?? new Map(), had = held.get(ident.user.id), now = this.hub.mono();
+    if (!body.viewing) {
+      held.delete(ident.user.id);
+      if (held.size) this.viewing.set(row.id, held); else this.viewing.delete(row.id);
+      return { viewing: false };
+    }
+    if (had && now - had.at < PRESENCE_MIN_MS / 2) return { viewing: true };
+    if (!had && held.size >= SHARE_LIMITS.viewersPerShare) return { viewing: false };
+    held.set(ident.user.id, { at: now, wall: this.now() });
+    this.viewing.set(row.id, held);
+    return { viewing: true };
+  }
+
+  /** Reaper: forget silent viewers (TTL only; no share query). */
+  sweepViewers() {
+    const now = this.hub.mono();
+    for (const [id, held] of this.viewing) {
+      for (const [userId, v] of held) if (now - v.at > PRESENCE_TTL_MS) held.delete(userId);
+      if (!held.size) this.viewing.delete(id);
+    }
+  }
+
+  /** A member was removed or changed: their open views go at once. */
+  dropViewer(memberId) {
+    const userId = this.db.get('SELECT user_id FROM members WHERE id = ?', memberId)?.user_id;
+    if (!userId) return;
+    for (const [id, held] of this.viewing) { held.delete(userId); if (!held.size) this.viewing.delete(id); }
   }
 
   /** GET: sessions shared with the caller, across their teams. */
@@ -234,6 +300,7 @@ export class InteractionShares {
     route('DELETE', '/api/interaction/v1/shares/:share_id', ({ ident, params }) => this.revoke(ident, params.share_id), { auth: 'user', replay: false });
     route('DELETE', '/api/teams/:team_id/interaction-shares/:share_id', ({ member, params }) => this.adminRevoke(member, params.share_id), { replay: false });
     route('GET', '/api/interaction/v1/shared', ({ ident }) => this.shared(ident), { auth: 'user', replay: false });
+    route('POST', '/api/interaction/v1/shared/:share_id/view', ({ ident, params, body }) => this.view(ident, params.share_id, body), { auth: 'user', replay: false, strictBody: true });
     route('POST', '/api/interaction/v1/shared/:share_id/call', ({ ident, params, body }) => this.call(ident, params.share_id, body), { auth: 'user', replay: false, strictBody: true, ...size });
   }
 }

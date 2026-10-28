@@ -1250,3 +1250,140 @@ test('T0: a create that throws releases the lock, and the next create for the sa
     assert.equal((await r.mac.shareSessionAutomatic({ session: s.session, team: r.org, scope: 'watch' })).status, 'exists');
   } finally { await r.close(); }
 });
+
+// ---- Share viewers (ledger 32): a grantee's "I have this open" beat, shown to the owner ----
+const view = (r, dev, share, viewing = true, extra = {}) => r.h.call('POST', `/api/interaction/v1/shared/${share}/view`, { token: dev.token, body: { viewing, ...extra } });
+const viewers = async (r) => (await r.h.call('GET', '/api/interaction/v1/shares', { token: r.macA.token })).body.shares.map((s) => s.viewers);
+const held = (r) => r.h.hub.interactionShares.viewing;
+
+test('SHARE VIEWERS: a grantee beat shows the owner who is watching; leaving, TTL and revoke clear it; nothing is stored', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    const { share } = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' });
+    assert.deepEqual(await viewers(r), [[]]);
+    const rows = r.h.db.get('SELECT (SELECT count(*) FROM interaction_shares) a, (SELECT count(*) FROM journal) b').b;
+    const beat = await view(r, r.bob, share.id);
+    assert.equal(beat.status, 200); assert.deepEqual(beat.body, { viewing: true });
+    const [[v]] = await viewers(r);
+    assert.deepEqual({ user_id: v.user_id, name: v.name }, { user_id: r.bob.user, name: r.bobName });
+    assert.equal(v.at, r.h.hub.iso());
+    assert.equal(r.h.db.get('SELECT count(*) b FROM journal').b, rows);
+    assert.ok(!JSON.stringify(r.h.db.all('SELECT * FROM interaction_shares')).includes(r.bob.user));
+    // Leaving clears at once; the answer is the same either way.
+    assert.deepEqual((await view(r, r.bob, share.id, false)).body, { viewing: false });
+    assert.deepEqual(await viewers(r), [[]]); assert.equal(held(r).size, 0);
+    // Silent for the TTL: gone on read, then swept by the reaper.
+    await view(r, r.bob, share.id);
+    r.h.clock.advance(89_000); assert.equal((await viewers(r))[0].length, 1);
+    r.h.clock.advance(2_000); assert.deepEqual(await viewers(r), [[]]);
+    assert.equal(held(r).size, 1);                       // still held until the reaper runs
+    await r.h.hub.tick(); assert.equal(held(r).size, 0);   // one reaper pass ages it out
+    // The owner stopping the share, or the team removing the member, clears it.
+    await view(r, r.bob, share.id);
+    await r.h.call('DELETE', `/api/interaction/v1/shares/${share.id}`, { token: r.macA.token, body: {} });
+    assert.equal(held(r).size, 0);
+    assert.equal((await view(r, r.bob, share.id)).status, 404);
+    const b = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' });
+    await view(r, r.bob, b.share.id); assert.equal(held(r).size, 1);
+    r.h.db.run('UPDATE members SET removed_at = ? WHERE id = ?', r.h.hub.iso(), r.h.ids.bob);
+    assert.deepEqual(await viewers(r), [[]]);          // filtered on read, even before the hook
+    r.h.hub.memberChanged(r.h.ids.bob); assert.equal(held(r).size, 0);
+    // Admin revoke clears too.
+    r.h.db.run('UPDATE members SET removed_at = NULL WHERE id = ?', r.h.ids.bob);
+    await view(r, r.bob, b.share.id); assert.equal(held(r).size, 1);
+    assert.equal((await r.h.call('DELETE', `/api/teams/${r.org}/interaction-shares/${b.share.id}`, { token: r.winA.token, body: {} })).status, 200);
+    assert.equal(held(r).size, 0);
+  } finally { await r.close(); }
+});
+
+test('SHARE VIEWERS HOSTILE: only a grantee of a live share can beat; everyone else gets the same 404 and nothing is stored', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    const { share } = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'interact' });
+    const s2 = await r.launch();   // a second session: sharing the same one again would replace the first share
+    const gone = await r.mac.shareSession({ session: s2.session, team: r.org, scope: 'watch', expiresInS: 60 });
+    const missing = [
+      await view(r, r.macA, share.id),
+      await view(r, r.winA, share.id),                              // nor is the owner's other device
+      await view(r, r.carol, share.id),                             // outsider
+      await view(r, r.bob, '00000000-0000-4000-8000-000000000000'), // unknown
+      await view(r, r.bob, 'not-a-uuid'),
+    ];
+    for (const m of missing) assert.equal(m.status, 404, m.text);
+    assert.equal(new Set(missing.map((m) => m.text)).size, 1);
+    assert.equal(held(r).size, 0);
+    // Another team's member, and a removed member.
+    const other = r.h.db.get('SELECT id FROM orgs WHERE id != ? LIMIT 1', r.org)?.id;
+    if (other) r.h.db.run('UPDATE members SET org_id = ? WHERE id = ?', other, r.h.ids.bob);
+    else r.h.db.run('UPDATE members SET removed_at = ? WHERE id = ?', r.h.hub.iso(), r.h.ids.bob);
+    assert.equal((await view(r, r.bob, share.id)).status, 404);
+    assert.equal(held(r).size, 0);
+    r.h.db.run('UPDATE members SET org_id = ?, removed_at = NULL WHERE id = ?', r.org, r.h.ids.bob);
+    // Owner no longer a member of the team: nobody can beat.
+    r.h.db.run("UPDATE members SET role = 'owner' WHERE id = ?", r.h.ids.bob);
+    r.h.db.run('UPDATE members SET removed_at = ? WHERE id = ?', r.h.hub.iso(), r.h.ids.alice);
+    assert.equal((await view(r, r.bob, share.id)).status, 404);
+    r.h.db.run('UPDATE members SET removed_at = NULL WHERE id = ?', r.h.ids.alice);
+    // Expired, and a revoked device token.
+    r.h.clock.advance(61_000);
+    assert.equal((await view(r, r.bob, gone.share.id)).status, 404);
+    assert.equal(held(r).size, 0);
+    assert.equal((await r.h.call('POST', `/api/interaction/v1/shared/${share.id}/view`, { body: { viewing: true } })).status, 401);
+    // The body is closed.
+    for (const body of [{}, { viewing: 'yes' }, { viewing: true, request_id: rid() }, { viewing: true, name: 'Eve' }, []]) {
+      const res = await r.h.call('POST', `/api/interaction/v1/shared/${share.id}/view`, { token: r.bob.token, body });
+      assert.equal(res.status, 400, JSON.stringify(body));
+    }
+    assert.equal(held(r).size, 0);
+  } finally { await r.close(); }
+});
+
+test('SHARE VIEWERS: repeat beats are dropped inside half the presence floor, a change is not, the bucket and the cap bound a flood, names are clean', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    const { share } = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' });
+    await view(r, r.bob, share.id);
+    const first = held(r).get(share.id).get(r.bob.user).at;
+    r.h.clock.advance(1_000); await view(r, r.bob, share.id);
+    assert.equal(held(r).get(share.id).get(r.bob.user).at, first);          // dropped: a keepalive flood
+    r.h.clock.advance(2_000); await view(r, r.bob, share.id);
+    assert.ok(held(r).get(share.id).get(r.bob.user).at > first);             // accepted
+    // A leave right after a beat is always honoured.
+    await view(r, r.bob, share.id, false); assert.equal(held(r).size, 0);
+    // The per-user bucket: 60 a minute, then 429; other users are unaffected.
+    let limited = null;
+    for (let i = 0; i < 70 && !limited; i++) { const res = await view(r, r.bob, share.id, i % 2 === 0); if (res.status === 429) limited = res; }
+    assert.ok(limited, 'bucket not enforced');
+    assert.equal((await view(r, r.carol, share.id)).status, 404);
+    // Names: control and bidi characters never reach the owner.
+    r.h.clock.advance(60_000);
+    r.h.db.run('UPDATE users SET display_name = ? WHERE id = ?', 'Bo‮b\u0007 ⁦x', r.bob.user);
+    assert.equal((await view(r, r.bob, share.id)).status, 200);
+    assert.equal((await viewers(r))[0][0].name, 'Bob x');
+    // Newest first: a second grantee who beats later is listed first.
+    r.join(r.carol);
+    r.h.clock.advance(6_000);
+    assert.equal((await view(r, r.carol, share.id)).status, 200);
+    assert.deepEqual((await viewers(r))[0].map((v) => v.user_id), [r.carol.user, r.bob.user]);
+    // Cap per share: a new viewer beyond the limit is not recorded.
+    const m = held(r).get(share.id); m.clear();
+    for (let i = 0; i < 50; i++) m.set(`u${i}`, { at: r.h.hub.mono(), wall: r.h.hub.iso() });
+    assert.deepEqual((await view(r, r.bob, share.id)).body, { viewing: false });
+    assert.equal(m.size, 50); assert.ok(!m.has(r.bob.user));
+  } finally { await r.close(); }
+});
+
+test('SHARE VIEWERS: a beat needs no online host; viewers are memory only', async () => {
+  const r = await rig();
+  try {
+    const s = await r.launch();
+    const { share } = await r.mac.shareSession({ session: s.session, team: r.org, scope: 'watch' });
+    r.mac.close();
+    await until(() => !r.h.hub.interactionRelay.liveHost(r.macA.user, r.macA.device));
+    assert.equal((await view(r, r.bob, share.id)).status, 200);
+    assert.equal(held(r).size, 1);
+  } finally { await r.close(); }
+});
