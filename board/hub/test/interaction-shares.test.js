@@ -1360,7 +1360,7 @@ test('SHARE VIEWERS: repeat beats are dropped inside half the presence floor, a 
     assert.equal((await view(r, r.carol, share.id)).status, 404);
     // Names: control and bidi characters never reach the owner.
     r.h.clock.advance(60_000);
-    r.h.db.run('UPDATE users SET display_name = ? WHERE id = ?', 'Bo‮b\u0000 ⁦x', r.bob.user);
+    r.h.db.run('UPDATE users SET display_name = ? WHERE id = ?', 'Bo‮b\u0007 ⁦x', r.bob.user);
     assert.equal((await view(r, r.bob, share.id)).status, 200);
     assert.equal((await viewers(r))[0][0].name, 'Bob x');
     // Newest first: a second grantee who beats later is listed first.
