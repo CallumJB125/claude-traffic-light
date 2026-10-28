@@ -6,7 +6,7 @@
 const HINT_MS = 10000;
 const MAX = 100;
 // Control characters and the direction overrides/isolates, which could make a folder name read as something else.
-const UNSAFE = /[\u0000-\u001f\u007f-\u009f؜‎‏‪-‮⁦-⁩]/g;
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 /** The search text for a folder path: its last segment, cleaned, at most 100 characters; '' when there is none. */
 function queryOf(cwd) {
