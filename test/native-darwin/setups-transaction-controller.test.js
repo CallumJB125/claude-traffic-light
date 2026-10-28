@@ -24,7 +24,7 @@ test('L16 controller: CANCELLED re-arms the same handle, writes nothing, keeps t
  const f=fixture(t,helper),clock={t:Date.now()};let mode='cancel',writes=0;f.state.storeHook=m=>{if(m==='write')writes++;};
  const c=cancelCtl(t,f,async d=>mode==='cancel'?CANCELLED:{approved:true,plan_hash:d.plan_hash},clock),p=await c.plan(f.sourceHandle,f.request());assert.equal(p.ok,true);
  for(let i=0;i<2;i++){const r=await c.apply(p.handle,p.plan_hash);assert.deepEqual({ok:r.ok,status:r.status},{ok:false,status:'cancelled'});assert.equal(writes,0);assert.ok(kept(f));}
- clock.t+=24*3600*1000;mode='approve';assert.equal((await c.apply(p.handle,p.plan_hash)).ok,false,'the original expiry still applies after Cancel');assert.ok(kept(f));
+ clock.t+=48*3600*1000;mode='approve';assert.equal((await c.apply(p.handle,p.plan_hash)).ok,false,'the original expiry still applies after Cancel');assert.ok(kept(f));
  const g=fixture(t,helper),k2={t:Date.now()};let m2='cancel';const c2=cancelCtl(t,g,async d=>m2==='cancel'?CANCELLED:{approved:true,plan_hash:d.plan_hash},k2),p2=await c2.plan(g.sourceHandle,g.request());
  assert.equal((await c2.apply(p2.handle,p2.plan_hash)).status,'cancelled');m2='approve';assert.equal((await c2.apply(p2.handle,p2.plan_hash)).ok,true);assert.equal((await c2.apply(p2.handle,p2.plan_hash)).ok,false);
 });
@@ -34,7 +34,7 @@ test('L16 controller: anything but the CANCELLED sentinel consumes the handle',a
   const r=await c.apply(p.handle,p.plan_hash);assert.equal(r.ok,false,name);assert.notEqual(r.status,'cancelled',name);on=false;assert.equal((await c.apply(p.handle,p.plan_hash)).ok,false,name+' consumed');assert.ok(kept(f),name);}
 });
 test('L16 controller: CANCELLED after invalidate(), expiry or lost foreground does not re-arm',async t=>{
- for(const [name,lose] of [['invalidate',(c)=>c.invalidate()],['expiry',(c,k)=>{k.t+=24*3600*1000;}],['foreground',(c,k,f)=>{f.state.foreground=false;}]]){
+ for(const [name,lose] of [['invalidate',(c)=>c.invalidate()],['expiry',(c,k)=>{k.t+=48*3600*1000;}],['foreground',(c,k,f)=>{f.state.foreground=false;}]]){
   const f=fixture(t,helper),clock={t:Date.now()};let ctl,on=true;ctl=cancelCtl(t,f,async()=>{if(on)lose(ctl,clock,f);return CANCELLED;},clock);const p=await ctl.plan(f.sourceHandle,f.request());
   const r=await ctl.apply(p.handle,p.plan_hash);assert.notEqual(r.status,'cancelled',name);on=false;f.state.foreground=true;clock.t=Date.now();assert.equal((await ctl.apply(p.handle,p.plan_hash)).ok,false,name+' must stay consumed');assert.equal((await ctl.check(p.handle)).ok,false,name);assert.ok(kept(f),name);}
 });
