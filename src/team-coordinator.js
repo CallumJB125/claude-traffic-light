@@ -162,7 +162,7 @@ function createTeamCoordinator({ inventory: readInventory, inspect, action, reso
       if (!fresh() || !t?.hub?.proposals || !t.isCurrent()) { a.status='refused'; a.reason='Owner-reviewed proposals are unavailable for this connection.'; continue; }
       if (t.scope !== 'interact') { a.status='refused'; a.reason='Shared with you to watch only. The owner can choose Allow sending.'; continue; }
       let r; try { r = await t.hub.proposals(t.viewer,t.team,t.ref,'request',{ id:a.id, decision:p.id, version:1, generation:a.generation,title:a.name,text:a.text }, () => fresh() && t.isCurrent()); } catch { r=null; }
-      a.selection=null; a.status=r?.ok?'awaiting-owner':'unconfirmed'; a.reason=r?.ok?'The session owner must review this exact message in its Share panel.':safeText(r?.error,600)||'Request outcome is unknown. Refresh owner requests before trying again.';
+      a.selection=null; a.status=r?.ok?'awaiting-owner':r?.offline===true?'refused':'unconfirmed'; a.reason=r?.ok?'The session owner must review this exact message in its Share panel.':safeText(r?.error,600)||'Request outcome is unknown. Refresh owner requests before trying again.';
     }
     p.status='awaiting-owner';
     return alive(at) ? project(p) : fail('stale', STALE);
@@ -188,6 +188,7 @@ function createTeamCoordinator({ inventory: readInventory, inspect, action, reso
     if(!fresh()||!t?.hub?.proposals||!t.isCurrent())return fail('stale',STALE);
     if(operation==='send'||operation==='replace'){
       const read=await inspect({id:chosen.entry});
+      if(fresh()&&t.isCurrent()&&read?.offline===true)return read;
       if(!fresh()||!t.isCurrent()||!read?.ok||read.state?.generation!==chosen.proposal.generation||read.state?.status==='ended'||operation==='send'&&(read.state?.status!=='ready'||read.state?.activeTurn!==null||read.capabilities?.send?.available!==true))return fail('stale',STALE);
     }
     const payload=operation==='replace'?{id:crypto.randomUUID(),decision:chosen.proposal.decision,version:chosen.proposal.version+1,generation:chosen.proposal.generation,title:chosen.proposal.title,text:request.text.trim()}:chosen.proposal;

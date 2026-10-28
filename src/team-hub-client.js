@@ -323,6 +323,8 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
     if (!current()) return failed('forbidden', REASONS.forbidden);
     const row = target.row;
     if (row.scope !== 'interact') return failed('forbidden', 'Owner-reviewed requests require an existing Watch and send share.');
+    // An offline owner answers 404 on every proposal route, which cannot be told from a missing proposal: say offline first.
+    if (row.online === false) return offlineFailure();
     let endpoint = `${base}/api/interaction/v1/shared/${encodeURIComponent(ref)}/proposals`, method = operation === 'list' ? 'GET' : operation === 'cancel' ? 'DELETE' : 'POST', body;
     if (operation === 'request') {
       if (!object(input) || !UUID.test(input.id) || !UUID.test(input.decision) || !Number.isSafeInteger(input.version) || !Number.isSafeInteger(input.generation) || typeof input.title !== 'string' || typeof input.text !== 'string') return failed('invalid', REASONS.invalid);
@@ -333,6 +335,7 @@ function createTeamHubClient({ baseUrl, token, fetch = globalThis.fetch, viewer:
       if (operation === 'send') {
         const before = await readShared(row, viewerArg);
         if (!current()) return failed('forbidden', REASONS.forbidden);
+        if (before.offline) return before;
         if (!before.ok || before.state.generation !== input.generation || before.state.status !== 'ready' || before.state.activeTurn !== null) return failed('stale', 'The reviewed session is busy, ended or changed.');
         body = { version: input.version, digest: input.digest, request_id: crypto.randomUUID() };
       }

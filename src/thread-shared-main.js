@@ -184,6 +184,7 @@ function createSharedThreadActions({ authority = null, now = Date.now } = {}) {
       let list;
       try { list = await auth.remoteList(); } catch { list = null; }
       if (!still(c, true)) return fail('stale', TEXT.MOVED);
+      if (list?.offline === true) return mapped(list);
       const p = Array.isArray(list?.proposals) ? list.proposals.find((x) => x.id === rec.proposalId) : null;
       if (!p) return fail('stale', TEXT.OWNER_ACTED);
       if (p.status !== 'pending') return fail('stale', TEXT.OWNER_ACTED);
