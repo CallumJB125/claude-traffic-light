@@ -38,7 +38,7 @@ const { createOwnerThreadActions } = require('./thread-owner-main');
 const ROW_ID = /^[0-9a-f]{64}$/;
 const EFFECT_MS = 500;
 const { createShareView } = require('./share-view');
-const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act', 'thread:inputs', 'thread:answer-input', 'thread:shared-state', 'thread:open-team', 'thread:shared-review', 'thread:shared-confirm', 'thread:shared-proposals', 'thread:owned-state', 'thread:open-overview', 'thread:owner-state', 'thread:owner-review', 'thread:owner-confirm', 'thread:owner-act', 'thread:shared-painted']);
+const CHANNELS = Object.freeze(['thread:open', 'thread:state', 'thread:close', 'thread:open-in-tasks', 'thread:go-to-terminal', 'thread:copy-link', 'thread:message', 'thread:act', 'thread:inputs', 'thread:answer-input', 'thread:shared-state', 'thread:open-team', 'thread:shared-review', 'thread:shared-confirm', 'thread:shared-proposals', 'thread:shared-queue', 'thread:shared-queue-remove', 'thread:owned-state', 'thread:open-overview', 'thread:owner-state', 'thread:owner-review', 'thread:owner-confirm', 'thread:owner-act', 'thread:shared-painted']);
 // The reply's own bound: guard's (TV.LIMITS.message), checked before any await.
 const MESSAGE_BYTES = 8192;
 const REPLY_TEXT = Object.freeze({
@@ -182,6 +182,18 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
     const c = guard(e, args);
     if (!c || !sharedBound(c)) return null;
     return shared.proposals(c, still);
+  }
+  // T5b: this thread's queued follow-ups (main-built rows with opaque keys) and cancel/discard by key.
+  async function sharedQueue(e, args) {
+    const c = guard(e, args);
+    if (!c || !sharedBound(c)) return null;
+    return shared.queueList(c, still);
+  }
+  async function sharedQueueRemove(e, args) {
+    const c = guardWith(e, args, { effect: true });
+    if (!c || !sharedBound(c)) return null;
+    if (!rateOk(c, 'shared-queue-remove')) return { ok: false, status: 'busy', error: 'Wait a moment, then try again.' };
+    return shared.queueRemove(c, args[1], still);
   }
   // T4: owner controls, for a bound `owned` or `session` row only (a session row's owned twin is resolved in main).
   const ownerActs = createOwnerThreadActions({ owner, now, ...(ownerTimers ? { timers: ownerTimers } : {}) });
@@ -683,6 +695,8 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
       ipc.handle('thread:shared-review', (e, ...a) => sharedReview(e, a));
       ipc.handle('thread:shared-confirm', (e, ...a) => sharedConfirm(e, a));
       ipc.handle('thread:shared-proposals', (e, ...a) => sharedProposals(e, a));
+      ipc.handle('thread:shared-queue', (e, ...a) => sharedQueue(e, a));
+      ipc.handle('thread:shared-queue-remove', (e, ...a) => sharedQueueRemove(e, a));
       ipc.handle('thread:owned-state', (e, ...a) => ownedState(e, a));
       ipc.handle('thread:open-overview', (e, ...a) => toOverview(e, a));
       ipc.handle('thread:owner-state', (e, ...a) => ownerState(e, a));

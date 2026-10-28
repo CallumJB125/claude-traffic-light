@@ -112,7 +112,8 @@ test('channels: the three T3 channels exist and nothing else was added', () => {
   for (const c of ['thread:shared-review', 'thread:shared-confirm', 'thread:shared-proposals']) assert.ok(CHANNELS.includes(c), c);
   // T4a adds thread:owned-state and thread:open-overview (test/owned-thread-t4a.test.js); T4 the four owner
   // channels (test/owner-thread-t4.test.js).
-  assert.equal(CHANNELS.length, 22); // + T4a's two, T4's four, L32's thread:shared-painted
+  // T5b adds thread:shared-queue and thread:shared-queue-remove (test/shared-thread-t5b.test.js).
+  assert.equal(CHANNELS.length, 24); // + T4a's two, T4's four, L32's thread:shared-painted, T5b's two
 });
 
 test('Guard T: wrong sender or frame, args, an unbound id, a watch scope, a task row', async () => {
@@ -127,7 +128,7 @@ test('Guard T: wrong sender or frame, args, an unbound id, a watch scope, a task
     assert.equal((await x.handlers.get('thread:shared-review')(x.ev, x.id, { op: 'send', text: 'a' })).status, 'busy', 'a 500 ms floor per document');
     assert.equal(await x.handlers.get('thread:shared-review')(x.ev, x.id, { op: 'send', text: 'a' }, 'extra'), null, 'extra args');
     assert.equal(await x.handlers.get('thread:shared-proposals')(x.ev, x.id, 'extra'), null);
-    assert.equal((await x.review('queue', 'hi')).status, 'invalid', 'no Queue in T3');
+    assert.equal((await x.review('queue', 'hi')).status, 'unavailable', 'this authority has no queue (T5b tests have their own)');
     assert.equal((await x.review('send', 'a\0b')).status, 'invalid');
     assert.equal((await x.review('send', 'x'.repeat(4001))).status, 'invalid');
     assert.equal((await x.review('stop', 'text')).status, 'invalid', 'stop never carries text');
@@ -473,12 +474,12 @@ function page(views, api = {}) {
 }
 const items = (p) => [...p.$('th-sh-menu').querySelectorAll('[role="menuitemradio"]')].map((b) => [b.dataset.op, b.disabled]);
 
-test('renderer: idle default is Send; options Send / Steer / Propose, no Queue; placeholder and quota line', async () => {
+test('renderer: idle default is Send; options Send / Steer / Queue / Propose; placeholder and quota line', async () => {
   const p = page(pv());
   p.ready(); await tick(); await tick();
   assert.equal(p.$('th-sh-chip').textContent, 'Send ▾');
-  assert.deepEqual(items(p), [['send', false], ['steer', true], ['propose', false]]);
-  assert.ok(!/queue/i.test(p.$('th-sh-menu').textContent), 'no Queue option at all');
+  assert.deepEqual(items(p), [['send', false], ['steer', true], ['queue', true], ['propose', false]]);
+  assert.match(p.$('th-sh-menu').textContent, /Send now; the session is idle\./, 'Queue is for a working session');
   assert.equal(p.$('th-sh-text').placeholder, "Message Bob's session");
   assert.equal(p.$('th-sh-quota').textContent, "Runs on Bob's Codex account and quota.");
   assert.equal(p.$('th-sh-stop').hidden, true, 'Stop only while a turn can be interrupted');
@@ -489,7 +490,7 @@ test('renderer: busy Codex defaults to Steer with Stop; busy Claude (no steer) h
   const codex = page(pv({ status: 'working', activeTurn: TURN }));
   codex.ready(); await tick(); await tick();
   assert.equal(codex.$('th-sh-chip').textContent, 'Steer this turn ▾');
-  assert.deepEqual(items(codex), [['send', true], ['steer', false], ['propose', true]]);
+  assert.deepEqual(items(codex), [['send', true], ['steer', false], ['queue', false], ['propose', true]]);
   assert.match(codex.$('th-sh-menu').textContent, /Bob's session is busy\. Propose when it's idle\./);
   assert.equal(codex.$('th-sh-stop').hidden, false);
   const claude = page(pv({ status: 'working', activeTurn: TURN, capabilities: { newTurn: true, steer: false, interrupt: true } }));

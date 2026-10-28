@@ -186,3 +186,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .th-sh-ask-row { display: flex; align-items: center; gap: 6px; font-size: var(--text-xs); color: var(--muted); }
 .th-sh-stop { justify-self: start; }
 .th-sh-proposal .th-btn { justify-self: start; }
+
+/* T5b: my queued messages to this share, above the composer. */
+.th-sh-queue { display: grid; gap: var(--space-1); }
+.th-sh-queue[hidden] { display: none; }
+.th-sh-queue-head { margin: 0; font-size: var(--text-xs); color: var(--muted); }
+.th-sh-queued .th-btn { justify-self: start; }

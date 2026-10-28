@@ -16,7 +16,7 @@ const CATEGORIES = Object.freeze(['Thinking', 'Running a command', 'Editing file
 const turnTag = (t) => (typeof t === 'string' && t ? crypto.createHash('sha256').update(`turn:${t}`).digest('hex').slice(0, 16) : null);
 const TOP_KEYS = Object.freeze(['header', 'banner', 'activity', 'deliveries', 'status', 'generation', 'turn', 'canSendLater', 'controls']);
 // T3: what the interact layout may offer, as booleans and fixed reasons only. Main checks every one again.
-const CONTROL_KEYS = Object.freeze(['send', 'steer', 'interrupt', 'propose']);
+const CONTROL_KEYS = Object.freeze(['send', 'steer', 'interrupt', 'propose', 'queue']);
 const HEADER_KEYS = Object.freeze(['title', 'owner', 'initials', 'provider', 'scope', 'expiresAt', 'fake']);
 const DELIVERY_KEYS = Object.freeze(['id', 'by', 'text', 'state', 'response', 'at']);
 
@@ -33,7 +33,12 @@ function controlsOf(scope, s, owner) {
   // Propose is idle-only, like the hub's proposal send (plan-t3 M2).
   const propose = c.send.available ? { available: true, reason: '' }
     : { available: false, reason: scope !== 'interact' || state.status === 'ended' ? c.send.reason : `${owner}'s session is busy. Propose when it's idle.` };
-  return { send: pick(c.send), steer: pick(c.steer), interrupt: pick(c.interrupt), propose: pick(propose) };
+  // T5b: a message queued to send when the session is idle: offered while it is working (when idle, Send is the way).
+  const queue = scope !== 'interact' ? { available: false, reason: 'Queueing needs an interact share.' }
+    : state.status === 'ended' ? { available: false, reason: 'This session has ended.' }
+    : state.status === 'ready' && state.activeTurn === null ? { available: false, reason: 'Send now; the session is idle.' }
+    : s.capabilities?.newTurn === false ? { available: false, reason: 'This provider cannot take a new message.' } : { available: true, reason: '' };
+  return { send: pick(c.send), steer: pick(c.steer), interrupt: pick(c.interrupt), propose: pick(propose), queue: pick(queue) };
 }
 
 // T4a reuses these two for the owned thread, so both kinds keep the same bounds and cleaners.

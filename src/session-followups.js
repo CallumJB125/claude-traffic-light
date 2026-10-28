@@ -84,7 +84,7 @@ function createSessionFollowups({ file, storage, scope, now = Date.now, onChange
       entries = next; changed();
     } finally { if (fd !== undefined) io.closeSync(fd); io.closeSync(dirFd); try { io.rmSync(tmp, { force: true }); } catch { /* preserve primary error */ } }
   }
-  const snapshot = s => entries.filter(e => e.scope === s).map(dto);
+  const snapshot = (s, match = null) => entries.filter(e => e.scope === s && (match === null || match(e.target))).map(dto);
   async function update(e, fields, s, keep = () => current(s)) {
     const next = entries.map(v => v.id === e.id ? { ...v, ...fields, updatedAt: Math.max(v.updatedAt, now()) } : v);
     await save(next, keep);
@@ -116,12 +116,12 @@ function createSessionFollowups({ file, storage, scope, now = Date.now, onChange
     // The hub account explicitly signed out or its token was revoked (never inferred from a missing viewer).
     signedOut: ({ origin, userId } = {}) => typeof origin === 'string' && typeof userId === 'string' && userId
       ? refuseTeam(e => e.target.route?.origin === origin && e.target.route.viewer === userId, "Signed out; this follow-up won't be sent.", () => true) : Promise.resolve(),
-    list: (keep=()=>true) => {const s=scope();
+    list: (keep=()=>true, match=null) => {const s=scope();
       // The durable sending marker is already cached. A passive read must not
       // wait behind its provider acknowledgement, or Sending would never be
       // visible and the UI could still offer cancellation of a dispatched turn.
-      if(loaded&&current(s)&&keep()===true&&entries.some(e=>e.scope===s&&e.status==='sending'))return Promise.resolve({ok:true,status:'ready',items:snapshot(s)});
-      return serial(async () => { try { if (!current(s)||keep()!==true) return fail('stale', 'Select your account and workspace.'); await load();if(!current(s)||keep()!==true)return fail('stale','The account or view changed.');await expire(s); return current(s)&&keep()===true ? { ok: true, status: 'ready', items: snapshot(s) } : fail('stale', 'The account changed.'); } catch { return unavailable(); } });},
+      if(loaded&&current(s)&&keep()===true&&entries.some(e=>e.scope===s&&e.status==='sending'))return Promise.resolve({ok:true,status:'ready',items:snapshot(s,match)});
+      return serial(async () => { try { if (!current(s)||keep()!==true) return fail('stale', 'Select your account and workspace.'); await load();if(!current(s)||keep()!==true)return fail('stale','The account or view changed.');await expire(s); return current(s)&&keep()===true ? { ok: true, status: 'ready', items: snapshot(s, match) } : fail('stale', 'The account changed.'); } catch { return unavailable(); } });},
     enqueue: request => {const s=scope();return serial(async () => {
       if (!object(request) || !UUID.test(request.id) || !validTarget(request.target) || !text(request.text) || typeof request.label !== 'string' || request.label.length > 240) return fail('invalid', 'Check the target and message.');
       try {

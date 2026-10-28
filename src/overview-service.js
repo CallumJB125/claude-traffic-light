@@ -547,6 +547,7 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
    const e=model.entries.find(e=>e.id===r.entryId);
    return e?{schema:1,view:'team',status:'complete',observed_at:now(),team:{key,name:r.teamName},entries:[e]}:null;
   }
+  const mineT=t=>t.kind==='team'&&t.route.origin===hub.origin&&t.route.viewer===r.viewerId&&t.route.team===r.team&&t.route.ref===r.ref;
   const controls=createTeamSessionControls({resolve:threadResolve,current:live,actionCurrent:acting,now});
   const coordinator=createTeamCoordinator({inventory:oneEntry,inspect:controls.inspect,action:controls.action,resolve:threadResolve,current:live,actionCurrent:acting,now});
   return Object.freeze({
@@ -560,6 +561,18 @@ function createOverviewService({presence=()=>null,presenceView=()=>0,presenceOwn
    remoteList:()=>coordinator.remoteList({id:r.entryId}),
    remoteSend:selection=>coordinator.remoteSend({selection}),
    remoteCancel:selection=>coordinator.remoteCancel({selection}),
+   // T5b: queued messages to this one share, in the current follow-up scope only. The route keys keep Overview's order
+   // so a thread item and an Overview item for the same session share one target key (and its 3-per-target cap).
+   queue:Object.freeze({
+    enqueue:async({text,requestId,generation,provider,providerLabel})=>{
+     if(!followups||!acting()||viewerOf(hub)?.id!==r.viewerId||typeof hub.origin!=='string')return{ok:false,status:'stale'};
+     const target=pinned({kind:'team',route:{origin:hub.origin,viewer:r.viewerId,team:r.team,ref:r.ref},generation,provider});
+     return followups.enqueue({id:requestId,target,label:`Shared ${clean(providerLabel,60)||provider} session`.slice(0,240),text,schedule:{kind:'ready'},current:()=>acting()&&viewerOf(hub)?.id===r.viewerId});
+    },
+    list:async()=>followups?followups.list(live,mineT):{ok:false,status:'unavailable'},
+    cancel:async id=>followups?followups.cancel(id,acting):{ok:false,status:'unavailable'},
+    discard:async id=>followups?followups.discard(id,acting):{ok:false,status:'unavailable'},
+   }),
    invalidate(){controls.invalidate();coordinator.invalidate();},
   });
  }
