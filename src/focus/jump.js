@@ -3,6 +3,17 @@
 const { ADAPTERS } = require('./index.js');
 const Ids = require('./ids.js');
 const ADOPT_MS = 2500;
+// QoL1: how long the "is this session still running?" check may take before the note stays neutral.
+const LIVENESS_MS = 1500;
+// Terminals with no tab API: the app the hook recorded is brought forward by its bundle id (never the
+// recorded string in a script), and the note says the tab could not be picked. No window is guessed at.
+const OPEN_ONLY = Object.freeze({ Warp: 'dev.warp.Warp-Stable', Alacritty: 'org.alacritty' });
+// An adapter that ran and found no tab for the session: its window is gone, or never was this app's.
+const NOT_FOUND = new Set(['no match', 'not-running', 'matches: 0', 'no adapter for this terminal']);
+const NOTE_ENDED = "This session has ended, so there's no terminal window to show.";
+const NOTE_NO_WINDOW = "This session is still running, but Plexiform couldn't find its terminal window. It may have been closed.";
+const NOTE_MAYBE_CLOSED = "Couldn't find this session's terminal window. It may have been closed.";
+const base = (p) => String(p || '').split('/').filter(Boolean).pop() || 'that folder';
 
 // A session reported from another machine: its host is a name the user typed
 // and its ids describe that machine's terminals, so nothing here may act on
@@ -17,7 +28,8 @@ function hitResult(r, used) {
 // `adopt(session)` may answer a copy of the session to focus instead: one
 // Ghostty Dock lists under its exact id, though its hook recorded another
 // app (src/terminal.js). It answers null to leave the session as it is.
-function createJumper({ localHost, platform, focus, activate, explainer, adopt = null, log = () => {} }) {
+// `liveness(session)` answers 'gone', 'alive' or 'unknown' (src/terminal.js); `openApp(bundleId)` true once opened.
+function createJumper({ localHost, platform, focus, activate, explainer, adopt = null, liveness = null, openApp = null, log = () => {} }) {
   let current = null; // { key, gen, promise } of the jump in flight
   let gen = 0;
 
@@ -37,6 +49,35 @@ function createJumper({ localHost, platform, focus, activate, explainer, adopt =
     return { app: null, exact: false, cant: NOTE_UNKNOWN };
   }
 
+  async function aliveness(session) {
+    if (!liveness) return 'unknown';
+    let timer;
+    try { return await Promise.race([liveness(session), new Promise((r) => { timer = setTimeout(() => r('unknown'), LIVENESS_MS); })]); } catch { return 'unknown'; } finally { clearTimeout(timer); }
+  }
+
+  // QoL1: every miss says plainly why. `r` is the last adapter's answer, or null when nothing was recorded.
+  async function missed(r, session, stale) {
+    if (r && (r.sibling || r.selected || r.detached)) return cantJump(r, session);
+    if (r && r.ambiguous) {
+      const app = String(r.adapter || '').startsWith('ghostty-dock') ? 'Ghostty Dock' : 'Ghostty';
+      return { app: null, exact: false, cant: `There are ${r.ambiguous} ${app} tabs in ${base(Ids.launchCwd(session))}, so Plexiform didn't guess. Switch to it in ${app}.` };
+    }
+    const id = Object.hasOwn(OPEN_ONLY, session.hostApp) && !Ids.inTmux(session) ? OPEN_ONLY[session.hostApp] : null;
+    if (id && openApp && (!r || r.reason === 'no adapter for this terminal')) {
+      let opened = false;
+      try { opened = await openApp(id); } catch { opened = false; }
+      if (stale()) return null;
+      if (opened) return { app: session.hostApp, exact: false, cant: `Opened ${session.hostApp}. Plexiform can't pick its tab.` };
+    }
+    if (r && !NOT_FOUND.has(r.reason)) return cantJump(r, session);
+    const alive = await aliveness(session);
+    if (stale()) return null;
+    if (alive === 'gone') return { app: null, exact: false, cant: NOTE_ENDED };
+    // Nothing recorded: where its window was was never known, so not "closed".
+    if (!r) return cantJump(null, session);
+    return { app: null, exact: false, cant: alive === 'alive' ? NOTE_NO_WINDOW : NOTE_MAYBE_CLOSED };
+  }
+
   // Same shape as activate's answer: { app, exact } or null, or
   // { app: null, cant, command? } when nothing was switched. `stale()` turns
   // true once a click for another target has superseded this one.
@@ -54,7 +95,7 @@ function createJumper({ localHost, platform, focus, activate, explainer, adopt =
       }
       if (stale()) return null;
       const target = adopted || session;
-      if (!target.terminal && !adopted) { log('no terminal recorded; nothing switched'); return stale() ? null : cantJump(null); }
+      if (!target.terminal && !adopted) { log('no terminal recorded; nothing switched'); return stale() ? null : missed(null, session, stale); }
       if (adopted) log(`listed by ${adopted.hostApp}; trying it first`);
       const ctx = { onNeeds: (needs) => explainer.onNeeds(needs), isCancelled: stale, log };
       let used = target;
@@ -69,7 +110,7 @@ function createJumper({ localHost, platform, focus, activate, explainer, adopt =
       if (r.ok) return hitResult(r, used);
       log(`${r.adapter || 'no adapter'}: ${r.reason || 'failed'}; nothing switched`);
       if (r.denied) explainer.onDenied(r.needs);
-      return cantJump(r, session);
+      return missed(r, session, stale);
     }
     if (platform === 'linux' && here) return runLinux(session, folderHint, preferApp, stale);
     return stale() ? null : activate(folderHint, preferApp);
@@ -119,4 +160,4 @@ function createJumper({ localHost, platform, focus, activate, explainer, adopt =
   };
 }
 
-module.exports = { createJumper, isRemote, ADOPT_MS };
+module.exports = { createJumper, isRemote, ADOPT_MS, LIVENESS_MS, OPEN_ONLY, NOTES: { NOTE_ENDED, NOTE_NO_WINDOW, NOTE_MAYBE_CLOSED } };

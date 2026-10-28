@@ -72,11 +72,11 @@ const UpdateView = require('./src/update-view.js');
 const Feedback = require('./src/feedback');
 const http = require('http'); // privacy-flow: local-server
 const crypto = require('crypto');
-const Terminal = require('./src/terminal.js')({ getSessions: () => localSessions(aggregateState().sessions), getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST, getGhosttyDockMode: () => GhosttyDock.modeOf(loadConfig()) });
+const Terminal = require('./src/terminal.js')({ getSessions: () => localSessions(aggregateState().sessions), getRootDir: () => ROOT_DIR, getLocalHost: () => LOCAL_HOST, getGhosttyDockMode: () => GhosttyDock.modeOf(loadConfig()), isAiProcess: (pid, provider) => AgentAwareness.isAiProcess(pid, provider) });
 const {
   TERMINAL_APPS, escapeForAppleScript, activateTerminalApp, jumpToSession, isRemote, osa, frontmostApp,
   dockIconRect, clampToDisplay, runningProcessNames, terminalForSessions,
-  runningTerminal, bounceOwnDock,
+  runningTerminal, bounceOwnDock, showNote: showJumpNote,
 } = Terminal;
 
 // `--demo weed`: a self-contained showing of the garden's weed scene — its
@@ -2427,7 +2427,8 @@ const Compose = require('./src/compose-main.js').register({
 // local session, from a focused, shown thread, once per 500 ms (S1).
 async function threadGoToTerminal({ source, sessionId }) {
   const session = localSessions(aggregateState().sessions).find((s) => s && !s.device && s.sessionId === sessionId && (s.source ?? 'claude') === source);
-  if (!session) return { ok: false };
+  // QoL1: never a silent miss. A session no longer listed has ended. (A null jump was superseded by a newer click.)
+  if (!session) return { ok: false, note: "This session has ended, so there's no terminal window to show." };
   const r = await jumpToSession(session, String(session.cwd || '').split('/').filter(Boolean).pop() || '', session.hostApp);
   return { ok: !!r && !r.cant, ...(r && r.cant ? { note: r.cant } : {}) };
 }
@@ -2905,7 +2906,8 @@ function maybeNotify(st) {
       // Another machine's session: nothing on this Mac to jump to.
       if (String(n.sessionId || '').startsWith('remote:') || isRemote(s) || isRemote({ sessionId: n.sessionId })) return;
       if (n.hostApp || n.kind === 'runaway') {
-        jumpToSession(s, Rules.folderOf(n.cwd), n.hostApp).catch((err) => console.warn('[jump] failed:', err.message));
+        // QoL1: a click that switched nothing says why, through the same notification path as the jump's own notes.
+        jumpToSession(s, Rules.folderOf(n.cwd), n.hostApp).then((r) => { if (r && r.cant) showJumpNote({ title: 'Plexiform', body: r.cant }); }).catch((err) => console.warn('[jump] failed:', err.message));
       }
     });
     note.on('close', () => liveNotifications.delete(note));

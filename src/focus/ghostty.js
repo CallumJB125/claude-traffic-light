@@ -1,9 +1,10 @@
 // Ghostty (1.3+ AppleScript): terminals expose id, name and working
 // directory, but no tty, and its child shells get no per-terminal id — so the
 // only handle is the folder the session started in. Focus only when exactly one terminal
-// is in that folder; two tabs in the same repo would be a guess.
+// is in that folder; two tabs in the same repo would be a guess, and say how many (QoL1). `focus`
+// restores a minimised window (verified on Ghostty 1.3.1); `activate` first keeps a hidden app's order.
 const Ids = require('./ids.js');
-const { runScript } = require('./applescript.js');
+const { runScript, folderMatches } = require('./applescript.js');
 
 const SCRIPT = `on run argv
   set wantDir to item 1 of argv
@@ -11,8 +12,8 @@ const SCRIPT = `on run argv
   tell application "Ghostty"
     set hits to every terminal whose working directory is wantDir
     if (count of hits) is not 1 then return "matches: " & (count of hits)
-    focus (item 1 of hits)
     activate
+    focus (item 1 of hits)
   end tell
   return "ok"
 end run`;
@@ -24,6 +25,6 @@ module.exports = {
   app: 'Ghostty',
   needs: { permission: 'automation', app: 'Ghostty', reason: 'so a click can switch to the exact Ghostty tab your session is running in' },
   canHandle: (s, ctx) => ctx.platform === 'darwin' && isGhostty(s) && !!Ids.launchCwd(s),
-  focus: (s, { exec }) => runScript(exec, SCRIPT, [Ids.launchCwd(s)]),
+  focus: async (s, { exec }) => folderMatches(await runScript(exec, SCRIPT, [Ids.launchCwd(s)])),
   SCRIPT,
 };

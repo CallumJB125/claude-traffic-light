@@ -6,7 +6,7 @@
 // Ghostty. Both are skipped when Preferences turn Ghostty Dock off
 // (ctx.ghosttyDock is then null).
 const Ids = require('./ids.js');
-const { runScript } = require('./applescript.js');
+const { runScript, folderMatches } = require('./applescript.js');
 const GhosttyDock = require('../ghostty-dock.js');
 
 const SCRIPT = `on run argv
@@ -15,8 +15,8 @@ const SCRIPT = `on run argv
   tell application id "${GhosttyDock.BUNDLE_ID}"
     set hits to every terminal whose working directory is wantDir
     if (count of hits) is not 1 then return "matches: " & (count of hits)
-    focus (item 1 of hits)
     activate
+    focus (item 1 of hits)
   end tell
   return "ok"
 end run`;
@@ -41,7 +41,7 @@ const script = {
   // The only Dock tab in that folder, not one picked by session id: so not `exact`.
   focus: async (s, { exec }) => {
     const r = await runScript(exec, SCRIPT, [Ids.launchCwd(s)]);
-    return r.ok ? { ok: true, exact: false, byFolder: true } : r;
+    return r.ok ? { ok: true, exact: false, byFolder: true } : folderMatches(r);
   },
   SCRIPT,
 };

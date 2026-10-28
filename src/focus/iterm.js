@@ -1,5 +1,6 @@
 // iTerm2: select the session by its id (the UUID in ITERM_SESSION_ID), or by
-// tty when all we have is the tty (a tmux client's outer tab).
+// tty when all we have is the tty (a tmux client's outer tab). QoL1: activate first and restore a
+// minimised window, as for Terminal.app (src/focus/terminal-app.js).
 const Ids = require('./ids.js');
 const { runScript } = require('./applescript.js');
 
@@ -12,10 +13,11 @@ const SCRIPT = `on run argv
       repeat with t in tabs of w
         repeat with s in sessions of t
           if (wantId is not "" and id of s is wantId) or (wantTty is not "" and tty of s is wantTty) then
+            activate
+            if miniaturized of w then set miniaturized of w to false
             select w
             select t
             select s
-            activate
             return "ok"
           end if
         end repeat
