@@ -25,7 +25,7 @@ const ENDED_TTL_MS = 7 * 24 * 3600 * 1000;
 const FACTS_TTL_MS = 30 * 1000;
 const PROVIDER_LABEL = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini', hermes: 'Hermes', cursor: 'Cursor' };
 
-const flat = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/g, ' ').replace(/\s+/g, ' ').trim();
+const flat = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').trim();
 const clip = (s, max) => (s.length > max ? `${s.slice(0, max - 1).replace(/\s+\S*$/, '') || s.slice(0, max - 1)}…` : s);
 const str = (v) => (typeof v === 'string' && v.trim() ? v : null);
 const isoOf = (v) => { const t = typeof v === 'string' ? Date.parse(v) : Number.isFinite(v) ? v : NaN; return Number.isFinite(t) && t > 0 ? new Date(t).toISOString() : null; };

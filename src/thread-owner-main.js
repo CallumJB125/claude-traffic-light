@@ -62,7 +62,7 @@ const TEXT = Object.freeze({
 
 const plain = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
 // eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f‪-‮⁦-⁩]/g;
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
 const line = (v, max) => (typeof v === 'string' ? v.replace(CONTROL, '').replace(/\s+/g, ' ').trim().slice(0, max) : '');
 const prose = (v, max) => (typeof v === 'string' ? v.replace(CONTROL, '').slice(0, max) : '');
 const fail = (status, error) => ({ ok: false, status, error });

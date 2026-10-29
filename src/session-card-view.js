@@ -13,7 +13,7 @@ const Actions = require('./session-row-actions.js');
 const Snooze = require('./session-snooze.js');
 const id0 = (s) => !!Snooze.idOf(s && s.sessionId);
 
-const str = (v, max = MAX) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f‪-‮⁦-⁩]/g, '').trim().slice(0, max) : '');
+const str = (v, max = MAX) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, '').trim().slice(0, max) : '');
 const stamp = (v) => { const t = typeof v === 'number' ? v : Date.parse(v || ''); return Number.isFinite(t) && t > 0 ? t : null; };
 
 // The project's name (projectOf), never the whole path (the path is the person's own business).

@@ -15,7 +15,7 @@ export function memoryStorage(initial = null) {
 
 export function cleanName(name) {
   // Control and bidi-override characters would let a name spoof the UI.
-  const s = String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g, '').trim();
+  const s = String(name ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').trim();
   return s.slice(0, 64) || 'Phone';
 }
 

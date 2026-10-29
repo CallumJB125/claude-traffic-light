@@ -15,7 +15,7 @@ const { hasCredential } = require('./secret-patterns.js');
 const MAX = Object.freeze({ text: 20_000, skills: 20, mcp: 20, args: 20 });
 const SKILL = /^[a-z0-9][a-z0-9-]{0,59}$/;
 const MCP_NAME = /^[A-Za-z0-9_.-]{1,60}$/;
-const HIDDEN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿]/u;
+const HIDDEN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/u;
 const fail = (m) => { throw new Error(m); };
 const txt = (v, max, where) => { if (typeof v !== 'string' || v.length > max || HIDDEN.test(v)) fail(`${where} is not valid text`); return v; };
 const https = (v, where) => { if (v == null || v === '') return null; let u; try { u = new URL(v); } catch { fail(`${where} must be an https link`); } if (u.protocol !== 'https:' || u.username || u.password) fail(`${where} must be an https link`); return u.href; };

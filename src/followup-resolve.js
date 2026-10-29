@@ -5,7 +5,7 @@
 const { takeLock } = require('./team-session-controls');
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const safe = (fn, fallback) => { try { return fn() ?? fallback; } catch { return fallback; } };
-const clean = (v, n) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/g, ' ').trim().slice(0, n) : '');
+const clean = (v, n) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ').trim().slice(0, n) : '');
 const viewerOf = hub => { const v = safe(() => hub?.viewer?.(), null); return object(v) && typeof v.id === 'string' && v.id ? { id: v.id } : null; };
 const MSG = {
   signIn: 'Sign in to continue.',

@@ -14,7 +14,7 @@ import { ipKey } from './ratelimit.js';
 export const LIMITS = Object.freeze({ bytes: 300_000, perOrg: 200, timeline: 200, prompts: 100, files: 200, skills: 20, mcp: 20, permissions: 50, reportsToHide: 3 });
 const KINDS = ['prompt', 'edit', 'command', 'checkpoint', 'note', 'deploy', 'tool', 'failed'];
 const SLUG = /^[A-Za-z0-9_-]{22}$/;
-const HIDDEN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿]/u;
+const HIDDEN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/u;
 const bad = (m) => { throw new HubError('VALIDATION', m); };
 const obj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const closed = (v, keys, where) => { if (!obj(v) || Object.keys(v).some((k) => !keys.includes(k))) bad(`${where}: unknown or missing field`); };
