@@ -57,26 +57,44 @@ test('runtime: the dev fallback is plain node, and needs no wrapper', () => {
 
 test('isInstalled is false when the wrapper an installed command runs through is gone', () => {
   const Gemini = require('../../adapters/gemini.js');
+  // A Windows runtime has Windows paths (like `\tmp\...\data\bin\buddy-hook.cmd`), which on macOS/Linux are one odd
+  // folder name in the current directory (ledger 42). So Windows cases run on an in-memory fs; the rest on the real one.
+  const memory = () => {
+    const files = new Map();
+    const gone = (f) => Object.assign(new Error(`ENOENT: ${f}`), { code: 'ENOENT' });
+    return {
+      readFileSync: (f) => { if (!files.has(f)) throw gone(f); return files.get(f); },
+      writeFileSync: (f, t) => files.set(f, String(t)),
+      renameSync: (a, b) => { files.set(b, files.get(a)); files.delete(a); },
+      unlinkSync: (f) => { if (!files.delete(f)) throw gone(f); },
+      existsSync: (f) => files.has(f),
+      mkdirSync: () => {}, chmodSync: () => {},
+    };
+  };
+  const strays = () => fs.readdirSync(process.cwd()).filter((n) => n.includes('\\') || /^[A-Za-z]:/.test(n));
+  const strayBefore = new Set(strays());
   const wrapped = (platform, adapter) => {
     const home = tmp();
+    const mem = platform === 'win32' ? memory() : null;
     const rt = Runtime.make({ execPath: '/App/Buddy', platform, hooksDir: '/h', dataDir: path.join(home, 'data') });
-    assert.equal(adapter.install({ home, runtime: rt }).ok, true);
-    return { home, rt };
+    assert.equal(adapter.install({ home, runtime: rt, ...(mem ? { fs: mem } : {}) }).ok, true);
+    return { home, rt, mem };
   };
   // Codex: argv notify always runs through the wrapper.
-  let { home, rt } = wrapped('linux', Codex);
+  let { home, rt, mem } = wrapped('linux', Codex);
   assert.equal(Codex.isInstalled({ home, runtime: rt }), true);
   fs.rmSync(Runtime.wrapperPath(rt));
   assert.equal(Codex.isInstalled({ home, runtime: rt }), false);
   // Windows shell strings (Cursor, Gemini) too; macOS/Linux shell strings need none.
   for (const adapter of [Cursor, Gemini]) {
-    ({ home, rt } = wrapped('win32', adapter));
-    assert.equal(adapter.isInstalled({ home, runtime: rt }), true);
-    fs.rmSync(Runtime.wrapperPath(rt));
-    assert.equal(adapter.isInstalled({ home, runtime: rt }), false, adapter.id);
+    ({ home, rt, mem } = wrapped('win32', adapter));
+    assert.equal(adapter.isInstalled({ home, runtime: rt, fs: mem }), true);
+    mem.unlinkSync(Runtime.wrapperPath(rt));
+    assert.equal(adapter.isInstalled({ home, runtime: rt, fs: mem }), false, adapter.id);
     ({ home, rt } = wrapped('linux', adapter));
     assert.equal(adapter.isInstalled({ home, runtime: rt }), true);
   }
+  assert.deepEqual(strays().filter((n) => !strayBefore.has(n)), [], 'a Windows-style path was written to the real fs (a stray folder in the current directory)');
 });
 
 test('isInstalled is false when the wrapper runs a different binary (a reinstall elsewhere, a moved AppImage)', () => {
