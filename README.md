@@ -299,7 +299,7 @@ None of this applies until you join a team; with no team signed in the pages loo
 
 ## Answer permission prompts from the widget
 
-Settings → Widget → **Answer permission prompts from the widget** (on for new
+Preferences → Widget → **Answer permission prompts from the widget** (on for new
 installs; existing installs keep their setting)
 installs a `PermissionRequest` hook. When Claude asks to run a tool, the
 widget shows what it wants (`Bash: git push origin main`) with **Allow** /
