@@ -39,6 +39,23 @@ for (const body of [...BODIES, ...PROBES, ...HATCHED]) {
   }
 }
 
+// The page is static once ready: the rig's own timers (flip and rail removal, blink, smoke) are cleared at the pin,
+// so nothing in a cell changes while a screenshot is taken.
+for (const [body, axis] of [['claude', 'pose'], ['fox', 'routine'], ['owl', 'eyes'], ['cat', 'sign']]) {
+  test(`static: ${body} × ${axis} changes nothing for 6 s after ready`, async () => {
+    await page.goto(`${PAGE}?body=${body}&axis=${axis}`);
+    await page.waitForSelector('body[data-ready="1"]');
+    await page.evaluate(() => {
+      window.__seen = [];
+      const mo = new MutationObserver((ms) => { for (const m of ms) window.__seen.push(`${m.type}:${m.attributeName || ''}:${m.oldValue || ''}`.slice(0, 120)); });
+      mo.observe(document.getElementById('grid'), { attributes: true, attributeOldValue: true, childList: true, subtree: true, characterData: true });
+    });
+    await page.waitForTimeout(6000); // the page's own timers are stopped, so the wait is on this side
+    const changes = await page.evaluate(() => window.__seen);
+    expect(changes).toEqual([]);
+  });
+}
+
 // B3 geometry, measured on the rendered rig in rig units.
 const within = (b, x0, y0, x1, y1, pad = 0) => b.x0 >= x0 - pad && b.y0 >= y0 - pad && b.x1 <= x1 + pad && b.y1 <= y1 + pad;
 for (const body of [...BODIES, ...PROBES, ...HATCHED]) {

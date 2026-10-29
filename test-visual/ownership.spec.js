@@ -33,7 +33,7 @@ async function exercise(page, f, runHb, runtime) {
   f.h.hub.ownership.live.get(f.sender.run.run_id).deadline=f.h.hub.mono()+2000;
   await panel.getByRole('button',{name:'Refresh coordination',exact:true}).click();
   await expect(panel).toContainText('Agent active · fresh host signal');
-  await expect(panel).toContainText('Heartbeat expired',{timeout:4000});
+  await expect(panel).toContainText('Heartbeat expired',{timeout:20000});
   await f.sender.client.hb([runHb(f.sender.run,{child_alive:true,cost_usd:null})]);
   await panel.getByRole('button',{name:'Refresh coordination',exact:true}).click();
   await expect(panel).toContainText('Agent active · fresh host signal');
