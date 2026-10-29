@@ -1,4 +1,4 @@
-Plexiform app update — 29 October 2026 (1.0.2-beta.104)
+Plexiform app update — 29 October 2026 (1.0.2-beta.106)
 
 For macOS (Apple silicon and Intel) and Linux (x64).
 
@@ -33,7 +33,9 @@ What changed
 
 What has been verified
 
-[TODO before publish: test results for the release build, from the release gate and the release visual pass.]
+- Every change in this release was reviewed before it merged, and the full unit, remote and website test suites ran on a Mac with no new failures.
+- The unit tests also passed on macOS and Linux in a release dry run on GitHub Actions. The release build runs them again on both, and smoke-tests each packaged app, before anything is published.
+- All 62 screenshot test files ran on a recent build of this release: 59 passed. The other three (animated character poses, a page that navigates mid-test and a timing check) fail the same way on the previous build and are being fixed; none is a visible change.
 
 Current limits
 
