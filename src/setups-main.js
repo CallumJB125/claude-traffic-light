@@ -47,6 +47,9 @@ function createSetupsMain({app,buddy,service,dialog,safeStorage,accepted=false,r
      title='Undo reviewed local changes';message='Conditionally restore this reviewed local transaction?';detail=`Restore only targets that still match this transaction’s verified changes. Changed or uncertain targets are retained for review.\n\nTransaction: ${request.transaction_id}\nInspection: ${request.inspection_hash}`;approved={approved:true,transaction_id:request.transaction_id,inspection_hash:request.inspection_hash};
     }else return null;
     const answer=await before.buddy.setupsConfirm(window=>dialog.showMessageBox(window,{type:'warning',title,message,detail,buttons:['Cancel',title],defaultId:0,cancelId:0,noLink:true}));
+    // L16: an explicit Cancel (with the window still the same) and "another dialog is open" are told apart from a lost window; both are closed shapes the runtime knows, neither is an approval.
+    if(answer?.busy===true)return Object.freeze({busy:true});
+    if(answer?.response===0&&same(before))return Object.freeze({cancelled:true});
     return answer?.response===1&&same(before)?approved:null;
    },
   });return runtime;

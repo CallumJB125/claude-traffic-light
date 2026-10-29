@@ -67,3 +67,40 @@ test('ordinary metadata plan locked listing and status never probe OS wrapping, 
  const f=await setup(t),opts=f.optionsFor();let probes=0;const r=createSetupsRuntime({...opts,wrapping:{available(){probes++;return false;},wrap(){throw Error('must not wrap');},unwrap(){throw Error('must not unwrap');}}});t.after(()=>r.close());
  const state=r.localState();assert.equal(state.status,'review_available');assert.equal(state.wrapped_storage_available,null);const p=await r.plan(f.handle,f.request());assert.equal(p.ok,true);assert.equal((await r.listLocked()).ok,true);assert.equal((await r.status(require('node:crypto').randomUUID())).ok,false);assert.equal(r.localState().wrapped_storage_available,null);assert.equal(probes,0);assert.equal((await r.apply(p.handle,p.plan_hash)).ok,false);assert.ok(probes>0);assert.equal(fs.readFileSync(f.filename,'utf8'),'Keep synthetic notes.\n');
 });
+// L16 (option B): an explicit Cancel keeps the reviewed Apply handle; every other outcome consumes it.
+async function cancelSetup(t){const f=await setup(t),clock={t:Date.now()};const r=createSetupsRuntime({...f.optionsFor(),now:()=>clock.t});t.after(()=>r.close());f.rt=r;f.clock=clock;f.writes=0;f.state.storeHook=m=>{if(m==='write')f.writes++;};f.p=await r.plan(f.handle,f.request());assert.equal(f.p.ok,true);return f;}
+const untouched=f=>assert.equal(fs.readFileSync(f.filename,'utf8'),'Keep synthetic notes.\n');
+test('L16: Cancel writes nothing, says cancelled, and the same reviewed handle applies once afterwards',async t=>{
+ const f=await cancelSetup(t);f.control.dialog=()=>({cancelled:true});
+ const c=await f.rt.apply(f.p.handle,f.p.plan_hash);assert.equal(c.ok,false);assert.equal((await f.rt.check(f.p.handle)).ok,true,'Cancel keeps the reviewed plan alive in the runtime');assert.equal(c.status,'cancelled');assert.equal(f.writes,0);untouched(f);assert.equal(fs.existsSync(f.parent+'/setups-transactions'),false);
+ const again=await f.rt.apply(f.p.handle,f.p.plan_hash);assert.equal(again.status,'cancelled');assert.equal(f.writes,0);
+ f.control.dialog=null;const a=await f.rt.apply(f.p.handle,f.p.plan_hash);assert.equal(a.ok,true,JSON.stringify(a));assert.equal(fs.readFileSync(f.filename,'utf8'),f.file.content);assert.ok(fs.existsSync(f.parent+'/setups-transactions'));const writes=f.writes;
+ assert.equal((await f.rt.apply(f.p.handle,f.p.plan_hash)).ok,false);assert.equal(f.writes,writes);assert.equal(fs.readdirSync(f.parent+'/setups-transactions').length,1);
+});
+test('L16: after Cancel the handle keeps its ORIGINAL expiry (no fresh time to live)',async t=>{
+ const f=await cancelSetup(t);f.control.dialog=()=>({cancelled:true});assert.equal((await f.rt.apply(f.p.handle,f.p.plan_hash)).status,'cancelled');
+ f.clock.t+=24*3600*1000;f.control.dialog=null;assert.equal((await f.rt.apply(f.p.handle,f.p.plan_hash)).ok,false);assert.equal(f.writes,0);untouched(f);
+});
+test('L16: a concurrent second Apply during the dialog is refused, then Cancel still leaves one usable handle',async t=>{
+ const f=await cancelSetup(t);let release;f.control.dialog=()=>new Promise(r=>release=r);const first=f.rt.apply(f.p.handle,f.p.plan_hash);await tick();
+ const second=await f.rt.apply(f.p.handle,f.p.plan_hash);assert.equal(second.ok,false);assert.notEqual(second.status,'cancelled');release({cancelled:true});assert.equal((await first).status,'cancelled');
+ f.control.dialog=null;assert.equal((await f.rt.apply(f.p.handle,f.p.plan_hash)).ok,true);
+});
+test('L16: every non-Cancel outcome leaves the handle gone',async t=>{
+ const wrong=[['null',()=>null,'unavailable'],['busy marker',()=>({busy:true}),'busy'],['approved:false',d=>({approved:false,plan_hash:d.plan_hash}),'unavailable'],['cancelled not true',()=>({cancelled:'yes'}),'unavailable'],['cancelled plus extra key',()=>({cancelled:true,extra:1}),'unavailable'],['wrong hash',()=>({approved:true,plan_hash:'0'.repeat(64)}),'unavailable'],['throws',()=>{throw new Error('x');},'unavailable']];
+ for(const [name,dialog,status] of wrong){const f=await cancelSetup(t);f.control.dialog=dialog;const r=await f.rt.apply(f.p.handle,f.p.plan_hash);assert.equal(r.ok,false,name);if(status==='busy')assert.equal(r.status,'busy',name);else assert.notEqual(r.status,'cancelled',name);
+  assert.equal((await f.rt.check(f.p.handle)).ok,false,name+' runtime store must not keep the handle');f.control.dialog=null;assert.equal((await f.rt.apply(f.p.handle,f.p.plan_hash)).ok,false,name+' handle must be consumed');assert.equal(f.writes,0,name);untouched(f);}
+ const f=await cancelSetup(t);assert.equal((await f.rt.apply(f.p.handle,'f'.repeat(64))).ok,false);assert.equal((await f.rt.apply(f.p.handle,f.p.plan_hash)).ok,false,'wrong expected hash consumes');
+});
+test('L16: Cancel after authority loss, invalidate() or expiry is unavailable and the handle is gone',async t=>{
+ for(const [name,lose] of [['foreground',f=>{f.state.foreground=false;}],['generation',f=>{f.state.generation++;}],['invalidate',f=>f.rt.invalidate()],['expiry',f=>{f.clock.t+=24*3600*1000;}]]){
+  const f=await cancelSetup(t);f.control.dialog=()=>{lose(f);return {cancelled:true};};const r=await f.rt.apply(f.p.handle,f.p.plan_hash);assert.equal(r.ok,false,name);assert.notEqual(r.status,'cancelled',name);
+  f.state.foreground=true;f.state.generation=1;f.clock.t=Date.now();f.control.dialog=null;assert.equal((await f.rt.check(f.p.handle)).ok,false,name+' runtime store');assert.equal((await f.rt.apply(f.p.handle,f.p.plan_hash)).ok,false,name);assert.equal(f.writes,0,name);untouched(f);}
+});
+test('L16: Undo and Recovery Cancel say cancelled and stay one-use',async t=>{
+ const f=await setup(t),{a}=await apply(f),fresh=f.make();f.state.actor=null;
+ f.control.dialog=()=>({cancelled:true});const rc=await fresh.recover(a.transaction_id);assert.equal(rc.ok,false);assert.equal(rc.status,'cancelled');
+ f.control.dialog=null;const r=await fresh.recover(a.transaction_id);assert.equal(r.ok,true);
+ f.control.dialog=()=>({cancelled:true});const u=await fresh.confirmUndo(r.handle);assert.equal(u.ok,false);assert.equal(u.status,'cancelled');
+ f.control.dialog=null;assert.equal((await fresh.confirmUndo(r.handle)).ok,false);assert.equal(fs.readFileSync(f.filename,'utf8'),f.file.content);
+});

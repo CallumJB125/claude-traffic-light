@@ -5,13 +5,14 @@ const {performance}=require('node:perf_hooks');
 const {canonical,closed,SHA}=require('./plugins/index-verify');
 const {UUID,validatePayload}=require('./borrow/payload');
 const {createNativeSupervisor}=require('./borrow/native-supervisor');
-const {createTransactionController}=require('./borrow/transaction-controller');
+const {createTransactionController,CANCELLED}=require('./borrow/transaction-controller');
 const RECIPES=Object.freeze(['codex-instructions-v1','claude-settings-v1','gemini-settings-v1']);
 const SOURCE_KEYS=['profileId','versionId','contentHash','payload','principal','current'];
 const OBSERVE_KEYS=['profilePath','platform','osUser','generation','foreground'];
 const ID=/^[A-Za-z0-9_.:-]{1,100}$/;
 const unavailable=()=>({ok:false,status:'unavailable',error:'Review the current setup and local access again.'});
 const refuse=()=>{throw new Error('Setups local runtime is unavailable');};
+const busyResult=()=>({ok:false,status:'busy',retained:false});
 const copy=x=>JSON.parse(canonical(x));
 const actorValid=a=>closed(a,['account','team','member','device'])&&Object.values(a).every(x=>typeof x==='string'&&ID.test(x));
 const sourceIdentity=s=>canonical([s.profileId,s.versionId,s.contentHash,s.principal]);
@@ -38,7 +39,7 @@ function createSetupsRuntime(options){
  if(!closed(options,['service','observe','roots','launch','wrapping','confirm','currentActor','currentSource'],['now','clock']))refuse();
  const {service,observe,roots,launch,wrapping,confirm,currentActor,currentSource,now=Date.now,clock=()=>performance.now()}=options;
  if(!service||typeof service.readForPlan!=='function'||typeof service.invalidate!=='function'||![observe,roots,launch,confirm,currentActor,currentSource,now,clock].every(x=>typeof x==='function')||!wrapping||!['available','wrap','unwrap'].every(k=>typeof wrapping[k]==='function'))refuse();
- let generation=0,closedRuntime=false,busy=null,context=null;
+ let generation=0,closedRuntime=false,busy=null,context=null,busyRefusal=false;
  const plans=new Map(),recoveries=new Map();
  function observed(){
   const o=observe();
@@ -74,6 +75,9 @@ function createSetupsRuntime(options){
   const c=context;if(!c||!authority(c))refuse();
   const answer=await confirm(copy(request));
   if(!authority(c))refuse();
+  // L16: main says "Cancel pressed" or "another window has a dialog open" with these two closed shapes only; anything else is a refusal as before.
+  if(closed(answer,['cancelled'])&&answer.cancelled===true)return CANCELLED;
+  if(closed(answer,['busy'])&&answer.busy===true){busyRefusal=true;refuse();}
   if(request.kind==='apply'){
    if(!closed(answer,['approved','plan_hash'])||answer.approved!==true||answer.plan_hash!==request.plan_hash)refuse();
    await readFor(c);if(!authority(c))refuse();
@@ -120,20 +124,25 @@ function createSetupsRuntime(options){
   },
   async apply(handle,expectedHash){
    let lease;const e=plans.get(handle);if(e)plans.delete(handle); // one-use before awaits
-   try{if(!e||!SHA.test(expectedHash??'')||expectedHash!==e.hash||!authority(e.c))refuse();lease=start();return result(e.c,await controller.apply(handle,expectedHash));}
+   busyRefusal=false;
+   try{if(!e||!SHA.test(expectedHash??'')||expectedHash!==e.hash||!authority(e.c))refuse();lease=start();const out=await controller.apply(handle,expectedHash);
+    // L16 (option B): only the controller's explicit "cancelled", with authority still holding, gives the reviewed plan back under its handle.
+    if(out?.status==='cancelled'&&out.ok===false&&authority(e.c)&&!plans.has(handle))plans.set(handle,e);
+    return result(e.c,busyRefusal&&out?.ok!==true?busyResult():out);}
    catch{return unavailable();}finally{release(lease);}
   },
   listLocked(){return locked(()=>controller.listLocked());},
   status(id){if(!UUID.test(id??''))return Promise.resolve(unavailable());return locked(()=>controller.status(id));},
   async recover(id){
-   let lease;try{if(!UUID.test(id??''))refuse();lease=start();retire();const o=observed();const c={generation,observation:canonical(o),profilePath:o.profilePath,actor:null,source:null};context=c;
+   let lease;busyRefusal=false;try{if(!UUID.test(id??''))refuse();lease=start();retire();const o=observed();const c={generation,observation:canonical(o),profilePath:o.profilePath,actor:null,source:null};context=c;
     const value=await controller.recover(id);if(!authority(c))return unavailable();
-    if(value.ok===true)recoveries.set(value.handle,{c});return result(c,value);
+    if(value.ok===true)recoveries.set(value.handle,{c});return result(c,busyRefusal&&value.ok!==true?busyResult():value);
    }catch{return unavailable();}finally{release(lease);}
   },
   async confirmUndo(handle){
    let lease;const e=recoveries.get(handle);if(e)recoveries.delete(handle);
-   try{if(!e||!authority(e.c))refuse();lease=start();return result(e.c,await controller.confirmUndo(handle));}
+   busyRefusal=false;
+   try{if(!e||!authority(e.c))refuse();lease=start();const out=await controller.confirmUndo(handle);return result(e.c,busyRefusal&&out?.ok!==true?busyResult():out);}
    catch{return unavailable();}finally{release(lease);}
   },
  };
