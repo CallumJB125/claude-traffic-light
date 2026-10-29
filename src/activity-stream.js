@@ -12,7 +12,7 @@ const TYPES = new Set(['record.upsert', 'record.end', 'collision']);
 const BACKOFF_MS = [1000, 2000, 5000, 15_000, 30_000, 60_000];
 const QUIET_MS = 60_000;
 const BUFFER_MAX = 256 * 1024;
-const HIDDEN = /[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿]/g;
+const HIDDEN = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
 const str = (v, max) => (typeof v === 'string' ? v.replace(HIDDEN, ' ').slice(0, max) : null);
 const int = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
 const paths = (v) => (Array.isArray(v) ? v.slice(0, 50).map((p) => str(p, 300)).filter(Boolean) : []);

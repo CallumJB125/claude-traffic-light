@@ -6,7 +6,7 @@
 // Pure: signal-server.js attaches it to each request; index.html renders it
 // as text only.
 
-const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f­؜ᅟᅠ឴឵᠎​-‏‪-‮⁠-⁯ㅤ︀-️﻿ﾠ￹-￻]|\udb40[\udc00-\udc7f]/g;
+const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061cᅟᅠ឴឵\u180e\u200b-\u200f\u202a-\u202e\u2060-⁯ㅤ︀-️\ufeffﾠ￹-￻]|\udb40[\udc00-\udc7f]/g;
 const reveal = (s) => String(s).replace(HIDDEN, (ch) => `⟨U+${ch.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}⟩`);
 
 const HEADLINE_CHARS = 60;

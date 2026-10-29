@@ -11,7 +11,7 @@ const path = require('node:path');
 const ID = /^[A-Za-z0-9_.:-]{1,120}$/;
 const MAX_LINKS = 500;
 const REPO_KEY = /^[0-9a-f]{16}$/;
-const clean = (s, n) => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/g, ' ').trim().slice(0, n);
+const clean = (s, n) => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ').trim().slice(0, n);
 const keyOf = (provider, sessionId) => `${provider}:${sessionId}`;
 
 function destinationOf(d) {

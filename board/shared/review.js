@@ -40,7 +40,7 @@ export const REVIEW_DISCLOSURE = 'When this is on, every time an AI finishes a c
 
 const clip = (s, n) => (typeof s === 'string' ? s : '').slice(0, n);
 // One line, no control or bidi-override characters (they can disguise text in the UI).
-export const oneLine = (s, n) => clip(String(s ?? '').replace(/[\u0000-\u001f\u007f‪-‮⁦-⁩]+/g, ' ').replace(/\s+/g, ' ').trim(), n);
+export const oneLine = (s, n) => clip(String(s ?? '').replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]+/g, ' ').replace(/\s+/g, ' ').trim(), n);
 
 /** Board settings as stored (boards.settings.ai_review) → settings as used. */
 export function reviewSettings(raw) {

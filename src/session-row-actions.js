@@ -29,7 +29,7 @@ function resumeCommand(row) {
 const MAX_FOLDER = 80;
 function folderLabel(cwd, home) {
   if (typeof cwd !== 'string' || !cwd) return null;
-  let s = cwd.replace(/[\u0000-\u001f\u007f‪-‮⁦-⁩]/g, '');
+  let s = cwd.replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, '');
   const h = typeof home === 'string' && home.length > 1 ? home.replace(/\/+$/, '') : '';
   // Only on a path boundary: /Users/callumx is not ~ for /Users/callum.
   if (h && s === h) s = '~';

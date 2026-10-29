@@ -19,7 +19,7 @@ const Kit = require('./starter-kit.js');
 const LIMITS = Object.freeze({ timeline: 200, prompts: 100, files: 200, text: 500, prompt: 2000, title: 120, note: 1000 });
 const KINDS = new Set(['prompt', 'edit', 'command', 'checkpoint', 'note', 'deploy', 'tool', 'failed']);
 const PROVIDER = { 'claude-code': 'Claude Code', codex: 'Codex', gemini: 'Gemini', hermes: 'Hermes', cursor: 'Cursor' };
-const HIDDEN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿]/gu;
+const HIDDEN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/gu;
 const clip = (s, n) => { const t = String(s ?? '').replace(HIDDEN, ''); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const isoOrNull = (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);

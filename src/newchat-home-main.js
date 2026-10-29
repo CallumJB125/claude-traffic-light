@@ -29,7 +29,7 @@ const GENERATED = /\.min\.[^/]+$|\.d\.ts$|\.generated\.|\.pb\.|_pb2\.py$/i;
 /** Drop control and bidirectional-override characters, collapse spaces, cap at NAME_MAX (review nit). */
 function cleanName(s) {
   // eslint-disable-next-line no-control-regex
-  const t = String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f؜​-‏‪-‮⁦-⁩﻿]/g, '').replace(/\s+/g, ' ').trim();
+  const t = String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '').replace(/\s+/g, ' ').trim();
   return t.length > NAME_MAX ? `…${t.slice(t.length - NAME_MAX + 1)}` : t;
 }
 
