@@ -334,7 +334,7 @@ function createTasksService(opts) {
     if (!connected() || typeof id !== 'string' || id.length > 128) return null;
     try {
       const raw = await client.getTask(id);
-      return raw && typeof raw === 'object' ? { sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : null, workInPlace: raw.workInPlace === true, lastSeq: Number.isSafeInteger(raw.lastSeq) ? raw.lastSeq : null } : null;
+      return raw && typeof raw === 'object' ? { workInPlace: raw.workInPlace === true, lastSeq: Number.isSafeInteger(raw.lastSeq) ? raw.lastSeq : null } : null;
     } catch { return null; }
   }
   async function watchChat(id, fromSeq, onEvent, onReset) {

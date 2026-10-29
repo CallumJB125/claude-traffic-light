@@ -11,7 +11,8 @@ const { createRemoteChatTargets, ACTOR } = require('../src/remote-chat-target');
 const { createRemoteInteractionHost } = require('../src/remote-interaction');
 
 const ROOT = path.join(__dirname, '..');
-const SESSION = '7b0c3f2e-4a1d-4c55-9e0f-1234567890ab';
+const PROVIDER_SESSION = '7b0c3f2e-4a1d-4c55-9e0f-1234567890ab';
+let SESSION = '7b0c3f2e-4a1d-4c55-9e0f-0000000000ab'; // replaced by each register(): the share id main mints
 const flush = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
 
 function fakeTasks(over = {}) {
@@ -20,7 +21,7 @@ function fakeTasks(over = {}) {
     row, sends: [], watchers: [], stopped: 0, answer: null,
     tasks: {
       row: (id) => (id === row.id ? row : null),
-      detail: async (id) => (id === row.id ? { sessionId: SESSION, workInPlace: row.workInPlace, lastSeq: row.lastSeq, ...over.detail } : null),
+      detail: async (id) => (id === row.id ? { sessionId: PROVIDER_SESSION, workInPlace: row.workInPlace, lastSeq: row.lastSeq, ...over.detail } : null),
       watch: async (id, fromSeq, onEvent, onReset) => { t.watchers.push({ id, fromSeq, onEvent, onReset }); return { stop: () => { t.stopped++; } }; },
       shareMessage: async (id, body, share, requestId) => { t.sends.push({ id, body, share, requestId }); return t.answer ?? { ok: true, messageId: `msg-${t.sends.length}` }; },
     },
@@ -53,7 +54,7 @@ test('inert: no chat is a target until register(); no code outside the module an
 });
 
 test('register: refuses work in place and a bad session; disabled means nothing resolves', async () => {
-  for (const detail of [{ workInPlace: true }, { sessionId: 'not-a-uuid' }, { lastSeq: null }]) {
+  for (const detail of [{ workInPlace: true }, { lastSeq: null }]) {
     const f = fakeTasks({ detail });
     const c = createRemoteChatTargets({ tasks: f.tasks });
     assert.equal((await c.register('tsk_1')).ok, false, JSON.stringify(detail));
@@ -62,7 +63,8 @@ test('register: refuses work in place and a bad session; disabled means nothing 
   let on = true;
   const f = fakeTasks();
   const c = createRemoteChatTargets({ tasks: f.tasks, enabled: () => on });
-  assert.deepEqual(await c.register('tsk_1'), { ok: true, session: SESSION });
+  const r = await c.register('tsk_1');
+  assert.equal(r.ok, true); SESSION = r.session;
   assert.deepEqual(c.target(SESSION), { hub: c.hub, actor: ACTOR });
   on = false;
   assert.equal(c.target(SESSION), null);
@@ -77,7 +79,7 @@ test('register: refuses work in place and a bad session; disabled means nothing 
 test('state: closed keys, no title/folder/branch; only events strictly after the share; responses join their message', async () => {
   const f = fakeTasks();
   const c = createRemoteChatTargets({ tasks: f.tasks, now: () => 5000 });
-  await c.register('tsk_1');
+  SESSION = (await c.register('tsk_1')).session;
   assert.equal(f.watchers[0].fromSeq, 41, 'subscribes after the task\'s lastSeq at register');
   f.emit({ type: 'message', seq: 40, id: 'm-old', direction: 'in', from: { kind: 'human' }, body: 'BEFORE SHARE', createdAt: 1 });
   f.emit({ type: 'message', seq: 41, id: 'm-1', direction: 'in', from: { kind: 'human' }, body: 'owner asks', createdAt: 4000 });
@@ -98,7 +100,7 @@ test('state: closed keys, no title/folder/branch; only events strictly after the
 test('send: the engine decides; the teammate rides only the share fields; no steer, no stop', async () => {
   const f = fakeTasks();
   const c = createRemoteChatTargets({ tasks: f.tasks, now: () => 9000 });
-  await c.register('tsk_1');
+  SESSION = (await c.register('tsk_1')).session;
   const base = { session: SESSION, generation: 1, board: null };
   const ok = await c.hub.send({ ...base, text: '  please add tests  ' }, ACTOR, sendOpts);
   assert.equal(ok.ok, true, JSON.stringify(ok));
@@ -135,7 +137,7 @@ test('send: the engine decides; the teammate rides only the share fields; no ste
 test('relay: a teammate\'s send through the unchanged host carries the host\'s own record of who sent it', async () => {
   const f = fakeTasks();
   const chats = createRemoteChatTargets({ tasks: f.tasks });
-  await chats.register('tsk_1');
+  SESSION = (await chats.register('tsk_1')).session;
   const USER = 'u-owner', shares = [];
   const fetch = async (url, init) => {
     const u = new URL(url);
@@ -170,7 +172,7 @@ test('relay: a teammate\'s send through the unchanged host carries the host\'s o
 test('two teammates are told apart: each send names its own member id and name', async () => {
   const f = fakeTasks();
   const c = createRemoteChatTargets({ tasks: f.tasks });
-  await c.register('tsk_1');
+  SESSION = (await c.register('tsk_1')).session;
   const base = { session: SESSION, generation: 1, board: null };
   await c.hub.send({ ...base, text: 'from alex' }, ACTOR, sendOpts);
   await c.hub.send({ ...base, text: 'from sam' }, ACTOR, { by: 'Sam', byId: 'u-sam', share: 'shr-1', frame: 'frm-2' });
@@ -182,7 +184,7 @@ test('S7: the automatic-share reconciler never shares, or stops, a chat (Q4: cha
   const { createTeamSessionSharing } = require('../src/team-session-sharing');
   const f = fakeTasks();
   const chats = createRemoteChatTargets({ tasks: f.tasks });
-  await chats.register('tsk_1');
+  SESSION = (await chats.register('tsk_1')).session;
   const calls = [];
   const manual = { id: 'shr-manual', session: SESSION, team: { id: 'team-1' } };
   const host = { connected: () => true, listShares: async () => ({ ok: true, teams: [{ id: 'team-1' }] }), shared: () => [manual],
@@ -219,7 +221,7 @@ test('tasks-service: the chat reads and the share send, against the mock supervi
     assert.equal(row.id, id);
     assert.equal(svc.chatRow('tsk_none'), null);
     const d = await svc.chatDetail(id);
-    assert.deepEqual(Object.keys(d).sort(), ['lastSeq', 'sessionId', 'workInPlace']);
+    assert.deepEqual(Object.keys(d).sort(), ['lastSeq', 'workInPlace']);
     const seen = [];
     const w = await svc.watchChat(id, 1, (e) => seen.push(e), () => {});
     await until(() => seen.some((e) => e.type === 'state'));
@@ -228,4 +230,25 @@ test('tasks-service: the chat reads and the share send, against the mock supervi
     const r = await svc.shareMessage(id, 'hello', { key: 'shr-1', by: { memberId: 'u-alex', name: 'Alex' }, expect: { permissionLevel: row.permissionLevel, ai: 'claude' } }, 'share:shr-1:frm-1');
     assert.ok(r.ok === true ? typeof r.messageId === 'string' : typeof r.code === 'string', JSON.stringify(r));
   } finally { svc.stop(); await srv.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('§0: the hub\'s share id is a fresh UUID per chat, stable for this process, never the provider session id', async () => {
+  const f = fakeTasks();
+  const c = createRemoteChatTargets({ tasks: f.tasks });
+  assert.equal(c.sessionOf('tsk_1'), null, 'a lookup never registers');
+  const a = await c.register('tsk_1');
+  assert.equal(a.ok, true);
+  assert.match(a.session, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.notEqual(a.session, PROVIDER_SESSION);
+  assert.ok(!a.session.includes(PROVIDER_SESSION.slice(0, 8)));
+  assert.equal((await c.register('tsk_1')).session, a.session, 're-sharing reuses it');
+  assert.equal(c.sessionOf('tsk_1'), a.session);
+  assert.equal(c.taskOf(a.session), 'tsk_1');
+  assert.equal(c.target(PROVIDER_SESSION), null, 'the provider id reaches nothing');
+  c.unregister(a.session);
+  assert.equal(c.sessionOf('tsk_1'), null);
+  const g = { ...f.row, id: 'tsk_2' };
+  const c2 = createRemoteChatTargets({ tasks: { ...f.tasks, row: (id) => (id === 'tsk_1' ? f.row : id === 'tsk_2' ? g : null), detail: async () => ({ workInPlace: false, lastSeq: 3 }) } });
+  const x = await c2.register('tsk_1'), y = await c2.register('tsk_2');
+  assert.notEqual(x.session, y.session);
 });
