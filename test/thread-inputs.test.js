@@ -231,11 +231,11 @@ const hookSrc = between(mainSrc, 'const threadSession = ', 'if (CHAT_PREVIEW) {\
 const refusalSrc = between(mainSrc, 'function homeAnswerRefusal', "ipcMain.handle('answer-input'"); // includes rebuildAnswer
 const rebuildSrc = mainSrc.slice(mainSrc.indexOf('const rebuildAnswer = '), mainSrc.indexOf('\n', mainSrc.indexOf('const rebuildAnswer = ')));
 
-function mainHook({ requests, config = { askFromWidget: true }, sessions = [{ sessionId: 's-1', source: 'claude', host: 'mac' }], danger = () => null, inputs } = {}) {
+function mainHook({ requests, reads = { n: 0 }, config = { askFromWidget: true }, sessions = [{ sessionId: 's-1', source: 'claude', host: 'mac' }], danger = () => null, inputs } = {}) {
   const writes = [];
   const ctx = {
     console: { log() {} }, setTimeout: () => {}, broadcastStatus() {},
-    loadConfig: () => config, readRequests: () => requests,
+    loadConfig: () => config, readRequests: () => { reads.n += 1; return requests; },
     aggregateState: () => ({ sessions, inputs: inputs ?? PendingInputs.collect({ requests, sessions: [], dialogs: [] }) }),
     localSessions: (s) => s, TourMain: { isDemoId: (id) => id === 'demo' },
     AutoRules: { danger }, AnswerMore, PendingInputs, REQUESTS_DIR: '/x', keyFor: () => Buffer.alloc(32),
@@ -307,4 +307,46 @@ test('AnswerMore.check is cleanExtra\'s rules plus anyway, and never oneKey', ()
   for (const bad of [null, [], 'x', { oneKey: true }, { anyway: false }, { anyway: 1 }, { mode: 'acceptEdits' }, { message: 'x'.repeat(1001) }, { answers: [] }, { content: { a: { b: 1 } } }, Object.create({ x: 1 })]) {
     assert.equal(AnswerMore.check(bad), false, JSON.stringify(bad));
   }
+});
+
+// Ledger 21: the thread reads the request files only when this session has a hook input waiting.
+test('main: inputs reads the request files only for a hook input; none waiting means no disk read', () => {
+  const hookInput = (id) => ({ id, source: 'hook', session: 's-1', host: 'mac', provider: 'claude', answerable: true });
+  const none = { n: 0 };
+  assert.deepEqual(json(mainHook({ requests: [REQ()], reads: none, inputs: [] }).hook.inputs(T)).items, []);
+  assert.equal(none.n, 0, 'nothing waiting: no read');
+  const other = { n: 0 };
+  assert.equal(json(mainHook({ requests: [REQ()], reads: other, inputs: [{ ...hookInput('r9'), session: 's-2' }] }).hook.inputs(T)).items.length, 0);
+  assert.equal(other.n, 0, 'another session\'s input: no read');
+  const dialog = { n: 0 };
+  const d = json(mainHook({ requests: [REQ()], reads: dialog, inputs: [{ id: 'p1', source: 'pane', session: 's-1', host: 'mac', provider: 'claude' }] }).hook.inputs(T));
+  assert.deepEqual(d.items.map((x) => [x.input.id, x.hash, x.danger]), [['p1', null, null]]);
+  assert.equal(dialog.n, 0, 'a non-hook input: no read, same null hash and danger');
+  const hook = { n: 0 };
+  const h = json(mainHook({ requests: [REQ()], reads: hook, inputs: [hookInput('r1')], danger: () => 'deletes files' }).hook.inputs(T));
+  assert.equal(hook.n, 1);
+  assert.deepEqual(h.items.map((x) => [x.input.id, x.hash, x.danger]), [['r1', 'a'.repeat(64), 'deletes files']]);
+  const noRow = { n: 0 }; // no local row for the thread's session (the travel return is the same early exit)
+  assert.deepEqual(json(mainHook({ requests: [REQ()], reads: noRow, inputs: [hookInput('r1')] }).hook.inputs({ source: 'claude', sessionId: 's-none' })), { answering: false, items: [] });
+  assert.equal(noRow.n, 0);
+});
+
+test('main: computeState still reads the requests on every build, so dead-pid reaping does not depend on an open thread', () => {
+  const compute = between(mainSrc, 'function computeState(', 'const sessions = ');
+  assert.ok(compute.includes('const requests = readRequests();'));
+});
+
+test('signal-server readRequests reaps a request whose hook process is dead, with no thread involved', () => {
+  const fs2 = require('node:fs'), os2 = require('node:os');
+  const dir = fs2.mkdtempSync(path.join(os2.tmpdir(), 'l21-req-'));
+  try {
+    const AF = require('../hooks/answer-file.js');
+    const mk = (id, pid) => { const r = { id, createdAt: new Date().toISOString(), host: os2.hostname().split('.')[0], pid, sessionId: 's-1', tool: 'Bash', toolInput: { command: 'ls' }, cwd: '/p' }; r.decisionHash = AF.decisionHashOf(r); fs2.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify(r)); };
+    mk('live', process.pid);
+    const dead = require('node:child_process').spawnSync(process.execPath, ['-e', '0']);
+    mk('gone', dead.pid);
+    const S = require('../src/signal-server.js')({ rootDir: dir, sessionsDir: dir, requestsDir: dir, aggregateState: () => ({ sessions: [] }), broadcastStatus: () => {}, port: 0, app: { on: () => {} } });
+    assert.deepEqual(S.readRequests().map((r) => r.id), ['live']);
+    assert.equal(fs2.existsSync(path.join(dir, 'gone.json')), false, 'the dead hook\'s request file was removed');
+  } finally { fs2.rmSync(dir, { recursive: true, force: true }); }
 });
