@@ -2520,8 +2520,9 @@ const threadHook = {
     if (!s) return { answering: false, items: [] };
     const st = aggregateState();
     if (st.reason === 'travel') return { answering: !!loadConfig().askFromWidget, items: [] };
-    const reqs = new Map(readRequests().map((r) => [r.id, r]));
     const mine = (st.inputs || []).filter((i) => i && i.session === s.sessionId && i.host === s.host && (i.provider ?? 'claude') === t.source && !TourMain.isDemoId(String(i.id)));
+    // The request files are read only for a hook input (decisionHash and danger come from them); with none waiting, no disk read (ledger 21).
+    const reqs = mine.some((i) => i.source === 'hook') ? new Map(readRequests().map((r) => [r.id, r])) : new Map();
     return { answering: !!loadConfig().askFromWidget, items: mine.map((i) => { const r = i.source === 'hook' ? reqs.get(i.id) : null; return { input: i, hash: r && typeof r.decisionHash === 'string' ? r.decisionHash : null, danger: r ? dangerOf(r) : null }; }) };
   },
   prepare(t, inputId, optionId, more) {
