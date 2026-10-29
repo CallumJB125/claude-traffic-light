@@ -638,7 +638,7 @@ test('AW-S5: the bus-tools switch is shown on a Mac and hidden on Linux and Wind
     const b = await boot({ pane: 'agent-messages', platform });
     try {
       const d = b.w.document;
-      for (const id of ['busToolsRow', 'hint-bus-tools']) assert.equal(b.w.getComputedStyle(d.getElementById(id)).display !== 'none', shown, `${platform} ${id}`);
+      for (const id of ['busToolsRow', 'hint-bus-tools', 'hint-bus-ref']) assert.equal(b.w.getComputedStyle(d.getElementById(id)).display !== 'none', shown, `${platform} ${id}`);
       assert.equal(b.w.getComputedStyle(d.getElementById('agentAwarenessEnabled').closest('label')).display !== 'none', true, 'the awareness switch stays');
     } finally { b.close(); }
   }
