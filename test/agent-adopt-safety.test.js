@@ -324,7 +324,7 @@ test('change 4: no restore command when the data folder is outside home; ids onl
     assert.equal(s.it.restoreBackupPlan(bad).ok, false);
   }
   const home = s.home, data = path.join(home, 'Library', 'Plexiform');
-  const t = createAgentInstaller({ home, dataRoot: data, catalog: shipped, ledgerKey: Buffer.alloc(32, 9) });
+  const t = createAgentInstaller({ home, dataRoot: data, catalog: shipped, ledgerKey: Buffer.alloc(32, 9), platform: 'darwin' });
   const b = t.adopt([`.claude/agents/${s.fx.exact[0].name}`]);
   const tag = b.backup.replace(/^claude-agents-/, '');
   const mac = t.restoreCommand(b.backup);

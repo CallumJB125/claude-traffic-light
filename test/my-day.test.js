@@ -75,7 +75,7 @@ function productionBroker() {
   return { broker: context.broker, context, markers, origin, launch, launches, urls, reads };
 }
 test('production desktop My day wiring uses registered hubs and fixed local launch, then opens the verified board/card', async () => {
-  const p = productionBroker(), state = await p.broker.snapshot(); assert.equal(state.status, 'complete'); assert.equal(state.sources[0].name, 'My board (this Mac)'); assert.deepEqual(p.reads, [p.origin]);
+  const p = productionBroker(), state = await p.broker.snapshot(); assert.equal(state.status, 'complete'); assert.equal(state.sources[0].name, process.platform === 'darwin' ? 'My board (this Mac)' : 'My board (this computer)'); assert.deepEqual(p.reads, [p.origin]);
   assert.equal(await p.broker.open(state.sources[1].cards[0].handle), true);
   const target = new URL(p.urls[0]); assert.equal(target.origin, p.origin); assert.equal(target.searchParams.get('org'), 't1'); assert.equal(target.searchParams.get('board'), 'b1'); assert.equal(target.hash, '#card=c1');
 });

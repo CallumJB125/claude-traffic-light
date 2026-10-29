@@ -41,7 +41,8 @@ const TOOLS = [
 
 function fakeSafe({ on = true } = {}) {
   const calls = { encrypt: 0, decrypt: 0 };
-  return { calls, isEncryptionAvailable: () => on, encryptString: (s) => { calls.encrypt++; return Buffer.from(`sealed:${s}`); }, decryptString: (b) => { calls.decrypt++; return b.toString().slice(7); } };
+  // A working keyring: on Linux an unknown backend is refused by design (the weak-backend test is in agent-install.test.js).
+  return { calls, isEncryptionAvailable: () => on, getSelectedStorageBackend: () => 'gnome_libsecret', encryptString: (s) => { calls.encrypt++; return Buffer.from(`sealed:${s}`); }, decryptString: (b) => { calls.decrypt++; return b.toString().slice(7); } };
 }
 function frame() { return { id: Math.random() }; }
 function contents() { const c = { mainFrame: frame(), destroyed: false, isDestroyed: () => c.destroyed }; return c; }

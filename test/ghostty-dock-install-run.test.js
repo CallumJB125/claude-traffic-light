@@ -10,6 +10,9 @@ const { spawnSync } = require('node:child_process');
 const { testTempDir } = require('./helpers/tmp');
 const I = require('../src/ghostty-dock-install.js');
 
+// The script is a zsh script run by the macOS Terminal; where /bin/zsh is absent these three cannot run it.
+const NO_ZSH = !fs.existsSync('/bin/zsh') && 'needs /bin/zsh (the script is zsh)';
+
 const RAN = 'STUB-INSTALLER-RAN';
 function runScript(input, stub = `print -r -- ${RAN}`) {
   const root = testTempDir('px-dock-run-');
@@ -23,7 +26,7 @@ function runScript(input, stub = `print -r -- ${RAN}`) {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
-test('L2: anything but an empty line or y/Y cancels, says so, and runs nothing', () => {
+test('L2: anything but an empty line or y/Y cancels, says so, and runs nothing', { skip: NO_ZSH }, () => {
   for (const input of ['no\n', 'n\n', 'N\n', 'nope\n', 'yes please\n', ' \n', 'yy\n', 'x\n']) {
     const r = runScript(input);
     assert.doesNotMatch(r.out, new RegExp(RAN), JSON.stringify(input));
@@ -36,7 +39,7 @@ test('L2: anything but an empty line or y/Y cancels, says so, and runs nothing',
   assert.notEqual(eof.code, 0);
 });
 
-test('L2: Return alone, y or Y installs', () => {
+test('L2: Return alone, y or Y installs', { skip: NO_ZSH }, () => {
   for (const input of ['\n', 'y\n', 'Y\n']) {
     const r = runScript(input);
     assert.match(r.out, new RegExp(RAN), JSON.stringify(input));
@@ -46,7 +49,7 @@ test('L2: Return alone, y or Y installs', () => {
   assert.match(runScript('\n').out, /Press Return or type y to install; anything else cancels\./);
 });
 
-test('L3: a failed download in the pipe is reported as a failure, not "Done."', () => {
+test('L3: a failed download in the pipe is reported as a failure, not "Done."', { skip: NO_ZSH }, () => {
   const r = runScript('\n', '/usr/bin/false | /bin/bash');
   assert.doesNotMatch(r.out, /Done\./);
   assert.match(r.out, /The installer stopped with code 1\./);
