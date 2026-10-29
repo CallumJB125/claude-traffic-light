@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -48,7 +49,9 @@ function why(app, hub, root) {
   const kinds = {}; for (const m of hub.outs()) kinds[m.kind] = (kinds[m.kind] || 0) + 1;
   const tail = app.logs().split('\n').slice(-40).join('\n');
   const text = `node ${process.version}; hub outs ${JSON.stringify(kinds)}; prep.failed ${JSON.stringify(hub.outs('prep.failed'))}; app exit ${app.exit}\n${tail}`;
-  const hide = [root, process.env.HOME, TOKEN, CF_ID, CF_SECRET].filter((v) => typeof v === 'string' && v.length > 3);
+  let real = null; try { real = fs.realpathSync(root); } catch { /* gone already */ }
+  let user = null; try { user = os.userInfo().homedir; } catch { /* no passwd entry */ }
+  const hide = [real, root, process.env.HOME, user, TOKEN, CF_ID, CF_SECRET].filter((v) => typeof v === 'string' && v.length > 3);
   let out = text;
   for (const v of hide) out = out.split(v).join('<redacted>');
   out = out.replace(/\b(?:sk|bdt|cfsecret|ghp|xox[a-z])[-_][A-Za-z0-9._-]{8,}/g, '<redacted>')
