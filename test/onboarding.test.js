@@ -170,7 +170,7 @@ test('budget writes the Spend daily budget; navigation is a short allow-list and
   for (const bad of ['settings', 'https://x', 'aitools:../x', 'Home', '']) assert.equal(await r.call('onboarding:navigate', bad), false);
   assert.equal(await r.call('onboarding:navigate', 'home', 'extra'), false);
   assert.equal(await r.call('onboarding:navigate', 'aitools:codex'), true);
-  // QoL4b: Settings › Terminal, navigation only.
+  // QoL4b: Preferences › Terminal access, navigation only.
   assert.equal(await r.call('onboarding:navigate', 'terminal-access'), true);
   assert.equal(r.opened.at(-1), 'at:terminal-access');
   r.ctx.IS_MAC = false;

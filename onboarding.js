@@ -234,7 +234,7 @@ $('budget-form').addEventListener('submit', (e) => {
 });
 $('join').addEventListener('click', () => go('join', $('extras-status')));
 $('create-team').addEventListener('click', () => go('create-team', $('extras-status')));
-// Navigation only (QoL4b): Settings › Terminal reads what macOS allowed and never asks on its own.
+// Navigation only (QoL4b): Preferences › Terminal access (Settings › Terminal in the chat preview) reads what macOS allowed and never asks on its own.
 $('terminal-access').addEventListener('click', () => go('terminal-access', $('extras-status')));
 $('finish').addEventListener('click', () => go('home', $('extras-status')));
 

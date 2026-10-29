@@ -72,7 +72,7 @@ function view({ installed, trusted, seen }) {
 function healthRow(rows) {
   const off = rows.filter((r) => r.needs === 'automation' && r.state === 'denied').map((r) => r.app);
   if (!off.length) return null;
-  return { status: 'warn', detail: `Plexiform can't switch to the exact tab in ${off.join(' or ')}: macOS has turned that off.`, fix: 'terminal-access-open', fixLabel: 'Open Terminal settings' };
+  return { status: 'warn', detail: `Plexiform can't switch to the exact tab in ${off.join(' or ')}: macOS has turned that off.`, fix: 'terminal-access-open', fixLabel: 'Open Terminal access' };
 }
 
 /**
