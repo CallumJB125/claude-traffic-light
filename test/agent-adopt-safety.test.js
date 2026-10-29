@@ -14,6 +14,17 @@ const { createHash } = require('node:crypto');
 const { createAgentInstaller } = require('../src/agent-install.js');
 const Catalog = require('../src/agent-catalog.js');
 const FP = require('../scripts/agents-fingerprint.js');
+// A copy's times come from the source's float milliseconds through utimes, so a copy can sit up to a microsecond off:
+// across a millisecond boundary the whole-ms mtime differs by 1. Everything else in the line must match exactly.
+const LINE = /^(.) (.*?) ([0-7]{4}) (\d+) (\d+|-) (.*)$/s;
+function sameFolder(got, want, message) {
+  assert.equal(got.length, want.length, message);
+  got.forEach((g, i) => {
+    const [, k1, r1, m1, z1, t1, x1] = LINE.exec(g), [, k2, r2, m2, z2, t2, x2] = LINE.exec(want[i]);
+    assert.deepEqual([k1, r1, m1, z1, x1], [k2, r2, m2, z2, x2], message);
+    assert.ok(t1 === t2 || Math.abs(Number(t1) - Number(t2)) <= 1, `${message || 'copy'}: ${r1} mtime ${t1} vs ${t2}`);
+  });
+}
 const { buildAgentsHome } = require('./fixtures/agents-home.js');
 
 const sha = (t) => createHash('sha256').update(t).digest('hex');
@@ -106,7 +117,7 @@ test('step 1: the backup is the folder exactly (bytes, modes, mtimes, links kept
   assert.equal(r.ok, true);
   const [b] = backupsOf(s);
   const copy = path.join(s.data, 'agent-backups', b);
-  assert.deepEqual(FP.fingerprint(copy), before, 'the copy matches entry for entry');
+  sameFolder(FP.fingerprint(copy), before, 'the copy matches entry for entry');
   assert.equal(fs.statSync(copy).mode & 0o777, 0o700);
   assert.deepEqual(s.fp(), before);
   s.it.adopt([`.claude/agents/${s.fx.exact[1].name}`]);
@@ -282,7 +293,7 @@ test('step 11: the documented restore (into a new folder, then swap by hand) get
   assert.deepEqual(s.fp(), live);
   assert.equal(sh(copy), '');
   assert.deepEqual(s.fp(), live, 'restoring into a new folder leaves the live one alone');
-  assert.deepEqual(FP.fingerprint(R, { linkTimes: false }), before);
+  sameFolder(FP.fingerprint(R, { linkTimes: false }), before);
   // A second copy never merges into the first.
   fs.writeFileSync(path.join(R, 'checked.txt'), 'looked at it\n');
   const restored = FP.fingerprint(R);
@@ -396,7 +407,7 @@ test('change 8: hostile folders and files: swaps, links, planted backups, a link
     const r = s.it.adopt();
     assert.equal(r.ok, true);
     assert.notEqual(r.backup, planted);
-    assert.deepEqual(FP.fingerprint(s.it.backupPath(r.backup)), s.fp());
+    sameFolder(FP.fingerprint(s.it.backupPath(r.backup)), s.fp());
   }
   // The data folder as a link.
   {
@@ -545,7 +556,7 @@ test('M1: subfolders that are 0700 and 0555 are backed up with their modes, and 
   const b = s.it.backupPath(r.backup);
   for (const [d, mode] of Object.entries(s.fx.modeDirs)) assert.equal((fs.lstatSync(path.join(b, d)).mode & 0o7777).toString(8), mode.toString(8), d);
   assert.equal((fs.lstatSync(b).mode & 0o777).toString(8), '700', 'the backup folder itself stays 0700');
-  assert.deepEqual(FP.fingerprint(b), before, 'the backup is the folder exactly, modes included');
+  sameFolder(FP.fingerprint(b), before, 'the backup is the folder exactly, modes included');
   assert.deepEqual(s.fp(), before, 'the agents folder is untouched');
   for (const [d, mode] of Object.entries(s.fx.modeDirs)) assert.equal(fs.lstatSync(path.join(s.fx.dir, d)).mode & 0o7777, mode, `${d} in ~/.claude/agents unchanged`);
 });
@@ -792,7 +803,7 @@ test('L4: a second instance backing up mid-way through this one never sweeps its
   assert.equal(r.ok, true, r.error);
   const b = s.it.backupPath(r.backup);
   assert.ok(b, 'listed');
-  assert.deepEqual(FP.fingerprint(b), before, 'the whole folder, nothing swept out of it');
+  sameFolder(FP.fingerprint(b), before, 'the whole folder, nothing swept out of it');
   assert.ok(!backupsOf(s).some((n) => n.startsWith('.tmp-')));
 });
 
