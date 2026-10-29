@@ -2,6 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),cp=require('node:child_process');
 const {createSetupsPlatform}=require('../../src/setups-platform');
 const { testTempDir } = require('../helpers/tmp');
+const {requireHelper}=require('../helpers/setups-native/runtime');
 function fixture(t){
  const root=fs.realpathSync(testTempDir('pf-platform-')),profile=path.join(root,'profile'),userData=path.join(profile,'Library','Application Support','Plexiform'),bundle=path.join(root,'Plexiform.app'),contents=path.join(bundle,'Contents'),resources=path.join(contents,'Resources');
  fs.mkdirSync(userData,{recursive:true,mode:0o700});fs.mkdirSync(path.join(resources,'setups'),{recursive:true,mode:0o700});fs.mkdirSync(path.join(contents,'_CodeSignature'),{mode:0o700});
@@ -38,7 +39,7 @@ test('unsupported/unpackaged/misbound roots fail before any credential or helper
  const f=fixture(t);for(const opts of [{...f.base,platform:'win32'},{...f.base,app:{...f.base.app,isPackaged:false}},{...f.base,profilePath:'/'},{...f.base,resourcesPath:f.root}])assert.throws(()=>createSetupsPlatform(opts));assert.equal(f.calls.length,0);
 });
 test('actual sealed minimal app launches native snapshot and refuses changed manifest without a new child',async t=>{
- const f=fixture(t),helper=process.env.PLEXIFORM_TEST_HELPER;assert.ok(helper);
+ const f=fixture(t),helper=requireHelper(process.env.PLEXIFORM_TEST_HELPER);
  const executable=path.join(f.contents,'MacOS','Plexiform');fs.mkdirSync(path.dirname(executable),{mode:0o700});fs.copyFileSync(helper,executable);fs.copyFileSync(helper,f.files.helper);fs.chmodSync(executable,0o700);fs.chmodSync(f.files.helper,0o700);
  fs.writeFileSync(path.join(f.contents,'Info.plist'),'<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.plexiform.synthetic.setups</string><key>CFBundleExecutable</key><string>Plexiform</string><key>CFBundleVersion</key><string>1</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>');
  const entitlements=path.resolve(__dirname,'../../build/entitlements.setups-helper.plist');assert.ok(fs.existsSync(entitlements));

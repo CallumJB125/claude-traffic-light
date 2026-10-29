@@ -7,7 +7,12 @@ const {createTransactionController}=require('../../../src/borrow/transaction-con
 const {validatePayload}=require('../../../src/borrow/payload');
 const { testTempDir } = require('../tmp');
 function stamp(p){const s=fs.statSync(p,{bigint:true});return {device:s.dev,inode:s.ino,size:s.size,uid:s.uid,mode:s.mode,links:s.nlink,mtime_seconds:s.mtimeNs/1000000000n,mtime_nanoseconds:s.mtimeNs%1000000000n,ctime_seconds:s.ctimeNs/1000000000n,ctime_nanoseconds:s.ctimeNs%1000000000n};}
+function requireHelper(helper){
+ if(typeof helper!=='string'||!helper||!fs.existsSync(helper)||!fs.statSync(helper).isFile())throw new Error('Setups helper not built. Run "npm run test:native-darwin", or "npm run setups-helper" and set PLEXIFORM_TEST_HELPER=$PWD/native/setups-build/buddy-setups');
+ return helper;
+}
 function fixture(t,helper,options={}){
+ requireHelper(helper);
  const root=fs.realpathSync(testTempDir('pf-binding-runtime-')),profile=root+'/profile',app=root+'/app';fs.mkdirSync(profile,{mode:0o700});fs.mkdirSync(app,{mode:0o700});fs.mkdirSync(profile+'/.codex',{mode:0o700});fs.writeFileSync(profile+'/.codex/AGENTS.md',options.before??'Keep synthetic notes.\n',{mode:0o600});
  const file={id:randomUUID(),source_id:'codex',relative_path:'.codex/AGENTS.md',format:'text',content:options.after??'Write synthetic notes.\n',note:''},extra=options.extraFile?{id:randomUUID(),source_id:'gemini-cli',relative_path:'.gemini/settings.json',format:'json',content:'{"theme":"synthetic"}',note:''}:null,payload=validatePayload({schema:1,files:extra?[file,extra]:[file],items:[],note:''}),actor={account:'fixture-account',team:'fixture-team',member:'fixture-member',device:'fixture-device'};
  if(extra){fs.mkdirSync(profile+'/.gemini',{mode:0o700});fs.writeFileSync(profile+'/.gemini/settings.json','{"theme":"before"}',{mode:0o600});}
@@ -22,6 +27,6 @@ function fixture(t,helper,options={}){
  const request=()=>({files:[{id:file.id,mode:'replace',replace_keys:[],instructions:true,code:true},...(extra?[{id:extra.id,mode:'replace',replace_keys:[],instructions:false,code:true}]:[])],values:{}}),sourceHandle=randomUUID(),core=make();
  return {root,profile,app,file,extra,state,source,wrapping,sup,roots,observe,core,make,request,sourceHandle,filename:profile+'/.codex/AGENTS.md'};
 }
-module.exports={stamp,fixture};
+module.exports={stamp,fixture,requireHelper};
 async function snapshot(f,recipe=1){const C=require('../../../src/borrow/native-codec');const {performance}=require('node:perf_hooks');const s=await f.sup.open({...f.roots(),mode:1,generation:2n,authority_hash:C.hash(Buffer.from('synthetic-only'))},performance.now()+8000);try{const out=await s.request(0x30,new C.Writer().u32(recipe).finish());if(out.result!==0)throw Error('Synthetic snapshot failed');const r=new C.Reader(out.body),raw=Buffer.from(r.blob(C.LIMITS.snapshot));r.done();return raw;}finally{await s.close();}}
 module.exports.snapshot=snapshot;
