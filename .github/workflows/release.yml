@@ -145,10 +145,12 @@ jobs:
       # Root files run serially: memory.test.js includes a wall-clock latency
       # requirement that unrelated parallel SQLite/CPU fixtures distort. Keep
       # its 200 ms assertion and every test in the mandatory gate.
+      # Measured with the board suite included (runs 105/106): Mac 18–21 min, Linux 16 min. 35 leaves room on every
+      # platform (Windows has no data yet); the job cap is 60. Split this step if it grows past about 30 minutes.
       - name: Unit tests
         id: units
         shell: bash
-        timeout-minutes: 20
+        timeout-minutes: 35
         env:
           TZ: Africa/Johannesburg
           ELECTRON_DISABLE_SANDBOX: '1'

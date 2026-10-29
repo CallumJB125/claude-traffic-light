@@ -148,10 +148,15 @@ test('worst-case inputs stay fast (64 KB rejected at once; 8 KB scanned in linea
   for (const unit of ['rm ', 'chmod ', 'git ', 'sh ', 'dd ', 'find ', 'git push ', '| ', '$(', "'", '"', 'a=b ', '> ', '-rf ']) {
     for (const size of [65000, MAX_REMOTE_INPUT_CHARS - 40]) {
       const c = unit.repeat(Math.floor(size / unit.length));
-      const t = performance.now();
-      remote('Bash', { command: c });
-      const ms = performance.now() - t;
-      assert.ok(ms < 100, `${JSON.stringify(unit)} × ${c.length}: ${ms.toFixed(0)} ms`);
+      // Best of three: a GC pause or a busy CI runner stalls one run, never all three, while catastrophic backtracking
+      // (the thing this guards) is slow on every run. Typical time here is 0.2–4 ms against the 100 ms ceiling.
+      let ms = Infinity;
+      for (let i = 0; i < 3; i += 1) {
+        const t = performance.now();
+        remote('Bash', { command: c });
+        ms = Math.min(ms, performance.now() - t);
+      }
+      assert.ok(ms < 100, `${JSON.stringify(unit)} × ${c.length}: ${ms.toFixed(0)} ms (best of 3)`);
     }
   }
 });
