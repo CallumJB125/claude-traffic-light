@@ -16,6 +16,8 @@
     const syncNotifyKinds = () => { const on = document.getElementById('notifyOnStates').checked; for (const k of NOTIFY_KINDS) document.getElementById(`notify-${k}`).disabled = !on; };
     document.getElementById('notifyOnStates').addEventListener('change', syncNotifyKinds);
 
+    // The bus tools are added on macOS only (src/mcp-auto.js): elsewhere the switch would do nothing, so it is not shown.
+    if (!/mac/i.test(String((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || ''))) for (const id of ['busToolsRow', 'hint-bus-tools']) document.getElementById(id).style.display = 'none';
     let awarenessSaved = {}; // notes / midTurnNotices have no control here: sent back as loaded
     const syncBusTools = () => { const t = document.getElementById('busToolsOn'); t.disabled = !document.getElementById('agentAwarenessEnabled').checked && !document.getElementById('agentBusEnabled').checked; };
     async function load() {

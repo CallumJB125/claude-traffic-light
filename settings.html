@@ -874,7 +874,7 @@
   <div class="field" id="ai-sessions-settings" data-pane="agent-messages">
     <label class="row"><input type="checkbox" id="agentAwarenessEnabled" aria-describedby="hint-agent-awareness" /> Let my AI sessions see each other</label>
     <div class="hint" id="hint-agent-awareness">Each Claude Code, Codex and Gemini CLI session here is told which others are running (tool, folder name, branch, working or waiting) and can leave notes for them. Off: Plexiform deletes that list, stops adding the line at the start of each session, and the sessions can't see each other.</div>
-    <label class="row"><input type="checkbox" id="busToolsOn" aria-describedby="hint-bus-tools" /> Add Plexiform's bus tools to Claude Code and Codex</label>
+    <label class="row" id="busToolsRow"><input type="checkbox" id="busToolsOn" aria-describedby="hint-bus-tools" /> Add Plexiform's bus tools to Claude Code and Codex</label>
     <div class="hint" id="hint-bus-tools">Adds one entry named plexiform-bus to ~/.claude.json and to Codex, so sessions can use bus_peers and hand work over. Off: Plexiform removes the entries it added (never anyone else's). The Agent bus and the session list's notes need them. Not added while both of those are off.</div>
   </div>
 

@@ -288,7 +288,7 @@ const FIXTURES = {
   remoteDevices: { devices: [], loopback: {}, tailnet: { enabled: false }, port: 1, pairing: null }, interactionHostStatus: 'Off.', privacyText: null,
 };
 
-async function boot({ pane, search, config = {} }) {
+async function boot({ pane, search, config = {}, platform = 'MacIntel' }) {
   const calls = []; const timers = []; const errors = [];
   const vc = new VirtualConsole(); vc.on('jsdomError', (e) => errors.push(e.message));
   const api = new Proxy({}, { get: (_, k) => {
@@ -299,6 +299,7 @@ async function boot({ pane, search, config = {} }) {
   const dom = await JSDOM.fromFile(path.join(root, 'settings.html'), {
     url: `file://${root}/settings.html${q}`, runScripts: 'dangerously', resources: 'usable', virtualConsole: vc, pretendToBeVisual: true,
     beforeParse(w) {
+      Object.defineProperty(w.navigator, 'platform', { value: platform, configurable: true });
       w.settingsApi = api; w.IntersectionObserver = class { observe() {} disconnect() {} };
       const st = w.setTimeout, si = w.setInterval;
       w.setTimeout = (...a) => { timers.push('timeout'); return st(...a); }; w.setInterval = (...a) => { timers.push('interval'); return si(...a); };
@@ -630,4 +631,15 @@ test('AW-S3/S4: the two switches show the config, save it back the right way rou
     await new Promise((r) => setTimeout(r, 400));
     assert.equal(b.calls.filter((c) => c.name === 'saveConfig').pop().args[0].agentAwareness.enabled, false);
   } finally { b.close(); }
+});
+
+test('AW-S5: the bus-tools switch is shown on a Mac and hidden on Linux and Windows (the tools are added on macOS only)', async () => {
+  for (const [platform, shown] of [['MacIntel', true], ['Linux x86_64', false], ['Win32', false]]) {
+    const b = await boot({ pane: 'agent-messages', platform });
+    try {
+      const d = b.w.document;
+      for (const id of ['busToolsRow', 'hint-bus-tools']) assert.equal(b.w.getComputedStyle(d.getElementById(id)).display !== 'none', shown, `${platform} ${id}`);
+      assert.equal(b.w.getComputedStyle(d.getElementById('agentAwarenessEnabled').closest('label')).display !== 'none', true, 'the awareness switch stays');
+    } finally { b.close(); }
+  }
 });
