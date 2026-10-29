@@ -522,7 +522,7 @@ test('projection: a shared chat is labelled a chat; an unknown kind is a session
     assert.equal(out.header.kind, 'session', String(kind));
     assert.equal(out.header.title, "Bob's Claude Code session");
   }
-  assert.match(read('thread-shared.js'), /h\.kind === 'chat' \? `\$\{h\.owner\}'s chat · \$\{h\.provider\}`/);
+  assert.match(read('thread-shared.js'), /h\.kind === 'chat' \? h\.provider : `\$\{h\.owner\}'s \$\{h\.provider\} session`/);
 });
 
 test('CT2-M1: a shared chat never offers Propose (the hub would keep its text); a session still does', () => {

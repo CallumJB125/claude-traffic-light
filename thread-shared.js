@@ -57,7 +57,8 @@
     noun = h.kind === 'chat' ? 'chat' : 'session';
     document.title = h.title;
     $('th-title').textContent = h.title;
-    $('th-meta').textContent = `${h.kind === 'chat' ? `${h.owner}'s chat · ${h.provider}` : `${h.owner}'s ${h.provider} session`} · ${h.via === 'allowance' ? `${h.owner} let you send` : h.scope === 'interact' ? 'Watch and send' : 'Shared with you to watch'}${h.expiresAt ? ` · until ${clock(h.expiresAt)}` : ''}${h.fake ? ' (test data)' : ''}`;
+    // A chat's title is already "‹Owner›'s chat" (it never carries the chat's own title), so its meta starts at the provider.
+    $('th-meta').textContent = `${h.kind === 'chat' ? h.provider : `${h.owner}'s ${h.provider} session`} · ${h.via === 'allowance' ? `${h.owner} let you send` : h.scope === 'interact' ? 'Watch and send' : 'Shared with you to watch'}${h.expiresAt ? ` · until ${clock(h.expiresAt)}` : ''}${h.fake ? ' (test data)' : ''}`;
     const banner = $('th-banner'); banner.hidden = false;
     const seen = v.watching !== 'off';
     if (!seen) painted = false;

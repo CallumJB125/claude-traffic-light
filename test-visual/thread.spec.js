@@ -817,15 +817,19 @@ test('owner: Share this chat… then its review card, Watch and send (dark)', as
 // The teammate's side of a shared chat: labelled a chat, no Stop (the host's capabilities say interrupt is off).
 const SHARED_CHAT = { ...SHARED_BASE, header: { ...SHARED_BASE.header, title: "Bob's chat", provider: 'Claude', kind: 'chat', scope: 'interact' }, status: 'ready', canSendLater: true,
   activity: { category: null, ageMs: 0, stale: false },
-  controls: { send: yes, steer: no('No current turn is available to steer.'), interrupt: no("Only the chat's owner can stop it."), propose: yes, queue: no('Send now; the session is idle.') } };
-test('shared chat (dark): "Bob\'s chat · Claude", the composer, no Stop', async () => {
+  controls: { send: yes, steer: no('No current turn is available to steer.'), interrupt: no("Only the chat's owner can stop it."), propose: no('Proposals are not available for a shared chat. Send when it is idle.'), queue: no('Send now; the session is idle.') } };
+test('shared chat (dark): "Bob\'s chat", Claude, the composer, no Propose, no Stop', async () => {
   const { h, side } = await sharedOpen('dark', SHARED_CHAT);
   try {
     const page = await openThread(h, side, 'dark');
-    await expect(page.locator('#th-meta')).toHaveText("Bob's chat · Claude · Watch and send");
+    await expect(page.locator('#th-title')).toHaveText("Bob's chat");
+    await expect(page.locator('#th-meta')).toHaveText('Claude · Watch and send');
     await expect(page.locator('#th-sh-stop')).toBeHidden();
     await expect(page.locator('#th-sh-chip')).toHaveText('Send ▾');
     await expect(page.locator('#th-sh-text')).toHaveAttribute('placeholder', "Message Bob's chat");
     await shot(page, 'thread-shared-chat-dark.png');
+    // CT2-M1: Propose is in the menu but off, with main's reason (a proposal's text would be kept on the hub).
+    await page.locator('#th-sh-chip').click();
+    await expect(page.locator('#th-sh-menu')).toContainText('Proposals are not available for a shared chat.');
   } finally { await h.cleanup(); }
 });
