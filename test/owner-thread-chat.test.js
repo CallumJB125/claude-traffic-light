@@ -7,18 +7,19 @@ const { createThreadMain } = require('../src/thread-main');
 const Owner = require('../src/thread-owner-main');
 const { createRemoteChatTargets } = require('../src/remote-chat-target');
 
+const PROVIDER = '7b0c3f2e-4a1d-4c55-9e0f-1234567890ab'; // the provider's session id: never sent anywhere
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function rig({ workInPlace = false } = {}) {
   let time = 1_000_000;
-  const row = { id: 'tsk_1', state: 'in_review', source: 'local', ai: { id: 'claude' }, permissionLevel: 'auto-edits', workInPlace, lastSeq: 10, repo: { name: 'plexiform' } };
+  const row = { id: 'tsk_1', sessionId: PROVIDER, state: 'in_review', source: 'local', ai: { id: 'claude' }, permissionLevel: 'auto-edits', workInPlace, lastSeq: 10, repo: { name: 'plexiform' } };
   const watchers = [];
   let unsubscribed = 0, registers = 0;
   const chats = createRemoteChatTargets({
     now: () => time,
     tasks: {
       row: (id) => (id === row.id ? row : null),
-      detail: async (id) => (id === row.id ? { workInPlace: row.workInPlace, lastSeq: row.lastSeq } : null),
+      detail: async (id) => (id === row.id ? { sessionId: PROVIDER, workInPlace: row.workInPlace, lastSeq: row.lastSeq } : null),
       watch: async (...a) => { watchers.push(a); return { stop() { unsubscribed++; } }; },
       shareMessage: async () => ({ ok: false, code: 'INTERNAL' }),
     },
@@ -97,11 +98,14 @@ test('the Share card for a chat (plan §4, S2); confirm is the one place that re
   assert.equal(r.registers(), 1);
   const [, req] = r.host.calls.find((c) => c[0] === 'share');
   assert.match(req.session, UUID);
+  assert.notEqual(req.session, PROVIDER, 'the hub\'s session is never the provider session id');
+  assert.ok(!JSON.stringify(r.host.calls).includes(PROVIDER));
   assert.equal(req.scope, 'interact');
   assert.deepEqual(r.chats.registered(), [{ session: req.session, taskId: 'tsk_1' }]);
   assert.equal(r.watchers[0][1], 11, 'from after the chat\'s latest message');
   const after = await r.state();
   assert.equal(after.shares.length, 1);
+  assert.ok(!JSON.stringify([after, out, send, watch, st]).includes(PROVIDER), 'owner-state, cards and receipts');
   r.tm.stop();
 });
 

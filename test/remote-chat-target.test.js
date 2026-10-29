@@ -113,6 +113,8 @@ test('send: the engine decides; the teammate rides only the share fields; no ste
   assert.equal(ok.ok, true, JSON.stringify(ok));
   assert.deepEqual(f.sends[0], { id: 'tsk_1', body: 'please add tests', share: { key: 'shr-1', by: { memberId: 'u-alex', name: 'Alex' }, expect: { permissionLevel: 'auto-edits', ai: 'claude' } }, requestId: 'share:shr-1:frm-1' });
   assert.equal(ok.delivery.by, 'Alex');
+  assert.ok(!JSON.stringify(ok).includes(PROVIDER_SESSION), 'the receipt never carries the provider session id');
+  assert.ok(!JSON.stringify(f.sends).includes(PROVIDER_SESSION));
   // Its own message event (a member) arriving later shows once, with the name from the send.
   f.emit({ type: 'message', seq: 50, id: 'msg-1', direction: 'in', from: { kind: 'member', id: 'u-alex', label: 'Alex (teammate)' }, body: 'please add tests', createdAt: 9000 });
   f.emit({ type: 'transcript', seq: 51, role: 'assistant', text: 'Added.', turn: 4 });
