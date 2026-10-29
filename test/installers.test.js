@@ -409,7 +409,7 @@ test('release.yml: tags and manual runs only, nothing signed, no branch conditio
   // the bounded unit tests (a hang on Windows ate the whole job once)
   assert.match(jobs.build, /timeout-minutes: 60/);
   assert.doesNotMatch(jobs.build, /--test-force-exit/, 'forced exit can silently discard completed child-test verdicts');
-  assert.match(jobs.build, /name: Unit tests\n(?:.*\n)*? {8}timeout-minutes: 20\n/);
+  assert.match(jobs.build, /name: Unit tests\n(?:.*\n)*? {8}timeout-minutes: 35\n/);
   assert.match(jobs.build, /node --import "\$GITHUB_WORKSPACE\/test\/support\/no-real-cli\.mjs" --test --test-concurrency=1 --test-timeout=120000 test\/\*\.test\.js test\/adapters\/\*\.test\.js/);
   assert.match(jobs.build, /node --import "\$GITHUB_WORKSPACE\/test\/support\/no-real-cli\.mjs" --test --test-concurrency=4 --test-timeout=120000 remote\/test\//);
   assert.ok(!/npm test/.test(jobs.build));

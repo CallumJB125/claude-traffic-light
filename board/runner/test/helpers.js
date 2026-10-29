@@ -30,10 +30,13 @@ export function tmpDir(prefix = 'brt-') {
 
 /** Every file under dir whose bytes contain needle (secrets must never reach disk). */
 export function filesHolding(dir, needle, out = []) {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+  // git deletes folders (such as .git/worktrees/*) while this walks: an entry that vanishes mid-walk holds nothing.
+  // Only ENOENT is ignored; any other error still fails the test.
+  const gone = (fn) => { try { return fn(); } catch (e) { if (e && e.code === 'ENOENT') return undefined; throw e; } };
+  for (const e of gone(() => fs.readdirSync(dir, { withFileTypes: true })) ?? []) {
     const p = path.join(dir, e.name);
     if (e.isDirectory()) filesHolding(p, needle, out);
-    else if (e.isFile() && fs.readFileSync(p).includes(needle)) out.push(p);
+    else if (e.isFile() && gone(() => fs.readFileSync(p))?.includes(needle)) out.push(p);
   }
   return out;
 }
