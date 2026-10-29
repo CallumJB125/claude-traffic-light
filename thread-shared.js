@@ -56,7 +56,7 @@
     const h = v.header;
     document.title = h.title;
     $('th-title').textContent = h.title;
-    $('th-meta').textContent = `${h.owner}'s ${h.provider} session · ${h.via === 'allowance' ? `${h.owner} let you send` : h.scope === 'interact' ? 'Watch and send' : 'Shared with you to watch'}${h.expiresAt ? ` · until ${clock(h.expiresAt)}` : ''}${h.fake ? ' (test data)' : ''}`;
+    $('th-meta').textContent = `${h.kind === 'chat' ? `${h.owner}'s chat · ${h.provider}` : `${h.owner}'s ${h.provider} session`} · ${h.via === 'allowance' ? `${h.owner} let you send` : h.scope === 'interact' ? 'Watch and send' : 'Shared with you to watch'}${h.expiresAt ? ` · until ${clock(h.expiresAt)}` : ''}${h.fake ? ' (test data)' : ''}`;
     const banner = $('th-banner'); banner.hidden = false;
     const seen = v.watching !== 'off';
     if (!seen) painted = false;
@@ -254,7 +254,7 @@
     if (r && r.ok === true) {
       if (op === 'send' || op === 'steer' || op === 'propose' || op === 'queue') clearDraft();
       const to = view?.header?.owner ? `Sent to ${view.header.owner}.` : 'Sent.';
-      sticky = op === 'queue' ? `Queued. It sends once ${view?.header?.owner ? `${view.header.owner}'s` : 'the'} session is idle.` : op === 'propose' ? 'Proposal sent. It waits for the owner to review it.' : op === 'stop' ? 'Stop requested.' : op === 'withdraw' ? 'Proposal withdrawn.' : r.note || (direct ? to : 'Sent. Its receipt appears with the messages.');
+      sticky = op === 'queue' ? `Queued. It sends once ${view?.header?.owner ? `${view.header.owner}'s` : 'the'} ${view?.header?.kind === 'chat' ? 'chat' : 'session'} is idle.` : op === 'propose' ? 'Proposal sent. It waits for the owner to review it.' : op === 'stop' ? 'Stop requested.' : op === 'withdraw' ? 'Proposal withdrawn.' : r.note || (direct ? to : 'Sent. Its receipt appears with the messages.');
       note(sticky);
       proposalsAt = 0; queueAt = 0;
     } else note(failure(r), 'error');

@@ -853,7 +853,7 @@ function createTasksService(opts) {
     return { handle, label };
   }
 
-  return { start, stop, retryNow, refresh, snapshot, openTask, closeTask, act, shownHash, saveCheckpoint, copyTakeover, openTerminal, create, preflight, route, composerInfo, registerFolder, markSeen, chatRow, chatDetail, watchChat, shareMessage, folderOf: (handle) => folders.get(handle) ?? null, folderPaths: () => [...folders.values()], bus };
+  return { start, stop, retryNow, refresh, snapshot, openTask, closeTask, act, shownHash, saveCheckpoint, copyTakeover, openTerminal, create, preflight, route, composerInfo, registerFolder, markSeen, chatRow, chatDetail, watchChat, shareMessage, chatConnected: () => connected(), folderOf: (handle) => folders.get(handle) ?? null, folderPaths: () => [...folders.values()], bus };
 }
 
 module.exports = { createTasksService, OFFLINE };

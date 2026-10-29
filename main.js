@@ -1982,6 +1982,7 @@ loginEnvHub.subscribe((values) => { try { tasksProcess?.sendLoginEnv(values); } 
 // T4c: a Plexiform chat as a shared-session target. Created only with the chat-first preview on (below, in the
 // preview block); otherwise null. Inert until T4c-2: nothing calls register(), so target() resolves no chat.
 let ChatTargets=null;
+const chatOwnerTarget=(rowId)=>{const t=OverviewMain?.threadTarget?.(rowId);return t?.kind==='task'?ChatTargets?.ownerTarget(t.taskId)??null:null;};
 const InteractionMain=require('./src/interaction-main').createInteractionMain({
   accountScope:followupScope,
   keyRoot:claudeKeyRoot,
@@ -2162,7 +2163,7 @@ const TeamSessionSharing=require('./src/team-session-sharing').createTeamSession
   },onChange:()=>OverviewMain.directoryChanged(),
 });
 let manualShareRefresh=null;
-setInterval(()=>{InteractionMain.reportHooks(aggregateState().sessions||[]);if(loadConfig().teamSessionSharing===false){const h=hostSync.host();if(h?.shared().length&&!manualShareRefresh)manualShareRefresh=h.listShares().catch(()=>{}).finally(()=>{manualShareRefresh=null;});}TeamSessionSharing.sync().catch(()=>{});},5000).unref?.();
+setInterval(()=>{InteractionMain.reportHooks(aggregateState().sessions||[]);if(loadConfig().teamSessionSharing===false){const h=hostSync.host();if(h?.shared().length&&!manualShareRefresh)manualShareRefresh=h.listShares().catch(()=>{}).finally(()=>{manualShareRefresh=null;});}TeamSessionSharing.sync().catch(()=>{});ChatTargets?.sweep(hostSync.host(),tasksSvc?.chatConnected?.()===true);},5000).unref?.();
 onQuit(app,()=>TeamSessionSharing.stop());
 const INTERACTION_HOST_LINES={connecting:'Connecting…',connected:'On: your other signed-in devices can use sessions started from them on this Mac.',retrying:'Can\'t reach your team hub; retrying.','signed-out':'Stopped: this Mac is signed out or was removed from your account.',replaced:'Stopped: another connection took over this Mac\'s sign-in. If that wasn\'t you, remove this device in Account and sign in again.',refused:'Stopped: the hub named a different account.',held:'Stopped: another connection is using this Mac\'s sign-in, so your devices can\'t reach it. If that wasn\'t you, remove this Mac from your account (Account → Devices) and sign in again.'};
 ipcMain.handle('interaction-host-status',e=>{
@@ -2564,8 +2565,8 @@ if (CHAT_PREVIEW) {
     // T4a: my own Plexiform-held session's thread: a read, and the way to Overview (navigation only).
     ownedRead: (id) => OverviewMain.ownedThreadRead(id),
     openOverview: () => buddyWin?.openOverviewFromThread?.() ?? false,
-    // T4: owner controls on my own thread (plan-t4). The host directly, never interaction-main's actorOf.
-    owner: { target: (id) => OverviewMain.ownerTarget(id), host: () => hostSync.host(), account: () => InteractionMain.ownedAccount(), automatic: (shareId) => TeamSessionSharing.isAutomatic(shareId) },
+    // T4: owner controls on my own thread (plan-t4). The host directly, never interaction-main's actorOf. T4c-2: a chat's target is ChatTargets' (read-only); only the Share confirm registers.
+    owner: { target: (id) => OverviewMain.ownerTarget(id) ?? chatOwnerTarget(id), register: (taskId) => ChatTargets?.register(taskId) ?? null, release: (session, host) => ChatTargets?.release(session, host), host: () => hostSync.host(), account: () => InteractionMain.ownedAccount(), automatic: (shareId) => TeamSessionSharing.isAutomatic(shareId) },
     // L32: the grantee's beat for the shared session this thread shows (src/share-view.js), main-held route.
     sharedView: (id) => OverviewMain.sharedViewRoute(id),
     header: (t, id) => SidebarRows.headerOf(t, id),
@@ -2581,7 +2582,7 @@ if (CHAT_PREVIEW) {
   ThreadMain.register(ipcMain);
   // T4 (Q5): with the preview on, a proposal is approved only on its thread's card; Overview's approve is refused.
   InteractionMain.approveInThread();
-  // T4c-1: the chat share target (src/remote-chat-target.js), preview only. register() has no caller until T4c-2.
+  // T4c: the chat share target (src/remote-chat-target.js), preview only. Only the owner's confirmed Share registers a chat.
   ChatTargets = require('./src/remote-chat-target').createRemoteChatTargets({
     enabled: () => !!tasksSvc,
     tasks: {

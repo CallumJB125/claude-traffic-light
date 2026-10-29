@@ -417,7 +417,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     const t = targetFor(session);
     if (!t || t.hub.state({ session }, t.actor).status === 'ended') return refuse('stale', 'This session has ended and cannot be shared.');
     if (state !== 'connected') return refuse('unavailable', 'This Mac is not connected to your team hub.');
-    if (shares.size >= MAX_SHARES) return refuse('unavailable', 'Stop sharing another session first.');
+    if (shares.size >= MAX_SHARES) return refuse('unavailable', 'You’re sharing as many sessions and chats as you can. Stop one first.');
     // Taken before the hub creates its row, so this Mac never shows a teammate anything older than the hub would.
     const createdAt = clock();
     let r;

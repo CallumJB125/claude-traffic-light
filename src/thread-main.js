@@ -198,7 +198,8 @@ function createThreadMain({ buddy, chatPreview = false, target, tasks, activity,
   // T4: owner controls, for a bound `owned` or `session` row only (a session row's owned twin is resolved in main).
   const ownerActs = createOwnerThreadActions({ owner, now, ...(ownerTimers ? { timers: ownerTimers } : {}) });
   ownerActs.bind(() => ctx());
-  const ownerBound = (c) => { const t = resolve(c.boundId); return !!t && (t.kind === 'owned' || t.kind === 'session'); };
+  // T4c-2: a chat (task row) too; whether it is this computer's own chat is ownerTarget's answer, per call.
+  const ownerBound = (c) => { const t = resolve(c.boundId); return !!t && (t.kind === 'owned' || t.kind === 'session' || t.kind === 'task'); };
   async function ownerState(e, args) {
     const c = guard(e, args);
     if (!c || !ownerBound(c)) return null;

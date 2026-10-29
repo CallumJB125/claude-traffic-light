@@ -17,7 +17,7 @@ const turnTag = (t) => (typeof t === 'string' && t ? crypto.createHash('sha256')
 const TOP_KEYS = Object.freeze(['header', 'banner', 'activity', 'deliveries', 'status', 'generation', 'turn', 'canSendLater', 'controls']);
 // T3: what the interact layout may offer, as booleans and fixed reasons only. Main checks every one again.
 const CONTROL_KEYS = Object.freeze(['send', 'steer', 'interrupt', 'propose', 'queue']);
-const HEADER_KEYS = Object.freeze(['title', 'owner', 'initials', 'provider', 'scope', 'via', 'expiresAt', 'fake']);
+const HEADER_KEYS = Object.freeze(['title', 'owner', 'initials', 'provider', 'kind', 'scope', 'via', 'expiresAt', 'fake']);
 const DELIVERY_KEYS = Object.freeze(['id', 'by', 'mode', 'text', 'state', 'response', 'stoppedBy', 'at']);
 
 // eslint-disable-next-line no-control-regex
@@ -68,9 +68,11 @@ function project({ state, share, route, now }) {
   const scope = share?.scope === 'interact' ? 'interact' : 'watch';
   const via = scope === 'interact' && share?.via === 'allowance';
   const exp = typeof share?.expiresAt === 'string' ? Date.parse(share.expiresAt) : NaN;
+  // T4c-2 (C2-S2): the owner's host says a shared chat is a chat; anything else is a session.
+  const kind = s.kind === 'chat' ? 'chat' : 'session';
   const deliveries = deliveriesOf(s);
   return {
-    header: { title: line(s.task_title, 120) || `${owner}'s ${provider} session`, owner, initials: initialsOf(owner), provider, scope, via: via ? 'allowance' : null, expiresAt: Number.isFinite(exp) ? new Date(exp).toISOString() : null, fake: route.fake === true },
+    header: { title: line(s.task_title, 120) || (kind === 'chat' ? `${owner}'s chat` : `${owner}'s ${provider} session`), owner, initials: initialsOf(owner), provider, kind, scope, via: via ? 'allowance' : null, expiresAt: Number.isFinite(exp) ? new Date(exp).toISOString() : null, fake: route.fake === true },
     banner: true,
     activity: activityOf(s, now),
     deliveries,
