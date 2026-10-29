@@ -20,7 +20,7 @@ function* sources(dir) {
   }
 }
 
-test('no raw invisible character in the app's own js and html source', () => {
+test('no raw invisible character in our own js and html source', () => {
   let files = 0;
   const hits = [];
   const rootFiles = fs.readdirSync(ROOT).filter((n) => /\.((c|m)?js|html)$/.test(n)).map((n) => path.join(ROOT, n));
