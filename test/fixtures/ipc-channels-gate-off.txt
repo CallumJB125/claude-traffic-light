@@ -489,6 +489,9 @@ handle tasks:state
 handle tasks:voice-draft
 handle team-hint
 handle team-hint-done
+handle terminal-access:open
+handle terminal-access:test
+handle terminal-access:view
 handle timeline:export
 handle timeline:list
 handle timeline:load
@@ -547,6 +550,7 @@ handle widget:resume-nudges
 handle widget:session-cards
 handle widget:session-copy-resume
 handle widget:session-open
+handle widget:session-snooze
 handle widget:sprite-packs
 handle widget:use-sprite-pack
 handle work-cost

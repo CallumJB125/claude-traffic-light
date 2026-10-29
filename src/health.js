@@ -479,6 +479,8 @@ const CHECKS = [
   ['burst-console', 'Burst console', checkBurstConsole],
   // Only main passes this (src/ghostty-dock.js healthRow); the MCP health tool never loads that module.
   ['ghostty-dock', 'Ghostty Dock', (c) => c.ghosttyDock || null],
+  // Only main passes this (src/terminal-access.js healthRow): a warning only when macOS turned off a terminal's Automation.
+  ['terminal-access', 'Terminal access', (c) => c.terminalAccess || null],
   ['version', 'App version', checkVersion],
 ];
 

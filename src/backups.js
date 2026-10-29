@@ -41,6 +41,7 @@ const EXCLUDED = [
   { name: 'approval-secret.json', why: 'the approval-counter signing secret' },
   { name: 'approval-counts.json', why: 'live counters derived from that secret' },
   { name: 'terminal-state.json', why: 'machine state (when Open in Terminal was last used), not a setting' },
+  { name: 'terminal-access.json', why: 'seen state (whether macOS allowed each terminal when last used), rebuilt by use' },
   { name: 'devices.json / remote.json', why: 'paired-device keys' },
   { name: 'hub token and team-hub account files', why: 'account credentials, sealed to this machine' },
   { name: 'requests/, sessions/, owned/', why: 'live state about running agents, stale within minutes' },

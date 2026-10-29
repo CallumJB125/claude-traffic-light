@@ -17,6 +17,7 @@ const GhosttyDock = require('./ghostty-dock.js');
 const { writeJsonAtomic, processGone } = require('../hooks/session-state.js');
 const PowerShell = require('./powershell.js');
 const LinuxActivate = require('./linux-activate.js');
+const TerminalAccess = require('./terminal-access.js');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
@@ -228,7 +229,8 @@ function openBundle(id) {
   });
 }
 
-module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = () => 'auto', isAiProcess = null }) => {
+// `appRunning(bundleId)`: main's prompt-free running check for Terminal access's Test (QoL4b, review B4-M1).
+module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = () => 'auto', isAiProcess = null, appRunning = async () => false }) => {
   // ── Jump to the exact tab ─────────────────────────────────────────────────
   // The session file says where the session's tab is (hooks/terminal-id.js);
   // src/focus/ has one adapter per terminal. On macOS, anything short of a
@@ -243,6 +245,15 @@ module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = 
     notify: showNote,
     openSettings: () => shell.openExternal(Permission.SETTINGS_URL), // privacy-flow: os-settings
   });
+  // QoL4b: what the jumps and the Test button have seen of each terminal's Automation permission.
+  const accessFile = () => path.join(getRootDir(), 'terminal-access.json');
+  const access = TerminalAccess.createStore({
+    read: () => JSON.parse(fs.readFileSync(accessFile(), 'utf8')),
+    write: (obj) => { fs.mkdirSync(getRootDir(), { recursive: true }); writeJsonAtomic(accessFile(), obj); },
+    // Asked of LaunchServices by main, never of the app: no prompt, and no script that could launch it (review B4-M1).
+    running: (bundle) => appRunning(bundle),
+    script: (bundle, timeout) => new Promise((resolve) => execFile('/usr/bin/osascript', ['-e', TerminalAccess.testScript(bundle)], { timeout, killSignal: 'SIGKILL' }, (err, _out, stderr) => resolve({ ok: !err, stderr: String(stderr || ''), timedOut: !!err && err.killed === true }))), // privacy-flow: terminal-jump
+  });
   let jumper = null;
   function jumpToSession(session, folderHint, preferApp = null) {
     jumper = jumper || Jump.createJumper({
@@ -255,6 +266,7 @@ module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = 
       liveness: (s) => sessionLiveness(s, getLocalHost(), isAiProcess),
       openApp: openBundle,
       explainer,
+      access: (app, state) => access.record(app, state),
       log: (msg) => console.log(`[jump] ${msg}`),
     });
     return jumper(session, folderHint, preferApp);
@@ -291,5 +303,6 @@ module.exports = ({ getSessions, getRootDir, getLocalHost, getGhosttyDockMode = 
     terminalForSessions,
     runningTerminal,
     bounceOwnDock,
+    terminalAccess: access,
   };
 };

@@ -17,7 +17,7 @@ const path = require('path');
 
 const STORES = Object.freeze([
   { id: 'settings', root: 'data', kind: 'settings', label: 'Settings, rules and presets', detail: 'Your preferences, light rules, presets, clients list and window positions.',
-    names: ['config.json', 'rules', 'presets', 'window-bounds.json', 'manual-override.json', 'claude-deny-rules.json', 'router-baseline.json', 'automation-explained.json', 'ai-tools.json', 'tasks-seen.json', 'morning-seen.json', 'away.json', 'clients.json', 'checkpoints.json', '.help-shown', '.onboarded', '.auto-launch-configured', '.calendar-granted'] },
+    names: ['config.json', 'rules', 'presets', 'window-bounds.json', 'manual-override.json', 'claude-deny-rules.json', 'router-baseline.json', 'automation-explained.json', 'terminal-access.json', 'ai-tools.json', 'tasks-seen.json', 'morning-seen.json', 'away.json', 'clients.json', 'checkpoints.json', '.help-shown', '.onboarded', '.auto-launch-configured', '.calendar-granted'] },
   { id: 'sessions', root: 'data', kind: 'sessions', label: 'Session state', detail: 'What each AI session is doing now: folder, state, tool and model names, approval requests.',
     names: ['sessions', 'requests', 'owned', 'senders', 'last-hook.json', 'hook-endpoint.json', 'burst-snapshot.json', 'burst-handover.json', 'burst-scripts', 'git-signals.json', 'busy-ics-cache.json', 'spend-snapshot.json', 'terminal-state.json', 'session-snoozes.json'] },
   { id: 'handovers', root: 'data', kind: 'handovers', label: 'Session handovers', detail: 'Handover notes written from your sessions.', names: ['handovers'] },

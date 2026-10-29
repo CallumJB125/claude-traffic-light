@@ -35,6 +35,7 @@ function show(next) {
     notShowingTimer = setTimeout(draw, NOT_SHOWING_MS);
   }
   if (next === 'extras') $('team-box').hidden = !!view?.onTeam || !!view?.simple;
+  if (next === 'extras') $('terminal-access-box').hidden = view?.mac !== true;
   draw();
   document.querySelector(`#step-${next} h1`)?.focus();
 }
@@ -233,6 +234,8 @@ $('budget-form').addEventListener('submit', (e) => {
 });
 $('join').addEventListener('click', () => go('join', $('extras-status')));
 $('create-team').addEventListener('click', () => go('create-team', $('extras-status')));
+// Navigation only (QoL4b): Settings › Terminal reads what macOS allowed and never asks on its own.
+$('terminal-access').addEventListener('click', () => go('terminal-access', $('extras-status')));
 $('finish').addEventListener('click', () => go('home', $('extras-status')));
 
 api.onStatusChanged(() => { refresh(); });

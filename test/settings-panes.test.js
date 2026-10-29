@@ -449,7 +449,7 @@ const SECTION_TABLE = {
   Spend: 'spend', 'Runaway sessions': 'spend',
   Privacy: 'privacy', 'Crash reports': 'privacy', Policies: 'privacy', Backups: 'privacy',
   'Sharing and remote control': 'phone', 'Remote devices': 'phone',
-  Health: 'advanced', 'Git and CI': 'projects', 'Agent bus': 'agent-messages', 'Ghostty Dock': 'terminal', 'Agent mail': 'agent-messages',
+  Health: 'advanced', 'Git and CI': 'projects', 'Agent bus': 'agent-messages', 'Ghostty Dock': 'terminal', 'Terminal access': 'terminal', 'Agent mail': 'agent-messages',
 };
 
 function settingsDoc() { return new JSDOM(read('settings.html')).window.document; }
