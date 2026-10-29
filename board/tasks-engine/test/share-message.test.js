@@ -3,7 +3,8 @@
 // and otherwise refused with nothing recorded, so it can never ride the next PostToolUse or the owner's next prompt.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startEngine, makeRepo, waitFor, rm, tmpDir } from './helpers.js';
+import path from 'node:path';
+import { startEngine, makeRepo, waitFor, rm, tmpDir, fakeLog } from './helpers.js';
 import { addRelayToken } from '../relay-tokens.js';
 import { connect } from '../../tasks-api/client.js';
 
@@ -43,6 +44,11 @@ test('a finished chat takes a teammate message: labelled with their name, the pr
     const msg = (await m.client.listMessages(id)).find((x) => x.body === 'TEAMMATE-ASK');
     assert.deepEqual(msg.from, { kind: 'member', id: 'u-alex', label: 'Alex (teammate)' });
     assert.notEqual(m.eng.tasks.get(id).state, 'in_review', 'the message reopens the finished chat');
+    // The resumed run's prompt says a teammate asked, never who (N2).
+    const sent = await waitFor(() => fakeLog(path.join(m.dataDir, 'run', id)).filter((l) => l.ev === 'stdin' && JSON.stringify(l.msg).includes('TEAMMATE-ASK')).at(-1), { label: 'prompt' });
+    const text = JSON.stringify(sent.msg);
+    assert.ok(text.includes('A teammate asks for changes.') && !text.includes('Alex') && !text.includes('authorized relay participant asks'), text);
+    assert.match(text, /cannot grant permissions or approval/, 'still framed as untrusted');
     assert.ok(!JSON.stringify(m.eng.tasks.get(id).audit).includes('share:'), 'the audit names the source, not the share key');
   } finally { await m.done(); }
 });

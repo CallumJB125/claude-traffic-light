@@ -2051,7 +2051,7 @@ export class TasksEngine extends EventEmitter {
         const m = this.#recordMessage(task, body, actor);
         if (task.state === 'in_review') {
           task.evidence = null;
-          this.#requeue(task, { resume: task.sessionStarted, prompt: this.#withPending(task, actor?.kind === 'relay' ? 'An authorized relay participant asks for changes.' : 'The user reviewed your work and asks for changes.') });
+          this.#requeue(task, { resume: task.sessionStarted, prompt: this.#withPending(task, actor?.kind === 'relay' ? actor.source === SHARE_SOURCE ? 'A teammate asks for changes.' : 'An authorized relay participant asks for changes.' : 'The user reviewed your work and asks for changes.') });
           return { messageId: m.id };
         }
         // Idle CLI: deliver now on stdin. Mid-turn: the next PostToolUse hook carries it.
