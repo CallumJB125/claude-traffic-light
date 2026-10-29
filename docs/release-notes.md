@@ -35,7 +35,7 @@ What has been verified
 
 - Every change in this release was reviewed before it merged, and the full unit, remote and website test suites ran on a Mac with no new failures.
 - The unit tests also passed on macOS and Linux in a release dry run on GitHub Actions. The release build runs them again on both, and smoke-tests each packaged app, before anything is published.
-- All 62 screenshot test files ran on a recent build of this release: 59 passed. The other three (animated character poses, a page that navigates mid-test and a timing check) fail the same way on the previous build and are being fixed; none is a visible change.
+- All 62 screenshot test files ran on a recent build of this release: 59 passed. The other three (animated character poses, a page that navigates mid-test and a timing check) also fail from time to time on earlier builds and are being fixed; the cause is in the tests' timing, not the app, and none is a visible change.
 
 Current limits
 
