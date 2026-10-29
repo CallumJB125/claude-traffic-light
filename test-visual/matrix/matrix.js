@@ -3,6 +3,13 @@
 // matrix.html?body=<id>&axis=<axis>. Every animation is paused at a fixed
 // time before the page reports ready, so a screenshot is deterministic.
 (function () {
+  // The rig's own timers (blink, flip and rail removal, smoke, event classes) would change a pinned cell mid-screenshot.
+  // Record them until the pin, clear them all there, and make later calls no-ops.
+  const timers = { ids: [], frozen: false };
+  for (const [name, clear] of [['setTimeout', 'clearTimeout'], ['setInterval', 'clearInterval']]) {
+    const real = window[name].bind(window);
+    window[name] = (...a) => { if (timers.frozen) return 0; const id = real(...a); timers.ids.push([clear, id]); return id; };
+  }
   const q = new URLSearchParams(location.search);
   const body = q.get('body') || 'claude';
   const axis = q.get('axis') || 'costume';
@@ -125,6 +132,8 @@
     for (const { rig, freeze } of rigs) {
       for (const a of rig.svg.getAnimations({ subtree: true })) { a.pause(); a.currentTime = freeze; }
     }
+    timers.frozen = true;
+    for (const [clear, id] of timers.ids) window[clear](id);
     document.body.dataset.ready = '1';
   }));
 })();

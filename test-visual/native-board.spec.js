@@ -18,7 +18,8 @@ test('a signed-in person connects only selected boards and Undo revokes the live
     await expect.poll(() => /mock accounts hub at http:\/\/127\.0\.0\.1:\d+/.test(log())).toBe(true);
     const hub = /mock accounts hub at (http:\/\/127\.0\.0\.1:\d+)/.exec(log())[1];
     const account = await windowByFile(h.app, 'account.html');
-    await account.evaluate(() => window.buddyAccount.go('hub'));
+    // go() navigates this same page, which can destroy the evaluate's own context before it returns.
+    await account.evaluate(() => window.buddyAccount.go('hub')).catch((e) => { if (!/Execution context was destroyed/.test(e.message)) throw e; });
     const hubPage = await windowByFile(h.app, 'account.html');
     await hubPage.locator('input[name="url"]').fill(hub);
     await hubPage.getByRole('button', { name: 'Continue', exact: true }).click();
