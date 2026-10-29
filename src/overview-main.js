@@ -3,7 +3,7 @@ const {createOverviewService,response}=require('./overview-service');
 // Exact visible main-app Overview document owns passive reads.
 // Foreground focus remains required for every action and effect.
 // Directory inputs (owned, shares, hubTeams, teamHub) are main-only; see overview-service.
-function createOverviewMain({buddy,sessions,work,managed,openManaged,messageManaged,now,owned,shares,hubTeams,teamHub,followups,followupScope,followupLocal,shareView=null,presence,presenceView,presenceOwner=null,looseEnds=null,accountName=null,ownedThreads=null,chatPreview=false}){
+function createOverviewMain({buddy,sessions,work,managed,openManaged,messageManaged,now,owned,shares,hubTeams,teamHub,followups,followupScope,followupLocal,shareView=null,presence,presenceView,presenceOwner=null,looseEnds=null,accountName=null,ownedThreads=null,chatPreview=false,mineHint=null}){
  let authority=null,stopped=false;
  function owner(readOnly=false){const b=buddy(),c=readOnly?(b?.overviewReadContext?.()??b?.overviewContext?.()):b?.overviewContext?.();if(!c||!readOnly&&!c.foreground||!c.window||!c.contents||c.window.isDestroyed()||c.contents.isDestroyed()||!c.contents.mainFrame||!Number.isSafeInteger(c.generation))return null;return{buddy:b,window:c.window,contents:c.contents,frame:c.contents.mainFrame,generation:c.generation,document:c.document??null};}
  const equal=(a,b)=>!!a&&!!b&&a.buddy===b.buddy&&a.window===b.window&&a.contents===b.contents&&a.frame===b.frame&&a.generation===b.generation&&a.document===b.document;
@@ -83,6 +83,9 @@ function createOverviewMain({buddy,sessions,work,managed,openManaged,messageMana
     // Recompute focus after the final await; this changes only public controls.
     if(!same(before))for(const row of result.sessions)for(const action of ['open','message'])if(row.capabilities[action].enabled)row.capabilities[action]={...row.capabilities[action],enabled:false,reason:'Focus Plexiform and refresh before acting.'};
     return result;});
+   // QoL4a: a notification's "Show in Overview" folder name for My sessions' search (src/overview-mine-hint.js). Not
+   // gated: My sessions isn't, and the hint is only a local folder's name, taken once, no arguments.
+   ipc.handle('overview:mine-hint',(e,...args)=>{const before=owner(true);if(!allowed(e,before)||args.length!==0||!mineHint)return null;return mineHint.take();});
    // T1: the sidebar's Team filter and the Overview hint it arms exist only with the chat-first preview on; gate off
    // they are not registered at all, so the gate-off app keeps main's channels from before R2b.
    if(chatPreview===true){

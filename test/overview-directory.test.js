@@ -39,7 +39,7 @@ const FIXTURE = {
   ],
 };
 
-function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed = true, shares = [], channelAdapter = null, prepareChannel = null, scripts = [], presence = null, presenceView = null, looseEnds = null, chatPreview = false } = {}) {
+function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed = true, shares = [], channelAdapter = null, prepareChannel = null, scripts = [], presence = null, presenceView = null, looseEnds = null, chatPreview = false, mineHint = null } = {}) {
   const handlers = new Map(), listeners = new Map(), results = [];
   const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => ctx.foreground };
   const contents = { id: 9, isDestroyed: () => false, mainFrame: {}, send: (ch, ...a) => { for (const fn of listeners.get(ch) ?? []) fn({}, ...structuredClone(a)); } };
@@ -57,7 +57,7 @@ function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed
     buddy: () => buddy, sessions: () => raw, work: async () => ({ sources: [], capture: [] }), now,
     owned: () => interaction.listOwned(), shares: () => ({ origin: 'https://hub.example', list: shares }),
     hubTeams: async () => ({ origin: 'https://hub.example', teams: [] }), teamHub: () => teamHub,
-    ...(presence ? { presence } : {}), ...(presenceView ? { presenceView } : {}), ...(looseEnds ? { looseEnds } : {}), chatPreview,
+    ...(presence ? { presence } : {}), ...(presenceView ? { presenceView } : {}), ...(looseEnds ? { looseEnds } : {}), chatPreview, mineHint,
   });
   overview.register({ handle: (ch, fn) => handlers.set(ch, fn) });
   teamHub?.onChange(() => overview.directoryChanged());
@@ -84,7 +84,7 @@ function stack({ teamHub = createFakeTeamHub(structuredClone(FIXTURE)), observed
   const row = (list, re) => rows(list).find((r) => re.test(r.textContent));
   const change = (id, value) => { $(id).value = value; $(id).dispatchEvent(new dom.window.Event('change')); };
   return {
-    dom, doc, $, rows, row, change, adapter, interaction, overview, teamHub, ctx, api, results, raw,
+    dom, doc, $, rows, row, change, adapter, interaction, overview, teamHub, ctx, api, results, raw, handler: (ch) => handlers.get(ch),
     sidebarRows: () => handlers.get('sidebar:team-rows')({ sender: sidebar, senderFrame: sidebar.mainFrame }),
     ready: async () => { ready(); await tick(); },
     poll: async () => { for (const fn of intervals) fn(); await tick(); },
@@ -539,5 +539,80 @@ test('T1 open hint: the page consumes it on ready, switches to that team and ope
     await s.ready(); await tick(); await tick();
     assert.equal(s.$('team-status').textContent, 'That session is no longer shared with you.');
     assert.ok(!/Fix login/.test(s.doc.querySelector('.team-activity')?.getAttribute('aria-label') ?? ''), 'Bob\'s activity was not opened');
+  } finally { s.close(); }
+});
+
+// ── QoL4a: find a session in My sessions ───────────────────────────────────
+const typeIn = async (s, text) => { s.$('mine-search').value = text; s.$('mine-search').dispatchEvent(new s.dom.window.Event('input')); await wait(40); await tick(); };
+
+test('QoL4a: the search filters My sessions, says "n of m", hides groups with no match and gives their folds back', async () => {
+  const STORE = 'plexiform.overview.mine.groups.v1';
+  const s = stack({ scripts: ['src/session-pins.js'] });
+  try {
+    const at = new Date().toISOString();
+    s.raw.push({ sessionId: 'c-3', source: 'codex', signal: 'idle', updatedAt: at, cwd: '/Users/me/app' });
+    s.raw.push({ sessionId: 'c-4', source: 'codex', signal: 'idle', updatedAt: at, cwd: '/Users/me/<img src=x onerror=alert(1)>' });
+    await s.ready(); await s.poll();
+    const ls = s.dom.window.localStorage;
+    const names = () => [...s.$('mine-list').querySelectorAll('.group-name')].map((n) => n.textContent);
+    assert.equal(names().length, 3);
+    // Fold "checkout" (a person's toggle, saved), then search for "app".
+    const checkout = [...s.$('mine-list').querySelectorAll('.mine-group')].find((g) => g.querySelector('.group-name').textContent === 'checkout');
+    checkout.querySelector('.group-toggle').click();
+    const saved = ls.getItem(STORE);
+    await typeIn(s, '  APP ');
+    assert.deepEqual(names(), ['app']);
+    assert.equal(s.$('mine-count').textContent, '1 of 3 sessions');
+    assert.equal(s.$('mine-no-match').hidden, true);
+    assert.equal(ls.getItem(STORE), saved, 'the query is never stored');
+    assert.equal([...Array(ls.length).keys()].map((i) => ls.key(i)).some((k) => /search|query/i.test(k)), false);
+    // Markup in a folder name is text, and searchable as text.
+    await typeIn(s, '<img');
+    assert.equal(names().length, 1);
+    assert.equal(s.$('mine-list').querySelector('img'), null);
+    // Nothing matches: the empty state, then Clear.
+    await typeIn(s, 'zzz-nothing');
+    assert.deepEqual(names(), []);
+    assert.equal(s.$('mine-count').textContent, '0 of 3 sessions');
+    assert.equal(s.$('mine-no-match').hidden, false);
+    assert.equal(s.$('mine-empty').hidden, true, 'not the "no sessions yet" state');
+    s.$('mine-no-match-clear').click(); await tick();
+    assert.equal(s.$('mine-search').value, '');
+    assert.equal(names().length, 3);
+    assert.equal(s.$('mine-count').textContent, '3 sessions');
+    assert.equal(s.$('mine-no-match').hidden, true);
+    const back = [...s.$('mine-list').querySelectorAll('.mine-group')].find((g) => g.querySelector('.group-name').textContent === 'checkout');
+    assert.equal(back.querySelector('.group-body').hidden, true, 'the hidden group comes back folded');
+    // A folded group that matches shows open while searching, without changing the saved fold.
+    await typeIn(s, 'checkout');
+    assert.equal(s.$('mine-list').querySelector('.group-body').hidden, false);
+    assert.equal(ls.getItem(STORE), saved);
+  } finally { s.close(); }
+});
+
+test('QoL4a: a "Show in Overview" hint fills the search on ready, shows My sessions and focuses the row, once', async () => {
+  const { createMineHint } = require('../src/overview-mine-hint.js');
+  const mineHint = createMineHint();
+  const s = stack({ scripts: ['src/session-pins.js'], mineHint });
+  try {
+    const at = new Date().toISOString();
+    s.raw.push({ sessionId: 'c-3', source: 'codex', signal: 'idle', updatedAt: at, cwd: '/Users/me/app' });
+    await s.ready(); await s.poll();
+    await s.team();
+    assert.equal(mineHint.set('/Users/me/app/'), true);
+    await s.ready(); await tick(); await tick();
+    assert.equal(s.$('tab-mine').getAttribute('aria-selected'), 'true');
+    assert.equal(s.$('mine-search').value, 'app');
+    assert.equal(s.$('mine-count').textContent, '1 of 2 sessions');
+    const focused = s.doc.activeElement;
+    assert.ok(focused && focused.classList.contains('dir-entry'), 'the matching row has focus');
+    assert.ok(s.$('mine-list').contains(focused));
+    assert.equal(await s.api.mineHint(), null, 'consumed');
+    // Wrong sender, or any argument: null, and the hint stays for its own page.
+    mineHint.set('/Users/me/app');
+    const h = s.handler('overview:mine-hint');
+    assert.equal(await h({ sender: { id: 99 }, senderFrame: {} }), null);
+    assert.equal(await h({ sender: s.ctx.contents, senderFrame: s.ctx.contents.mainFrame }, 'x'), null);
+    assert.deepEqual(await s.api.mineHint(), { query: 'app' });
   } finally { s.close(); }
 });

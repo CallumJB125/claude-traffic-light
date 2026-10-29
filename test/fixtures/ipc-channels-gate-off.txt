@@ -369,6 +369,7 @@ handle overview:followup-enqueue
 handle overview:followup-list
 handle overview:followup-review
 handle overview:message
+handle overview:mine-hint
 handle overview:open
 handle overview:share-view
 handle overview:state
