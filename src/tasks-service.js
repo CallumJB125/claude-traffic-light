@@ -328,6 +328,35 @@ function createTasksService(opts) {
     } catch (e) { if (!stale()) slots.delete(wcId); return failure(e); }
   }
 
+  // T4c: a shared chat's reads and teammate sends (src/remote-chat-target.js). Main-only; no page reaches these.
+  const chatRow = (id) => (typeof id === 'string' ? tasks.get(id) ?? null : null);
+  async function chatDetail(id) {
+    if (!connected() || typeof id !== 'string' || id.length > 128) return null;
+    try {
+      const raw = await client.getTask(id);
+      return raw && typeof raw === 'object' ? { sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : null, workInPlace: raw.workInPlace === true, lastSeq: Number.isSafeInteger(raw.lastSeq) ? raw.lastSeq : null } : null;
+    } catch { return null; }
+  }
+  async function watchChat(id, fromSeq, onEvent, onReset) {
+    if (!connected()) throw Object.assign(new Error('offline'), { code: 'SUPERVISOR_UNREACHABLE' });
+    const sub = await client.subscribe(id, { fromSeq, onReset: () => { try { onReset?.(); } catch { /* the target is gone */ } } }, (ev) => {
+      const e = guard.sanitizeEvent(ev, now());
+      if (!e) return;
+      const out = e.type === 'state' ? (e.patch ? { type: 'state', seq: e.seq, state: e.patch.state } : null) : e;
+      if (out) try { onEvent(out); } catch { /* one bad event never stops the watch */ }
+    });
+    return { stop: () => { sub.unsubscribe().catch(() => {}); } };
+  }
+  async function shareMessage(id, body, share, requestId) {
+    if (!connected()) return { ok: false, code: 'SUPERVISOR_UNREACHABLE' };
+    try {
+      const r = await client.act(id, 'message', { body, share }, { requestId });
+      const t = guard.sanitizeTask(r?.task, { now: now(), homeDir });
+      if (t) { tasks.set(t.id, t); publishSoon(); }
+      return typeof r?.messageId === 'string' ? { ok: true, messageId: r.messageId } : { ok: false, code: 'INTERNAL' };
+    } catch (e) { return { ok: false, code: codeOf(e) }; }
+  }
+
   // A prompt that changed (approval, ask, state) is re-fetched, so what is shown is never stale.
   const refreshingOpen = new Set();
   const pendingOpen = new Set();
@@ -824,7 +853,7 @@ function createTasksService(opts) {
     return { handle, label };
   }
 
-  return { start, stop, retryNow, refresh, snapshot, openTask, closeTask, act, shownHash, saveCheckpoint, copyTakeover, openTerminal, create, preflight, route, composerInfo, registerFolder, markSeen, folderOf: (handle) => folders.get(handle) ?? null, folderPaths: () => [...folders.values()], bus };
+  return { start, stop, retryNow, refresh, snapshot, openTask, closeTask, act, shownHash, saveCheckpoint, copyTakeover, openTerminal, create, preflight, route, composerInfo, registerFolder, markSeen, chatRow, chatDetail, watchChat, shareMessage, folderOf: (handle) => folders.get(handle) ?? null, folderPaths: () => [...folders.values()], bus };
 }
 
 module.exports = { createTasksService, OFFLINE };

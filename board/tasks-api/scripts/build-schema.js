@@ -214,7 +214,12 @@ const payloads = {
   stop: optional({}, []),
   takeover: optional({ mode: en(['tab', 'tmux', 'print']), confirm: bool }, []),
   handback: optional({ note: str({ maxLength: 4000 }) }, []),
-  message: optional({ body: str({ minLength: 1, maxLength: MSG_MAX_BYTES }) }, ['body']),
+  // T4c: share is set only by Plexiform's own app for a teammate's message into a shared chat (engine #shareGate).
+  message: optional({ body: str({ minLength: 1, maxLength: MSG_MAX_BYTES }), share: obj({
+    key: str({ minLength: 1, maxLength: 128 }),
+    by: obj({ memberId: str({ minLength: 1, maxLength: 128 }), name: str({ minLength: 1, maxLength: 80 }) }),
+    expect: obj({ permissionLevel: str({ minLength: 1, maxLength: 40 }), ai: str({ minLength: 1, maxLength: 40 }) }),
+  }) }, ['body']),
   approve: optional({ approvalId: str(), scope: en(['once', 'task']) }, ['approvalId']),
   deny: optional({ approvalId: str(), message: str({ maxLength: 2000 }) }, ['approvalId']),
   answer: optional({ askId: str(), answer: str({ minLength: 1, maxLength: 20000 }) }, ['askId', 'answer']),

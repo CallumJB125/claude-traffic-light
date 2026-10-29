@@ -305,7 +305,8 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
       const st = t.hub.state({ session: sh.session }, t.actor);
       const req = { session: sh.session, generation: args.generation, board: st.board, text: args.text };
       if (args.expectedTurn !== undefined) req.expectedTurn = args.expectedTurn;
-      const result = await t.hub.send(req, t.actor, { by: member.name, fresh });
+      // T4c: a shared chat target also needs the teammate's id, the share and this frame (its idempotency key).
+      const result = await t.hub.send(req, t.actor, { by: member.name, byId: s.user, share: sh.id, frame: frame.id, fresh });
       return projectResult(result, sh);
     }
     if (!closed(args, ['session', 'generation', 'turn'])) return REFUSED.invalid;

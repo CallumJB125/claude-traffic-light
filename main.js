@@ -1979,6 +1979,9 @@ const loginEnvHub = LoginEnvHub.createLoginEnvHub({ read: (a) => LoginShellEnv.r
 require('./src/claude-carry.js').setLoginShellEnv(loginEnvHub.read);
 CodexAppServer.setLoginShellEnv(loginEnvHub.read);
 loginEnvHub.subscribe((values) => { try { tasksProcess?.sendLoginEnv(values); } catch { /* helper exiting */ } try { buddyWin?.sendLoginEnv?.(values); } catch { /* window gone */ } });
+// T4c: a Plexiform chat as a shared-session target. Created only with the chat-first preview on (below, in the
+// preview block); otherwise null. Inert until T4c-2: nothing calls register(), so target() resolves no chat.
+let ChatTargets=null;
 const InteractionMain=require('./src/interaction-main').createInteractionMain({
   accountScope:followupScope,
   keyRoot:claudeKeyRoot,
@@ -2041,7 +2044,7 @@ const hostSync=require('./src/interaction-host-sync').createInteractionHostSync(
     boardCurrent:board=>board===null,
     log:m=>console.log(m),
     // An Overview session is reachable by teammates only while its owner shares it.
-    sharedTarget:session=>InteractionMain.sharedTarget(session),
+    sharedTarget:session=>InteractionMain.sharedTarget(session)??ChatTargets?.target(session)??null,
     ...(interactionHostExtras?.()??{}),
   }),
   connect:(host,o)=>host.enable({...o,WebSocket:require('ws')}), // privacy-flow: remote-interaction
@@ -2578,6 +2581,16 @@ if (CHAT_PREVIEW) {
   ThreadMain.register(ipcMain);
   // T4 (Q5): with the preview on, a proposal is approved only on its thread's card; Overview's approve is refused.
   InteractionMain.approveInThread();
+  // T4c-1: the chat share target (src/remote-chat-target.js), preview only. register() has no caller until T4c-2.
+  ChatTargets = require('./src/remote-chat-target').createRemoteChatTargets({
+    enabled: () => !!tasksSvc,
+    tasks: {
+      row: (id) => tasksSvc?.chatRow(id) ?? null,
+      detail: (id) => (tasksSvc ? tasksSvc.chatDetail(id) : Promise.resolve(null)),
+      watch: (id, from, onEvent, onReset) => tasksSvc.watchChat(id, from, onEvent, onReset),
+      shareMessage: (id, body, share, requestId) => (tasksSvc ? tasksSvc.shareMessage(id, body, share, requestId) : Promise.resolve({ ok: false, code: 'SUPERVISOR_UNREACHABLE' })),
+    },
+  });
   // Redesign R2b-2: the new chat, Home's task box bound to its own document (src/newchat-main.js).
   NewChat = require('./src/newchat-main.js').createNewChat({
     ipcMain, buddy: () => buddyWin, service: getTasks, config: loadConfig, homeDir: os.homedir(),

@@ -117,6 +117,11 @@ const MAX_WAITING_PER_SOURCE = 100;
 const MAX_PARALLEL = 8;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RELAY_DENIED = new Set(['approve', 'answer', 'takeover', 'merge', 'switchAi', 'openPr']);
+// T4c: a teammate's message into a shared chat. Only Plexiform's own app (the full principal) relays one, it only ever
+// adds a message, and only when the engine can deliver it at once: a finished chat, or a live run that is between turns
+// on a backend that takes input now. Anything else is SESSION_BUSY with nothing recorded, so it can never wait for the
+// next PostToolUse or the owner's next prompt (an invisible steer). No relay token may carry this source.
+const SHARE_SOURCE = 'share';
 const RELAY_PARENT_ACTIVE = new Set(['claimed', 'running', 'quiet', 'blocked', 'handing_over', 'handed_over']);
 
 export class ApiError extends Error {
@@ -757,6 +762,7 @@ export class TasksEngine extends EventEmitter {
     if (p?.kind !== 'relay') return false;
     const t = this.tasks.get(id);
     if (!t || !this.relayActive(p)) return false;
+    if (p.source === SHARE_SOURCE) return false;
     if (p.source !== 'mcp') return p.taskIds?.includes(id) || (t.relayOwner === p.id && t.originUserId === p.userId);
     const parent = [...this.tasks.values()].find((x) => x.sessionId === p.parentSessionId);
     const seen = new Set();
@@ -1873,6 +1879,8 @@ export class TasksEngine extends EventEmitter {
     // Only the UI/CLI token approves, answers, takes over or accepts a start (§9.2).
     const principal = this.principal(ctx);
     if (principal?.kind === 'relay' && RELAY_DENIED.has(action)) throw new ApiError('POLICY_DENIED', `a relay can't ${action}`);
+    const share = action === 'message' && payload && Object.hasOwn(payload, 'share') ? payload.share : null;
+    if (share !== null && principal?.kind !== 'full') throw new ApiError('POLICY_DENIED', "only Plexiform's own app relays a teammate's message");
     const cacheKey = `${principal?.kind === 'relay' ? principal.id : 'full'}:${requestId}`;
     const hash = crypto.createHash('sha256').update(JSON.stringify({ id, action, payload })).digest('hex');
     const cached = this.actCache.get(cacheKey);
@@ -1881,12 +1889,17 @@ export class TasksEngine extends EventEmitter {
     if (!task) throw new ApiError('NOT_FOUND', 'no such task');
     const pending = this.#withLock(task, async () => {
       this.#access(id, ctx); // Recheck after a queued action waited.
+      if (share !== null) {
+        const se = validate(SCHEMA, 'ActPayloads', { message: payload });
+        if (se) throw new ApiError('VALIDATION', `payload: ${se.message}`);
+        this.#shareGate(task, share);
+      }
       const f = this.#face(task);
       if (!f.actions.includes(action)) throw new ApiError('ILLEGAL_TRANSITION', `${action} is not allowed while the task is ${task.state}`, { allowed: f.actions });
       if (f.confirm.includes(action) && payload.confirm !== true) throw new ApiError('CONFIRM_REQUIRED', `${action} needs {confirm:true}`);
       const pe = validate(SCHEMA, 'ActPayloads', { [action]: payload });
       if (pe) throw new ApiError('VALIDATION', `payload: ${pe.message}`);
-      const actor = this.principal(ctx);
+      const actor = share !== null ? { kind: 'relay', source: SHARE_SOURCE, id: `${SHARE_SOURCE}:${share.key}`, userId: share.by.memberId, by: share.by.name } : this.principal(ctx);
       this.#audit(task, actor.kind === 'relay' ? actor.source === 'mcp' ? 'agent' : 'remote' : 'user', action, action === 'openPr' ? payload.phase : Object.keys(payload).length && action !== 'message' ? JSON.stringify(payload) : null);
       const out = await this.#doAct(task, action, payload, actor);
       this.#save(task);
@@ -1895,6 +1908,17 @@ export class TasksEngine extends EventEmitter {
     this.actCache.set(cacheKey, { pending, hash, at: this.now() });
     pending.catch(() => this.actCache.delete(cacheKey));
     return pending;
+  }
+
+  // T4c share gate (C-M1, S1): runs under the task lock, before anything is recorded.
+  #shareGate(task, share) {
+    if (task.workInPlace) throw new ApiError('POLICY_DENIED', 'a teammate can only send to a chat that works in its own worktree');
+    if (task.permissionLevel !== share.expect.permissionLevel || task.ai.id !== share.expect.ai) throw new ApiError('CONFLICT', 'this chat changed since it was shared');
+    if (task.state === 'in_review') return;
+    const run = this.runs.get(task.id);
+    // The same branch #doAct delivers on at once, and only on a backend whose send() takes input now (not codex exec).
+    if (ACTIVE.has(task.state) && run && !run.stopping && run.backend && run.backend.turnActive === false && run.backend.liveSend === true) return;
+    throw new ApiError('SESSION_BUSY', 'the chat is working; a teammate can send when it is idle');
   }
 
   async #doAct(task, action, payload, actor) {
@@ -2027,7 +2051,7 @@ export class TasksEngine extends EventEmitter {
         const m = this.#recordMessage(task, body, actor);
         if (task.state === 'in_review') {
           task.evidence = null;
-          this.#requeue(task, { resume: task.sessionStarted, prompt: this.#withPending(task, actor?.kind === 'relay' ? 'An authorized relay participant asks for changes.' : 'The user reviewed your work and asks for changes.') });
+          this.#requeue(task, { resume: task.sessionStarted, prompt: this.#withPending(task, actor?.kind === 'relay' ? actor.source === SHARE_SOURCE ? 'A teammate asks for changes.' : 'An authorized relay participant asks for changes.' : 'The user reviewed your work and asks for changes.') });
           return { messageId: m.id };
         }
         // Idle CLI: deliver now on stdin. Mid-turn: the next PostToolUse hook carries it.
@@ -2162,7 +2186,9 @@ export class TasksEngine extends EventEmitter {
   #recordMessage(task, body, actor) {
     const relay = actor?.kind === 'relay';
     const parent = relay && actor.source === 'mcp' ? [...this.tasks.values()].find((t) => t.sessionId === actor.parentSessionId) : null;
-    const from = relay ? parent ? { kind: 'task', id: parent.id, label: 'Agent relay' } : { kind: 'member', id: actor.userId, label: `${actor.source} relay` } : { kind: 'human', id: 'you', label: 'You' };
+    const from = relay ? parent ? { kind: 'task', id: parent.id, label: 'Agent relay' }
+      : actor.source === SHARE_SOURCE ? { kind: 'member', id: actor.userId, label: clip(`${actor.by} (teammate)`, 80) }
+      : { kind: 'member', id: actor.userId, label: `${actor.source} relay` } : { kind: 'human', id: 'you', label: 'You' };
     const m = {
       id: messageId(), taskId: task.id, direction: 'in', from,
       to: { kind: 'task', id: task.id, label: clip(`${task.title} · ${AI_LABEL[task.ai.id]}`, 80) },
