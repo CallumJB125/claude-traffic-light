@@ -63,7 +63,7 @@ test('Health: a warning only for a denied Automation app, never for Accessibilit
   const report = Health.runChecks({ home: os.tmpdir(), root: path.join(os.tmpdir(), 'nope-qol4b'), terminalAccess: row });
   const c = report.checks.find((x) => x.id === 'terminal-access');
   assert.equal(c.label, 'Terminal access');
-  assert.equal(c.fixLabel, 'Open Terminal settings');
+  assert.equal(c.fixLabel, 'Open Terminal access');
   assert.equal(Health.runChecks({ home: os.tmpdir(), root: path.join(os.tmpdir(), 'nope-qol4b') }).checks.some((x) => x.id === 'terminal-access'), false);
 });
 
