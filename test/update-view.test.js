@@ -316,3 +316,9 @@ test('the tray "Check for Updates…" is a user check, so offline and server err
   assert.match(src, /item\.click = \(\) => \{ createUpdatesWindow\(\); updaterService\.check\(\{ user: true \}\); \}/);
   assert.match(src, /IS_DEV_RUN && !app\.isPackaged && process\.env\.CLAUDE_BUDDY_UPDATER_STUB/);
 });
+
+test('notes: the bidi and control ranges are written as \\u escapes, not raw characters (ledger 43)', () => {
+  const src = require('node:fs').readFileSync(require.resolve('../src/update-view.js'), 'utf8');
+  assert.equal(/[\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(src), false, 'raw invisible character in src/update-view.js');
+  assert.equal(/[\u202a-\u202e\u2066-\u2069]/.test(JSON.stringify(V.sanitizeNotes('- a\u202eb\u2066c\u2069d\u202ae'))), false);
+});
