@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -41,6 +42,25 @@ const config = (hub, root, over = {}) => ({
   type: 'runner.config', hub_url: hub.url.replace('ws://', 'http://').replace('/ws/runner', ''), device_id: 'dev-app',
   device_token: TOKEN, cf_client_id: CF_ID, cf_client_secret: CF_SECRET, data_dir: path.join(root, 'app-data'), ai_ids: ['claude'], ...over,
 });
+
+// For a wait that times out: what the hub saw and the app's own log tail, so a failure that only happens on another
+// machine explains itself. Bounded (40 lines, 4 KB) and redacted: home and temp paths, tokens and anything key-shaped.
+function why(app, hub, root) {
+  const kinds = {}; for (const m of hub.outs()) kinds[m.kind] = (kinds[m.kind] || 0) + 1;
+  const tail = app.logs().split('\n').slice(-40).join('\n');
+  const text = `node ${process.version}; hub outs ${JSON.stringify(kinds)}; prep.failed ${JSON.stringify(hub.outs('prep.failed'))}; app exit ${app.exit}\n${tail}`;
+  let real = null; try { real = fs.realpathSync(root); } catch { /* gone already */ }
+  let user = null; try { user = os.userInfo().homedir; } catch { /* no passwd entry */ }
+  const hide = [real, root, process.env.HOME, user, TOKEN, CF_ID, CF_SECRET].filter((v) => typeof v === 'string' && v.length > 3);
+  let out = text;
+  for (const v of hide) out = out.split(v).join('<redacted>');
+  out = out.replace(/\b(?:sk|bdt|cfsecret|ghp|xox[a-z])[-_][A-Za-z0-9._-]{8,}/g, '<redacted>')
+    .replace(/(\/\/)[^\s/@]+:[^\s/@]*@/g, '$1<redacted>@')      // credentials in a URL
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/=-]{8,}/gi, '$1 <redacted>')
+    .replace(/(Client-Secret|Client-Id|Authorization|Cookie)(["':=\s]+)[^\s",}]+/gi, '$1$2<redacted>');
+  return out.slice(-4096); // cut last, so a cut can never split something the masks have not seen
+}
+const explained = (app, hub, root, p) => p.catch((e) => { throw new Error(`${e.message}\n${why(app, hub, root)}`); });
 
 function assertNoSecrets(text) {
   for (const s of [TOKEN, CF_SECRET, CF_ID, 'APPTOKEN', 'APPSECRET']) assert.equal(text.includes(s), false, `a credential (${s.slice(0, 6)}…) reached the logs`);
@@ -253,8 +273,8 @@ test('app mode under the test guard: a claimed run never reads HOME or runs the 
     app.child.send(config(hub, root));
     await app.next('runner.status', (m) => m.state === 'connected');
     hub.send(offerFor({ key: 'G-1' }));
-    await waitFor(() => hub.of('claim')[0], { what: 'claim', timeout: 15000 });
-    await waitFor(() => hub.outs('activity').length, { what: 'the run is live', timeout: 15000 });
+    await explained(app, hub, root, waitFor(() => hub.of('claim')[0], { what: 'claim', timeout: 15000 }));
+    await explained(app, hub, root, waitFor(() => hub.outs('activity').length, { what: 'the run is live', timeout: 15000 }));
     assert.equal(fs.existsSync(markerFile), false, 'the helper never ran');
     assert.equal(hub.outs('prep.failed').length, 0, 'no preflight against the (unreachable) fixture gateway either');
   } finally {
