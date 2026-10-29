@@ -38,7 +38,8 @@ What has been verified
 Current limits
 
 - Mac builds remain ad-hoc signed and are not Apple-notarized.
-- [TODO before publish: the Linux and keychain limits, from the Linux CI work.]
+- On Linux, adding or adopting an agent in Find agents needs a working system keyring (libsecret, such as GNOME Keyring, or KWallet). With a weak or unknown keyring, Plexiform refuses rather than store the key unprotected.
+- Builds are for macOS and Linux only; there is no Windows build.
 - The limits listed for earlier betas below still apply.
 
 <!-- Parked until the chat-first preview ships (R6a); each line below is one HTML comment, hidden on GitHub and stripped in the app. Restore by removing the comment marks. -->
