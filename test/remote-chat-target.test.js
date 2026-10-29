@@ -172,6 +172,14 @@ test('relay: a teammate\'s send through the unchanged host carries the host\'s o
     assert.equal(out.ok, true, JSON.stringify(out));
     assert.deepEqual(f.sends[0].share.by, { memberId: 'u-alex', name: 'Alex' }, 'the name is the host\'s record, never the frame\'s');
     assert.equal(f.sends[0].requestId, `share:${made.share.id}:${id}`);
+    // CT2-S1: a queued message (T5b) is dispatched later as the same send frame (team-hub-client adds expectedTurn only
+    // for steer): it reaches the chat with the host's own member id, this share and its own frame id.
+    f.row.state = 'in_review';
+    const qid = crypto.randomUUID();
+    const queued = await host.handle({ type: 'relay.request', id: qid, rid: crypto.randomUUID(), user: USER, from: 'hub', op: 'send', args: { session: SESSION, generation: 1, text: 'queued while it worked' },
+      share: { id: made.share.id, team: 'team-1', user: 'u-alex', name: 'Alex', scope: 'interact' } });
+    assert.equal(queued.ok, true, JSON.stringify(queued));
+    assert.deepEqual({ ...f.sends[1], share: { ...f.sends[1].share } }, { id: 'tsk_1', body: 'queued while it worked', share: { key: made.share.id, by: { memberId: 'u-alex', name: 'Alex' }, expect: { permissionLevel: 'auto-edits', ai: 'claude' } }, requestId: `share:${made.share.id}:${qid}` });
     const stop = await host.handle({ type: 'relay.request', id: crypto.randomUUID(), rid: crypto.randomUUID(), user: USER, from: 'hub', op: 'interrupt', args: { session: SESSION, generation: 1, turn: crypto.randomUUID() },
       share: { id: made.share.id, team: 'team-1', user: 'u-alex', name: 'Alex', scope: 'interact' } });
     assert.equal(stop.ok, false);
@@ -366,4 +374,36 @@ test('ownerTarget: this computer\'s own chat, read-only (never registers); null 
   assert.equal(c.ownerTarget('tsk_1'), null, 'a relay-created task is not the owner\'s to share');
   f.row.source = 'cli'; f.row.state = 'done';
   assert.equal(c.ownerTarget('tsk_1'), null);
+});
+
+test('CT2-M1: the host never approves a proposal for a shared chat; no approve reaches the hub', async () => {
+  const f = fakeTasks();
+  const chats = createRemoteChatTargets({ tasks: f.tasks });
+  const session = (await chats.register('tsk_1')).session;
+  const USER = 'u-owner', shares = [], calls = [];
+  const PID = crypto.randomUUID();
+  const fetch = async (url, init) => {
+    const u = new URL(url);
+    calls.push(`${init.method} ${u.pathname}`);
+    let body = { ok: true };
+    if (u.pathname === '/api/interaction/v1/shares' && init.method === 'POST') {
+      const b = JSON.parse(init.body);
+      const s = { id: crypto.randomUUID(), session: b.session, team: { id: b.team, name: 'Design' }, scope: b.scope, owner: { name: 'Owner' }, members: [{ id: 'u-alex', name: 'Alex', role: 'member' }] };
+      shares.push(s); body = { share: s };
+    } else if (u.pathname === '/api/interaction/v1/shares') body = { teams: [{ id: 'team-1', name: 'Design' }], shares };
+    else if (u.pathname.endsWith('/proposals')) body = { proposals: [{ id: PID, share: shares[0].id, requester: { id: 'u-alex', name: 'Alex' }, text: 'run it', title: 'run it', digest: 'a'.repeat(64), version: 1, generation: 1, status: 'pending' }] };
+    return { status: 200, ok: true, json: async () => body };
+  };
+  class WS extends EventEmitter { constructor() { super(); this.readyState = 1; setImmediate(() => this.emit('message', Buffer.from(JSON.stringify({ type: 'relay.welcome', user: USER, device: 'd-1', resume: 'r-1' })), false)); } send() {} close() {} }
+  const host = createRemoteInteractionHost({ userId: USER, adapters: {}, boardCurrent: (b) => b === null, sharedTarget: (s) => chats.target(s) });
+  try {
+    await host.enable({ baseUrl: 'https://hub.example', token: 'tok', WebSocket: WS, fetch });
+    await flush();
+    const made = await host.shareSession({ session, team: 'team-1', scope: 'interact' });
+    assert.equal(made.ok, true, JSON.stringify(made));
+    const out = await host.proposalApprove({ share: made.share.id, id: PID, version: 1, digest: 'a'.repeat(64), expiresInS: 600 });
+    assert.equal(out.ok, false);
+    assert.match(out.error, /not available for a shared chat/);
+    assert.ok(!calls.some((c) => c.endsWith('/approve')), calls.join(', '));
+  } finally { host.close(); }
 });

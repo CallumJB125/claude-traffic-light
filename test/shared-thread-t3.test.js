@@ -246,6 +246,7 @@ test('a scope downgraded to watch between review and confirm refuses before any 
 test('M3: requestOwner\'s result is mapped from the assignment, not from ok', async () => {
   const fake = (assignment) => ({ live: () => true, owner: 'Bob', seen: () => null, invalidate() {},
     resolve: async () => ({ hub: {}, scope: 'interact' }),
+    inspect: async () => ({ ok: true, selection: crypto.randomUUID(), state: { generation: 2, activeTurn: null, provider: { label: 'Codex' } }, capabilities: {} }),
     propose: async () => ({ ok: true, proposal: crypto.randomUUID(), expiresAt: Date.now() + 30_000, assignments: [{ status: 'review', target: { provider: 'Codex' }, text: 'x' }] }),
     requestOwner: async () => ({ ok: true, assignments: [assignment] }) });
   for (const [a, want] of [[{ status: 'refused', reason: WATCH }, ['refused', WATCH]], [{ status: 'unconfirmed', reason: 'Request outcome is unknown.' }, ['unconfirmed', 'Request outcome is unknown.']], [{ status: 'awaiting-owner' }, ['awaiting', undefined]]]) {
@@ -953,4 +954,21 @@ test('T3b renderer: the composer line, a Send button and Ask me each time follow
   assert.equal(p.$('th-sh-window').hidden, true); assert.equal(p.$('th-sh-go').textContent, 'Review');
   p.$('th-sh-text').value = 'x'; p.$('th-sh-form').requestSubmit(); await tick(); await tick();
   assert.equal(p.calls.find((c) => c[0] === 'review').length, 3);
+});
+
+// T4c-2 (CT2-M1): a proposal's text is stored on the hub, so main never makes one for a shared chat (its fresh state says
+// kind 'chat'); an unreadable state proposes nothing either.
+test('CT2-M1: no proposal for a shared chat; nothing reaches the hub', async () => {
+  for (const [inspect, want] of [[{ ok: true, selection: crypto.randomUUID(), state: { kind: 'chat', generation: 2, activeTurn: null, provider: { label: 'Claude' } }, capabilities: {} }, SharedMain.TEXT.CHAT_NO_PROPOSE],
+    [null, null]]) {
+    let proposed = 0;
+    const auth = { live: () => true, owner: 'Bob', seen: () => null, invalidate() {}, resolve: async () => ({ hub: {}, scope: 'interact' }),
+      inspect: async () => inspect, propose: async () => { proposed++; return { ok: true, proposal: crypto.randomUUID(), expiresAt: Date.now() + 30_000, assignments: [{ status: 'review', target: { provider: 'Claude' }, text: 'x' }] }; } };
+    const a = SharedMain.createSharedThreadActions({ authority: () => auth, now: () => 0 });
+    const c = { contents: { id: 1 }, generation: 1, boundId: 'b'.repeat(64) };
+    const r = await a.review(c, { op: 'propose', text: 'x' }, () => true);
+    assert.equal(r.ok, false);
+    if (want) assert.equal(r.error, want);
+    assert.equal(proposed, 0);
+  }
 });

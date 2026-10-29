@@ -524,3 +524,12 @@ test('projection: a shared chat is labelled a chat; an unknown kind is a session
   }
   assert.match(read('thread-shared.js'), /h\.kind === 'chat' \? `\$\{h\.owner\}'s chat · \$\{h\.provider\}`/);
 });
+
+test('CT2-M1: a shared chat never offers Propose (the hub would keep its text); a session still does', () => {
+  const ctl = (over) => SharedView.project({ state: state({ status: 'ready', activeTurn: null, capabilities: { newTurn: true, steer: false, interrupt: false }, ...over }), share: { scope: 'interact' }, route, now: 2000 }).controls;
+  assert.equal(ctl({}).propose.available, true);
+  const chat = ctl({ kind: 'chat' });
+  assert.equal(chat.propose.available, false);
+  assert.match(chat.propose.reason, /not available for a shared chat/);
+  assert.equal(chat.send.available, true, 'Send stays the way in');
+});
