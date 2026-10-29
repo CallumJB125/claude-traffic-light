@@ -87,14 +87,18 @@ test('uninstall-hooks: an unparsable config is reported and left alone', () => {
 
 test('uninstall-hooks: the plain-Node entry the .deb prerm runs works against HOME', { skip: process.platform === 'win32' && 'HOME is not the home on Windows' }, () => {
   const { home, geminiText } = seededHome();
-  // No Codex config here: with one, the entry would run the real Codex CLI it finds on this machine
-  // (`codex mcp get`). That branch is covered in-process with a fake runner below.
+  // No Codex config here: with one, the entry would run the Codex CLI it finds (`codex mcp get`). That branch is
+  // covered in-process with a fake runner below. A fake CLI where the entry looks first ($HOME/.local/bin/codex) makes
+  // "a Codex CLI is found" true on every machine, and its marker file shows it was never run.
   fs.rmSync(path.join(home, '.codex', 'config.toml'));
+  fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.local', 'bin', 'codex'), '#!/bin/sh\ntouch "$HOME/codex-was-run"\nexit 1\n', { mode: 0o755 });
   const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'hooks', 'uninstall-hooks.js')], { env: { ...process.env, HOME: home }, encoding: 'utf8', timeout: 30000 });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /claude: removed/);
   assert.match(r.stdout, /mcp: removed/);
   assert.match(r.stdout, /codex-mcp: nothing to remove/, 'no Codex config, so the Codex CLI is never run');
+  assert.ok(!fs.existsSync(path.join(home, 'codex-was-run')), 'the fake Codex CLI was not run');
   assertClean(home, geminiText, { codexConfig: false });
   fs.rmSync(home, { recursive: true, force: true });
 });

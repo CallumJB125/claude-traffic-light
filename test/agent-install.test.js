@@ -874,7 +874,7 @@ test('security R1b: no ledger key, no installer; Health says nothing it cannot v
 
 test('security R1b: the ledger key is made once, sealed by safeStorage, and never made again unsealed', () => {
   const { createLedgerKeyStore } = require('../src/agent-install-key.js');
-  const fakeSafe = (on = true) => ({ isEncryptionAvailable: () => on, encryptString: (s) => Buffer.from(`sealed:${s}`), decryptString: (b) => { const t = b.toString(); if (!t.startsWith('sealed:')) throw new Error('bad'); return t.slice(7); } });
+  const fakeSafe = (on = true) => ({ isEncryptionAvailable: () => on, getSelectedStorageBackend: () => 'gnome_libsecret', encryptString: (s) => Buffer.from(`sealed:${s}`), decryptString: (b) => { const t = b.toString(); if (!t.startsWith('sealed:')) throw new Error('bad'); return t.slice(7); } });
   const file = path.join(tmp(), 'agent-installs.key');
   const a = createLedgerKeyStore({ file, safeStorage: fakeSafe() })();
   assert.equal(a.length, 32);
@@ -961,7 +961,7 @@ test('PR3 review 1: undo refuses a kind it has no branch for, and a project add 
 test('PR3 review 6: peek() and cached() never make a key or touch safeStorage without a key file', () => {
   const { createLedgerKeyStore } = require('../src/agent-install-key.js');
   let calls = 0;
-  const safe = { isEncryptionAvailable: () => { calls++; return true; }, encryptString: (t) => { calls++; return Buffer.from(`sealed:${t}`); }, decryptString: (b) => { calls++; return b.toString().slice(7); } };
+  const safe = { isEncryptionAvailable: () => { calls++; return true; }, getSelectedStorageBackend: () => 'gnome_libsecret', encryptString: (t) => { calls++; return Buffer.from(`sealed:${t}`); }, decryptString: (b) => { calls++; return b.toString().slice(7); } };
   const file = path.join(tmp(), 'agent-installs.key');
   const k = createLedgerKeyStore({ file, safeStorage: safe });
   assert.equal(k.cached(), null);
@@ -979,7 +979,7 @@ test('PR3 review 6: peek() and cached() never make a key or touch safeStorage wi
 test('PR3 review L1: available() asks safeStorage once per run, however often the page lists', () => {
   const { createLedgerKeyStore } = require('../src/agent-install-key.js');
   let asked = 0;
-  const safe = { isEncryptionAvailable: () => { asked++; return true; }, encryptString: (t) => Buffer.from(`sealed:${t}`), decryptString: (b) => b.toString().slice(7) };
+  const safe = { isEncryptionAvailable: () => { asked++; return true; }, getSelectedStorageBackend: () => 'gnome_libsecret', encryptString: (t) => Buffer.from(`sealed:${t}`), decryptString: (b) => b.toString().slice(7) };
   const k = createLedgerKeyStore({ file: path.join(tmp(), 'agent-installs.key'), safeStorage: safe });
   for (let i = 0; i < 3; i++) assert.equal(k.available(), true);
   assert.equal(k().length, 32, 'making the key reuses the cached answer');

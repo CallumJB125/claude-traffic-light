@@ -85,7 +85,7 @@ function mcpWorld(t, config = { agentAwareness: { enabled: true }, agentBus: { e
   fs.mkdirSync(codexHome, { recursive: true });
   const bin = Fake.write(path.join(dir, 'bin'));
   const state = { config };
-  const make = (launch = PACKAGED) => McpAuto.create({ rootDir: root, home, config: () => state.config, launch, codexBin: () => bin, codexEnv: { PATH: '/usr/bin:/bin', CODEX_HOME: codexHome }, trustCodexBin: async (b) => b });
+  const make = (launch = PACKAGED) => McpAuto.create({ rootDir: root, home, config: () => state.config, launch, platform: 'darwin', codexBin: () => bin, codexEnv: { PATH: '/usr/bin:/bin', CODEX_HOME: codexHome }, trustCodexBin: async (b) => b });
   const claudeJson = () => JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8'));
   return { home, root, codexHome, state, make, claudeJson };
 }
@@ -196,7 +196,7 @@ test('L5 (PR #35 review): the old-entry check is made on what the atomic edit re
   // The person's edit lands right after Plexiform first reads the file.
   let once = false;
   const racing = { ...McpInstall, status(o) { const r = McpInstall.status(o); if (!once) { once = true; fs.writeFileSync(file, JSON.stringify({ mcpServers: { 'claude-buddy': edited } }, null, 2)); } return r; } };
-  const auto = McpAuto.create({ rootDir: w.root, home: w.home, config: () => w.state.config, launch: PACKAGED, mcpInstall: racing, codexBin: () => null, codexEnv: { PATH: '/usr/bin:/bin', CODEX_HOME: w.codexHome }, trustCodexBin: async (b) => b });
+  const auto = McpAuto.create({ rootDir: w.root, home: w.home, config: () => w.state.config, launch: PACKAGED, platform: 'darwin', mcpInstall: racing, codexBin: () => null, codexEnv: { PATH: '/usr/bin:/bin', CODEX_HOME: w.codexHome }, trustCodexBin: async (b) => b });
   await auto.sync();
   assert.deepEqual(w.claudeJson().mcpServers['claude-buddy'], edited);
 });
