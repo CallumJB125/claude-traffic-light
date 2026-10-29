@@ -4000,6 +4000,62 @@
               "type": "string",
               "maxLength": 8192,
               "minLength": 1
+            },
+            "share": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "minLength": 1
+                },
+                "by": {
+                  "type": "object",
+                  "properties": {
+                    "memberId": {
+                      "type": "string",
+                      "maxLength": 128,
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string",
+                      "maxLength": 80,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "memberId",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                "expect": {
+                  "type": "object",
+                  "properties": {
+                    "permissionLevel": {
+                      "type": "string",
+                      "maxLength": 40,
+                      "minLength": 1
+                    },
+                    "ai": {
+                      "type": "string",
+                      "maxLength": 40,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "permissionLevel",
+                    "ai"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "key",
+                "by",
+                "expect"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [

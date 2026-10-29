@@ -157,6 +157,9 @@ export class ClaudeBackend extends EventEmitter {
     return true;
   }
 
+  // T4c: stream-json takes a new user message on stdin between turns, so a teammate's send can be delivered at once.
+  get liveSend() { return true; }
+
   send(text) {
     const ok = this.#write(userMessage(text));
     if (ok) this.turnActive = true;

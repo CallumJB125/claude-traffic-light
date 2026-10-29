@@ -211,6 +211,8 @@ export class CodexBackend extends EventEmitter {
     }
   }
   exit(code, signal) { if (this.exited) return; if (this.authCommandFailed && !this.sawResult) this.error = AUTH_COMMAND_REASON; if (this.platform === 'win32' && code !== 0 && !this.sawResult) this.error = 'Codex could not complete its Windows launch. Check the native CLI installation and elevated sandbox setup; the task restrictions were not relaxed.'; this.exited = true; this.turnActive = false; this.emit('exit', { code, signal, error: this.error, sawResult: this.sawResult }); }
+  // T4c: codex exec has no live input; a shared chat on Codex takes a teammate's message only once the run is finished.
+  get liveSend() { return false; }
   send() { return false; }
   interrupt() { return Promise.resolve(false); }
   endInput() { this.child?.stdin?.end(); }
