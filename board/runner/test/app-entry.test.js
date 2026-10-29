@@ -42,6 +42,19 @@ const config = (hub, root, over = {}) => ({
   device_token: TOKEN, cf_client_id: CF_ID, cf_client_secret: CF_SECRET, data_dir: path.join(root, 'app-data'), ai_ids: ['claude'], ...over,
 });
 
+// For a wait that times out: what the hub saw and the app's own log tail, so a failure that only happens on another
+// machine explains itself. Bounded (40 lines, 4 KB) and redacted: home and temp paths, tokens and anything key-shaped.
+function why(app, hub, root) {
+  const kinds = {}; for (const m of hub.outs()) kinds[m.kind] = (kinds[m.kind] || 0) + 1;
+  const tail = app.logs().split('\n').slice(-40).join('\n');
+  const text = `node ${process.version}; hub outs ${JSON.stringify(kinds)}; prep.failed ${JSON.stringify(hub.outs('prep.failed'))}; app exit ${app.exit}\n${tail}`;
+  const hide = [root, process.env.HOME, TOKEN, CF_ID, CF_SECRET].filter((v) => typeof v === 'string' && v.length > 3);
+  let out = text;
+  for (const v of hide) out = out.split(v).join('<redacted>');
+  return out.replace(/\b(?:sk|bdt|cfsecret|ghp|xox[a-z])[-_][A-Za-z0-9._-]{8,}/g, '<redacted>').slice(-4096);
+}
+const explained = (app, hub, root, p) => p.catch((e) => { throw new Error(`${e.message}\n${why(app, hub, root)}`); });
+
 function assertNoSecrets(text) {
   for (const s of [TOKEN, CF_SECRET, CF_ID, 'APPTOKEN', 'APPSECRET']) assert.equal(text.includes(s), false, `a credential (${s.slice(0, 6)}…) reached the logs`);
 }
@@ -253,8 +266,8 @@ test('app mode under the test guard: a claimed run never reads HOME or runs the 
     app.child.send(config(hub, root));
     await app.next('runner.status', (m) => m.state === 'connected');
     hub.send(offerFor({ key: 'G-1' }));
-    await waitFor(() => hub.of('claim')[0], { what: 'claim', timeout: 15000 });
-    await waitFor(() => hub.outs('activity').length, { what: 'the run is live', timeout: 15000 });
+    await explained(app, hub, root, waitFor(() => hub.of('claim')[0], { what: 'claim', timeout: 15000 }));
+    await explained(app, hub, root, waitFor(() => hub.outs('activity').length, { what: 'the run is live', timeout: 15000 }));
     assert.equal(fs.existsSync(markerFile), false, 'the helper never ran');
     assert.equal(hub.outs('prep.failed').length, 0, 'no preflight against the (unreachable) fixture gateway either');
   } finally {
