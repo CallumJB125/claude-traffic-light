@@ -51,7 +51,11 @@ function why(app, hub, root) {
   const hide = [root, process.env.HOME, TOKEN, CF_ID, CF_SECRET].filter((v) => typeof v === 'string' && v.length > 3);
   let out = text;
   for (const v of hide) out = out.split(v).join('<redacted>');
-  return out.replace(/\b(?:sk|bdt|cfsecret|ghp|xox[a-z])[-_][A-Za-z0-9._-]{8,}/g, '<redacted>').slice(-4096);
+  out = out.replace(/\b(?:sk|bdt|cfsecret|ghp|xox[a-z])[-_][A-Za-z0-9._-]{8,}/g, '<redacted>')
+    .replace(/(\/\/)[^\s/@]+:[^\s/@]*@/g, '$1<redacted>@')      // credentials in a URL
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/=-]{8,}/gi, '$1 <redacted>')
+    .replace(/(Client-Secret|Client-Id|Authorization|Cookie)(["':=\s]+)[^\s",}]+/gi, '$1$2<redacted>');
+  return out.slice(-4096); // cut last, so a cut can never split something the masks have not seen
 }
 const explained = (app, hub, root, p) => p.catch((e) => { throw new Error(`${e.message}\n${why(app, hub, root)}`); });
 
