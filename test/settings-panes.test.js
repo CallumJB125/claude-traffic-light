@@ -288,7 +288,7 @@ const FIXTURES = {
   remoteDevices: { devices: [], loopback: {}, tailnet: { enabled: false }, port: 1, pairing: null }, interactionHostStatus: 'Off.', privacyText: null,
 };
 
-async function boot({ pane, search, config = {} }) {
+async function boot({ pane, search, config = {}, platform = 'MacIntel' }) {
   const calls = []; const timers = []; const errors = [];
   const vc = new VirtualConsole(); vc.on('jsdomError', (e) => errors.push(e.message));
   const api = new Proxy({}, { get: (_, k) => {
@@ -299,6 +299,7 @@ async function boot({ pane, search, config = {} }) {
   const dom = await JSDOM.fromFile(path.join(root, 'settings.html'), {
     url: `file://${root}/settings.html${q}`, runScripts: 'dangerously', resources: 'usable', virtualConsole: vc, pretendToBeVisual: true,
     beforeParse(w) {
+      Object.defineProperty(w.navigator, 'platform', { value: platform, configurable: true });
       w.settingsApi = api; w.IntersectionObserver = class { observe() {} disconnect() {} };
       const st = w.setTimeout, si = w.setInterval;
       w.setTimeout = (...a) => { timers.push('timeout'); return st(...a); }; w.setInterval = (...a) => { timers.push('interval'); return si(...a); };
@@ -449,7 +450,7 @@ const SECTION_TABLE = {
   Spend: 'spend', 'Runaway sessions': 'spend',
   Privacy: 'privacy', 'Crash reports': 'privacy', Policies: 'privacy', Backups: 'privacy',
   'Sharing and remote control': 'phone', 'Remote devices': 'phone',
-  Health: 'advanced', 'Git and CI': 'projects', 'Agent bus': 'agent-messages', 'Ghostty Dock': 'terminal', 'Terminal access': 'terminal', 'Agent mail': 'agent-messages',
+  Health: 'advanced', 'Git and CI': 'projects', 'AI sessions on this computer': 'agent-messages', 'Agent bus': 'agent-messages', 'Ghostty Dock': 'terminal', 'Terminal access': 'terminal', 'Agent mail': 'agent-messages',
 };
 
 function settingsDoc() { return new JSDOM(read('settings.html')).window.document; }
@@ -566,7 +567,7 @@ test('R8-3a: the three panes exist as sheet documents and own what the plan says
   for (const p of ['projects', 'terminal', 'agent-messages']) { assert.ok(SP.isPane(p)); assert.ok(Pages.paneById(`settings:${p}`), p); assert.ok(SP.NAV.includes(p)); }
   assert.deepEqual(Pages.FUTURE_IDS.filter((x) => x.startsWith('settings:')), [], 'the reserved ids are real panes now');
   assert.deepEqual(SP.ownedKeys('projects').sort(), ['gitDeployWorkflows', 'gitRepos', 'gitSignals']);
-  assert.deepEqual(SP.ownedKeys('agent-messages').sort(), ['agentBus', 'agentMailInbox']);
+  assert.deepEqual(SP.ownedKeys('agent-messages').sort(), ['agentAwareness', 'agentBus', 'agentMailInbox', 'mcpBusUserOff']);
   assert.deepEqual(SP.ownedKeys('terminal'), ['integrations'], 'the Ghostty select saves integrations through save-config');
   assert.equal(SP.ownedKeys('aitools').includes('integrations'), false);
   for (const ch of ['git-status', 'deploy:settings', 'deploy:set-enabled', 'deploy:token-save', 'deploy:token-remove']) assert.equal(SP.CHANNEL_PANE[ch], 'projects', ch);
@@ -594,4 +595,51 @@ test('R8-3a: the Terminal pane saves integrations, AI tools does not, and each p
   try { assert.ok(p.calls.some((c) => c.name === 'gitStatus')); } finally { p.close(); }
   const g = await boot({ pane: 'general' });
   try { assert.equal(g.calls.some((c) => c.name === 'gitStatus'), false); } finally { g.close(); }
+});
+
+test('AW-S1: agentAwareness and mcpBusUserOff are saved from the old Preferences page and from the agent-messages pane, and refused from any other pane; main acts on the key', () => {
+  const h = configHandlers({ preview: true });
+  const p = { agentAwareness: { enabled: false, notes: true, midTurnNotices: false }, mcpBusUserOff: true };
+  assert.deepEqual(h.call('save-config', from('settings'), p), { saved: true }, 'packaged builds: the old page');
+  assert.deepEqual(h.call('save-config', from('settings:agent-messages'), p), { saved: true });
+  assert.deepEqual(h.log.commits, [p, p]);
+  for (const pane of SP.PANES.filter((x) => x !== 'agent-messages')) {
+    assert.match(h.call('save-config', from(`settings:${pane}`), p).error, /not on this page/, pane);
+  }
+  assert.equal(h.log.commits.length, 2);
+  assert.equal(SP.KEY_OWNER.agentAwareness, 'agent-messages');
+  assert.equal(SP.KEY_OWNER.mcpBusUserOff, 'agent-messages');
+  // commitConfig reschedules the roster when agentAwareness is in the save.
+  assert.match(mainSrc, /else if \('agentAwareness' in partial\) AgentAwareness\.schedule\(\);/);
+});
+
+test('AW-S3/S4: the two switches show the config, save it back the right way round, and the tools switch is disabled while awareness and the Agent bus are both off', async () => {
+  const b = await boot({ pane: 'agent-messages', config: { agentAwareness: { enabled: true, notes: false, midTurnNotices: true }, agentBus: { enabled: true }, mcpBusUserOff: true } });
+  try {
+    const d = b.w.document;
+    const aw = d.getElementById('agentAwarenessEnabled'); const tools = d.getElementById('busToolsOn'); const bus = d.getElementById('agentBusEnabled');
+    assert.equal(aw.checked, true);
+    assert.equal(tools.checked, false, 'mcpBusUserOff true = unticked');
+    assert.equal(tools.disabled, false);
+    tools.checked = true; tools.dispatchEvent(new b.w.Event('change', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 400));
+    const saved = b.calls.filter((c) => c.name === 'saveConfig').pop().args[0];
+    assert.equal(saved.mcpBusUserOff, false, 'ticked = not user-off');
+    assert.deepEqual(JSON.parse(JSON.stringify(saved.agentAwareness)), { enabled: true, notes: false, midTurnNotices: true }, 'the sub-flags without a control go back as loaded');
+    aw.checked = false; bus.checked = false; bus.dispatchEvent(new b.w.Event('change', { bubbles: true }));
+    assert.equal(tools.disabled, true);
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(b.calls.filter((c) => c.name === 'saveConfig').pop().args[0].agentAwareness.enabled, false);
+  } finally { b.close(); }
+});
+
+test('AW-S5: the bus-tools switch is shown on a Mac and hidden on Linux and Windows (the tools are added on macOS only)', async () => {
+  for (const [platform, shown] of [['MacIntel', true], ['Linux x86_64', false], ['Win32', false]]) {
+    const b = await boot({ pane: 'agent-messages', platform });
+    try {
+      const d = b.w.document;
+      for (const id of ['busToolsRow', 'hint-bus-tools', 'hint-bus-ref']) assert.equal(b.w.getComputedStyle(d.getElementById(id)).display !== 'none', shown, `${platform} ${id}`);
+      assert.equal(b.w.getComputedStyle(d.getElementById('agentAwarenessEnabled').closest('label')).display !== 'none', true, 'the awareness switch stays');
+    } finally { b.close(); }
+  }
 });

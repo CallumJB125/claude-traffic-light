@@ -1210,6 +1210,8 @@ function boardAnswer(board) {
     running = (async () => {
       try {
         const { aw } = settings();
+        // Off means off: no session scan, just remove the list.
+        if (!aw.enabled) { lastRoster = null; if (!stopped) { await fsp.rm(rosterFile, { force: true }).catch(() => {}); lastVersion = null; } return; }
         let hung;
         const roster = await Promise.race([build(), new Promise((_, reject) => { hung = setTimeout(() => reject(Object.assign(new Error('build'), { code: 'ETIMEDOUT' })), buildTimeoutMs); if (hung.unref) hung.unref(); })])
           .finally(() => clearTimeout(hung));
