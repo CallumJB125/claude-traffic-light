@@ -778,3 +778,58 @@ for (const theme of ['dark', 'light']) {
     } finally { await h.cleanup(); }
   });
 }
+
+// T4c-2: one of my chats, shared from its own thread. The state and card are the shapes src/thread-owner-main.js
+// returns for a chat; main's checks are test/owner-thread-chat.test.js.
+const OwnerText = require('../src/thread-owner-main').TEXT;
+const OWNER_CHAT = { ...OWNER_WATCH, provider: 'Claude', chat: true, sendNote: '',
+  shares: [{ key: K('3'), team: 'Design team', scope: 'watch', expiresAt: null, automatic: false, members: 3, viewers: ['Alex'], allowNote: '', allowed: [], allowable: [] }] };
+const chatOwnerOpen = (theme, state, review = null) => open({ fixture: CHAT, theme, owner: { state, review } });
+for (const theme of ['dark', 'light']) {
+  test(`owner: a chat shared with a team, watch only (${theme})`, async () => {
+    const { h, side } = await chatOwnerOpen(theme, OWNER_CHAT);
+    try {
+      const page = await openThread(h, side, theme);
+      await expect(page.locator('#th-owner-line .th-own-share-text')).toHaveText('Shared with Design team · Watch only · until you stop it · 3 members · Alex is watching');
+      await expect(page.getByRole('button', { name: 'Allow sending' })).toBeVisible();
+      await expect(page.locator('#th-title')).toHaveText('Fix the flaky upload test');
+      await shot(page, `thread-owner-chat-shared-watch-${theme}.png`);
+    } finally { await h.cleanup(); }
+  });
+}
+test('owner: Share this chat… then its review card, Watch and send (dark)', async () => {
+  const { h, side } = await chatOwnerOpen('dark', { ...OWNER_CHAT, shares: [] }, { op: 'share', title: 'Share this chat with Platform', text: '', scope: 'Watch and send',
+    notes: [OwnerText.CHAT_WATCH, 'They can send messages that this chat runs on this computer, in api, with its current permissions (Edit files), using your Claude account and quota. They can’t approve requests, stop the chat, merge or open a pull request.', OwnerText.CHAT_REOPENS, 'For 1 day'], confirm: 'Share', armMs: 600 });
+  try {
+    const page = await openThread(h, side, 'dark');
+    await page.locator('#th-more').click();
+    await page.locator('#th-share').click();
+    await expect(page.locator('#th-own-scope')).toHaveValue('watch');
+    await expect(page.locator('#th-own-sheet')).toContainText('Members see this chat from the moment you share it');
+    await page.locator('#th-own-team').selectOption({ label: 'Platform' });
+    await page.locator('#th-own-scope').selectOption('interact');
+    await page.locator('#th-own-continue').click();
+    await expect(page.locator('#th-own-card-title')).toHaveText('Share this chat with Platform');
+    await expect(page.locator('#th-own-yes')).toBeEnabled();
+    await shot(page, 'thread-owner-chat-share-review-dark.png');
+  } finally { await h.cleanup(); }
+});
+// The teammate's side of a shared chat: labelled a chat, no Stop (the host's capabilities say interrupt is off).
+const SHARED_CHAT = { ...SHARED_BASE, header: { ...SHARED_BASE.header, title: "Bob's chat", provider: 'Claude', kind: 'chat', scope: 'interact' }, status: 'ready', canSendLater: true,
+  activity: { category: null, ageMs: 0, stale: false },
+  controls: { send: yes, steer: no('No current turn is available to steer.'), interrupt: no("Only the chat's owner can stop it."), propose: no('Proposals are not available for a shared chat. Send when it is idle.'), queue: no('Send now; the session is idle.') } };
+test('shared chat (dark): "Bob\'s chat", Claude, the composer, no Propose, no Stop', async () => {
+  const { h, side } = await sharedOpen('dark', SHARED_CHAT);
+  try {
+    const page = await openThread(h, side, 'dark');
+    await expect(page.locator('#th-title')).toHaveText("Bob's chat");
+    await expect(page.locator('#th-meta')).toHaveText('Claude · Watch and send');
+    await expect(page.locator('#th-sh-stop')).toBeHidden();
+    await expect(page.locator('#th-sh-chip')).toHaveText('Send ▾');
+    await expect(page.locator('#th-sh-text')).toHaveAttribute('placeholder', "Message Bob's chat");
+    await shot(page, 'thread-shared-chat-dark.png');
+    // CT2-M1: Propose is in the menu but off, with main's reason (a proposal's text would be kept on the hub).
+    await page.locator('#th-sh-chip').click();
+    await expect(page.locator('#th-sh-menu')).toContainText('Proposals are not available for a shared chat.');
+  } finally { await h.cleanup(); }
+});

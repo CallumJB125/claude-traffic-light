@@ -285,7 +285,7 @@ test('a hub change clears Overview\'s card slot on the old hub\'s open socket be
 // ── wiring ──────────────────────────────────────────────────────────────
 test('wiring: no new authority; main passes the presence owner and the bind; the window opens a thread first and falls back to Overview', () => {
   const main = read('main.js'), win = read('buddy-window/index.js'), tm = read('src/thread-main.js');
-  assert.match(main, /sharedRead: \(id, alive\) => OverviewMain\.sharedThreadRead\(id, alive\),\n    sharedAuthority: \(id, live\) => OverviewMain\.sharedThreadAuthority\(id, live\),\n    openTeam: \(id\) => buddyWin\?\.openTeamRow\?\.\(id\) \?\? false,\n    \/\/ T4a[^\n]*\n    ownedRead: \(id\) => OverviewMain\.ownedThreadRead\(id\),\n    openOverview: \(\) => buddyWin\?\.openOverviewFromThread\?\.\(\) \?\? false,\n    \/\/ T4[^\n]*\n    owner: \{ target: \(id\) => OverviewMain\.ownerTarget\(id\), [^\n]*\},\n    \/\/ L32[^\n]*\n    sharedView: \(id\) => OverviewMain\.sharedViewRoute\(id\),/);
+  assert.match(main, /sharedRead: \(id, alive\) => OverviewMain\.sharedThreadRead\(id, alive\),\n    sharedAuthority: \(id, live\) => OverviewMain\.sharedThreadAuthority\(id, live\),\n    openTeam: \(id\) => buddyWin\?\.openTeamRow\?\.\(id\) \?\? false,\n    \/\/ T4a[^\n]*\n    ownedRead: \(id\) => OverviewMain\.ownedThreadRead\(id\),\n    openOverview: \(\) => buddyWin\?\.openOverviewFromThread\?\.\(\) \?\? false,\n    \/\/ T4[^\n]*\n    owner: \{ target: \(id\) => OverviewMain\.ownerTarget\(id\) \?\? chatOwnerTarget\(id\), [^\n]*\},\n    \/\/ L32[^\n]*\n    sharedView: \(id\) => OverviewMain\.sharedViewRoute\(id\),/);
   assert.match(main, /threadBindShared: \(id, alive\) => OverviewMain\.sharedThreadBind\(id, alive\),/);
   assert.match(win, /openTeamRow\(id\) \{ if \(typeof id !== 'string' \|\| !ROW_ID\.test\(id\)\) return false;/);
   const body = tm.slice(tm.indexOf('async function sharedState'), tm.indexOf('// "Team overview"'));
@@ -508,4 +508,28 @@ test('a click that binds late opens nothing: a second click, a navigation or a h
   assert.deepEqual(JSON.parse(JSON.stringify(c.log.filter(([k]) => k !== 'bound'))), []);
   const body = src.slice(from, to);
   assert.match(body, /threadBindShared\(id, current\)/);
+});
+
+// T4c-2 (C2-S2): the owner's host marks a shared chat with kind 'chat'; the label says so. Anything else is a session,
+// and the key never adds a top-level field (an older app that picks named fields ignores it).
+test('projection: a shared chat is labelled a chat; an unknown kind is a session', () => {
+  const chat = SharedView.project({ state: state({ kind: 'chat', task_title: null }), share: { scope: 'watch' }, route, now: 2000 });
+  assert.deepEqual(Object.keys(chat), [...SharedView.TOP_KEYS]);
+  assert.equal(chat.header.kind, 'chat');
+  assert.equal(chat.header.title, "Bob's chat");
+  for (const kind of [undefined, 'evil', 'session']) {
+    const out = SharedView.project({ state: state({ kind, task_title: null }), share: { scope: 'watch' }, route, now: 2000 });
+    assert.equal(out.header.kind, 'session', String(kind));
+    assert.equal(out.header.title, "Bob's Claude Code session");
+  }
+  assert.match(read('thread-shared.js'), /h\.kind === 'chat' \? h\.provider : `\$\{h\.owner\}'s \$\{h\.provider\} session`/);
+});
+
+test('CT2-M1: a shared chat never offers Propose (the hub would keep its text); a session still does', () => {
+  const ctl = (over) => SharedView.project({ state: state({ status: 'ready', activeTurn: null, capabilities: { newTurn: true, steer: false, interrupt: false }, ...over }), share: { scope: 'interact' }, route, now: 2000 }).controls;
+  assert.equal(ctl({}).propose.available, true);
+  const chat = ctl({ kind: 'chat' });
+  assert.equal(chat.propose.available, false);
+  assert.match(chat.propose.reason, /not available for a shared chat/);
+  assert.equal(chat.send.available, true, 'Send stays the way in');
 });

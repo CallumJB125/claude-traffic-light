@@ -1,6 +1,6 @@
 'use strict';
-// T4c-1 (plan-t4c Rev 1): a Plexiform chat as a shared-session target (src/remote-chat-target.js), served through the
-// unchanged remote host. Inert until T4c-2: nothing calls register(), so no chat is ever a shared target.
+// T4c (plan-t4c Rev 1, plan-t4c2): a Plexiform chat as a shared-session target (src/remote-chat-target.js), served
+// through the unchanged remote host. Only the owner's confirmed Share (thread-owner-main confirm) registers a chat.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
@@ -11,7 +11,8 @@ const { createRemoteChatTargets, ACTOR } = require('../src/remote-chat-target');
 const { createRemoteInteractionHost } = require('../src/remote-interaction');
 
 const ROOT = path.join(__dirname, '..');
-const SESSION = '7b0c3f2e-4a1d-4c55-9e0f-1234567890ab';
+const PROVIDER_SESSION = '7b0c3f2e-4a1d-4c55-9e0f-1234567890ab';
+let SESSION = '7b0c3f2e-4a1d-4c55-9e0f-0000000000ab'; // replaced by each register(): the share id main mints
 const flush = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
 
 function fakeTasks(over = {}) {
@@ -20,7 +21,7 @@ function fakeTasks(over = {}) {
     row, sends: [], watchers: [], stopped: 0, answer: null,
     tasks: {
       row: (id) => (id === row.id ? row : null),
-      detail: async (id) => (id === row.id ? { sessionId: SESSION, workInPlace: row.workInPlace, lastSeq: row.lastSeq, ...over.detail } : null),
+      detail: async (id) => (id === row.id ? { sessionId: PROVIDER_SESSION, workInPlace: row.workInPlace, lastSeq: row.lastSeq, ...over.detail } : null),
       watch: async (id, fromSeq, onEvent, onReset) => { t.watchers.push({ id, fromSeq, onEvent, onReset }); return { stop: () => { t.stopped++; } }; },
       shareMessage: async (id, body, share, requestId) => { t.sends.push({ id, body, share, requestId }); return t.answer ?? { ok: true, messageId: `msg-${t.sends.length}` }; },
     },
@@ -28,10 +29,10 @@ function fakeTasks(over = {}) {
   };
   return t;
 }
-const KEYS = ['activeTurn', 'activity', 'board', 'capabilities', 'deliveries', 'generation', 'input_needed', 'provider', 'reporting', 'session', 'status', 'task_title'];
+const KEYS = ['activeTurn', 'activity', 'board', 'capabilities', 'deliveries', 'generation', 'input_needed', 'kind', 'provider', 'reporting', 'session', 'status', 'task_title'];
 const sendOpts = { by: 'Alex', byId: 'u-alex', share: 'shr-1', frame: 'frm-1' };
 
-test('inert: no chat is a target until register(); no code outside the module and tests calls register', async () => {
+test('no chat is a target until register(); the only caller is the confirmed Share', async () => {
   const f = fakeTasks();
   const c = createRemoteChatTargets({ tasks: f.tasks });
   assert.equal(c.target(SESSION), null);
@@ -39,11 +40,17 @@ test('inert: no chat is a target until register(); no code outside the module an
   assert.equal((await c.hub.send({ session: SESSION, generation: 1, board: null, text: 'hi' }, ACTOR, sendOpts)).status, 'stale');
   assert.equal(f.sends.length, 0);
   const callers = [];
-  const scan = (dir) => { for (const n of fs.readdirSync(dir)) { const p = path.join(dir, n); if (fs.statSync(p).isDirectory()) scan(p); else if (/\.(js|cjs|mjs|html)$/.test(n) && p !== path.join(ROOT, 'src', 'remote-chat-target.js') && /ChatTargets\.register\(|chatTargets\.register\(|\.register\(\s*task/.test(fs.readFileSync(p, 'utf8'))) callers.push(p); } };
+  const scan = (dir) => { for (const n of fs.readdirSync(dir)) { const p = path.join(dir, n); if (fs.statSync(p).isDirectory()) scan(p); else if (/\.(js|cjs|mjs|html)$/.test(n) && p !== path.join(ROOT, 'src', 'remote-chat-target.js') && /ChatTargets\??\.register\(|chatTargets\??\.register\(|owner\?\.register\?\.\(/.test(fs.readFileSync(p, 'utf8'))) callers.push(path.relative(ROOT, p)); } };
   scan(path.join(ROOT, 'src'));
-  if (/ChatTargets\.register\(/.test(fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8'))) callers.push('main.js');
-  assert.deepEqual(callers, [], 'T4c-2 adds the only caller, at a confirmed Share');
+  assert.deepEqual(callers, [path.join('src', 'thread-owner-main.js')]);
+  const tom = fs.readFileSync(path.join(ROOT, 'src', 'thread-owner-main.js'), 'utf8');
+  assert.equal((tom.match(/owner\?\.register\?\.\(/g) || []).length, 1, 'one wrapper');
+  assert.equal((tom.match(/await register\(/g) || []).length, 1, 'called once');
+  const confirmBody = tom.slice(tom.indexOf('async function confirm('), tom.indexOf('async function act('));
+  assert.ok(confirmBody.includes('await register(rec.chat)'), 'only inside confirm');
   const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
+  assert.equal((main.match(/ChatTargets\?\.register\(/g) || []).length, 1, 'main passes it to the owner actions only');
+  assert.match(main, /register: \(taskId\) => ChatTargets\?\.register\(taskId\) \?\? null/);
   assert.match(main, /sharedTarget:session=>InteractionMain\.sharedTarget\(session\)\?\?ChatTargets\?\.target\(session\)\?\?null/);
   // Chat-first preview only: created inside main's one `if (CHAT_PREVIEW) {` block, null otherwise.
   assert.equal((main.match(/ChatTargets = require\('\.\/src\/remote-chat-target'\)/g) || []).length, 1);
@@ -53,7 +60,7 @@ test('inert: no chat is a target until register(); no code outside the module an
 });
 
 test('register: refuses work in place and a bad session; disabled means nothing resolves', async () => {
-  for (const detail of [{ workInPlace: true }, { sessionId: 'not-a-uuid' }, { lastSeq: null }]) {
+  for (const detail of [{ workInPlace: true }, { lastSeq: null }]) {
     const f = fakeTasks({ detail });
     const c = createRemoteChatTargets({ tasks: f.tasks });
     assert.equal((await c.register('tsk_1')).ok, false, JSON.stringify(detail));
@@ -62,7 +69,8 @@ test('register: refuses work in place and a bad session; disabled means nothing 
   let on = true;
   const f = fakeTasks();
   const c = createRemoteChatTargets({ tasks: f.tasks, enabled: () => on });
-  assert.deepEqual(await c.register('tsk_1'), { ok: true, session: SESSION });
+  const r = await c.register('tsk_1');
+  assert.equal(r.ok, true); SESSION = r.session;
   assert.deepEqual(c.target(SESSION), { hub: c.hub, actor: ACTOR });
   on = false;
   assert.equal(c.target(SESSION), null);
@@ -77,7 +85,7 @@ test('register: refuses work in place and a bad session; disabled means nothing 
 test('state: closed keys, no title/folder/branch; only events strictly after the share; responses join their message', async () => {
   const f = fakeTasks();
   const c = createRemoteChatTargets({ tasks: f.tasks, now: () => 5000 });
-  await c.register('tsk_1');
+  SESSION = (await c.register('tsk_1')).session;
   assert.equal(f.watchers[0].fromSeq, 41, 'subscribes after the task\'s lastSeq at register');
   f.emit({ type: 'message', seq: 40, id: 'm-old', direction: 'in', from: { kind: 'human' }, body: 'BEFORE SHARE', createdAt: 1 });
   f.emit({ type: 'message', seq: 41, id: 'm-1', direction: 'in', from: { kind: 'human' }, body: 'owner asks', createdAt: 4000 });
@@ -90,7 +98,8 @@ test('state: closed keys, no title/folder/branch; only events strictly after the
   assert.deepEqual(st.capabilities, { send: true, steer: false, interrupt: false });
   assert.equal(st.board, null); assert.equal(st.task_title, null); assert.equal(st.status, 'ready');
   const text = JSON.stringify(st);
-  for (const leak of ['SECRET', 'secret-repo', 'secret-branch', 'BEFORE SHARE', 'AGENT RELAY', 'tsk_1']) assert.ok(!text.includes(leak), leak);
+  for (const leak of ['SECRET', 'secret-repo', 'secret-branch', 'BEFORE SHARE', 'AGENT RELAY', 'tsk_1', PROVIDER_SESSION]) assert.ok(!text.includes(leak), leak);
+  assert.equal(st.kind, 'chat');
   assert.equal(st.deliveries.length, 1);
   assert.deepEqual({ ...st.deliveries[0] }, { id: 'm-1', text: 'owner asks', by: null, mode: 'new-turn', stoppedBy: null, state: 'completed', recorded: true, turn: '3', response: 'Working on it. Done.', error: null, notices: [], sentAt: 4000, finishedAt: 5000 });
 });
@@ -98,12 +107,14 @@ test('state: closed keys, no title/folder/branch; only events strictly after the
 test('send: the engine decides; the teammate rides only the share fields; no steer, no stop', async () => {
   const f = fakeTasks();
   const c = createRemoteChatTargets({ tasks: f.tasks, now: () => 9000 });
-  await c.register('tsk_1');
+  SESSION = (await c.register('tsk_1')).session;
   const base = { session: SESSION, generation: 1, board: null };
   const ok = await c.hub.send({ ...base, text: '  please add tests  ' }, ACTOR, sendOpts);
   assert.equal(ok.ok, true, JSON.stringify(ok));
   assert.deepEqual(f.sends[0], { id: 'tsk_1', body: 'please add tests', share: { key: 'shr-1', by: { memberId: 'u-alex', name: 'Alex' }, expect: { permissionLevel: 'auto-edits', ai: 'claude' } }, requestId: 'share:shr-1:frm-1' });
   assert.equal(ok.delivery.by, 'Alex');
+  assert.ok(!JSON.stringify(ok).includes(PROVIDER_SESSION), 'the receipt never carries the provider session id');
+  assert.ok(!JSON.stringify(f.sends).includes(PROVIDER_SESSION));
   // Its own message event (a member) arriving later shows once, with the name from the send.
   f.emit({ type: 'message', seq: 50, id: 'msg-1', direction: 'in', from: { kind: 'member', id: 'u-alex', label: 'Alex (teammate)' }, body: 'please add tests', createdAt: 9000 });
   f.emit({ type: 'transcript', seq: 51, role: 'assistant', text: 'Added.', turn: 4 });
@@ -135,7 +146,7 @@ test('send: the engine decides; the teammate rides only the share fields; no ste
 test('relay: a teammate\'s send through the unchanged host carries the host\'s own record of who sent it', async () => {
   const f = fakeTasks();
   const chats = createRemoteChatTargets({ tasks: f.tasks });
-  await chats.register('tsk_1');
+  SESSION = (await chats.register('tsk_1')).session;
   const USER = 'u-owner', shares = [];
   const fetch = async (url, init) => {
     const u = new URL(url);
@@ -161,6 +172,14 @@ test('relay: a teammate\'s send through the unchanged host carries the host\'s o
     assert.equal(out.ok, true, JSON.stringify(out));
     assert.deepEqual(f.sends[0].share.by, { memberId: 'u-alex', name: 'Alex' }, 'the name is the host\'s record, never the frame\'s');
     assert.equal(f.sends[0].requestId, `share:${made.share.id}:${id}`);
+    // CT2-S1: a queued message (T5b) is dispatched later as the same send frame (team-hub-client adds expectedTurn only
+    // for steer): it reaches the chat with the host's own member id, this share and its own frame id.
+    f.row.state = 'in_review';
+    const qid = crypto.randomUUID();
+    const queued = await host.handle({ type: 'relay.request', id: qid, rid: crypto.randomUUID(), user: USER, from: 'hub', op: 'send', args: { session: SESSION, generation: 1, text: 'queued while it worked' },
+      share: { id: made.share.id, team: 'team-1', user: 'u-alex', name: 'Alex', scope: 'interact' } });
+    assert.equal(queued.ok, true, JSON.stringify(queued));
+    assert.deepEqual({ ...f.sends[1], share: { ...f.sends[1].share } }, { id: 'tsk_1', body: 'queued while it worked', share: { key: made.share.id, by: { memberId: 'u-alex', name: 'Alex' }, expect: { permissionLevel: 'auto-edits', ai: 'claude' } }, requestId: `share:${made.share.id}:${qid}` });
     const stop = await host.handle({ type: 'relay.request', id: crypto.randomUUID(), rid: crypto.randomUUID(), user: USER, from: 'hub', op: 'interrupt', args: { session: SESSION, generation: 1, turn: crypto.randomUUID() },
       share: { id: made.share.id, team: 'team-1', user: 'u-alex', name: 'Alex', scope: 'interact' } });
     assert.equal(stop.ok, false);
@@ -170,7 +189,7 @@ test('relay: a teammate\'s send through the unchanged host carries the host\'s o
 test('two teammates are told apart: each send names its own member id and name', async () => {
   const f = fakeTasks();
   const c = createRemoteChatTargets({ tasks: f.tasks });
-  await c.register('tsk_1');
+  SESSION = (await c.register('tsk_1')).session;
   const base = { session: SESSION, generation: 1, board: null };
   await c.hub.send({ ...base, text: 'from alex' }, ACTOR, sendOpts);
   await c.hub.send({ ...base, text: 'from sam' }, ACTOR, { by: 'Sam', byId: 'u-sam', share: 'shr-1', frame: 'frm-2' });
@@ -182,7 +201,7 @@ test('S7: the automatic-share reconciler never shares, or stops, a chat (Q4: cha
   const { createTeamSessionSharing } = require('../src/team-session-sharing');
   const f = fakeTasks();
   const chats = createRemoteChatTargets({ tasks: f.tasks });
-  await chats.register('tsk_1');
+  SESSION = (await chats.register('tsk_1')).session;
   const calls = [];
   const manual = { id: 'shr-manual', session: SESSION, team: { id: 'team-1' } };
   const host = { connected: () => true, listShares: async () => ({ ok: true, teams: [{ id: 'team-1' }] }), shared: () => [manual],
@@ -219,7 +238,7 @@ test('tasks-service: the chat reads and the share send, against the mock supervi
     assert.equal(row.id, id);
     assert.equal(svc.chatRow('tsk_none'), null);
     const d = await svc.chatDetail(id);
-    assert.deepEqual(Object.keys(d).sort(), ['lastSeq', 'sessionId', 'workInPlace']);
+    assert.deepEqual(Object.keys(d).sort(), ['lastSeq', 'workInPlace']);
     const seen = [];
     const w = await svc.watchChat(id, 1, (e) => seen.push(e), () => {});
     await until(() => seen.some((e) => e.type === 'state'));
@@ -228,4 +247,163 @@ test('tasks-service: the chat reads and the share send, against the mock supervi
     const r = await svc.shareMessage(id, 'hello', { key: 'shr-1', by: { memberId: 'u-alex', name: 'Alex' }, expect: { permissionLevel: row.permissionLevel, ai: 'claude' } }, 'share:shr-1:frm-1');
     assert.ok(r.ok === true ? typeof r.messageId === 'string' : typeof r.code === 'string', JSON.stringify(r));
   } finally { svc.stop(); await srv.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('§0: the hub\'s share id is a fresh UUID per chat, stable for this process, never the provider session id', async () => {
+  const f = fakeTasks();
+  const c = createRemoteChatTargets({ tasks: f.tasks });
+  assert.equal(c.sessionOf('tsk_1'), null, 'a lookup never registers');
+  const a = await c.register('tsk_1');
+  assert.equal(a.ok, true);
+  assert.match(a.session, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.notEqual(a.session, PROVIDER_SESSION);
+  assert.ok(!a.session.includes(PROVIDER_SESSION.slice(0, 8)));
+  assert.equal((await c.register('tsk_1')).session, a.session, 're-sharing reuses it');
+  assert.equal(c.sessionOf('tsk_1'), a.session);
+  assert.equal(c.taskOf(a.session), 'tsk_1');
+  assert.equal(c.target(PROVIDER_SESSION), null, 'the provider id reaches nothing');
+  c.unregister(a.session);
+  assert.equal(c.target(a.session), null);
+  assert.equal(c.sessionOf('tsk_1'), a.session, 'kept, so a later Share replaces the team\'s old share')
+  const g = { ...f.row, id: 'tsk_2' };
+  const c2 = createRemoteChatTargets({ tasks: { ...f.tasks, row: (id) => (id === 'tsk_1' ? f.row : id === 'tsk_2' ? g : null), detail: async () => ({ workInPlace: false, lastSeq: 3 }) } });
+  const x = await c2.register('tsk_1'), y = await c2.register('tsk_2');
+  assert.notEqual(x.session, y.session);
+});
+
+// ── T4c-2 ──
+const fakeHost = (shares = []) => ({ list: shares, stopped: [], shared() { return this.list; }, stopSharing(id) { this.stopped.push(id); this.list = this.list.filter((x) => x.id !== id); return { ok: true }; } });
+
+test('C2-M1: the last share stopping drops the subscription; a re-share reuses the id and starts after it', async () => {
+  const f = fakeTasks();
+  const c = createRemoteChatTargets({ tasks: f.tasks });
+  const a = await c.register('tsk_1');
+  const host = fakeHost([{ id: 'shr-1', session: a.session, expiresAt: null }]);
+  c.release(a.session, host);
+  assert.equal(c.target(a.session) !== null, true, 'a live share keeps it');
+  f.emit({ type: 'message', seq: 41, id: 'm-1', direction: 'in', from: { kind: 'human' }, body: 'BETWEEN ONE', createdAt: 1 });
+  host.stopSharing('shr-1');
+  c.release(a.session, host);
+  assert.equal(c.target(a.session), null);
+  assert.equal(f.stopped, 1, 'no subscription while nobody can watch');
+  f.row.lastSeq = 50;
+  const b = await c.register('tsk_1');
+  assert.equal(b.session, a.session, 'the hub replaces the team\'s old share');
+  assert.equal(f.watchers.at(-1).fromSeq, 51);
+  f.emit({ type: 'message', seq: 45, id: 'm-2', direction: 'in', from: { kind: 'human' }, body: 'BETWEEN TWO', createdAt: 2 });
+  const st = JSON.stringify(c.hub.state({ session: b.session }, ACTOR));
+  assert.ok(!st.includes('BETWEEN'));
+});
+
+test('C2-S1: a failed Share leaves nothing subscribed; a pinned chat survives the sweep until release', async () => {
+  const f = fakeTasks();
+  const c = createRemoteChatTargets({ tasks: f.tasks });
+  const host = fakeHost();
+  c.sweep(host, true);
+  const a = await c.register('tsk_1');
+  c.sweep(host, true);
+  assert.ok(c.target(a.session), 'between register and the hub\'s answer');
+  c.release(a.session, host);
+  assert.equal(c.target(a.session), null);
+  assert.equal(f.stopped, 1);
+});
+
+test('sweep: an ended or (connected) vanished chat stops its shares; an unreachable helper is not a reason (C2-S4); a new host drops all', async () => {
+  for (const [label, change, connected, gone] of [['done', (f) => { f.row.state = 'done'; }, true, true], ['failed', (f) => { f.row.state = 'failed'; }, false, true],
+    ['vanished, connected', (f) => { f.tasks.row = () => null; }, true, true], ['vanished, offline', (f) => { f.tasks.row = () => null; }, false, false]]) {
+    const f = fakeTasks();
+    const c = createRemoteChatTargets({ tasks: f.tasks });
+    const a = await c.register('tsk_1');
+    const host = fakeHost([{ id: 'shr-1', session: a.session, expiresAt: null }, { id: 'shr-other', session: 'x', expiresAt: null }]);
+    c.release(a.session, host);
+    c.sweep(host, true);
+    change(f);
+    c.sweep(host, connected);
+    assert.deepEqual(host.stopped, gone ? ['shr-1'] : [], label);
+    assert.equal(c.registered().length, gone ? 0 : 1, label);
+  }
+  const f = fakeTasks();
+  const c = createRemoteChatTargets({ tasks: f.tasks });
+  const a = await c.register('tsk_1');
+  const host = fakeHost([{ id: 'shr-1', session: a.session, expiresAt: null }]);
+  c.release(a.session, host);
+  c.sweep(host, true);
+  assert.equal(c.registered().length, 1);
+  c.sweep(fakeHost(), true);
+  assert.equal(c.registered().length, 0, 'signed out or another account');
+  const g = fakeTasks();
+  const d = createRemoteChatTargets({ tasks: g.tasks, now: () => 10_000 });
+  const x = await d.register('tsk_1');
+  const h2 = fakeHost([{ id: 'shr-1', session: x.session, expiresAt: 20_000 }]);
+  d.release(x.session, h2); d.sweep(h2, true);
+  h2.list[0].expiresAt = 5000;
+  d.sweep(h2, true);
+  assert.equal(d.registered().length, 0, 'an expired last share drops it too');
+});
+
+test('N3: busy copy says waiting for a queued, paused or blocked chat, working while it runs (one row read after the refusal)', async () => {
+  for (const [state, want] of [['queued', 'waiting, not idle'], ['parked', 'waiting, not idle'], ['blocked', 'waiting, not idle'], ['suspended', 'waiting, not idle'], ['running', 'is working']]) {
+    const f = fakeTasks();
+    const c = createRemoteChatTargets({ tasks: f.tasks });
+    const { session } = await c.register('tsk_1');
+    f.answer = { ok: false, code: 'SESSION_BUSY' };
+    let reads = 0;
+    const row = f.tasks.row;
+    f.tasks.row = (id) => { reads++; return row(id); };
+    const sendP = c.hub.send({ session, generation: 1, board: null, text: 'hi' }, ACTOR, sendOpts);
+    f.row.state = state;
+    const before = reads;
+    const r = await sendP;
+    assert.equal(r.status, 'busy');
+    assert.ok(r.error.includes(want), `${state}: ${r.error}`);
+    assert.equal(reads - before, 1, state);
+  }
+});
+
+test('ownerTarget: this computer\'s own chat, read-only (never registers); null for ended or relay-made chats', async () => {
+  const f = fakeTasks();
+  f.row.source = 'local'; f.row.repo = { name: 'plexiform' };
+  const c = createRemoteChatTargets({ tasks: f.tasks });
+  const t = c.ownerTarget('tsk_1');
+  assert.deepEqual(t, { chat: true, taskId: 'tsk_1', session: null, provider: 'Claude', workInPlace: false, folder: 'plexiform', permission: 'Edit files' });
+  assert.equal(f.watchers.length, 0, 'a read subscribes to nothing');
+  assert.equal(c.registered().length, 0);
+  const a = await c.register('tsk_1');
+  assert.equal(c.ownerTarget('tsk_1').session, a.session);
+  f.row.source = 'board';
+  assert.equal(c.ownerTarget('tsk_1'), null, 'a relay-created task is not the owner\'s to share');
+  f.row.source = 'cli'; f.row.state = 'done';
+  assert.equal(c.ownerTarget('tsk_1'), null);
+});
+
+test('CT2-M1: the host never approves a proposal for a shared chat; no approve reaches the hub', async () => {
+  const f = fakeTasks();
+  const chats = createRemoteChatTargets({ tasks: f.tasks });
+  const session = (await chats.register('tsk_1')).session;
+  const USER = 'u-owner', shares = [], calls = [];
+  const PID = crypto.randomUUID();
+  const fetch = async (url, init) => {
+    const u = new URL(url);
+    calls.push(`${init.method} ${u.pathname}`);
+    let body = { ok: true };
+    if (u.pathname === '/api/interaction/v1/shares' && init.method === 'POST') {
+      const b = JSON.parse(init.body);
+      const s = { id: crypto.randomUUID(), session: b.session, team: { id: b.team, name: 'Design' }, scope: b.scope, owner: { name: 'Owner' }, members: [{ id: 'u-alex', name: 'Alex', role: 'member' }] };
+      shares.push(s); body = { share: s };
+    } else if (u.pathname === '/api/interaction/v1/shares') body = { teams: [{ id: 'team-1', name: 'Design' }], shares };
+    else if (u.pathname.endsWith('/proposals')) body = { proposals: [{ id: PID, share: shares[0].id, requester: { id: 'u-alex', name: 'Alex' }, text: 'run it', title: 'run it', digest: 'a'.repeat(64), version: 1, generation: 1, status: 'pending' }] };
+    return { status: 200, ok: true, json: async () => body };
+  };
+  class WS extends EventEmitter { constructor() { super(); this.readyState = 1; setImmediate(() => this.emit('message', Buffer.from(JSON.stringify({ type: 'relay.welcome', user: USER, device: 'd-1', resume: 'r-1' })), false)); } send() {} close() {} }
+  const host = createRemoteInteractionHost({ userId: USER, adapters: {}, boardCurrent: (b) => b === null, sharedTarget: (s) => chats.target(s) });
+  try {
+    await host.enable({ baseUrl: 'https://hub.example', token: 'tok', WebSocket: WS, fetch });
+    await flush();
+    const made = await host.shareSession({ session, team: 'team-1', scope: 'interact' });
+    assert.equal(made.ok, true, JSON.stringify(made));
+    const out = await host.proposalApprove({ share: made.share.id, id: PID, version: 1, digest: 'a'.repeat(64), expiresInS: 600 });
+    assert.equal(out.ok, false);
+    assert.match(out.error, /not available for a shared chat/);
+    assert.ok(!calls.some((c) => c.endsWith('/approve')), calls.join(', '));
+  } finally { host.close(); }
 });

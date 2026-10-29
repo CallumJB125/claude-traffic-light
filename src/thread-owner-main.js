@@ -58,6 +58,13 @@ const TEXT = Object.freeze({
   REJECTED: 'Proposal rejected.',
   REVOKED: 'Grant revoked. A send already started cannot be undone.',
   RETIRED: 'This request already started or was retired. Check its current receipt; it cannot be undone here.',
+  // T4c-2: a chat (a Tasks task) shared the same way (plan-t4c §4, S1, S2).
+  CHAT_GONE: 'This chat has ended, so it can’t be shared.',
+  CHAT_WATCH: 'Members see messages sent from now on and the replies, and whether this computer is online. They don’t see files, commands or changes.',
+  CHAT_REOPENS: 'Their message reopens the chat if it’s finished, and the review you haven’t looked at yet is cleared.',
+  IN_PLACE: 'Sending is only offered for a chat that works in its own copy of the project.',
+  CHAT_STOPPED: 'Stopped sharing. Teammates can no longer see or send to this chat.',
+  NOT_SHARED: 'Not shared. Try again.',
 });
 
 const plain = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
@@ -79,7 +86,19 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
   let ticker = null, polling = false, stopped = false, current = () => null;
   const docKey = (c) => `${c.contents.id}:${c.generation}`;
   const safe = (fn, fallback = null) => { try { return fn() ?? fallback; } catch { return fallback; } };
-  const targetOf = (rowId) => { const t = safe(() => owner?.target?.(rowId)); return t && typeof t.session === 'string' && UUID.test(t.session) ? t : null; };
+  // A held session ({session, provider}) or, T4c-2, one of this computer's chats ({chat, taskId, session|null, …}):
+  // a chat's share id is null until its first confirmed Share, so a chat is followed by its task id.
+  const targetOf = (rowId) => {
+    const t = safe(() => owner?.target?.(rowId));
+    if (!plain(t)) return null;
+    if (t.chat === true) return typeof t.taskId === 'string' && t.taskId && (t.session === null || (typeof t.session === 'string' && UUID.test(t.session))) ? t : null;
+    return typeof t.session === 'string' && UUID.test(t.session) ? t : null;
+  };
+  const identOf = (t) => (!t ? null : t.chat === true ? `chat\n${t.taskId}` : `session\n${t.session}`);
+  // What a teammate allowed to send can do in a chat (the share, Allow sending and allow-one cards say the same).
+  const chatSendLine = (t, who = 'They') => `${who} can send messages that this chat runs on this computer, in ${line(t.folder, 120) || 'its folder'}, with its current permissions (${line(t.permission, 40) || 'unchanged'}), using your ${t.provider} account and quota. They can’t approve requests, stop the chat, merge or open a pull request.`;
+  const register = async (taskId) => { try { return await owner?.register?.(taskId); } catch { return null; } };
+  const release = (session, host) => { if (session) safe(() => owner?.release?.(session, host)); };
   const hostNow = () => safe(() => owner?.host?.());
   const accountNow = () => safe(() => owner?.account?.());
   const automatic = (id) => safe(() => owner?.automatic?.(id), false) === true;
@@ -137,7 +156,8 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
   }
   async function stateNow(c, d, still) {
     const tgt = targetOf(c.boundId);
-    if (!tgt) { const was = d.held; d.held = false; dropInterest(d); return { shareable: false, reason: was ? TEXT.NOT_HELD : '' }; }
+    if (!tgt) { const was = d.held; d.held = false; dropInterest(d); return { shareable: false, reason: was ? d.chat ? TEXT.CHAT_GONE : TEXT.NOT_HELD : '' }; }
+    d.chat = tgt.chat === true;
     d.held = true;
     const host = hostNow();
     if (!host) { dropInterest(d); return { shareable: true, available: false, reason: TEXT.NO_SHARING }; }
@@ -146,20 +166,22 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
     const shown = safe(() => c.window.isVisible(), false) === true && safe(() => c.window.isMinimized(), true) === false;
     const cat = shown ? await readCatalog(host) : catalog && catalog.host === host ? catalog.value : null;
     if (!still(c) || docs.get(docKey(c)) !== d) return null;
-    if (targetOf(c.boundId)?.session !== tgt.session || hostNow() !== host) return null;
+    if (identOf(targetOf(c.boundId)) !== identOf(tgt) || hostNow() !== host) return null;
     // The poll's interest: this document, this session, this host and account. Main re-checks all of it every pass.
-    d.interest = { host, account: accountNow(), session: tgt.session, at: now() };
+    d.interest = { host, account: accountNow(), session: tgt.session, ident: identOf(tgt), at: now() };
     ensureTicker(); void tick();
     const t = now(), mine = sharesOf(host, tgt.session);
     const shares = mine.slice(0, 8).map((s) => ({
       key: mac(d, 's', s.id), team: line(s.team?.name, 120) || 'Team', scope: s.scope === 'interact' ? 'interact' : 'watch',
       expiresAt: s.expiresAt, automatic: automatic(s.id), members: Array.isArray(s.members) ? s.members.length : 0,
       viewers: Array.isArray(s.viewers) ? s.viewers.slice(0, 50).map((n) => line(n, 80) || 'Teammate') : [],
-      ...allowView(d, s),
+      ...(tgt.chat === true && tgt.workInPlace === true ? { allowNote: TEXT.IN_PLACE, allowed: [], allowable: [] } : allowView(d, s)),
     }));
     const { groups, others } = groupsOf(d, tgt.session, mine, host);
     const teams = cat ? cat.teams.filter((x) => plain(x) && typeof x.id === 'string').slice(0, 40).map((x) => ({ key: mac(d, 't', x.id), name: line(x.name, 120) || 'Team' })) : [];
-    return { shareable: true, available: true, provider: tgt.provider, teams, shares, groups, others, reason: cat && !teams.length ? TEXT.NO_TEAMS : '', observedAt: t };
+    // A work-in-place chat is offered Watch only (S1): `sendNote` says why, and review refuses Watch and send anyway.
+    const chat = tgt.chat === true ? { chat: true, sendNote: tgt.workInPlace === true ? TEXT.IN_PLACE : '' } : {};
+    return { shareable: true, available: true, provider: tgt.provider, ...chat, teams, shares, groups, others, reason: cat && !teams.length ? TEXT.NO_TEAMS : '', observedAt: t };
   }
   // T4d: on a watch share, each acting teammate can be allowed to send for a while. `allowNote` (main's own words) says Allow can't be offered yet.
   function allowView(d, s) {
@@ -228,8 +250,8 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
   const card = (op, title, text, notes, confirm, extra = {}) => ({ op, title, text, notes, confirm, armMs: ARM_MS, ...extra });
   const interactLine = (provider) => `They can also send, steer and stop, using your ${provider} account and quota.`;
   // What every effect is checked against, immediately before and after each await.
-  function fenceOf(c, still, session, host, account) {
-    return () => !stopped && still(c, true) && targetOf(c.boundId)?.session === session && hostNow() === host && accountNow() === account;
+  function fenceOf(c, still, ident, host, account) {
+    return () => !stopped && still(c, true) && identOf(targetOf(c.boundId)) === ident && hostNow() === host && accountNow() === account;
   }
 
   // ── thread:owner-review [boundId, {op, …}] ──
@@ -245,7 +267,10 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
     if (!tgt) return fail('stale', TEXT.NOT_HELD);
     const host = hostNow(), account = accountNow();
     if (!host) return fail('unavailable', TEXT.NO_SHARING);
-    const fence = () => !stopped && still(c) && docs.get(docKey(c)) === d && targetOf(c.boundId)?.session === tgt.session && hostNow() === host && accountNow() === account;
+    const chat = tgt.chat === true, ident = identOf(tgt);
+    // S1: no sending into a chat that works in place, whichever card asks.
+    if (chat && tgt.workInPlace === true && (op === 'allow-sending' || op === 'allow-send' || (op === 'share' && req.scope === 'interact'))) return fail('refused', TEXT.IN_PLACE);
+    const fence = () => !stopped && still(c) && docs.get(docKey(c)) === d && identOf(targetOf(c.boundId)) === ident && hostNow() === host && accountNow() === account;
     d.busy = true;
     try {
       const list = await freshList(host);
@@ -256,11 +281,12 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
         const team = list.teams.find((x) => plain(x) && typeof x.id === 'string' && mac(d, 't', x.id) === req.team);
         if (!team) return fail('stale', TEXT.MOVED);
         const name = line(team.name, 120) || 'Team', expiresInS = req.expiry === '' ? null : Number(req.expiry);
-        const notes = [TEXT.WATCH, ...(req.scope === 'interact' ? [interactLine(tgt.provider)] : []), EXPIRY[req.expiry]];
+        const notes = chat ? [TEXT.CHAT_WATCH, ...(req.scope === 'interact' ? [chatSendLine(tgt), TEXT.CHAT_REOPENS] : []), EXPIRY[req.expiry]]
+          : [TEXT.WATCH, ...(req.scope === 'interact' ? [interactLine(tgt.provider)] : []), EXPIRY[req.expiry]];
         const replaces = mine.find((s) => s.team?.id === team.id);
         if (replaces) notes.push(`This replaces the current share with ${name}.`);
-        const selection = mint(c, { op, session: tgt.session, host, account, team: team.id, scope: req.scope, expiresInS });
-        return { ok: true, status: 'review', selection, card: card(op, `Share this session with ${name}`, '', notes, 'Share', { scope: SCOPES[req.scope] }) };
+        const selection = mint(c, { op, session: tgt.session, ident, chat: chat ? tgt.taskId : null, host, account, team: team.id, scope: req.scope, expiresInS });
+        return { ok: true, status: 'review', selection, card: card(op, `Share this ${chat ? 'chat' : 'session'} with ${name}`, '', notes, 'Share', { scope: SCOPES[req.scope] }) };
       }
       if (op === 'allow-sending') {
         const s = mine.find((x) => mac(d, 's', x.id) === req.share);
@@ -268,8 +294,8 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
         const left = s.expiresAt === null ? null : Math.floor((s.expiresAt - now()) / 1000);
         if (left !== null && left < 60) return fail('refused', TEXT.SOON);
         const name = line(s.team?.name, 120) || 'Team';
-        const selection = mint(c, { op, session: tgt.session, host, account, share: s.id, team: s.team?.id });
-        return { ok: true, status: 'review', selection, card: card(op, `Allow ${name} to send`, '', [interactLine(tgt.provider)], 'Allow sending', { keeps: s.expiresAt }) };
+        const selection = mint(c, { op, session: tgt.session, ident, host, account, share: s.id, team: s.team?.id });
+        return { ok: true, status: 'review', selection, card: card(op, `Allow ${name} to send`, '', chat ? [chatSendLine(tgt), TEXT.CHAT_REOPENS] : [interactLine(tgt.provider)], 'Allow sending', { keeps: s.expiresAt }) };
       }
       if (op === 'allow-send') {
         const s = mine.find((x) => mac(d, 's', x.id) === req.share);
@@ -281,8 +307,10 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
         const left = s.expiresAt === null ? null : Math.floor((s.expiresAt - now()) / 1000);
         if (left !== null && left < 60) return fail('refused', TEXT.SOON);
         const until = now() + Math.min(secs, left ?? secs) * 1000;
-        const selection = mint(c, { op, session: tgt.session, host, account, share: s.id, team: s.team?.id, user: m.id, seconds: secs });
-        return { ok: true, status: 'review', selection, card: card(op, `Allow ${who} to send`, '', [`${who} can send, steer and stop in this session for ${ALLOW_FOR[secs]}, using your ${tgt.provider} account and quota.`, 'You can stop it any time. It also ends when Plexiform quits on your Mac.'], `Allow · ${ALLOW_FOR[secs]}`, { until }) };
+        const selection = mint(c, { op, session: tgt.session, ident, host, account, share: s.id, team: s.team?.id, user: m.id, seconds: secs });
+        const lines = chat ? [`${who} can send to this chat for ${ALLOW_FOR[secs]}.`, chatSendLine(tgt), TEXT.CHAT_REOPENS]
+          : [`${who} can send, steer and stop in this session for ${ALLOW_FOR[secs]}, using your ${tgt.provider} account and quota.`];
+        return { ok: true, status: 'review', selection, card: card(op, `Allow ${who} to send`, '', [...lines, 'You can stop it any time. It also ends when Plexiform quits on your Mac.'], `Allow · ${ALLOW_FOR[secs]}`, { until }) };
       }
       // approve: a fresh proposalList of this session's live interact shares, never the poll cache.
       const found = await findProposal(d, host, mine, req.proposal, fence);
@@ -291,7 +319,7 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
       const { s, p } = found;
       if (p.status !== 'pending') return fail('stale', TEXT.MOVED);
       const who = line(p.requester?.name, 80) || 'A teammate';
-      const selection = mint(c, { op, session: tgt.session, host, account, share: s.id, proposal: p.id, version: p.version, digest: p.digest, generation: p.generation });
+      const selection = mint(c, { op, session: tgt.session, ident, host, account, share: s.id, proposal: p.id, version: p.version, digest: p.digest, generation: p.generation });
       return { ok: true, status: 'review', selection, card: card(op, `${who} proposes a message`, prose(p.text, 4000), [`One send, within 10 minutes, on your ${tgt.provider} account. Decision version ${p.version}.`], 'Approve one send · 10 min') };
     } finally { d.busy = false; }
   }
@@ -315,16 +343,26 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
     if (d.busy) return fail('busy', TEXT.BUSY);
     // One use, before the first await.
     selections.delete(req.selection);
-    const fence = fenceOf(c, still, rec.session, rec.host, rec.account);
+    const fence = fenceOf(c, still, rec.ident, rec.host, rec.account);
     if (!fence()) return fail('stale', TEXT.MOVED);
     const host = rec.host;
     d.busy = true;
     try {
       if (rec.op === 'share') {
+        let session = rec.session;
+        // T4c-2: the one place a chat becomes reachable. register() mints (or reuses) its share id and subscribes
+        // from the chat's latest message; release() drops it again unless a share is live (C2-S1).
+        if (rec.chat) {
+          const r = await register(rec.chat);
+          if (r?.ok !== true || typeof r.session !== 'string' || !UUID.test(r.session)) { if (r?.session) release(r.session, host); return fail('unavailable', TEXT.NOT_SHARED); }
+          session = r.session;
+          if (!fence()) { release(session, host); return fail('stale', TEXT.MOVED); }
+        }
         let out = null;
-        try { out = await host.shareSession({ session: rec.session, team: rec.team, scope: rec.scope, expiresInS: rec.expiresInS }); } catch { out = null; }
+        try { out = await host.shareSession({ session, team: rec.team, scope: rec.scope, expiresInS: rec.expiresInS }); } catch { out = null; }
+        if (rec.chat) release(session, host);
         afterEffect(d);
-        return out?.ok === true ? { ok: true, status: 'shared', note: TEXT.SHARED } : hostError(out, 'Not shared. Try again.');
+        return out?.ok === true ? { ok: true, status: 'shared', note: TEXT.SHARED } : hostError(out, TEXT.NOT_SHARED);
       }
       const list = await freshList(host);
       if (!fence()) return fail('stale', TEXT.MOVED);
@@ -374,7 +412,7 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
     const tgt = targetOf(c.boundId), host = hostNow(), account = accountNow();
     if (!tgt) return fail('stale', TEXT.NOT_HELD);
     if (!host) return fail('unavailable', TEXT.NO_SHARING);
-    const fence = fenceOf(c, still, tgt.session, host, account);
+    const fence = fenceOf(c, still, identOf(tgt), host, account);
     d.busy = true;
     try {
       const list = await freshList(host);
@@ -387,7 +425,9 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
         let out = null;
         try { out = host.stopSharing(s.id); } catch { out = null; }
         afterEffect(d, s.id);
-        return out?.ok === true ? { ok: true, status: 'stopped', note: TEXT.STOPPED } : hostError(out, 'Could not stop sharing. Try again.');
+        // C2-M1: the chat's last share stopping drops its subscription too.
+        if (tgt.chat === true) release(tgt.session, host);
+        return out?.ok === true ? { ok: true, status: 'stopped', note: tgt.chat === true ? TEXT.CHAT_STOPPED : TEXT.STOPPED } : hostError(out, 'Could not stop sharing. Try again.');
       }
       if (req.op === 'stop-allow') {
         for (const s of mine) {
@@ -464,7 +504,7 @@ function createOwnerThreadActions({ owner = null, now = Date.now, timers = { set
       if (!i) continue;
       // Main's own checks, every pass (R2-S2): the bound document, on screen, not minimised, same session, host, account.
       const ok = !stopped && !!c && docKey(c) === key && c.boundId === d.boundId && safe(() => c.window.isVisible(), false) === true && safe(() => c.window.isMinimized(), true) === false
-        && now() - i.at <= LEASE_MS && hostNow() === i.host && safe(() => i.host.connected(), false) === true && accountNow() === i.account && targetOf(d.boundId)?.session === i.session;
+        && now() - i.at <= LEASE_MS && hostNow() === i.host && safe(() => i.host.connected(), false) === true && accountNow() === i.account && identOf(targetOf(d.boundId)) === i.ident;
       if (!ok) { d.interest = null; continue; }
       const fence = () => { const n = safe(() => current()); return !stopped && d.interest === i && !!n && docKey(n) === key && n.boundId === d.boundId && safe(() => n.window.isVisible(), false) === true && safe(() => n.window.isMinimized(), true) === false && hostNow() === i.host; };
       for (const s of sharesOf(i.host, i.session)) if (s.scope === 'interact' && !out.has(s.id)) out.set(s.id, { host: i.host, fence });

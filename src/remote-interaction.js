@@ -417,7 +417,7 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     const t = targetFor(session);
     if (!t || t.hub.state({ session }, t.actor).status === 'ended') return refuse('stale', 'This session has ended and cannot be shared.');
     if (state !== 'connected') return refuse('unavailable', 'This Mac is not connected to your team hub.');
-    if (shares.size >= MAX_SHARES) return refuse('unavailable', 'Stop sharing another session first.');
+    if (shares.size >= MAX_SHARES) return refuse('unavailable', 'You’re sharing as many sessions and chats as you can. Stop one first.');
     // Taken before the hub creates its row, so this Mac never shows a teammate anything older than the hub would.
     const createdAt = clock();
     let r;
@@ -533,6 +533,8 @@ function createRemoteInteractionHost({ userId, adapters, workspace, boardCurrent
     const fresh = () => current() && proposalOperations.get(req.id) === ticket && clock() < ticket.expiresAt;
     const sh = shares.get(req.share), listed = await proposalList(req.share, fresh);
     const p = listed.proposals?.find(p => p.id === req.id), t = sh && targetFor(sh.session), state = t?.hub.state({ session: sh.session }, t.actor);
+    // T4c-2 (CT2-M1): no proposal is approved for a shared chat (the chat target's actor); its teammates send directly.
+    if (t?.actor === 'chat') return finish(refuse('unavailable', 'Proposals are not available for a shared chat.'));
     if (!fresh() || !liveShare(sh) || sh.scope !== 'interact' || !p || p.status !== 'pending' || p.digest !== req.digest || p.version !== req.version
       || state?.status === 'ended' || state?.generation !== p.generation || !sh.users.get(p.requester.id)?.act) return finish(REFUSED.gone);
     let r; try { r = await hubCall('POST', `/api/interaction/v1/shares/${encodeURIComponent(req.share)}/proposals/${encodeURIComponent(req.id)}/approve`,

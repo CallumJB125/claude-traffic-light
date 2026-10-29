@@ -54,9 +54,11 @@
     $('th').setAttribute('aria-busy', 'false');
     if (!v) return;
     const h = v.header;
+    noun = h.kind === 'chat' ? 'chat' : 'session';
     document.title = h.title;
     $('th-title').textContent = h.title;
-    $('th-meta').textContent = `${h.owner}'s ${h.provider} session · ${h.via === 'allowance' ? `${h.owner} let you send` : h.scope === 'interact' ? 'Watch and send' : 'Shared with you to watch'}${h.expiresAt ? ` · until ${clock(h.expiresAt)}` : ''}${h.fake ? ' (test data)' : ''}`;
+    // A chat's title is already "‹Owner›'s chat" (it never carries the chat's own title), so its meta starts at the provider.
+    $('th-meta').textContent = `${h.kind === 'chat' ? h.provider : `${h.owner}'s ${h.provider} session`} · ${h.via === 'allowance' ? `${h.owner} let you send` : h.scope === 'interact' ? 'Watch and send' : 'Shared with you to watch'}${h.expiresAt ? ` · until ${clock(h.expiresAt)}` : ''}${h.fake ? ' (test data)' : ''}`;
     const banner = $('th-banner'); banner.hidden = false;
     const seen = v.watching !== 'off';
     if (!seen) painted = false;
@@ -88,10 +90,12 @@
   // ── T3: the interact layout ──
   // T4d: when the owner allowed this teammate to send on a watch share, proposals do not exist (they need a real interact share).
   let viaAllowance = false;
+  // T4c-2: what the owner shared, in words: a chat (their host says kind 'chat') or a session.
+  let noun = 'session';
   const OPTIONS = (owner) => [
     { op: 'send', label: 'Send', sub: '' },
     { op: 'steer', label: 'Steer this turn', sub: '' },
-    { op: 'queue', label: 'Queue for when idle', sub: 'Sent once, when the session is idle.' },
+    { op: 'queue', label: 'Queue for when idle', sub: `Sent once, when the ${noun} is idle.` },
     { op: 'propose', label: `Propose to ${owner}`, sub: `${owner} reviews this exact text before it runs.` },
   ].filter((o) => !(viaAllowance && o.op === 'propose'));
   const capOf = (v, op) => (op === 'steer' ? v.controls.steer : op === 'propose' ? v.controls.propose : op === 'queue' ? v.controls.queue : v.controls.send);
@@ -119,17 +123,17 @@
     // Queue can be the way in even when Send and Steer are not (a working session that can't be steered).
     chip.disabled = !OPTIONS(owner).some((o) => capOf(v, o.op).available) || busy;
     t.disabled = !opt || busy;
-    t.placeholder = `Message ${owner}'s session`;
+    t.placeholder = `Message ${owner}'s ${noun}`;
     // T3b: after one accepted card, send/steer/stop go straight through until main says the window ends.
     const direct = winOn() && WINDOW_OPS.includes(opt);
     go.textContent = direct ? (opt === 'steer' ? 'Steer' : 'Send') : 'Review';
     go.disabled = !opt || busy || !!cardOn;
     const wl = $('th-sh-window');
     wl.hidden = !winOn();
-    wl.textContent = winOn() ? `Messages to ${owner}'s session send straight away for 30 minutes.` : '';
+    wl.textContent = winOn() ? `Messages to ${owner}'s ${noun} send straight away for 30 minutes.` : '';
     $('th-sh-ask').checked = askEach;
     if (!opt) note(v.controls.send.reason);
-    else if ($('th-sh-note').dataset.tone !== 'error' && !busy) note(sticky || (opt === 'propose' ? `${owner} reviews this exact text before it runs.` : opt === 'queue' ? `Sent once, when ${owner}'s session is idle.` : ''));
+    else if ($('th-sh-note').dataset.tone !== 'error' && !busy) note(sticky || (opt === 'propose' ? `${owner} reviews this exact text before it runs.` : opt === 'queue' ? `Sent once, when ${owner}'s ${noun} is idle.` : ''));
     $('th-sh-quota').textContent = `Runs on ${owner}'s ${h.provider} account and quota.`;
     const items = $('th-sh-menu');
     items.replaceChildren(...OPTIONS(owner).map((o) => {
@@ -150,8 +154,8 @@
   }
   function buildComposer(h) {
     const wrap = el('div', 'th-sh');
-    const form = el('form', 'th-reply th-sh-box'); form.id = 'th-sh-form'; form.setAttribute('aria-label', `Message ${h.owner}'s session`);
-    const lab = el('label', 'th-sr', `Message ${h.owner}'s session`); lab.htmlFor = 'th-sh-text';
+    const form = el('form', 'th-reply th-sh-box'); form.id = 'th-sh-form'; form.setAttribute('aria-label', `Message ${h.owner}'s ${noun}`);
+    const lab = el('label', 'th-sr', `Message ${h.owner}'s ${noun}`); lab.htmlFor = 'th-sh-text';
     const t = el('textarea', 'th-reply-text'); t.id = 'th-sh-text'; t.rows = 2; t.maxLength = 4000; t.setAttribute('aria-describedby', 'th-sh-note');
     const row = el('div', 'th-reply-row');
     const chipWrap = el('div', 'th-more-wrap th-sh-chip-wrap');
@@ -254,7 +258,7 @@
     if (r && r.ok === true) {
       if (op === 'send' || op === 'steer' || op === 'propose' || op === 'queue') clearDraft();
       const to = view?.header?.owner ? `Sent to ${view.header.owner}.` : 'Sent.';
-      sticky = op === 'queue' ? `Queued. It sends once ${view?.header?.owner ? `${view.header.owner}'s` : 'the'} session is idle.` : op === 'propose' ? 'Proposal sent. It waits for the owner to review it.' : op === 'stop' ? 'Stop requested.' : op === 'withdraw' ? 'Proposal withdrawn.' : r.note || (direct ? to : 'Sent. Its receipt appears with the messages.');
+      sticky = op === 'queue' ? `Queued. It sends once ${view?.header?.owner ? `${view.header.owner}'s` : 'the'} ${noun} is idle.` : op === 'propose' ? 'Proposal sent. It waits for the owner to review it.' : op === 'stop' ? 'Stop requested.' : op === 'withdraw' ? 'Proposal withdrawn.' : r.note || (direct ? to : 'Sent. Its receipt appears with the messages.');
       note(sticky);
       proposalsAt = 0; queueAt = 0;
     } else note(failure(r), 'error');
@@ -272,7 +276,7 @@
       if (p.action && p.status === 'approved') {
         const b = el('button', 'th-btn th-primary', 'Send approved message'); b.type = 'button';
         b.disabled = !idle || !!cardOn || busy;
-        if (!idle) li.append(el('p', 'th-msg-note', `Waiting for ${owner}'s session to be idle.`));
+        if (!idle) li.append(el('p', 'th-msg-note', `Waiting for ${owner}'s ${noun} to be idle.`));
         b.addEventListener('click', () => { if (!cardOn) showCard(p.action.card, p.action.selection, ''); });
         li.append(b);
       } else if (p.action && p.status === 'awaiting') {
@@ -293,7 +297,7 @@
       const chip = el('span', 'th-chip', QUEUE_WORD[q.state] || 'Unconfirmed'); chip.dataset.state = q.state; li.append(chip);
       if (q.state === 'queued') {
         const days = q.expiresAt ? Math.max(0, Math.ceil((q.expiresAt - Date.now()) / 86400000)) : null;
-        li.append(el('p', 'th-msg-note', `Waiting for ${v.header.owner}'s session to be idle.${days === null ? '' : ` Expires in ${days}d.`}`));
+        li.append(el('p', 'th-msg-note', `Waiting for ${v.header.owner}'s ${noun} to be idle.${days === null ? '' : ` Expires in ${days}d.`}`));
       } else if (q.reason && (q.state === 'not-sent' || q.state === 'unconfirmed')) li.append(el('p', 'th-msg-note', q.reason));
       if (q.state !== 'sending') {
         const op = q.state === 'queued' ? 'cancel' : 'discard';
@@ -338,7 +342,7 @@
     root.querySelector('.th-shared-empty').textContent = '';
     $('th-banner').hidden = true;
     clearDraft(); closeCard(); myProposals = []; myQueue = []; layout = '';
-    const text = reason === 'ended' ? 'This session has ended.' : 'This session is no longer shared with you.';
+    const text = reason === 'ended' ? `This ${noun} has ended.` : `This ${noun} is no longer shared with you.`;
     $('th-title').textContent = text; $('th-meta').textContent = '';
     const e = $('th-empty'); e.hidden = false; $('th-empty-title').textContent = text; $('th-empty-text').textContent = 'Nothing from it is kept here.';
     $('th-board').hidden = false;
@@ -356,7 +360,7 @@
     if (r.unavailable === true) {
       stale = true; offline = r.offline === true && typeof r.owner === 'string' ? r.owner : ''; signIn = r.signIn === true;
       if (view) render();
-      else if (signIn) { const n = pieces().querySelector('.th-activity'); if (n) n.textContent = 'Sign in again to see this session.'; }
+      else if (signIn) { const n = pieces().querySelector('.th-activity'); if (n) n.textContent = `Sign in again to see this ${noun}.`; }
       else if (offline) { const n = pieces().querySelector('.th-activity'); if (n) n.textContent = `${offline}'s computer is offline. This will update when they are back.`; }
       return;
     }

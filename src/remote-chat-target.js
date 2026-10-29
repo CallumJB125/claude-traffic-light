@@ -11,17 +11,23 @@
 // not it answers SESSION_BUSY and nothing is recorded. The teammate's id and name ride only in the message's
 // `from` label (never the prompt). There is no stop or steer for a teammate (Q2, S5).
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const crypto = require('node:crypto');
+
 const ACTOR = 'chat';
 const MAX_CHATS = 8, MAX_DELIVERIES = 20, MAX_TEXT = 4000, MAX_BYTES = 8192, MAX_RESPONSE = 16000;
 const ENDED = new Set(['done', 'failed', 'handed_over']);
 // A pause, a handover or a provider switch makes earlier composer state stale.
 const REGEN = new Set(['parked', 'suspended', 'handing_over', 'handed_over']);
+const WAITING = new Set(['queued', 'parked', 'blocked', 'suspended']);
+const OWN_SOURCES = new Set(['local', 'cli']); // a chat started on this computer, not one a relay created
+const PERMISSION = { plan: 'Plan only', ask: 'Ask me first', 'auto-edits': 'Edit files' };
 const LABEL = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', hermes: 'Hermes' };
 const ERRORS = {
   invalid: 'Check the selected session and message.',
   stale: 'This chat changed. Refresh and try again.',
   busy: 'The chat is working. Send when it has finished.',
+  // N3: refused because the chat is queued, paused or blocked, not because it is mid-turn.
+  waiting: "The chat is waiting, not idle. Send when it's idle.",
   forbidden: 'This chat can no longer take messages from teammates.',
   unavailable: 'The chat did not accept the message.',
   unsupported: "Only the chat's owner can stop it.",
@@ -34,13 +40,16 @@ const keyOf = (row) => `${row.ai?.id}|${row.permissionLevel}|${row.workInPlace =
 /**
  * tasks: {
  *   row(id) → the sanitized task row (state, ai, permissionLevel, workInPlace, lastSeq) | null   (synchronous)
- *   detail(id) → Promise<{sessionId, workInPlace, lastSeq} | null>
+ *   detail(id) → Promise<{workInPlace, lastSeq} | null>
  *   watch(id, fromSeq, onEvent, onReset) → Promise<{stop()}>
  *   shareMessage(id, body, share, requestId) → Promise<{ok:true, messageId} | {ok:false, code}>
  * }
  */
 function createRemoteChatTargets({ tasks, now = Date.now, enabled = () => true }) {
-  const chats = new Map(); // session uuid → entry
+  const chats = new Map(); // share session uuid → entry
+  // T4c-2 §0: the hub's `session` for a chat is a random UUID minted here, one per chat for this process (re-sharing
+  // reuses it, so a new share replaces the team's old one), never the provider's session id.
+  const byTask = new Map(); // taskId → share session uuid
 
   function entryFor(session, actor) {
     if (actor !== ACTOR || typeof session !== 'string') return null;
@@ -66,8 +75,9 @@ function createRemoteChatTargets({ tasks, now = Date.now, enabled = () => true }
     freshen(c, row);
     const id = typeof row.ai?.id === 'string' ? row.ai.id : 'ai';
     // Closed keys (S3): no board, title, folder, branch, owner or principal.
+    // `kind` (C2-S2) only lets the teammate's app call it a chat; older apps ignore unknown keys.
     return {
-      session, generation: c.generation, provider: { id, label: LABEL[id] ?? 'AI' }, status: statusOf(row), activeTurn: null,
+      kind: 'chat', session, generation: c.generation, provider: { id, label: LABEL[id] ?? 'AI' }, status: statusOf(row), activeTurn: null,
       capabilities: { send: true, steer: false, interrupt: false }, board: null,
       activity: null, reporting: { task: null, input: null, children: [] }, task_title: null, input_needed: false,
       deliveries: c.deliveries.filter((d) => !d.hidden).map(publicDelivery),
@@ -111,19 +121,25 @@ function createRemoteChatTargets({ tasks, now = Date.now, enabled = () => true }
   async function register(taskId) {
     if (!enabled() || typeof taskId !== 'string' || !taskId) return { ok: false };
     const d = await tasks.detail(taskId);
-    if (!d || d.workInPlace === true || typeof d.sessionId !== 'string' || !UUID.test(d.sessionId) || !Number.isSafeInteger(d.lastSeq)) return { ok: false };
+    if (!d || d.workInPlace === true || !Number.isSafeInteger(d.lastSeq)) return { ok: false };
     const row = tasks.row(taskId);
     if (!row || row.workInPlace === true) return { ok: false };
-    const had = chats.get(d.sessionId);
-    if (had && !had.dropped) return { ok: true, session: d.sessionId };
+    let session = byTask.get(taskId);
+    const had = session && chats.get(session);
+    if (had && !had.dropped) { had.pinned = true; return { ok: true, session }; }
     if (chats.size >= MAX_CHATS) return { ok: false, full: true };
-    const c = { taskId, boundarySeq: d.lastSeq, lastSeq: d.lastSeq, generation: 1, key: keyOf(row), deliveries: [], sent: new Map(), sub: null, dropped: false };
-    chats.set(d.sessionId, c);
+    if (!session) { session = crypto.randomUUID(); byTask.set(taskId, session); }
+    // `pinned`: the owner's Share is between register() and the hub's answer; the sweep leaves it alone until release().
+    const c = { taskId, boundarySeq: d.lastSeq, lastSeq: d.lastSeq, generation: 1, key: keyOf(row), deliveries: [], sent: new Map(), sub: null, dropped: false, pinned: true };
+    chats.set(session, c);
     try {
       c.sub = await tasks.watch(taskId, d.lastSeq + 1, (e) => onEvent(c, e), () => { c.generation++; });
-    } catch { chats.delete(d.sessionId); return { ok: false }; }
-    return { ok: true, session: d.sessionId };
+    } catch { chats.delete(session); return { ok: false }; }
+    if (chats.get(session) !== c) { try { c.sub?.stop(); } catch { /* gone */ } return { ok: false }; }
+    return { ok: true, session };
   }
+  // C2-M1: dropping a chat ends its subscription and its deliveries; its share id is kept (byTask), so a later
+  // Share reuses it and subscribes again from the chat's lastSeq then.
   function unregister(session) {
     const c = chats.get(session);
     if (!c) return;
@@ -151,7 +167,9 @@ function createRemoteChatTargets({ tasks, now = Date.now, enabled = () => true }
     }, `share:${share}:${frame}`.slice(0, 128));
     if (!r?.ok) {
       const code = r?.code;
-      return code === 'SESSION_BUSY' ? refuse('busy', ERRORS.busy) : code === 'CONFLICT' ? refuse('stale', ERRORS.stale)
+      // C2-S5: which busy it is comes from one read of the row after the refusal.
+      if (code === 'SESSION_BUSY') return refuse('busy', WAITING.has(tasks.row(c.taskId)?.state) ? ERRORS.waiting : ERRORS.busy);
+      return code === 'CONFLICT' ? refuse('stale', ERRORS.stale)
         : code === 'POLICY_DENIED' ? refuse('forbidden', ERRORS.forbidden) : refuse('unavailable', ERRORS.unavailable);
     }
     // The engine recorded it: the receipt says so even if the chat changed meanwhile (it can't be unsent).
@@ -162,6 +180,51 @@ function createRemoteChatTargets({ tasks, now = Date.now, enabled = () => true }
     return { ok: true, status: 'acknowledged', delivery: publicDelivery(d), state: state({ session: req.session }, actor) };
   }
 
+  const liveShares = (host, session, t = now()) => {
+    let list = [];
+    try { list = host?.shared?.() ?? []; } catch { list = []; }
+    return (Array.isArray(list) ? list : []).filter((x) => object(x) && typeof x.id === 'string' && x.session === session && (x.expiresAt === null || (Number.isFinite(x.expiresAt) && x.expiresAt > t)));
+  };
+  // C2-M1/C2-S1: after the owner's Share (either way) or Stop sharing, a chat with no live share is dropped: no
+  // subscription and no deliveries are kept while nobody can watch.
+  function release(session, host) {
+    const c = chats.get(session);
+    if (!c) return;
+    c.pinned = false;
+    if (!liveShares(host, session).length) unregister(session);
+  }
+  // Main's 5 s pass (plan §2.5, C2-S4). A chat that ended, or that the connected Tasks helper no longer lists, has
+  // its shares stopped and is dropped; an unreachable helper is not a reason. A new host (sign-out, another account)
+  // drops every chat: the old host's shares went with it.
+  let lastHost, swept = false;
+  function sweep(host, connected) {
+    const changed = swept && host !== lastHost;
+    lastHost = host; swept = true;
+    for (const [session, c] of [...chats]) {
+      if (c.dropped) continue;
+      if (changed || !host) { unregister(session); continue; }
+      const row = tasks.row(c.taskId);
+      const gone = row ? ENDED.has(row.state) : connected === true;
+      if (gone) {
+        for (const x of liveShares(host, session)) { try { host.stopSharing(x.id); } catch { /* already stopped */ } }
+        unregister(session);
+      } else if (!c.pinned && !liveShares(host, session).length) unregister(session);
+    }
+  }
+  // The owner's thread (thread-owner-main targetOf): a chat this computer started that is still going. A read: it
+  // never registers. `session` is null until the first confirmed Share.
+  function ownerTarget(taskId) {
+    if (!enabled() || typeof taskId !== 'string') return null;
+    const row = tasks.row(taskId);
+    if (!row || !OWN_SOURCES.has(row.source) || ENDED.has(row.state)) return null;
+    const id = typeof row.ai?.id === 'string' ? row.ai.id : '';
+    return {
+      chat: true, taskId, session: byTask.get(taskId) ?? null, provider: LABEL[id] ?? 'AI', workInPlace: row.workInPlace === true,
+      folder: typeof row.repo?.name === 'string' && row.repo.name ? row.repo.name.slice(0, 120) : 'its folder',
+      permission: PERMISSION[row.permissionLevel] ?? 'Edit files',
+    };
+  }
+
   const hub = {
     state,
     send,
@@ -170,9 +233,14 @@ function createRemoteChatTargets({ tasks, now = Date.now, enabled = () => true }
     list() { return []; },
   };
   return {
-    hub, register, unregister,
+    hub, register, unregister, release, sweep, ownerTarget,
     // For main's sharedTarget: a registered chat only, never anything else.
     target(session) { return enabled() && entryFor(session, ACTOR) ? { hub, actor: ACTOR } : null; },
+    // The owner side's read: this chat's share id, if it was ever shared in this process. A lookup only: it never
+    // registers or subscribes.
+    sessionOf(taskId) { return enabled() && typeof taskId === 'string' ? byTask.get(taskId) ?? null : null; },
+    registered: () => [...chats].filter(([, c]) => !c.dropped).map(([session, c]) => ({ session, taskId: c.taskId })),
+    taskOf(session) { const c = enabled() ? entryFor(session, ACTOR) : null; return c ? c.taskId : null; },
     size: () => chats.size,
   };
 }

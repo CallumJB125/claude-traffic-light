@@ -729,7 +729,7 @@
       if (apply(r)) {
         if (!gone) { renderAll(); startPoll(); readInputs(); }
         // T4: a session row whose owned session folded into it carries the owner controls; main decides (owner-state).
-        if (!gone && kind === 'session' && window.ThreadOwner) window.ThreadOwner.start(api, rowId);
+        if (!gone && (kind === 'session' || kind === 'task') && window.ThreadOwner) window.ThreadOwner.start(api, rowId);
         return;
       }
       await new Promise((res) => setTimeout(res, 250));

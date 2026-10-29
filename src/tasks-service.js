@@ -334,7 +334,7 @@ function createTasksService(opts) {
     if (!connected() || typeof id !== 'string' || id.length > 128) return null;
     try {
       const raw = await client.getTask(id);
-      return raw && typeof raw === 'object' ? { sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : null, workInPlace: raw.workInPlace === true, lastSeq: Number.isSafeInteger(raw.lastSeq) ? raw.lastSeq : null } : null;
+      return raw && typeof raw === 'object' ? { workInPlace: raw.workInPlace === true, lastSeq: Number.isSafeInteger(raw.lastSeq) ? raw.lastSeq : null } : null;
     } catch { return null; }
   }
   async function watchChat(id, fromSeq, onEvent, onReset) {
@@ -853,7 +853,7 @@ function createTasksService(opts) {
     return { handle, label };
   }
 
-  return { start, stop, retryNow, refresh, snapshot, openTask, closeTask, act, shownHash, saveCheckpoint, copyTakeover, openTerminal, create, preflight, route, composerInfo, registerFolder, markSeen, chatRow, chatDetail, watchChat, shareMessage, folderOf: (handle) => folders.get(handle) ?? null, folderPaths: () => [...folders.values()], bus };
+  return { start, stop, retryNow, refresh, snapshot, openTask, closeTask, act, shownHash, saveCheckpoint, copyTakeover, openTerminal, create, preflight, route, composerInfo, registerFolder, markSeen, chatRow, chatDetail, watchChat, shareMessage, chatConnected: () => connected(), folderOf: (handle) => folders.get(handle) ?? null, folderPaths: () => [...folders.values()], bus };
 }
 
 module.exports = { createTasksService, OFFLINE };

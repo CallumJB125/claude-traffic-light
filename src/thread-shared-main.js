@@ -25,6 +25,7 @@ const QUEUE_STATE = Object.freeze({ queued: 'queued', blocked: 'queued', sending
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const STATUSES = Object.freeze(['stale', 'forbidden', 'busy', 'unavailable', 'unconfirmed', 'invalid', 'unsupported', 'refused']);
 const TEXT = Object.freeze({
+  CHAT_NO_PROPOSE: 'Proposals are not available for a shared chat. Send when it is idle.',
   WATCH: 'Shared with you to watch only. The owner can choose Allow sending.',
   MOVED: 'This session moved on. Your draft is kept; review it again.',
   BUSY: 'Another action on this session is awaiting a receipt. Inspect it before sending again.',
@@ -146,6 +147,13 @@ function createSharedThreadActions({ authority = null, askEach: pref = null, now
     if (t.scope !== 'interact') { const h = auths.get(docKey(c)); if (h) h.window = null; return fail('forbidden', TEXT.WATCH); }
     const owner = line(auth.owner, 80) || 'Teammate';
     if (op === 'propose') {
+      // T4c-2 (CT2-M1): a proposal's text is stored on the hub, so none is ever made for a shared chat. Checked on a
+      // fresh read before anything reaches the hub; an unreadable state proposes nothing.
+      let st;
+      try { st = await auth.inspect(); } catch { st = null; }
+      if (!still(c)) return null;
+      if (st?.ok !== true || !plain(st.state)) return mapped(st);
+      if (st.state.kind === 'chat') return fail('unavailable', TEXT.CHAT_NO_PROPOSE);
       let p;
       try { p = await auth.propose(text); } catch { p = null; }
       if (!still(c)) return null;

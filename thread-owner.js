@@ -84,7 +84,8 @@
       const seen = Array.isArray(s.viewers) ? s.viewers.filter((n) => typeof n === 'string' && n) : [];
       const watching = seen.length === 1 ? ` · ${seen[0]} is watching` : seen.length > 1 ? ` · ${seen[0]} and ${seen.length - 1} ${seen.length === 2 ? 'other' : 'others'} are watching` : '';
       row.append(el('span', 'th-own-share-text', text + watching));
-      if (s.scope === 'watch') { const b = button('th-btn th-own-btn', 'Allow sending', () => { void review({ op: 'allow-sending', share: s.key }); }); b.disabled = busy; row.append(b); }
+      // T4c-2 (S1): main's sendNote means this chat can't take teammates' messages, so no Allow sending.
+      if (s.scope === 'watch' && !v.sendNote) { const b = button('th-btn th-own-btn', 'Allow sending', () => { void review({ op: 'allow-sending', share: s.key }); }); b.disabled = busy; row.append(b); }
       const stop = button('th-btn th-own-btn', 'Stop sharing', () => { void act('stop', s.key); }); stop.disabled = busy; row.append(stop);
       rows.push(row);
       for (const r of allowRows(s)) rows.push(r);
@@ -162,12 +163,14 @@
     };
     const [tl, team] = pick('Team', 'th-own-team', view.teams.map((t) => [t.key, t.name]));
     // Watch only first, and selected (T0).
-    const [sl, scope] = pick('They can', 'th-own-scope', [['watch', SCOPE.watch], ['interact', SCOPE.interact]]);
+    const watchOnly = typeof view.sendNote === 'string' && !!view.sendNote;
+    const [sl, scope] = pick('They can', 'th-own-scope', watchOnly ? [['watch', SCOPE.watch]] : [['watch', SCOPE.watch], ['interact', SCOPE.interact]]);
     const [el2, exp] = pick('For how long', 'th-own-expiry', EXPIRY);
     scope.value = 'watch';
     const go = button('th-btn th-primary', 'Continue', () => { void review({ op: 'share', team: team.value, scope: scope.value, expiry: exp.value }); }); go.id = 'th-own-continue';
     const btns = el('div', 'th-card-btns'); btns.append(go, cancel);
-    box.append(tl, sl, el2, el('p', 'th-card-sub', 'Members see this session from the moment you share it, not earlier messages.'), btns);
+    const what = view.chat === true ? 'this chat' : 'this session';
+    box.append(tl, sl, ...(watchOnly ? [el('p', 'th-card-sub', view.sendNote)] : []), el2, el('p', 'th-card-sub', `Members see ${what} from the moment you share it, not earlier messages.`), btns);
     host.replaceChildren(box);
   }
 
@@ -244,7 +247,7 @@
     try { r = await api.ownerState(rowId); } catch { r = null; }
     reading = false;
     if (over || !r || typeof r !== 'object') return;
-    view = { shareable: r.shareable === true, available: r.available === true, reason: typeof r.reason === 'string' ? r.reason : '', teams: Array.isArray(r.teams) ? r.teams : [], shares: Array.isArray(r.shares) ? r.shares : [], groups: Array.isArray(r.groups) ? r.groups : [], others: Array.isArray(r.others) ? r.others : [] };
+    view = { shareable: r.shareable === true, available: r.available === true, reason: typeof r.reason === 'string' ? r.reason : '', chat: r.chat === true, sendNote: typeof r.sendNote === 'string' ? r.sendNote : '', teams: Array.isArray(r.teams) ? r.teams : [], shares: Array.isArray(r.shares) ? r.shares : [], groups: Array.isArray(r.groups) ? r.groups : [], others: Array.isArray(r.others) ? r.others : [] };
     if (!view.shareable) { sheet = false; closeCard(); }
     render();
   }

@@ -17,7 +17,7 @@ const turnTag = (t) => (typeof t === 'string' && t ? crypto.createHash('sha256')
 const TOP_KEYS = Object.freeze(['header', 'banner', 'activity', 'deliveries', 'status', 'generation', 'turn', 'canSendLater', 'controls']);
 // T3: what the interact layout may offer, as booleans and fixed reasons only. Main checks every one again.
 const CONTROL_KEYS = Object.freeze(['send', 'steer', 'interrupt', 'propose', 'queue']);
-const HEADER_KEYS = Object.freeze(['title', 'owner', 'initials', 'provider', 'scope', 'via', 'expiresAt', 'fake']);
+const HEADER_KEYS = Object.freeze(['title', 'owner', 'initials', 'provider', 'kind', 'scope', 'via', 'expiresAt', 'fake']);
 const DELIVERY_KEYS = Object.freeze(['id', 'by', 'mode', 'text', 'state', 'response', 'stoppedBy', 'at']);
 
 // eslint-disable-next-line no-control-regex
@@ -26,12 +26,14 @@ const prose = (v, max) => (typeof v === 'string' ? v.replace(CONTROL, '').slice(
 const line = (v, max) => prose(v, max).replace(/\s+/g, ' ').trim();
 const initialsOf = (name) => { const w = line(name, 80).split(' ').filter(Boolean); return ((w[0]?.[0] ?? '?') + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase().slice(0, 2); };
 
+const CHAT_NO_PROPOSE = 'Proposals are not available for a shared chat. Send when it is idle.';
 function controlsOf(scope, s, owner, via = false) {
   const valid = ['ready', 'working', 'compacting', 'ended'].includes(s.status) && Number.isSafeInteger(s.generation);
   const state = { status: valid ? s.status : 'ended', activeTurn: typeof s.activeTurn === 'string' ? s.activeTurn : null, capabilities: s.capabilities };
   const c = capabilitiesOf(scope, state), pick = (v) => ({ available: v.available === true, reason: v.available ? '' : prose(v.reason, 200) });
-  // Propose is idle-only, like the hub's proposal send (plan-t3 M2).
-  const propose = via ? { available: false, reason: `${owner} has allowed you to send directly; proposals are for shares that already allow sending.` }
+  // Propose is idle-only, like the hub's proposal send (plan-t3 M2). T4c-2 (CT2-M1): never for a shared chat: the hub
+  // keeps a proposal's text, and a chat share promises the hub never holds the chat's text.
+  const propose = s.kind === 'chat' ? { available: false, reason: CHAT_NO_PROPOSE } : via ? { available: false, reason: `${owner} has allowed you to send directly; proposals are for shares that already allow sending.` }
     : c.send.available ? { available: true, reason: '' }
     : { available: false, reason: scope !== 'interact' || state.status === 'ended' ? c.send.reason : `${owner}'s session is busy. Propose when it's idle.` };
   // T5b: a message queued to send when the session is idle: offered while it is working (when idle, Send is the way).
@@ -68,9 +70,11 @@ function project({ state, share, route, now }) {
   const scope = share?.scope === 'interact' ? 'interact' : 'watch';
   const via = scope === 'interact' && share?.via === 'allowance';
   const exp = typeof share?.expiresAt === 'string' ? Date.parse(share.expiresAt) : NaN;
+  // T4c-2 (C2-S2): the owner's host says a shared chat is a chat; anything else is a session.
+  const kind = s.kind === 'chat' ? 'chat' : 'session';
   const deliveries = deliveriesOf(s);
   return {
-    header: { title: line(s.task_title, 120) || `${owner}'s ${provider} session`, owner, initials: initialsOf(owner), provider, scope, via: via ? 'allowance' : null, expiresAt: Number.isFinite(exp) ? new Date(exp).toISOString() : null, fake: route.fake === true },
+    header: { title: line(s.task_title, 120) || (kind === 'chat' ? `${owner}'s chat` : `${owner}'s ${provider} session`), owner, initials: initialsOf(owner), provider, kind, scope, via: via ? 'allowance' : null, expiresAt: Number.isFinite(exp) ? new Date(exp).toISOString() : null, fake: route.fake === true },
     banner: true,
     activity: activityOf(s, now),
     deliveries,

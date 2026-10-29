@@ -151,8 +151,9 @@ test('the four owner channels: Guard T, only an owned or session row, effects ne
   } finally { r.close(); }
 });
 
-test('a task or shared row gets null from every owner channel (the kind check)', async () => {
-  for (const kind of ['task', 'shared']) {
+// T4c-2: a task (chat) row now reaches the owner channels (ownerTarget decides); a shared row never does.
+test('a shared row gets null from every owner channel (the kind check)', async () => {
+  for (const kind of ['shared']) {
     let asked = 0;
     const contents = { id: 3, isDestroyed: () => false, mainFrame: {} };
     const ctx = { window: { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false }, contents, frame: contents.mainFrame, generation: 1, boundId: 'c'.repeat(64), foreground: true, account: 'a', workspace: 'w' };
