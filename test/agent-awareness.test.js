@@ -711,3 +711,17 @@ test('gitInfo: resolves a repository with awareness off and never touches the ro
   assert.ok(w.calls.every((c) => c[0] === 'git'), 'only git ran');
   assert.equal(w.make().gitInfo, null, 'no factory passed: no resolver, and the snapshot groups by folder');
 });
+
+test('AW-S2: awareness off removes the roster and stops before the session scan (no ps, lsof or git)', async (t) => {
+  const w = world(t);
+  w.claude('a', gitInit(path.join(w.dir, 'code', 'app')));
+  const aw = w.make();
+  await aw.refresh();
+  assert.equal(fs.existsSync(aw.rosterFile), true);
+  w.state.config.agentAwareness = { enabled: false };
+  w.calls.length = 0;
+  await aw.refresh();
+  assert.equal(fs.existsSync(aw.rosterFile), false, 'the list is deleted');
+  assert.deepEqual(w.calls, [], 'nothing was scanned');
+  aw.stop();
+});

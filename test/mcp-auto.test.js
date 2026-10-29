@@ -387,3 +387,28 @@ test('9a: off macOS the full server entry in ~/.claude.json is left byte-identic
   await w.make({ extra: { platform: 'linux' } }).sync();
   assert.deepEqual(fs.readFileSync(path.join(w.home, '.claude.json')), before);
 });
+
+test('AW-S3: the Preferences switch off removes only what Plexiform added; on again re-adds it through the normal path, and a foreign same-named entry is never touched', async (t) => {
+  const w = world(t);
+  await w.make().sync();
+  const cj = w.claudeJson();
+  const foreign = { type: 'stdio', command: 'mine', args: [] };
+  // Off by the switch (mcpBusUserOff true), both Claude Code and Codex lose their entries.
+  w.state.config = { ...ON, mcpBusUserOff: true };
+  await w.make().sync();
+  assert.ok(!('plexiform-bus' in w.claudeJson().mcpServers));
+  assert.ok(!('plexiform-bus' in w.codexServers()));
+  // On again: re-added, nothing else in ~/.claude.json changed.
+  w.state.config = { ...ON, mcpBusUserOff: false };
+  const s = await w.make().sync();
+  assert.deepEqual([s.claude.state, s.codex.state], ['ours', 'ours']);
+  assert.deepEqual(w.claudeJson(), cj);
+  assert.ok(w.codexServers()['plexiform-bus']);
+  assert.equal(w.record().claude.name, 'plexiform-bus');
+  // A user's own same-named entry survives the switch going off and on.
+  const c2 = w.claudeJson();
+  c2.mcpServers['plexiform-bus'] = foreign;
+  fs.writeFileSync(path.join(w.home, '.claude.json'), JSON.stringify(c2));
+  for (const off of [true, false]) { w.state.config = { ...ON, mcpBusUserOff: off }; await w.make().sync(); }
+  assert.deepEqual(w.claudeJson().mcpServers['plexiform-bus'], foreign);
+});

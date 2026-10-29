@@ -16,6 +16,8 @@
     const syncNotifyKinds = () => { const on = document.getElementById('notifyOnStates').checked; for (const k of NOTIFY_KINDS) document.getElementById(`notify-${k}`).disabled = !on; };
     document.getElementById('notifyOnStates').addEventListener('change', syncNotifyKinds);
 
+    let awarenessSaved = {}; // notes / midTurnNotices have no control here: sent back as loaded
+    const syncBusTools = () => { const t = document.getElementById('busToolsOn'); t.disabled = !document.getElementById('agentAwarenessEnabled').checked && !document.getElementById('agentBusEnabled').checked; };
     async function load() {
       const config = await window.settingsApi.getConfig();
       workingInput.value = config.workingStaleMinutes;
@@ -58,8 +60,12 @@
       document.getElementById('teamBrief').checked = config.teamBrief === true;
       document.getElementById('explainMode').checked = config.explainMode === true;
       document.getElementById('agentMailInbox').checked = config.agentMailInbox === true;
+      document.getElementById('agentAwarenessEnabled').checked = config.agentAwareness?.enabled !== false;
+      document.getElementById('busToolsOn').checked = config.mcpBusUserOff !== true;
+      awarenessSaved = config.agentAwareness || {};
       const bus = config.agentBus || {};
       document.getElementById('agentBusEnabled').checked = bus.enabled !== false;
+      syncBusTools();
       document.getElementById('agentBusAutoAccept').checked = bus.autoAccept !== false;
       document.getElementById('agentBusAuto').checked = bus.scope !== 'listed';
       document.getElementById('agentBusRepos').value = (bus.repos || []).join('\n');
@@ -240,6 +246,8 @@
         teamBrief: document.getElementById('teamBrief').checked,
         explainMode: document.getElementById('explainMode').checked,
         agentMailInbox: document.getElementById('agentMailInbox').checked,
+        agentAwareness: { ...awarenessSaved, enabled: document.getElementById('agentAwarenessEnabled').checked },
+        mcpBusUserOff: !document.getElementById('busToolsOn').checked,
         agentBus: {
           enabled: document.getElementById('agentBusEnabled').checked,
           autoAccept: document.getElementById('agentBusAutoAccept').checked,
@@ -570,6 +578,7 @@
     });
     // ── end Health ──
 
+    for (const id of ['agentAwarenessEnabled', 'agentBusEnabled']) document.getElementById(id).addEventListener('change', syncBusTools);
     load();
     // The Widget page and the tray change some of these keys too: re-read on return so a later save keeps them.
     document.addEventListener('visibilitychange', () => { if (!document.hidden) load().catch(() => {}); });

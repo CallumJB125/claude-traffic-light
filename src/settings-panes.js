@@ -94,7 +94,7 @@
     teamSessionSharing: 'phone', teamBrief: 'phone', explainMode: 'phone', remoteInteractionHost: 'phone', codexDaemonMessaging: 'phone',
     integrations: 'terminal', gitSignals: 'projects', gitRepos: 'projects', gitDeployWorkflows: 'projects', remoteTailscale: 'phone', agentBus: 'agent-messages', compaction: 'aitools',
     rules: 'widget-rules', template: 'widget-rules', presets: 'widget-rules', character: 'widget-rules', autoAnswer: 'widget-rules',
-    snoozeUntil: 'none', fastHook: 'none', keepAwake: 'none', paceTooltip: 'none', agentAwareness: 'none', mcpBusUserOff: 'none', mcpUserOff: 'none', threadAskEach: 'none',
+    snoozeUntil: 'none', fastHook: 'none', keepAwake: 'none', paceTooltip: 'none', agentAwareness: 'agent-messages', mcpBusUserOff: 'agent-messages', mcpUserOff: 'none', threadAskEach: 'none',
     remoteInteractionResetPending: 'none', persona: 'none',
   });
 

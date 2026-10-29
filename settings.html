@@ -870,10 +870,18 @@
   </section>
 
   <!-- Agent bus (src/agent-bus-main.js, board/AGENT-BUS.md) -->
+  <h2 data-pane="agent-messages">AI sessions on this computer</h2>
+  <div class="field" id="ai-sessions-settings" data-pane="agent-messages">
+    <label class="row"><input type="checkbox" id="agentAwarenessEnabled" aria-describedby="hint-agent-awareness" /> Let my AI sessions see each other</label>
+    <div class="hint" id="hint-agent-awareness">Each Claude Code, Codex and Gemini CLI session here is told which others are running (tool, folder name, branch, working or waiting) and can leave notes for them. Off: Plexiform deletes that list, stops adding the line at the start of each session, and the sessions can't see each other.</div>
+    <label class="row"><input type="checkbox" id="busToolsOn" aria-describedby="hint-bus-tools" /> Add Plexiform's bus tools to Claude Code and Codex</label>
+    <div class="hint" id="hint-bus-tools">Adds one entry named plexiform-bus to ~/.claude.json and to Codex, so sessions can use bus_peers and hand work over. Off: Plexiform removes the entries it added (never anyone else's). The Agent bus and the session list's notes need them. Not added while both of those are off.</div>
+  </div>
+
   <h2 data-pane="agent-messages">Agent bus</h2>
   <div class="field" id="agent-bus-settings" data-pane="agent-messages">
     <label class="row"><input type="checkbox" id="agentBusEnabled" aria-describedby="hint-agent-bus" /> Let AI tools on this Mac hand work to each other</label>
-    <div class="hint" id="hint-agent-bus">An AI session can hand a bounded piece of work to another AI tool here (for example Claude Code to Codex). It starts on its own in a new git worktree with no network access, so it cannot push or open a pull request. Its result goes back to the session that asked. Stop agent bus in the menu bar stops every such run.</div>
+    <div class="hint" id="hint-agent-bus">Uses the bus tools above. An AI session can hand a bounded piece of work to another AI tool here (for example Claude Code to Codex). It starts on its own in a new git worktree with no network access, so it cannot push or open a pull request. Its result goes back to the session that asked. Stop agent bus in the menu bar stops every such run.</div>
     <label class="row"><input type="checkbox" id="agentBusAutoAccept" /> Start handed-off work without asking me</label>
     <label class="row"><input type="checkbox" id="agentBusAuto" aria-describedby="hint-agent-bus-auto" /> Automatic: any repository a Claude Code or Codex session here is working in</label>
     <div class="hint" id="hint-agent-bus-auto">On by default. Any git checkout a Claude Code or Codex session on this Mac is working in can take handed-off work. Never your home folder, hidden folders in it (such as ~/.claude or ~/.codex) or ~/Library. Turn this off, or list repositories below, to allow only the ones you list.</div>
