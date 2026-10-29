@@ -293,7 +293,7 @@ test('step 11: the documented restore (into a new folder, then swap by hand) get
   assert.deepEqual(s.fp(), live);
   assert.equal(sh(copy), '');
   assert.deepEqual(s.fp(), live, 'restoring into a new folder leaves the live one alone');
-  assert.deepEqual(FP.fingerprint(R, { linkTimes: false }), before);
+  sameFolder(FP.fingerprint(R, { linkTimes: false }), before);
   // A second copy never merges into the first.
   fs.writeFileSync(path.join(R, 'checked.txt'), 'looked at it\n');
   const restored = FP.fingerprint(R);
