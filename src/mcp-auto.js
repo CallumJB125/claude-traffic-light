@@ -20,6 +20,9 @@
 //   still carries our marker.
 // - The record (mcp-auto.json, 0600) holds names, times and a hash of our own
 //   entry: never a copy of either config file, which can hold credentials.
+// - Every other AI tool found here (Gemini CLI, Cursor, VS Code, the Claude desktop app, Hermes) and the instruction
+//   blocks (~/.codex/AGENTS.md, ~/.gemini/GEMINI.md) go through src/enrol/registry.js in the same sync, under the
+//   same switches: on at each start, off and undone with the bus (BACKBONE-AUDIT-AND-PLAN §3.2, D1, D2).
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -27,6 +30,7 @@ const McpInstall = require('../mcp-install.js');
 const CodexMcp = require('../adapters/codex-mcp.js');
 const Codex = require('../adapters/codex.js');
 const PeerPid = require('./peer-pid.js');
+const Registry = require('./enrol/registry.js');
 const { allowedExe } = require('./agent-awareness.js');
 
 const NAME = McpInstall.BUS_NAME;
@@ -58,8 +62,11 @@ function create({ rootDir, home, config, launch, codexBin, platform = process.pl
   const recordFile = path.join(rootDir, 'mcp-auto.json');
   const entry = () => mcpInstall.launch({ ...launch, profile: 'bus' });
   const marker = () => McpInstall.markerOf(entry());
-  let state = { claude: { state: 'unknown' }, codex: { state: 'unknown' }, codexHook: { state: 'unknown' } };
+  let state = { claude: { state: 'unknown' }, codex: { state: 'unknown' }, codexHook: { state: 'unknown' }, tools: {} };
   let record = null;
+  const registry = Registry.create({ rootDir, home, codexHome: codexEnv.CODEX_HOME || path.join(home, '.codex'), launch: () => entry(),
+    external: () => ({ claude: state.claude, codex: state.codex }), now });
+  const brief = (en) => Object.fromEntries(Object.entries(en.results || {}).map(([id, r]) => [id, { installed: !!r.installed, mcp: r.mcp?.state || 'error', instructions: r.instructions?.state || 'none' }]));
 
   async function readRecord() {
     try {
@@ -172,7 +179,7 @@ function create({ rootDir, home, config, launch, codexBin, platform = process.pl
   let again = false;
   async function syncOnce() {
     const rec = await readRecord();
-    const had = !!(rec.claude || rec.codex);
+    const had = !!(rec.claude || rec.codex) || registry.anyEnrolled();
     const c = config();
     // Whatever the bus switches: it is the person's own Claude integration, only made safe to bind.
     if (c && c.mcpUserOff !== true && platform === 'darwin') {
@@ -180,12 +187,13 @@ function create({ rootDir, home, config, launch, codexBin, platform = process.pl
     }
     if (!effective(c)) {
       await removeAll(rec);
-      state = { claude: { state: 'off' }, codex: { state: 'off' }, codexHook: { state: 'off' } };
+      try { registry.unenrolAll(); } catch { /* retried next time */ }
+      state = { claude: { state: 'off' }, codex: { state: 'off' }, codexHook: { state: 'off' }, tools: {} };
     } else if (platform !== 'darwin') {
       // No caller binding here (src/peer-pid.js; its reason is UNSUPPORTED, this one UNSUPPORTED_PLATFORM): tools that
       // could not tell their caller are not added and nothing is announced, but turning the bus off still removes what an earlier version added.
       if (!claudeOn(c)) removeClaude(rec);
-      state = { claude: UNSUPPORTED_PLATFORM, codex: UNSUPPORTED_PLATFORM, codexHook: UNSUPPORTED_PLATFORM };
+      state = { claude: UNSUPPORTED_PLATFORM, codex: UNSUPPORTED_PLATFORM, codexHook: UNSUPPORTED_PLATFORM, tools: {} };
     } else {
       let claude;
       if (claudeOn(c)) {
@@ -196,13 +204,18 @@ function create({ rootDir, home, config, launch, codexBin, platform = process.pl
       }
       const codex = await addCodex(rec).catch(() => ({ state: 'error' }));
       const codexHook = codex.state === 'ours' ? addHook(rec) : { state: rec.codexHook ? 'error' : 'off' };
-      state = { claude, codex, codexHook };
+      let en = { results: {}, addedInstructions: [] };
+      try { en = registry.enrolAll({ mcpOurs: { claude: ['ours', 'full'].includes(claude.state), codex: codex.state === 'ours' } }); } catch (e) { log(`[mcp-auto] enrol failed: ${e && e.code ? e.code : 'error'}`); }
+      state = { claude, codex, codexHook, tools: brief(en) };
       // The first automatic add, ever: one Home notice with Undo (AW15). Earlier opt-outs left no record, so this is how they get honoured.
-      if (!had && (rec.claude || rec.codex) && !rec.notice) rec.notice = { added_at: new Date(now()).toISOString(), dismissed: false };
+      const fresh = !had && (rec.claude || rec.codex || registry.anyEnrolled()) && !rec.notice;
+      if (fresh) rec.notice = { added_at: new Date(now()).toISOString(), dismissed: false };
+      // Instruction blocks first written after that notice (an update, a newly installed tool): shown once, with their own Undo (D1).
+      else if (rec.notice && en.addedInstructions.length && !rec.instructionsNotice) rec.instructionsNotice = { added_at: new Date(now()).toISOString(), dismissed: false };
     }
     record = rec;
     await writeRecord(rec);
-    log(`[mcp-auto] claude=${state.claude.state} codex=${state.codex.state} hook=${state.codexHook.state}`);
+    log(`[mcp-auto] claude=${state.claude.state} codex=${state.codex.state} hook=${state.codexHook.state}${Object.entries(state.tools).filter(([id, t]) => t.installed && !['claude', 'codex'].includes(id)).map(([id, t]) => ` ${id}=${t.mcp}`).join('')}`);
     return state;
   }
   function sync() {
@@ -216,10 +229,17 @@ function create({ rootDir, home, config, launch, codexBin, platform = process.pl
   function notices() {
     const r = record || {};
     const out = [];
-    const where = [r.claude ? 'Claude Code' : null, r.codex ? 'Codex' : null].filter(Boolean);
+    const added = Object.entries(state.tools || {}).filter(([id, t]) => !['claude', 'codex'].includes(id) && t.mcp === 'ours').map(([id]) => id);
+    const where = [r.claude ? 'Claude Code' : null, r.codex ? 'Codex' : null, ...registry.labels(added)].filter(Boolean);
+    const join = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0]);
+    const notes = Object.entries(state.tools || {}).filter(([, t]) => t.instructions === 'ours').map(([id]) => id);
+    const noteFiles = registry.instructionFiles().filter((f) => notes.includes(f.id)).map((f) => f.file);
     if (r.notice && !r.notice.dismissed && where.length) {
-      out.push({ handle: 'bus-added', action: 'undo', title: `Plexiform added its agent bus tools to ${where.join(' and ')}`,
-        meta: `So your AI sessions can see each other and hand work to each other.${r.codex ? ' Codex asks you before each bus_handoff, unless you allow plexiform-bus in Codex.' : ''}` });
+      out.push({ handle: 'bus-added', action: 'undo', title: `Plexiform added its agent bus tools to ${join(where)}`,
+        meta: `So your AI sessions can see each other and hand work to each other.${noteFiles.length ? ` It also added a short note on using them to ${join(noteFiles)}.` : ''}${r.codex ? ' Codex asks you before each bus_handoff, unless you allow plexiform-bus in Codex.' : ''}` });
+    } else if (r.instructionsNotice && !r.instructionsNotice.dismissed && noteFiles.length) {
+      out.push({ handle: 'bus-instructions', action: 'undo', title: `Plexiform added a short agent bus note to ${join(noteFiles)}`,
+        meta: `So ${join(registry.labels(notes))} know to check bus_peers and use notes and hand-offs. Only the marked Plexiform block was added; Undo removes it and keeps it off.` });
     }
     if (r.codexHook && r.codexHook.kept) {
       if (!r.keptNoticeDismissed) out.push({ handle: 'bus-codex-hook-kept', action: 'dismiss', title: 'Plexiform left its bus_session hook in Codex',
@@ -244,6 +264,16 @@ function create({ rootDir, home, config, launch, codexBin, platform = process.pl
       await writeRecord(rec);
       return { ok: true, ...(action === 'undo' ? { note: 'Removed. Plexiform will not add them again; turn them back on in Preferences.' } : {}) };
     }
+    if (handle === 'bus-instructions' && (action === 'undo' || action === 'dismiss') && rec.instructionsNotice) {
+      rec.instructionsNotice.dismissed = true;
+      if (action === 'undo') {
+        try { registry.setInstructionsOff(true); } catch { return { ok: false, error: 'Plexiform could not remove the note. Try again.' }; }
+        state = { ...state, tools: Object.fromEntries(Object.entries(state.tools || {}).map(([id, t]) => [id, { ...t, instructions: t.instructions === 'ours' ? 'off' : t.instructions }])) };
+      }
+      record = rec;
+      await writeRecord(rec);
+      return { ok: true, ...(action === 'undo' ? { note: 'Removed. Plexiform will not add it again.' } : {}) };
+    }
     if (handle === 'bus-codex-hook' && action === 'dismiss') { rec.hookNoticeDismissed = true; record = rec; await writeRecord(rec); return { ok: true }; }
     if (handle === 'bus-codex-hook-kept' && action === 'dismiss') { rec.keptNoticeDismissed = true; record = rec; await writeRecord(rec); return { ok: true }; }
     return { ok: false, error: 'That card has changed. Home refreshes in a moment.' };
@@ -261,8 +291,10 @@ function create({ rootDir, home, config, launch, codexBin, platform = process.pl
   }
 
   return {
-    sync, notices, act, codexHookSeen, recordFile,
+    sync, notices, act, codexHookSeen, recordFile, registry,
     status: () => state,
+    // Per tool {id, label, installed, mcp, hooks, instructions, tier, reason, ...} for the Connections view.
+    toolCaps: (opts) => registry.caps(opts),
     // Which providers have the bus tools (the roster's caps.mcp, so the hook's Tools line is true).
     caps: () => ({ claude: ['ours', 'full'].includes(state.claude.state), codex: state.codex.state === 'ours' }),
   };
