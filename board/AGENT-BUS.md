@@ -19,7 +19,7 @@ AI tools hand bounded work to each other. A handoff is claimed and started autom
 | `result` | `result.done`, `result.failed`, `result.outcome_unknown`, `result.expired` | 30 d |
 | `control` | `control.halt`, `control.resume`, `control.policy_changed`, `control.cap_reached`, `control.card_paused` | 90 d |
 
-Delivery is at-least-once; dedupe by `(source agent, request_id)` and by `(card_id or repo, title + brief)` within an hour. Exactly one start per handoff: the claim CAS hands out a fence; a stale fence changes nothing and its result is refused. Leases (120 s) are renewed while the run lives; after a restart a granted claim with no task reopens (fence + 1), a started one whose run is gone becomes `outcome_unknown` and is never retried.
+Delivery is at-least-once; dedupe by `(source agent, request_id)` (the same request, whatever its state) and by `(card_id or repo, title + brief, requested to)` within an hour; the content dedupe joins only a hand-off still under way or done, never one that failed (stopped included), expired or ended `outcome_unknown`, so a retry with a new `request_id` or another target runs. Exactly one start per handoff: the claim CAS hands out a fence; a stale fence changes nothing and its result is refused. Leases (120 s) are renewed while the run lives; after a restart a granted claim with no task reopens (fence + 1), a started one whose run is gone becomes `outcome_unknown` and is never retried.
 
 ## 3. Identity and tiers
 

@@ -33,6 +33,7 @@ const DEFAULT_TTL_S = 24 * 60 * 60;
 const SESSION_REPO_MS = 2 * 24 * HOUR_MS;
 const SESSION_REPO_MAX = 100;
 const ACTIVE = new Set(['queued', 'claimed', 'running', 'quiet', 'blocked', 'handing_over', 'handed_over', 'suspended', 'unresponsive']);
+const DEAD_END = new Set(['result.failed', 'result.expired', 'result.outcome_unknown']);
 const AI_NAME = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' };
 const SESSION_KEY = /^(?:claude|codex|gemini)\|[\w.-]{1,120}$/;
 const HANDLE = /^(?:claude|codex|gemini)-[a-z0-9-]{1,16}-[0-9a-f]{4,6}$/;
@@ -222,9 +223,14 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     let h = input;
     const prior = log.byRequest(h.requestKey);
     if (prior) return { handoff_id: prior.handoff_id, state: stateOf(prior.handoff_id), duplicate: true };
-    const dedupeKey = sha(`${h.card_id ?? h.repoRoot}\n${h.title}\n${h.brief}${h.fallback_of ? `\n${h.fallback_of}` : ''}`);
+    // Content dedupe (same card or repo, title and brief, within the hour) is per requested target: asking another
+    // provider, 'any' or a list is a new request. It joins a hand-off still under way or done (its result is the
+    // answer); one that failed (stopped or cancelled included), expired or ended unknown is never handed back, so a
+    // retry with a new request_id runs.
+    const target = h.to?.agent_id ? `agent:${h.to.agent_id}` : JSON.stringify(h.to?.provider ?? Contract.ANY_PROVIDER);
+    const dedupeKey = sha(`${h.card_id ?? h.repoRoot}\n${h.title}\n${h.brief}\n${target}${h.fallback_of ? `\n${h.fallback_of}` : ''}`);
     const dup = h.fallback_of ? null : log.byDedupe(dedupeKey, now() - HOUR_MS);
-    if (dup) return { handoff_id: dup.handoff_id, state: stateOf(dup.handoff_id), duplicate: true };
+    if (dup && !DEAD_END.has(log.result(dup.handoff_id)?.kind)) return { handoff_id: dup.handoff_id, state: stateOf(dup.handoff_id), duplicate: true };
     // One provider before the offer is written (G4): a named one only if its breaker admits it; 'any' or a list, the
     // first that does, and the rest kept for a fallback.
     let rest = [];

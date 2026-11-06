@@ -206,6 +206,32 @@ test('live G4: an "any" hand-off whose run parks on its limit moves to the next 
   } finally { w.cleanup(); }
 });
 
+test('dedupe: never hands back a failed, expired or unknown-outcome hand-off; a different target is a new request; same request_id stays idempotent', async () => {
+  const w = await world({ fallback: { enabled: false, order: ['claude', 'codex'] } });
+  try {
+    const same = { title: 'Same job', brief: 'Same brief.' };
+    // The live failure: codex fails, a retry with 'any' and a new request_id got the old failed one back.
+    const first = await w.hand({ provider: 'codex' }, same);
+    const t = await w.until(() => w.taskOf(first.handoff_id), 'codex run');
+    // Same content, same target, new request_id, still running: joins the live one.
+    const live = await w.bus.op('handoff', { request_id: 'req-dd-live-0001', to: { provider: 'codex' }, ...same, provider: 'claude' }, { provider: 'claude', cwd: w.root, origin: ORIGIN });
+    assert.deepEqual([live.handoff_id, live.duplicate], [first.handoff_id, true]);
+    // Same content but 'any': another target, another hand-off.
+    const other = await w.hand({ provider: 'any' }, same);
+    assert.notEqual(other.handoff_id, first.handoff_id);
+    assert.equal(other.duplicate, undefined);
+    w.engine.end(t.id, 'failed', { failKind: 'error', failReason: 'boom' });
+    await w.until(() => w.bus.log.result(first.handoff_id), 'result');
+    // Failed now: the same content and target with a new request_id runs again.
+    const retry = await w.bus.op('handoff', { request_id: 'req-dd-retry-0001', to: { provider: 'codex' }, ...same, provider: 'claude' }, { provider: 'claude', cwd: w.root, origin: ORIGIN });
+    assert.notEqual(retry.handoff_id, first.handoff_id);
+    assert.equal(retry.state, 'offered');
+    // The same request_id again is the same request (idempotent), whatever its state.
+    const replay = await w.bus.op('handoff', { request_id: 'req-dd-retry-0001', to: { provider: 'codex' }, ...same, provider: 'claude' }, { provider: 'claude', cwd: w.root, origin: ORIGIN });
+    assert.deepEqual([replay.handoff_id, replay.duplicate], [retry.handoff_id, true]);
+  } finally { w.cleanup(); }
+});
+
 test('D4 switch off: "any" does not move past an unavailable provider', async () => {
   const w = await world({ fallback: { enabled: false, order: ['codex', 'claude'] } });
   try {
