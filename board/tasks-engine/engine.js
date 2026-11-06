@@ -50,6 +50,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const SCHEMA = JSON.parse(fs.readFileSync(path.join(here, '..', 'tasks-api', 'schema.json'), 'utf8'));
 
 // States with a (possibly dead) agent behind them: they get a LeaseView.
+// Tasks that get automatic cards: the person's own (local, cli) and hand-off runs (bus, G8).
+const CARD_SOURCES = Object.freeze([...LOCAL_SOURCES, 'bus']);
 const LEASED = new Set(['claimed', 'running', 'quiet', 'blocked', 'handing_over', 'suspended', 'unresponsive', 'orphaned']);
 // O3: a wrapped task is real work (gets a card) once it edits a file or has been working for a minute in total.
 const ACTIVE = new Set(['running', 'quiet']);
@@ -515,11 +517,11 @@ export class TasksEngine extends EventEmitter {
     try { this.opts.onRuns(rows); } catch { /* main may be gone */ }
   }
 
-  // O3: the person's own wrapped tasks that did real work, for main's automatic cards (work-capture). Title and
+  // O3: the person's own wrapped tasks that did real work, and the agent bus's hand-off runs (G8), for main's automatic cards (work-capture). Title and
   // state only: never the task text, the AI's words, an outcome or a failure reason. The AI is the one that was
   // running when the work began (cardAi), so a provider switch stays one card.
   #markWork(task) {
-    if (task.workedAt != null || !LOCAL_SOURCES.includes(task.source) || task.parentId) return;
+    if (task.workedAt != null || !CARD_SOURCES.includes(task.source) || task.parentId) return;
     if (task.ai?.id !== 'claude' && task.ai?.id !== 'codex') return;
     task.workedAt = this.now();
     task.cardAi = task.ai.id;
@@ -528,13 +530,17 @@ export class TasksEngine extends EventEmitter {
   #workRows() {
     const rows = [];
     for (const t of this.tasks.values()) {
-      if (t.workedAt == null || !t.cardAi || !LOCAL_SOURCES.includes(t.source) || t.parentId) continue;
+      if (t.workedAt == null || !t.cardAi || !CARD_SOURCES.includes(t.source) || t.parentId) continue;
       const root = t.repo?.root ?? t.worktree;
       if (typeof root !== 'string') continue;
       // A team card gets a title only when the person gave the task one; an untitled task's title is the first line of
-      // its prompt, which only My board (on this Mac) may show.
-      const titled = typeof t.spec?.title === 'string' && t.spec.title.trim() !== '';
-      rows.push({ taskId: t.id, ai: t.cardAi, title: titled ? t.title : null, localTitle: t.title, state: t.state, blockedKind: t.blockedKind ?? null, root, changedAt: Math.max(t.stateSince ?? 0, t.workedAt) });
+      // its prompt, which only My board (on this Mac) may show. A hand-off's title is an AI's, so it is treated the same.
+      const bus = t.source === 'bus';
+      const titled = !bus && typeof t.spec?.title === 'string' && t.spec.title.trim() !== '';
+      // G8 rule 2: a hand-off run's card goes to the asker's board (a route key main put on the hand-off), if any.
+      const originBoard = bus && /^[a-f0-9]{64}$/.test(t.sourceMeta?.originBoard ?? '') ? t.sourceMeta.originBoard : null;
+      rows.push({ taskId: t.id, ai: t.cardAi, title: titled ? t.title : null, localTitle: t.title, state: t.state, blockedKind: t.blockedKind ?? null, root, changedAt: Math.max(t.stateSince ?? 0, t.workedAt),
+        ...(bus ? { handoff: true } : {}), ...(originBoard ? { originBoard } : {}) });
     }
     // Live tasks first, so finished ones can never push a long-running card out of the 20.
     const live = (r) => (LEASED.has(r.state) ? 0 : 1);
@@ -923,6 +929,8 @@ export class TasksEngine extends EventEmitter {
       relayOwner: this.principal(ctx)?.kind === 'relay' ? this.principal(ctx).id : null,
     };
     this.tasks.set(id, task);
+    // A hand-off is delegated work from the start: its card appears when the run is created (G8), not after 60 s.
+    if (source === 'bus') this.#markWork(task);
     const actor = remote ? 'remote' : source === 'mcp' ? 'agent' : 'user';
     this.#audit(task, actor, 'created', `${AI_LABEL[ai.id]}${ai.reason ? ` (${ai.reason})` : ''}, ${level}, ${surface}${clamps.length ? `; ${clamps.join(', ')}` : ''}`, spec.sourceMeta?.displayName ?? null);
     this.#setState(task, 'queued');

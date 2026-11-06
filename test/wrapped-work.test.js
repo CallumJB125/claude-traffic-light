@@ -209,3 +209,25 @@ test('a wrapped task\'s title is scrubbed by hubTitle on the team send, exactly 
   assert.ok(!/dana@|10\.1\.2\.3/.test(JSON.stringify(team)), 'no email or IP reaches the hub');
   assert.equal(team[1].body.title, WorkCapture.hubTitle(title, R.hub));
 });
+
+test('G8: a hand-off run\'s card goes to My board by default, to the asker\'s team board when it carries one, and never with an AI title on a team card', async (t) => {
+  const key = WorkCapture.routeKey;
+  const hand = (extra = {}) => row({ taskId: 'tsk_hof1', ai: 'codex', title: null, localTitle: 'Fix the parser', handoff: true, ...extra });
+  // Not linked (no route for this repo): My board, with the hand-off's title.
+  const mine = rig(t, { getRoutes: async () => ({ routes: [], complete: true }) });
+  await mine.router.observe([], { wrapped: wrapped([hand()]) });
+  assert.equal(mine.calls.length, 1);
+  assert.equal(mine.calls[0].kind, 'local');
+  assert.equal(mine.calls[0].body.title, 'Fix the parser');
+  assert.equal(mine.calls[0].body.provider, 'codex');
+  // The asker's board is another team board the person can write to: rule 2 (inherited) wins over the repo's link.
+  const B = { ...R, team_id: 'team-b', board_id: 'board-b', repo_id: 'repo-b', canonical_url: 'github.com/org/other' };
+  const inh = rig(t, { getRoutes: async () => ({ routes: [R, B], complete: true }) });
+  await inh.router.observe([], { wrapped: wrapped([hand({ originBoard: key(B) })]) });
+  assert.equal(inh.calls[0].kind, 'team');
+  assert.equal(inh.calls[0].destination.board_id, 'board-b');
+  assert.ok(!JSON.stringify(inh.calls).includes('Fix the parser'), 'the AI\'s title stays on this Mac');
+  // originBoard only from a hand-off row, only as a route key.
+  assert.equal(wrapped([hand({ originBoard: 'not-a-key' })])[0].originBoard, undefined);
+  assert.equal(wrapped([row({ originBoard: key(B) })])[0].originBoard, undefined, 'a person\'s own task carries none');
+});

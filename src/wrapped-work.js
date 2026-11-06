@@ -1,5 +1,5 @@
 'use strict';
-// O3: the person's own wrapped tasks (local and cli) that did real work, as the session-shaped records
+// O3: the person's own wrapped tasks (local and cli) that did real work, and hand-off runs (bus, G8), as the session-shaped records
 // work-capture already understands, so they get automatic cards through the very same path as a native
 // session (routing, team title, retry, toggle, personal override). Only the task's title, its state and its
 // folder cross: never the task text, the AI's words, an outcome or a failure reason.
@@ -27,8 +27,10 @@ function recordsFor(rows, { host }) {
     // No taskTitle for an untitled task: its team card reads "Claude · <folder>" like a native session's. localTitle (the
     // prompt's first line) is read by work-capture for a My board card only.
     const title = text(r.title), localTitle = text(r.localTitle);
+    // A hand-off run (G8): originBoard is the asker's board as an opaque route key; work-capture's rule 2 reads it.
+    const originBoard = r.handoff === true && typeof r.originBoard === 'string' && /^[a-f0-9]{64}$/.test(r.originBoard) ? r.originBoard : null;
     out.push({ source: r.ai, sessionId: r.taskId, taskId: r.taskId, host, cwd: r.root, ...(title ? { taskTitle: title } : {}),
-      ...(localTitle ? { localTitle } : {}), signal, updatedAt: new Date(r.changedAt).toISOString() });
+      ...(localTitle ? { localTitle } : {}), ...(originBoard ? { originBoard } : {}), signal, updatedAt: new Date(r.changedAt).toISOString() });
   }
   return out;
 }
