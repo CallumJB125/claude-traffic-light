@@ -25,11 +25,14 @@ function createStore({ file, safeStorage }) {
     enabled: () => read().enabled !== false,
     setEnabled(on) { write({ ...read(), enabled: !!on }); return !!on; },
     saved: () => Object.fromEntries(Deploy.PROVIDERS.map((p) => [p, !!(read().tokens || {})[p]])),
+    // Every 15 s tick asks for these, the first one 15 s after launch. A keychain call
+    // is synchronous on main and, for a newly signed build, waits on the keychain's
+    // access prompt, so the keychain is asked only when a sealed token is stored.
     tokens() {
       const out = {};
-      if (!sealable()) return out;
-      for (const [p, sealed] of Object.entries(read().tokens || {})) {
-        if (!Deploy.PROVIDERS.includes(p) || typeof sealed !== 'string') continue;
+      const stored = Object.entries(read().tokens || {}).filter(([p, sealed]) => Deploy.PROVIDERS.includes(p) && typeof sealed === 'string');
+      if (!stored.length || !sealable()) return out;
+      for (const [p, sealed] of stored) {
         try { out[p] = safeStorage.decryptString(Buffer.from(sealed, 'base64')); } catch { /* sealed by another keychain: ignored */ }
       }
       return out;

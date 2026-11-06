@@ -207,6 +207,23 @@ test('tokens are sealed on disk, never returned to a page, and removable', () =>
   assert.equal(Main.createStore({ file, safeStorage: { isEncryptionAvailable: () => false } }).save('vercel', 'x').ok, false);
 });
 
+// The poll's first tick, 15 s after launch, froze main for minutes on a newly
+// signed build: safeStorage is a synchronous keychain call that waits on the
+// keychain's access prompt. With no saved token it must never be asked.
+test('the poll never asks the keychain while no token is saved', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deploy-'));
+  const asked = [];
+  const keychain = new Proxy({}, { get: (_t, name) => () => { asked.push(name); throw new Error('keychain asked'); } });
+  let tick = null;
+  const ipcMain = { handle() {} };
+  Main.install({ ipcMain, file: path.join(dir, 'deploy-status.json'), safeStorage: keychain, fetch: async () => { throw new Error('no network'); }, clipboard: {}, shell: {}, sessions: () => [{ cwd: dir }], online: () => true, allowedHome: () => false, allowedSettings: () => false, scrub: (t) => t, setInterval: (fn) => { tick = fn; return null; } });
+  await tick();
+  const store = Main.createStore({ file: path.join(dir, 'deploy-status.json'), safeStorage: keychain });
+  store.setEnabled(true);
+  assert.deepEqual(store.tokens(), {});
+  assert.deepEqual(asked, []);
+});
+
 test('the HTTP side only talks to the three API hosts, with a bearer token', async () => {
   const seen = [];
   const http = Main.httpWith(async (url, opts) => { seen.push([url, opts.headers.Authorization, opts.redirect]); return { status: 200, json: async () => ({ ok: 1 }) }; });
