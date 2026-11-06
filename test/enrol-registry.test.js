@@ -274,3 +274,27 @@ test('a one-line JSON file stays on one line', (t) => {
   assert.equal(entryIn(w, 'desktop', ['mcpServers']).env.PLEXIFORM_CLIENT, 'claude-desktop');
   assert.deepEqual(Jsonc.parse(w.read('desktop')).preferences, { quickEntryShortcut: 'off' });
 });
+
+test('Remote Control: the registry never writes Claude Code\'s or Codex\'s own settings files, whatever a tool table says', (t) => {
+  const w = world(t);
+  const settings = path.join(w.home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(settings), { recursive: true });
+  const text = '{\n  "enableRemoteControl": true,\n  "remote": { "defaultEnvironmentId": "env-fixture" }\n}\n';
+  fs.writeFileSync(settings, text);
+  fs.writeFileSync(path.join(w.home, '.claude.json'), '{\n  "remoteControlSurfacesSeen": ["mobile"],\n  "mcpServers": {}\n}\n');
+  const before = [settings, path.join(w.home, '.claude.json')].map((f) => fs.readFileSync(f, 'utf8'));
+  const reg = w.make();
+  reg.enrolAll({ mcpOurs: { claude: true, codex: true } });
+  reg.unenrolAll();
+  assert.deepEqual([settings, path.join(w.home, '.claude.json')].map((f) => fs.readFileSync(f, 'utf8')), before);
+  // A tool whose files point there is refused at the write, not trusted.
+  const Adapters = require('../adapters/index.js');
+  const vs = Adapters.mcpClient('vscode');
+  const orig = { file: vs.file, detect: vs.detect };
+  vs.file = ({ home }) => path.join(home, '.claude', 'settings.json');
+  vs.detect = () => true;
+  t.after(() => Object.assign(vs, orig));
+  const r = w.make().enrol('vscode');
+  assert.equal(r.mcp.state, 'error');
+  assert.equal(fs.readFileSync(settings, 'utf8'), text);
+});

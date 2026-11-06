@@ -77,8 +77,16 @@ function create({ home, rootDir, codexHome = path.join(home, '.codex'), launch =
     fs.writeFileSync(to, text, { mode: 0o600 });
     return to;
   }
+  // Claude Code's and Codex's own settings carry Remote Control, hooks and trust: this module never writes them.
+  // Their MCP entries go through mcp-install.js (one key) and `codex mcp add`; only AGENTS.md is ours to edit here.
+  const forbidden = (file) => {
+    const f = path.resolve(file);
+    return f === path.join(home, '.claude.json') || f.startsWith(`${path.join(home, '.claude')}${path.sep}`)
+      || [path.join(codexHome, 'config.toml'), path.join(codexHome, 'hooks.json')].includes(f);
+  };
   // change(src|null) → {text: string|null (delete), changed, ...extra}. Written only if nobody wrote in between.
   function edit(file, change, { mode = 0o600 } = {}) {
+    if (forbidden(file)) throw err('FORBIDDEN', `${tilde(file, home)} is not Plexiform's to edit here`);
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const readAt = Runtime.mtimeOf(file, fs);
       const src = readText(file);

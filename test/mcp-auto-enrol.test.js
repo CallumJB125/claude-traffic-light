@@ -101,3 +101,46 @@ test('off this Mac platform nothing is enrolled', async (t) => {
   assert.equal(w.read(VSCODE), VSCODE_TEXT);
   assert.equal(w.read('.codex/AGENTS.md'), null);
 });
+
+// Owner requirement: enrolment never changes Claude Code Remote Control or Plexiform's own remote/relay set-up. The
+// only change to ~/.claude.json is the one plexiform-bus key; Claude Code's settings, hooks and remote keys, Codex's
+// config.toml, and Plexiform's remote files are never written. Undo gives every file back byte for byte.
+test('Remote Control: enrol and undo leave Claude Code\'s and Plexiform\'s remote settings byte-identical apart from the managed entries', async (t) => {
+  const w = world(t);
+  const claudeJson = {
+    numStartups: 412, remoteControlSurfacesSeen: ['desktop', 'mobile'], remoteControlReadyPushCount: 3, remoteControlReadyPushKey: 'rc-push-fixture',
+    remoteControlUpsellSeenCount: 1, remoteDialogSeen: true,
+    mcpServers: { context7: { type: 'stdio', command: 'npx', args: ['-y', '@upstash/context7-mcp'], env: {} } },
+    projects: { '/Users/me/work': { allowedTools: [], remoteEnabled: true } },
+  };
+  const files = {
+    '.claude.json': `${JSON.stringify(claudeJson, null, 2)}\n`,
+    '.claude/settings.json': `${JSON.stringify({ remote: { defaultEnvironmentId: 'env-fixture' }, enableRemoteControl: true,
+      hooks: { SessionStart: [{ matcher: '', hooks: [{ type: 'command', command: 'my-own-hook.sh' }] }] } }, null, 2)}\n`,
+    '.codex/config.toml': 'model = "gpt-5"\n\n[features]\nremote_control = true\n\n[mcp_servers.mine]\ncommand = "x"\n',
+    '.claude-traffic-light/config.json': '{"remoteApprovals":{"enabled":true},"remoteControl":{"relay":"wss://relay.example"}}',
+    '.claude-traffic-light/remote/settings.json': '{"enabled":true}',
+    '.claude-traffic-light/remote/devices.json': '{"devices":[{"id":"phone"}]}',
+    '.claude-traffic-light/remote/identity.json': '{"publicKey":"fixture"}',
+  };
+  for (const [rel, text] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(w.home, rel)), { recursive: true }); fs.writeFileSync(path.join(w.home, rel), text); }
+  const untouched = Object.keys(files).filter((rel) => rel !== '.claude.json');
+  const same = () => untouched.filter((rel) => w.read(rel) !== files[rel]);
+
+  const auto = w.make();
+  const s = await auto.sync();
+  assert.equal(s.claude.state, 'ours');
+  assert.deepEqual(same(), [], 'Claude Code settings and hooks, Codex config.toml and Plexiform\'s remote files never written');
+  const now = JSON.parse(w.read('.claude.json'));
+  assert.equal(now.mcpServers['plexiform-bus'].env.PLEXIFORM_MCP, 'bus-v1:packaged');
+  delete now.mcpServers['plexiform-bus'];
+  assert.deepEqual(now, claudeJson, 'every other key of ~/.claude.json, the Remote Control ones included, is as it was');
+
+  await w.make().sync();
+  assert.deepEqual(same(), []);
+
+  w.state.config = { ...w.state.config, mcpBusUserOff: true };
+  await auto.sync();
+  assert.deepEqual(same(), []);
+  assert.equal(w.read('.claude.json'), files['.claude.json'], '~/.claude.json byte-identical after undo');
+});
