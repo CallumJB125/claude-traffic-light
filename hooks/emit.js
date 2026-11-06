@@ -118,6 +118,11 @@ function emitAdapter(payload) {
       Awareness.run({ adapter: adapter.id, event, payload, root: ROOT_DIR }),
       event === 'SessionStart' ? Brief.run({ adapter: adapter.id, event, payload, root: ROOT_DIR }) : null,
     ]).then(([aware, brief]) => { Brief.print(Awareness.combine(event, aware, brief)); exit(); }, exit);
+  } else if (codexLifecycle && event === 'PostToolUse') {
+    // Mid-turn notes notice (BACKBONE plan G1): files only, rate-limited in awareness.js, never the body.
+    const out = require('./awareness.js').midTurn({ adapter: 'codex', payload, root: ROOT_DIR });
+    if (out) require('./team-brief.js').print(out);
+    exit();
   } else exit();
 }
 

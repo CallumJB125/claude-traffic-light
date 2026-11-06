@@ -284,6 +284,41 @@ function noticeBlock({ adapter, event, self, key, root, now, start }) {
   return Receipt.prepare(output(text, event), file, version, now);
 }
 
+// Mid-turn notices (owner decision D3, BACKBONE plan G1): a working session hears of new notes at its next tool
+// call, not only when its person next types. The notice line only (never the roster, never a body), only for a note
+// set this session was not told yet, and at most once every MID_TURN_MS. It shares the turn notice's receipt, so
+// main marks the notes notified the same way and the next prompt does not repeat it. Off with
+// agentAwareness.midTurnNotices false. Files only, no git: it runs on every tool call.
+const MID_TURN_MS = 2 * 60 * 1000;
+const MID_TURN_ADAPTERS = new Set(['claude', 'codex']);
+const midTurnOn = (config) => !(config.agentAwareness && typeof config.agentAwareness === 'object' && config.agentAwareness.midTurnNotices === false);
+function midTurn({ adapter = 'claude', payload = {}, root = rootDir(), now = Date.now() } = {}) {
+  try {
+    if (!MID_TURN_ADAPTERS.has(adapter)) return null;
+    const d = payload && typeof payload === 'object' ? payload : {};
+    // A subagent's tool call: its context is not the session's, so the notice waits for the main thread.
+    if (d.agent_id !== undefined && d.agent_id !== null) return null;
+    const key = selfKey(adapter, d);
+    if (!key) return null;
+    const config = readConfig(root);
+    if (!enabledIn(config) || !midTurnOn(config)) return null;
+    const roster = readRoster(root, now);
+    if (!roster || !has(roster.self, key)) return null;
+    const self = roster.self[key];
+    if (!self || self.allowed !== true || self.interactive !== true) return null;
+    const list = noticesOf(self);
+    const text = noticeLine(list);
+    if (!text) return null;
+    const cwd = typeof d.cwd === 'string' && path.isAbsolute(d.cwd) ? d.cwd : process.cwd();
+    if (cheapExcluded(roster, cwd)) return null;
+    const file = noticeFile(root, adapter, key.slice(key.indexOf('|') + 1));
+    const version = noticeVersion(list);
+    const seen = Receipt.read(file, now);
+    if (seen && (seen.version === version || now - seen.written_at < MID_TURN_MS)) return null;
+    return Receipt.prepare(output(text, 'PostToolUse'), file, version, now);
+  } catch { return null; }
+}
+
 // What this viewer sees: peers and burst groups, itself left out; a group it
 // belongs to is shown member by member, any other group as one line.
 function viewOf(roster, self) {
@@ -467,6 +502,6 @@ function combine(event, ...outs) {
 }
 
 module.exports = {
-  check, decideSync, run, combine, enabled, readRoster, viewOf, versionOf, render, introLine, liveCount, boardLabel, boardOf, boardClause, BOARD_KINDS, BOARD_NAME_MAX, INTRO_TAIL, noticesOf, noticeLine, noticeVersion, noticeFile, label, folderLabel, branchLabel, selfKey, codexSessionMeta, sessionMetaOf, claudeInteractive, selfInteractive,
+  check, decideSync, run, midTurn, MID_TURN_MS, combine, enabled, readRoster, viewOf, versionOf, render, introLine, liveCount, boardLabel, boardOf, boardClause, BOARD_KINDS, BOARD_NAME_MAX, INTRO_TAIL, noticesOf, noticeLine, noticeVersion, noticeFile, label, folderLabel, branchLabel, selfKey, codexSessionMeta, sessionMetaOf, claudeInteractive, selfInteractive,
   classifySelf, HEADER, PROVIDERS, STATUS, WAITING, EVENTS, HANDLE, NOTE_ID, NOTICE_MAX, INTRO_MAX, BLOCK_MAX, OUTPUT_MAX, MAX_LINES, STALE_MS, REFRESH_MS, START_BUDGET_MS, META_MAX_BYTES,
 };

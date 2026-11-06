@@ -95,3 +95,21 @@ test('one-time migration: an empty list relying on policy.json bus_auto stays li
   assert.equal(contextOf({ scope: 'listed' }).scope, 'listed');
   assert.equal(contextOf({ scope: 'bogus' }).scope, 'auto');
 });
+
+test('G2: halted() is known within one poll of the helper being up, without anything else asking; polling never starts the helper', async () => {
+  const ticks = [];
+  let up = false, asked = 0;
+  const handlers = new Map();
+  const m = register({ ipcMain: { handle: (c, f) => handlers.set(c, f) }, sessionsAllowed: () => true, started: () => up, config: () => ({}),
+    tasks: () => ({ bus: async (op) => { asked += 1; return op === 'status' ? { halted: false, enabled: true, head: 0 } : {}; } }),
+    setInterval: (fn, ms) => { ticks.push({ fn, ms }); return { unref() {} }; } });
+  assert.equal(m.halted(), 'unknown');
+  assert.equal(ticks[0].ms, 60_000);
+  ticks[0].fn();
+  assert.equal(asked, 0, 'helper not up: not asked, not started');
+  up = true;
+  ticks[0].fn();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(m.halted(), false);
+  m.stop();
+});

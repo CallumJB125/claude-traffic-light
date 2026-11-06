@@ -37,7 +37,9 @@ function contextOf(cfg, folders = []) {
 }
 
 /** tasks(): the started tasks service; started(): whether it exists yet (settings changes never start the helper). */
-function register({ ipcMain, sessionsAllowed, tasks, started = () => true, config, folders = () => [], onChange = () => {} }) {
+const HALT_POLL_MS = 60_000;
+
+function register({ ipcMain, sessionsAllowed, tasks, started = () => true, config, folders = () => [], onChange = () => {}, pollMs = HALT_POLL_MS, setInterval: every = setInterval }) {
   // The tray keeps its default size: Stop appears once an AI has handed off this session, or while halted.
   // known: the helper has said whether it is halted (refresh() asks at its start); until then halted() is 'unknown'.
   let halted = false, known = false, used = false, sent = null;
@@ -53,6 +55,11 @@ function register({ ipcMain, sessionsAllowed, tasks, started = () => true, confi
   ipcMain.handle('bus:list', (e) => (!sessionsAllowed(e) ? null : started() ? call('list', { limit: 100 }).then(track, () => unavailable) : unavailable));
   ipcMain.handle('bus:halt', (e) => (sessionsAllowed(e) ? halt().catch(() => unavailable) : null));
   ipcMain.handle('bus:resume', (e) => (sessionsAllowed(e) ? resume().catch(() => unavailable) : null));
+  const refresh = () => call('status', {}).then(track, () => {});
+  // Halted is known within a minute of the helper starting, and stays known after a halt from another surface.
+  // Never starts the helper: only asks one that is already up.
+  const poll = every(() => { if (started()) refresh(); }, pollMs);
+  if (poll && poll.unref) poll.unref();
   return {
     context,
     relay: async (op, args, caller) => {
@@ -63,10 +70,11 @@ function register({ ipcMain, sessionsAllowed, tasks, started = () => true, confi
     },
     sync: () => { if (started()) push().catch(() => {}); },
     // Once the helper is up (after a restart while halted the tray must offer Resume before Sessions is opened).
-    refresh: () => call('status', {}).then(track, () => {}),
+    refresh,
     halt, resume,
-    // Last known; 'unknown' counts as halted wherever it matters (plan §3.3).
+    // Last known. 'unknown' gates what starts runs (hand-offs), never notes (BACKBONE plan G2).
     halted: () => (known ? halted : 'unknown'),
+    stop: () => clearInterval(poll),
     trayItems: () => (normalize(config().agentBus).enabled && (used || halted)
       ? [halted ? { label: 'Resume agent bus', click: () => resume().catch(() => {}) } : { label: 'Stop agent bus', sublabel: 'Stops every run AIs handed to each other', click: () => halt().catch(() => {}) }]
       : []),
@@ -82,4 +90,4 @@ function migrate(saved, policy) {
   return normalize({ ...saved, exclude: [], scope: listed ? 'listed' : saved.scope });
 }
 
-module.exports = { register, normalize, contextOf, migrate, DEFAULTS };
+module.exports = { register, normalize, contextOf, migrate, DEFAULTS, HALT_POLL_MS };

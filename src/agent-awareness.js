@@ -20,7 +20,8 @@ const Hook = require('../hooks/awareness.js');
 const PeerPid = require('./peer-pid.js');
 const { bindingStatus } = require('./bus-binding-status');
 
-const DEFAULTS = Object.freeze({ enabled: true, notes: true, midTurnNotices: false });
+// midTurnNotices on by default (owner decision D3, 2026-11-06): one line, at most every 2 minutes, never the body.
+const DEFAULTS = Object.freeze({ enabled: true, notes: true, midTurnNotices: true });
 const DEBOUNCE_MS = 1000;
 const HEARTBEAT_MS = 2 * 60 * 1000;
 const CLASSIFY_TTL_MS = 10 * 60 * 1000;
@@ -50,7 +51,7 @@ const OWN_WORKTREE = /-buddy-[0-9a-f]{12}(?:[\\/]|$)/;
 
 function normalize(cfg) {
   const c = cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : {};
-  return { enabled: c.enabled !== false, notes: c.notes !== false, midTurnNotices: c.midTurnNotices === true };
+  return { enabled: c.enabled !== false, notes: c.notes !== false, midTurnNotices: c.midTurnNotices !== false };
 }
 
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
@@ -719,7 +720,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     if (!(await classify(b.session.cwd, exclude)).allowed) return { reason: 'EXCLUDED', message: 'Plexiform does not carry notes for this folder.' };
     const status = op === 'notes' && args.status === true;
     if (halted() === 'unknown') { await Promise.resolve().then(refreshHalt).catch(() => {}); if (halted() !== 'unknown') await refresh(); }
-    if (!status && halted() !== false) return NOTES_HALTED;
+    if (!status && halted() === true) return NOTES_HALTED;
     const roster = await current(b.key);
     const me = roster && has(roster.self, b.key) ? roster.self[b.key] : null;
     if (!me || me.verified !== true || typeof me.handle !== 'string' || !book.has(b.key)) return op === 'notes' ? { ...NOT_BOUND, notes: [] } : NOT_BOUND;
@@ -1078,9 +1079,10 @@ function boardAnswer(board) {
     const self = {};
     const entries = [];
     wrappedKeys = new Map();
-    // Notes only while they are on and the bus is known to be running ('unknown' counts as stopped, plan §3.3).
+    // Notes are on unless the bus is known to be halted: a note never starts a run, so 'unknown' (the helper not asked
+    // yet) does not gate it (BACKBONE plan G2). The helper still refuses a note while it is halted.
     const h0 = halted();
-    const notesOn = aw.notes && h0 === false;
+    const notesOn = aw.notes && h0 !== true;
     const nextVerdicts = new Map();
     let unverified = 0;
     // Ties fail closed for every claimant: two files with one session id (a

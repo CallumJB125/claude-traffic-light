@@ -98,8 +98,12 @@ const needsTurnBrief = signal === 'prompt-submit' && require('./team-brief.js').
 // never prints it: its stdout goes nowhere, and a receipt there would hide the change.
 const awarenessTurn = signal === 'prompt-submit' && !gateDeny && !process.env.PLEXIFORM_NO_FAST
   ? require('./awareness.js').check({ adapter: 'claude', event: 'UserPromptSubmit', payload: data, root: ROOT_DIR }) : null;
+// Mid-turn notes notice (BACKBONE plan G1): a tool call that finished may carry the one-line notice of new notes,
+// rate-limited inside awareness.js. Decided from files alone, like the turn's; with nothing new the fast path stays.
+const awarenessMid = signal === 'tool-done' && !gateDeny && !process.env.PLEXIFORM_NO_FAST
+  ? require('./awareness.js').midTurn({ adapter: 'claude', payload: data, root: ROOT_DIR }) : null;
 // The app's own in-process run sets NO_FAST: it must never forward to itself.
-const fastEndpoint = !gateDeny && !needsTurnBrief && !awarenessTurn && !process.env.PLEXIFORM_NO_FAST && Fast.eligible(signal, data) ? Fast.readEndpoint(ROOT_DIR) : null;
+const fastEndpoint = !gateDeny && !needsTurnBrief && !awarenessTurn && !awarenessMid && !process.env.PLEXIFORM_NO_FAST && Fast.eligible(signal, data) ? Fast.readEndpoint(ROOT_DIR) : null;
 if (fastEndpoint) {
   Fast.forward(Fast.build({ signal, payload, env: process.env, ppid: process.ppid, cwd: process.cwd(), token: fastEndpoint.token }), fastEndpoint)
     .then((handled) => (handled ? process.exit(0) : fullPath()), () => fullPath());
@@ -258,8 +262,9 @@ if (signal === 'session-end') {
 }
 
 // What this hook prints for Claude Code (the PermissionRequest decision, or
-// the cost guard's PreToolUse deny).
-let hookOutput = gateDeny;
+// the cost guard's PreToolUse deny, or a PostToolUse's mid-turn notes notice).
+// Set here so every finish() on a tool-done path prints it.
+let hookOutput = gateDeny || awarenessMid;
 
 // fs.writeSync rather than process.stdout.write: stdout is a pipe, which is
 // asynchronous on macOS, and process.exit would cut a large reply short.
@@ -638,7 +643,7 @@ if (signal === 'tool-use' && tool === 'AskUserQuestion' && !data?.agent_id && as
 // `workingSince` marks when the current turn began (for the "working over N
 // minutes" signal) and resets on each new prompt.
 // Judged on the unlocked read: skipping is only ever safe, never a lost write.
-if (prevOnEntry && !needsTurnBrief && !awarenessTurn && signal !== 'session-start' && resolved !== 'subagent-start' && resolved !== 'subagent-done' && tool !== 'TaskStop'
+if (prevOnEntry && !needsTurnBrief && !awarenessTurn && !awarenessMid && signal !== 'session-start' && resolved !== 'subagent-start' && resolved !== 'subagent-done' && tool !== 'TaskStop'
     && !Machine.claudeInputPending(prevOnEntry) && !(resolved === 'permission-ask' && typeof data?.tool_use_id === 'string')) {
   const prev = prevOnEntry;
   const agentChurn = fromSubagent && stepOf(prev, new Date().toISOString()).bookkeeping;
