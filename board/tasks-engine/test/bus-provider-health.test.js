@@ -120,6 +120,7 @@ test('G4: a Codex run out of quota opens its breaker; a hand-off to Codex is ref
     assert.equal((await w.hand({ provider: ['codex', 'claude'] })).provider, 'claude');
     // G8 rule 2: the asker's board (main's route key) rides on the hand-off into the run's sourceMeta.
     const KEY = 'a'.repeat(64);
+    for (const t of [...w.engine.tasks.values()].filter((x) => x.state === 'running')) w.engine.end(t.id);
     const boarded = await w.bus.op('handoff', { request_id: 'req-board-0001', to: { provider: 'claude' }, title: 'Boarded', provider: 'claude' }, { provider: 'claude', cwd: w.root, origin: { ...ORIGIN, board: KEY } });
     assert.equal((await w.until(() => w.taskOf(boarded.handoff_id))).spec.sourceMeta.originBoard, KEY);
     // status reports provider health for the UI (Lane 3).
