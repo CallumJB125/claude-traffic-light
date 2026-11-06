@@ -131,11 +131,59 @@ function selfKey(adapter, payload) {
 // `claude remote-control` server started for the phone or claude.ai. Those run with --print, so their
 // entrypoint is sdk-cli, and Claude marks them CLAUDE_CODE_ENVIRONMENT_KIND=bridge. Plain `claude -p`
 // and the SDK stay headless. hooks/set-status.js and src/agent-awareness.js use this same rule.
-const claudeInteractive = (env = process.env) => {
+// 'cli' | 'bridge' | 'headless', or null with no entrypoint at all.
+const claudeEntry = (env = process.env) => {
   const entry = env.CLAUDE_CODE_ENTRYPOINT;
   if (typeof entry !== 'string') return null;
-  return entry === 'cli' || (entry === 'sdk-cli' && env.CLAUDE_CODE_ENVIRONMENT_KIND === 'bridge');
+  return entry === 'cli' ? 'cli' : entry === 'sdk-cli' && env.CLAUDE_CODE_ENVIRONMENT_KIND === 'bridge' ? 'bridge' : 'headless';
 };
+// Every process a bridge session starts inherits CLAUDE_CODE_ENVIRONMENT_KIND=bridge, `claude -p` from its Bash
+// tool included (security review #4). So bridge counts only when bridgeParent() says this claude process's own
+// parent is the `claude remote-control` server; without a check it is headless.
+const claudeInteractive = (env = process.env, { bridgeParent } = {}) => {
+  const kind = claudeEntry(env);
+  if (kind === null) return null;
+  return kind === 'cli' || (kind === 'bridge' && typeof bridgeParent === 'function' && bridgeParent() === true);
+};
+
+// `claude remote-control` as `ps -ww -o args=` prints it: the program is claude (the native install's
+// versions/<v> file too), and its first non-option argument is remote-control.
+const CLAUDE_PROGRAM = /(^|\/)claude$|\/claude\/versions\/[^/]+$/;
+function remoteControlServer(args) {
+  const t = String(args || '').trim().split(/\s+/);
+  if (!t[0] || !CLAUDE_PROGRAM.test(t[0])) return false;
+  let i = 1;
+  while (i < t.length && t[i].startsWith('-')) i += 1;
+  return t[i] === 'remote-control';
+}
+
+// The hook's own claude process (shells between skipped, as set-status.js claudePid does), then whether its parent is
+// the remote-control server. Synchronous /bin/ps, run only for a bridge session's hook. pid: the claude pid, if known.
+const SHELL_NAMES = new Set(['sh', 'bash', 'zsh', 'dash', 'fish']);
+function bridgeParentSync({ pid = null, run = null } = {}) {
+  if (process.platform !== 'darwin' && process.platform !== 'linux' && !run) return false;
+  const exec = run || ((file, args) => require('child_process').execFileSync(file, args, { encoding: 'utf8', timeout: 1500 }));
+  const parentOf = (p) => {
+    const m = /^\s*(\d+)\s+(.*?)\s*$/.exec(String(exec('/bin/ps', ['-o', 'ppid=,comm=', '-p', String(p)])).split('\n')[0] || '');
+    return m ? { ppid: Number(m[1]), comm: m[2] } : null;
+  };
+  try {
+    let claude = Number.isInteger(pid) && pid > 1 ? pid : null;
+    if (!claude) {
+      let p = process.ppid;
+      for (let depth = 0; depth < 3 && p > 1; depth += 1) {
+        const m = parentOf(p);
+        if (!m) return false;
+        if (!SHELL_NAMES.has((m.comm.split('/').pop() || '').replace(/^-/, ''))) { claude = p; break; }
+        p = m.ppid;
+      }
+    }
+    if (!claude) return false;
+    const up = parentOf(claude);
+    if (!up || up.ppid <= 1) return false;
+    return remoteControlServer(exec('/bin/ps', ['-ww', '-o', 'args=', '-p', String(up.ppid)]));
+  } catch { return false; }
+}
 
 // Codex: the rollout's first line (session_meta) says who started the thread
 // (findings §2, §9.3). Interactive = a person's thread in the TUI or the
@@ -170,8 +218,8 @@ function sessionMetaOf(text) {
   } catch { return null; }
 }
 
-function selfInteractive(adapter, payload, env = process.env) {
-  if (adapter === 'claude') return claudeInteractive(env) === true;
+function selfInteractive(adapter, payload, env = process.env, { bridgeParent = () => bridgeParentSync() } = {}) {
+  if (adapter === 'claude') return claudeInteractive(env, { bridgeParent }) === true;
   if (adapter === 'codex') return codexSessionMeta(payload && payload.transcript_path)?.interactive === true;
   return adapter === 'gemini';
 }
@@ -521,6 +569,6 @@ function combine(event, ...outs) {
 }
 
 module.exports = {
-  check, decideSync, run, midTurn, MID_TURN_MS, SYSTEM_HANDLE, isSystemNotice, combine, enabled, readRoster, viewOf, versionOf, render, introLine, liveCount, boardLabel, boardOf, boardClause, BOARD_KINDS, BOARD_NAME_MAX, INTRO_TAIL, noticesOf, noticeLine, noticeVersion, noticeFile, label, folderLabel, branchLabel, selfKey, codexSessionMeta, sessionMetaOf, claudeInteractive, selfInteractive,
+  check, decideSync, run, midTurn, MID_TURN_MS, SYSTEM_HANDLE, isSystemNotice, combine, enabled, readRoster, viewOf, versionOf, render, introLine, liveCount, boardLabel, boardOf, boardClause, BOARD_KINDS, BOARD_NAME_MAX, INTRO_TAIL, noticesOf, noticeLine, noticeVersion, noticeFile, label, folderLabel, branchLabel, selfKey, codexSessionMeta, sessionMetaOf, claudeEntry, claudeInteractive, remoteControlServer, bridgeParentSync, selfInteractive,
   classifySelf, HEADER, PROVIDERS, STATUS, WAITING, EVENTS, HANDLE, NOTE_ID, NOTICE_MAX, INTRO_MAX, BLOCK_MAX, OUTPUT_MAX, MAX_LINES, STALE_MS, REFRESH_MS, START_BUDGET_MS, META_MAX_BYTES,
 };

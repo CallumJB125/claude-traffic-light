@@ -92,6 +92,13 @@ function render(value, ind, unit, eol) {
   return JSON.stringify(value, null, unit).split('\n').join(`${eol}${ind}`);
 }
 
+// A key written twice: JSON.parse keeps the last, a text edit would touch the first. Neither is safe to act on.
+function only(members, key) {
+  const hits = members.filter((x) => x.key === key);
+  if (hits.length > 1) throw Object.assign(new Error(`"${key}" appears more than once`), { code: 'DUPLICATE' });
+  return hits[0];
+}
+
 function walk(src, path) {
   const toks = tokens(src);
   if (!toks.length || toks[0].t !== '{') throw new Error('not a JSON object');
@@ -99,7 +106,7 @@ function walk(src, path) {
   const chain = [obj];
   for (const key of path) {
     for (const m of obj.members) m.keyStart = toks[m.keyTok].s;
-    const m = obj.members.find((x) => x.key === key);
+    const m = only(obj.members, key);
     if (!m) return { toks, chain, missing: key };
     if (toks[m.valueTok].t !== '{') throw Object.assign(new Error(`"${key}" is not an object`), { code: 'SHAPE' });
     obj = objectAt(src, toks, m.valueTok);
@@ -109,9 +116,17 @@ function walk(src, path) {
   return { toks, chain, obj };
 }
 
-// The value under path/name as JSON, or undefined.
+// The value under path/name as JSON, or undefined. Throws DUPLICATE when a key on the way, or name, is written twice.
 function get(src, path, name) {
   const data = parse(src);
+  const s = String(src);
+  const toks = tokens(s);
+  let obj = toks.length ? objectAt(s, toks, 0) : { members: [] };
+  for (const key of [...path, name]) {
+    const m = only(obj.members, key);
+    if (!m || toks[m.valueTok].t !== '{') break;
+    obj = objectAt(s, toks, m.valueTok);
+  }
   let node = data;
   for (const k of path) { node = node && typeof node === 'object' ? node[k] : undefined; }
   return node && typeof node === 'object' && Object.prototype.hasOwnProperty.call(node, name) ? node[name] : undefined;
@@ -164,7 +179,7 @@ function replace(src, path, name, value) {
   const s = String(src);
   const w = walk(s, path);
   if (w.missing) throw Object.assign(new Error('not there'), { code: 'MISSING' });
-  const m = w.obj.members.find((x) => x.key === name);
+  const m = only(w.obj.members, name);
   if (!m) throw Object.assign(new Error('not there'), { code: 'MISSING' });
   const after = s.includes('\n') ? render(value, indentAt(s, m.keyStart), unitOf(s), eolOf(s)) : JSON.stringify(value);
   return { text: s.slice(0, m.valueStart) + after + s.slice(m.valueEnd), before: s.slice(m.valueStart, m.valueEnd), after };
@@ -187,8 +202,8 @@ function remove(src, path, name, chunk = null) {
   }
   const w = walk(s, path);
   if (w.missing) return { text: s, changed: false };
+  if (!only(w.obj.members, name)) return { text: s, changed: false };
   const idx = w.obj.members.findIndex((x) => x.key === name);
-  if (idx < 0) return { text: s, changed: false };
   const m = w.obj.members[idx];
   const prev = w.obj.members[idx - 1];
   // Comments that end the previous member's line stay with it.

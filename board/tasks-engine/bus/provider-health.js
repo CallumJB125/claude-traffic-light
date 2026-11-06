@@ -116,7 +116,10 @@ export function createProviderHealth({ log, now = Date.now, onChange = () => {} 
    */
   function choose(want, { order = C.DEFAULT_FALLBACK, fallback = true } = {}) {
     const recv = new Set(C.RECEIVE_PROVIDERS);
-    const list = (Array.isArray(want) ? want : want === C.ANY_PROVIDER || want == null ? order : [want]).filter((p, i, a) => recv.has(p) && a.indexOf(p) === i);
+    // A list is the caller's order over the person's: an AI the person left out of the fallback order is never in it
+    // (security review #5). A single named provider is the caller's explicit pick, as before.
+    const allowed = new Set(Array.isArray(order) ? order : []);
+    const list = (Array.isArray(want) ? want.filter((p) => allowed.has(p)) : want === C.ANY_PROVIDER || want == null ? order : [want]).filter((p, i, a) => recv.has(p) && a.indexOf(p) === i);
     const candidates = fallback || (!Array.isArray(want) && want !== C.ANY_PROVIDER && want != null) ? list : list.slice(0, 1);
     for (let i = 0; i < candidates.length; i += 1) {
       if (admits(candidates[i])) return { provider: candidates[i], rest: candidates.slice(i + 1) };

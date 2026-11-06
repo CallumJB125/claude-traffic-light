@@ -521,6 +521,15 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     return out;
   }
 
+  // Whether claude process pid was started by the `claude remote-control` server: its parent's command line says so and
+  // that parent is a real, signed claude (a renamed program could print the same command line).
+  async function remoteControlParent(pid) {
+    const p = await Peer.proc(pid);
+    if (!p || p.ppid <= 1) return false;
+    if (!Hook.remoteControlServer(await Peer.args(p.ppid))) return false;
+    return !!(await aiProcess(p.ppid, 'claude'));
+  }
+
   async function bindOnce(pid, me, threadId) {
     const [childText, args] = await Promise.all([Peer.lsof(pid), Peer.args(pid)]);
     const fds = PeerPid.parseFds(childText);
@@ -586,7 +595,10 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     }
     // Claude: the child's own env (Claude sets it; any shell the model runs inherits it too, which is why
     // the checks above are what count). A person's session only (Remote Control ones included); one live session per claude process.
-    if (Hook.claudeInteractive({ CLAUDE_CODE_ENTRYPOINT: env.vars.CLAUDE_CODE_ENTRYPOINT ?? undefined, CLAUDE_CODE_ENVIRONMENT_KIND: env.vars.CLAUDE_CODE_ENVIRONMENT_KIND ?? undefined }) !== true) return { ...base, provider, reason: 'HEADLESS' };
+    // A bridge child counts only under the `claude remote-control` server itself, a real claude: a `claude -p` the
+    // session ran from its Bash inherits CLAUDE_CODE_ENVIRONMENT_KIND=bridge too (security review #4).
+    const kind = Hook.claudeEntry({ CLAUDE_CODE_ENTRYPOINT: env.vars.CLAUDE_CODE_ENTRYPOINT ?? undefined, CLAUDE_CODE_ENVIRONMENT_KIND: env.vars.CLAUDE_CODE_ENVIRONMENT_KIND ?? undefined });
+    if (kind !== 'cli' && !(kind === 'bridge' && await remoteControlParent(me.ppid))) return { ...base, provider, reason: 'HEADLESS' };
     const claudePid = env.vars.CLAUDE_PID;
     if (claudePid !== null && (!/^\d{1,9}$/.test(claudePid) || Number(claudePid) !== me.ppid)) return { ...base, provider, reason: 'PID_MISMATCH' };
     const envId = typeof env.vars.CLAUDE_CODE_SESSION_ID === 'string' && /^[\w.-]{1,120}$/.test(env.vars.CLAUDE_CODE_SESSION_ID) ? env.vars.CLAUDE_CODE_SESSION_ID : null;
@@ -731,6 +743,15 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   }
 
   const UNVERIFIED_HANDOFF = 'This app is connected to Plexiform read-only, so it cannot hand off work. Ask your person to hand it off from Claude Code or Codex.';
+  const HEADLESS_HANDOFF = 'This is not a session your person is in (claude -p, an SDK or a script), so it cannot hand off work. A run Plexiform started hands on with its own bus_handoff.';
+  const FAILED_HANDOFF = 'Plexiform could not verify this session, so it cannot hand off work. Ask your person to hand it off from Claude Code or Codex.';
+  // Callers that are not a person's session, or that failed a check a genuine one passes (another program, a command
+  // the model ran, injected code, a folder or process not the session's): read-only, like a named client (TIER_CAN).
+  // The rest (no session file yet, a tie, a thread mid-move, a pid gone) can be an interactive session caught early or
+  // late, so they stay unbound: automatic mode still wants a session there. A run's own hand-on never comes this way
+  // (board/mcp/task-tools.js on its per-run socket).
+  const READ_ONLY = Object.freeze({ HEADLESS: Contract.TIERS.HEADLESS, NOT_OUR_SERVER: Contract.TIERS.UNVERIFIED_CLIENT, LISTENING: Contract.TIERS.UNVERIFIED_CLIENT,
+    NOT_STDIO: Contract.TIERS.UNVERIFIED_CLIENT, INJECTED: Contract.TIERS.UNVERIFIED_CLIENT, CWD: Contract.TIERS.UNVERIFIED_CLIENT, OWNER: Contract.TIERS.UNVERIFIED_CLIENT });
   const NOT_BOUND = { reason: 'NOT_BOUND', message: 'Plexiform could not tell which AI session is calling, so it cannot send or read notes for it.' };
   const NOTES_OFF = { reason: 'AWARENESS_OFF', message: 'Your person turned off notes between AI sessions in Plexiform.' };
   const NOTES_HALTED = { reason: 'HALTED', message: 'The agent bus is stopped on this Mac, so notes are held. Your person can resume it from the tray or Sessions.' };
@@ -1039,13 +1060,15 @@ function boardAnswer(board) {
         const origin = me && me.verified === true && typeof me.handle === 'string' ? { key: b.key, handle: me.handle, ...(originBoard ? { board: originBoard } : {}) } : null;
         if (origin) rememberOrigin(b.key);
         if (me && typeof me.handle === 'string') tc.from_handle = me.handle;
-        caller = { ...caller, provider: b.provider, ...(typeof b.session.cwd === 'string' && path.isAbsolute(b.session.cwd) ? { cwd: b.session.cwd } : {}),
+        caller = { ...caller, bound: true, provider: b.provider, ...(typeof b.session.cwd === 'string' && path.isAbsolute(b.session.cwd) ? { cwd: b.session.cwd } : {}),
           ...(op === 'handoff' && noteReaders.has(b.key) ? { after_note: true } : {}), ...(origin ? { origin } : {}) };
-      } else if (b.client) {
-        // A client that named itself (Gemini, Cursor, ...): unverified_client, read-only (owner decision D2).
-        if (op === 'handoff') return { reason: 'POLICY_DENIED', tier: Contract.TIERS.UNVERIFIED_CLIENT, message: UNVERIFIED_HANDOFF };
+      } else if (b.client || Object.hasOwn(READ_ONLY, b.reason)) {
+        // A client that named itself (Gemini, Cursor, ...): unverified_client, read-only (owner decision D2). A headless
+        // or failed caller likewise, with its own tier (security review #3).
+        const tier = b.client ? Contract.TIERS.UNVERIFIED_CLIENT : READ_ONLY[b.reason];
+        if (op === 'handoff') return { reason: 'POLICY_DENIED', tier, message: b.client ? UNVERIFIED_HANDOFF : tier === Contract.TIERS.HEADLESS ? HEADLESS_HANDOFF : FAILED_HANDOFF };
         const r = await forward(op, args, { ...caller, unbound: true });
-        return r && typeof r === 'object' && !Array.isArray(r) && typeof r.tier === 'string' ? { ...r, tier: Contract.TIERS.UNVERIFIED_CLIENT, can: [...Contract.TIER_CAN.unverified_client] } : r;
+        return r && typeof r === 'object' && !Array.isArray(r) && typeof r.tier === 'string' ? { ...r, tier, can: [...Contract.TIER_CAN[tier]] } : r;
       } else {
         // Its folder is only what it reported: automatic mode still wants a session or task folder of Plexiform's there.
         caller = { ...caller, unbound: true };

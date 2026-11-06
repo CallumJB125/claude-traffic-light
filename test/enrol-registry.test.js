@@ -298,3 +298,81 @@ test('Remote Control: the registry never writes Claude Code\'s or Codex\'s own s
   assert.equal(r.mcp.state, 'error');
   assert.equal(fs.readFileSync(settings, 'utf8'), text);
 });
+
+test('symlinks: an instruction file linked into ~/.claude is refused at its real target, and CLAUDE.md stays byte-identical', (t) => {
+  const w = world(t);
+  const claudeMd = path.join(w.home, '.claude', 'CLAUDE.md');
+  fs.mkdirSync(path.dirname(claudeMd), { recursive: true });
+  const text = '# My Claude rules\n\nBe brief.\n';
+  fs.writeFileSync(claudeMd, text);
+  for (const k of ['codexAgents', 'geminiMd']) { fs.rmSync(path.join(w.home, FILES[k])); fs.symlinkSync(claudeMd, path.join(w.home, FILES[k])); }
+  const reg = w.make();
+  const r = reg.enrolAll({ mcpOurs: { codex: true } });
+  assert.equal(r.results.codex.instructions.state, 'error');
+  assert.equal(r.results.codex.instructions.error, 'FORBIDDEN');
+  assert.equal(r.results.gemini.instructions.state, 'error');
+  assert.equal(fs.readFileSync(claudeMd, 'utf8'), text);
+  assert.equal(reg.caps().find((c) => c.id === 'codex').instructions, 'refused');
+  assert.deepEqual(reg.plan('codex').files, []);
+  reg.unenrolAll();
+  assert.equal(fs.readFileSync(claudeMd, 'utf8'), text);
+  // A folder link counts too: a not-yet-made AGENTS.md inside a ~/.codex that is really ~/.claude.
+  const w2 = world(t);
+  fs.mkdirSync(path.join(w2.home, '.claude'), { recursive: true });
+  fs.rmSync(path.join(w2.home, '.codex'), { recursive: true });
+  fs.symlinkSync(path.join(w2.home, '.claude'), path.join(w2.home, '.codex'));
+  w2.make().enrolAll({ mcpOurs: { codex: true } });
+  assert.deepEqual(fs.readdirSync(path.join(w2.home, '.claude')), []);
+});
+
+test('symlinks: AGENTS.md and GEMINI.md as one file get one block, stable across syncs, and unenrol restores it', (t) => {
+  const w = world(t);
+  const agents = path.join(w.home, FILES.codexAgents);
+  fs.rmSync(path.join(w.home, FILES.geminiMd));
+  fs.symlinkSync(agents, path.join(w.home, FILES.geminiMd));
+  const reg = w.make();
+  const r = reg.enrolAll({ mcpOurs: { codex: true } });
+  assert.equal(r.results.codex.instructions.state, 'ours');
+  assert.deepEqual([r.results.gemini.instructions.state, r.results.gemini.instructions.with], ['shared', 'codex']);
+  const once = fs.readFileSync(agents, 'utf8');
+  assert.equal(once.split('BEGIN PLEXIFORM').length, 2, 'one block');
+  assert.ok(once.includes(Instr.block(TIERS.LOCAL_ATTESTED).text), 'Codex\'s full block');
+  const again = reg.enrolAll({ mcpOurs: { codex: true } });
+  assert.equal(fs.readFileSync(agents, 'utf8'), once, 'second sync byte-identical');
+  assert.equal(again.results.gemini.instructions.state, 'shared');
+  assert.equal(again.changed, false);
+  assert.equal(reg.caps().find((c) => c.id === 'gemini').instructions, 'shared');
+  assert.equal(reg.unenrol('gemini').instructions.state, 'none', 'Gemini never held it');
+  assert.equal(fs.readFileSync(agents, 'utf8'), once, 'unenrolling Gemini leaves Codex\'s block');
+  reg.unenrolAll();
+  assert.equal(fs.readFileSync(agents, 'utf8'), ORIGINAL.codexAgents);
+  assert.ok(fs.lstatSync(path.join(w.home, FILES.geminiMd)).isSymbolicLink(), 'the link stays a link');
+});
+
+test('a config created while we were writing it is never written over: the new file is a conflict, not replaced', (t) => {
+  const w = world(t, { files: { ...ORIGINAL, cursor: null } });
+  const theirs = '{\n  "mcpServers": { "plexiform-bus": { "command": "theirs" } }\n}\n';
+  const realLink = fs.linkSync;
+  let raced = false;
+  fs.linkSync = (from, to) => { if (!raced && to.endsWith('mcp.json') && to.includes('.cursor')) { raced = true; fs.writeFileSync(to, theirs); } return realLink(from, to); };
+  t.after(() => { fs.linkSync = realLink; });
+  const r = w.make().enrol('cursor');
+  assert.ok(raced);
+  assert.equal(r.mcp.state, 'conflict');
+  assert.equal(w.read('cursor'), theirs);
+  assert.deepEqual(fs.readdirSync(path.join(w.home, '.cursor')), ['mcp.json'], 'no temp file left');
+});
+
+test('JSONC duplicate keys we would touch are a conflict, never edited', (t) => {
+  const dupName = '{\n  "mcpServers": {\n    "plexiform-bus": { "command": "a" },\n    "plexiform-bus": { "command": "b" }\n  }\n}\n';
+  const dupParent = '{\n  "mcpServers": {},\n  "mcpServers": { "x": { "command": "x" } }\n}\n';
+  for (const text of [dupName, dupParent]) {
+    const w = world(t, { files: { ...ORIGINAL, cursor: text } });
+    const r = w.make().enrol('cursor');
+    assert.equal(r.mcp.state, 'conflict');
+    assert.equal(w.read('cursor'), text);
+  }
+  assert.throws(() => Jsonc.get(dupName, ['mcpServers'], 'plexiform-bus'), { code: 'DUPLICATE' });
+  assert.throws(() => Jsonc.remove(dupName, ['mcpServers'], 'plexiform-bus'), { code: 'DUPLICATE' });
+  assert.equal(Jsonc.get('{"a":1,"a":2,"mcpServers":{}}', ['mcpServers'], 'plexiform-bus'), undefined, 'duplicates elsewhere are not ours to judge');
+});

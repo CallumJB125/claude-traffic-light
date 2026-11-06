@@ -68,12 +68,33 @@ async function setup(t, { halted = () => false, config = {}, desktopSource } = {
 }
 
 // The recipient's real Claude Code hook for one prompt; bounded, never left running.
-function claudeHook(w, sessionId = 'X', cwd = w.repoA, signal = 'prompt-submit', entry = { CLAUDE_CODE_ENTRYPOINT: 'cli' }) {
+// The hook under a process chain like the real one (security review #4): `under` is a list of launch steps
+// [file, args, cwd] run one inside the next by relay.js, the hook last. Without it the hook is the test's own child.
+const RELAY = `const { spawn } = require('node:child_process');
+const plan = JSON.parse(process.env.RC_PLAN);
+const [file, args, cwd, argv0] = plan.shift();
+const k = spawn(file, args, { cwd, stdio: 'inherit', ...(argv0 ? { argv0 } : {}), env: { ...process.env, RC_PLAN: JSON.stringify(plan) } });
+k.on('exit', (code) => process.exit(code ?? 1));
+`;
+function launchKit(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  const relay = path.join(dir, 'relay.js');
+  fs.writeFileSync(relay, RELAY);
+  // A process whose command line reads `<dir>/claude remote-control`: node (argv0 set) running ./remote-control, a copy
+  // of the relay. Never a real claude (test/support/no-real-cli.mjs).
+  fs.writeFileSync(path.join(dir, 'remote-control'), RELAY);
+  const session = [process.execPath, [relay], dir];
+  return { server: [process.execPath, ['remote-control'], dir, path.join(dir, 'claude')], session, shell: ['/bin/sh', ['-c', `"${process.execPath}" "${relay}"; exit $?`], dir], claudeP: session };
+}
+function claudeHook(w, sessionId = 'X', cwd = w.repoA, signal = 'prompt-submit', entry = { CLAUDE_CODE_ENTRYPOINT: 'cli' }, under = null) {
   const payload = signal === 'tool-done'
     ? { session_id: sessionId, cwd, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, tool_response: { stdout: 'PRIVATE OUTPUT' } }
     : { session_id: sessionId, cwd, hook_event_name: 'UserPromptSubmit', prompt: 'PRIVATE PROMPT' };
   return new Promise((resolve, reject) => {
-    const kid = spawn(process.execPath, [SET_STATUS, signal], { env: { PATH: process.env.PATH, HOME: w.home, CLAUDE_TRAFFIC_LIGHT_HOME: w.root, ...entry, CLAUDE_TRAFFIC_LIGHT_LOOKUP_MS: '500' }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const env = { PATH: process.env.PATH, HOME: w.home, CLAUDE_TRAFFIC_LIGHT_HOME: w.root, ...entry, CLAUDE_TRAFFIC_LIGHT_LOOKUP_MS: '500' };
+    const hook = [process.execPath, [SET_STATUS, signal], w.root];
+    const [first, ...rest] = under ? [...under, hook] : [hook];
+    const kid = spawn(first[0], first[1], { cwd: first[2], ...(first[3] ? { argv0: first[3] } : {}), env: { ...env, RC_PLAN: JSON.stringify(rest) }, stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
     const timer = setTimeout(() => { kid.kill('SIGKILL'); reject(new Error(`hook timed out: ${err}`)); }, 15_000);
@@ -258,19 +279,28 @@ test('G5 main side: a hand-off result shows as "hand-off result waiting"; when t
 const BRIDGE = { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli', CLAUDE_CODE_ENVIRONMENT_KIND: 'bridge' };
 // The hook names its file <host tag>-<session id>.json.
 const sessionFile = (w, id) => JSON.parse(fs.readFileSync(path.join(w.root, 'sessions', fs.readdirSync(path.join(w.root, 'sessions')).find((f) => f.endsWith(`-${id}.json`))), 'utf8'));
+// Claude 100 started by a signed `claude remote-control` server (90), as the bridge starts a session.
 function asRemoteControl(s) {
   const kid = s.w.procs.get(101);
   kid.env = kid.env.replace('CLAUDE_CODE_ENTRYPOINT=cli', 'CLAUDE_CODE_ENTRYPOINT=sdk-cli CLAUDE_CODE_ENVIRONMENT_KIND=bridge');
+  s.w.proc(90, { exe: s.w.CLAUDE, cwd: s.w.home, signed: 'claude', args: 'claude remote-control' });
+  s.w.procs.get(100).ppid = 90;
 }
 
 test('Remote Control: the classification: cli (with --remote-control) and a remote-control server session are people; claude -p and the SDK are not', () => {
   assert.equal(Hook.claudeInteractive({ CLAUDE_CODE_ENTRYPOINT: 'cli' }), true);
-  assert.equal(Hook.claudeInteractive(BRIDGE), true);
+  assert.equal(Hook.claudeInteractive(BRIDGE, { bridgeParent: () => true }), true);
+  // The variable alone is not enough: every process a bridge session starts inherits it (security review #4).
+  assert.equal(Hook.claudeInteractive(BRIDGE), false, 'no parent check');
+  assert.equal(Hook.claudeInteractive(BRIDGE, { bridgeParent: () => false }), false, 'a claude -p from a bridge session\'s Bash');
+  for (const a of ['claude remote-control', '/Users/x/.local/bin/claude remote-control', '/Users/x/.local/share/claude/versions/2.1.319 remote-control', 'claude --verbose remote-control']) assert.equal(Hook.remoteControlServer(a), true, a);
+  for (const a of ['claude', 'claude -p hi', 'claude --remote-control', '/bin/bash -c claude remote-control', 'node /x/claude-like remote-control', 'notclaude remote-control', 'claude -p remote-control', '']) assert.equal(Hook.remoteControlServer(a), a === 'claude -p remote-control', a);
   assert.equal(Hook.claudeInteractive({ CLAUDE_CODE_ENTRYPOINT: 'sdk-cli' }), false, 'claude -p');
   assert.equal(Hook.claudeInteractive({ CLAUDE_CODE_ENTRYPOINT: 'sdk-ts', CLAUDE_CODE_ENVIRONMENT_KIND: 'bridge' }), false, 'only the CLI the bridge starts');
   assert.equal(Hook.claudeInteractive({ CLAUDE_CODE_ENTRYPOINT: 'sdk-cli', CLAUDE_CODE_ENVIRONMENT_KIND: 'byoc' }), false, 'a self-hosted runner');
   assert.equal(Hook.claudeInteractive({}), null);
-  assert.equal(Hook.selfInteractive('claude', {}, BRIDGE), true);
+  assert.equal(Hook.selfInteractive('claude', {}, BRIDGE, { bridgeParent: () => true }), true);
+  assert.equal(Hook.selfInteractive('claude', {}, BRIDGE, { bridgeParent: () => false }), false);
 });
 
 test('Remote Control: a bridge session\'s hook records it interactive; its MCP child binds; it gets a note notice mid-turn and at its prompt, reads it, and hands off as itself', async (t) => {
@@ -279,7 +309,8 @@ test('Remote Control: a bridge session\'s hook records it interactive; its MCP c
   const x = s.handleOf(`codex|${s.w.T}`);
   const y = s.handleOf('claude|X');
   // The real hook, run as Remote Control runs it, writes the session as a person's (set-status.js).
-  await claudeHook(s.w, 'RC1', s.w.repoA, 'session-start', BRIDGE);
+  const kit = launchKit(path.join(s.w.dir, 'rc'));
+  await claudeHook(s.w, 'RC1', s.w.repoA, 'session-start', BRIDGE, [kit.server, kit.session]);
   const file = sessionFile(s.w, 'RC1');
   assert.equal(file.interactive, true);
   // Bound through its own MCP child, like any person's session (never HEADLESS).
@@ -304,6 +335,7 @@ test('Remote Control: a bridge session\'s hook records it interactive; its MCP c
   await s.aw.relay('handoff', { title: 'From the phone' }, { provider: 'claude', cwd: s.w.repoA }, s.w.call(101), { forward: async (op, args, caller) => { fwd.push(caller); return { state: 'offered' }; } });
   assert.equal(fwd[0].provider, 'claude');
   assert.equal(fwd[0].unbound, undefined);
+  assert.equal(fwd[0].bound, true);
   assert.equal(fwd[0].origin?.key, 'claude|X');
   assert.equal(fwd[0].origin?.handle, y);
 });
@@ -322,6 +354,28 @@ test('Remote Control: a hand-off result comes back to the bridge session as a no
   const got = await M.busCall('notes', {}, s.as.claude());
   assert.deepEqual(got.notes.map((n) => n.note_id), [r.note_id]);
   assert.match(JSON.stringify(got.notes), /RC-SUMMARY/);
+});
+
+test('Remote Control: a claude -p a bridge session runs from its Bash inherits the bridge variable, and is still headless (security review #4)', async (t) => {
+  const s = await setup(t);
+  asRemoteControl(s);
+  // Main's binding: claude 100's parent is a shell under the bridge session, not the server.
+  s.w.proc(95, { exe: '/bin/zsh', cwd: s.w.repoA, args: '/bin/zsh -c claude -p fix', ppid: 90 });
+  s.w.procs.get(100).ppid = 95;
+  assert.equal((await s.aw.bindCaller(s.w.call(101))).reason, 'HEADLESS');
+  // A command line that says remote-control from a program that is not a signed claude does not count either.
+  s.w.proc(96, { exe: '/opt/homebrew/bin/node', cwd: s.w.repoA, args: 'claude remote-control', signed: null });
+  s.w.procs.get(100).ppid = 96;
+  assert.equal((await s.aw.bindCaller(s.w.call(101))).reason, 'HEADLESS');
+  s.w.procs.get(100).ppid = 90;
+  assert.equal((await s.aw.bindCaller(s.w.call(101))).bound, true, 'under the server itself it binds');
+  // The real hook: the same variables, run under server → session → shell → claude -p, records it headless.
+  const kit = launchKit(path.join(s.w.dir, 'rc'));
+  await claudeHook(s.w, 'RCP', s.w.repoA, 'session-start', BRIDGE, [kit.server, kit.session, kit.shell, kit.claudeP]);
+  assert.equal(sessionFile(s.w, 'RCP').interactive, false);
+  // And as the test's own child (no server above it at all).
+  await claudeHook(s.w, 'RCQ', s.w.repoA, 'session-start', BRIDGE);
+  assert.equal(sessionFile(s.w, 'RCQ').interactive, false);
 });
 
 test('Remote Control: plain claude -p is still headless (never bound, no notice), so the bridge rule widens nothing else', async (t) => {

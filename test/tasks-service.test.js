@@ -420,14 +420,17 @@ test('the engine spend cap: BUDGET_HELD first, then Start anyway through the nat
   } finally { capped.stop(); await capSrv.close(); fs.rmSync(capDir, { recursive: true, force: true }); }
 });
 
-test('G5: only a hand-off carrying main\'s origin goes over busMain (the socket drops an origin), and only with a parentPort', () => {
+test('security review #1: every hand-off and hello main bound goes over busMain (the socket makes any caller unbound), origin or not, and only with a parentPort', () => {
   const { parentRouted } = require('../src/tasks-service.js');
   const origin = { key: 'claude|X', handle: 'claude-r-0a1b' };
   const busMain = async () => ({});
-  assert.equal(parentRouted('handoff', { origin }, { busMain }), true);
-  assert.equal(parentRouted('handoff', { cwd: '/r' }, { busMain }), false);
-  assert.equal(parentRouted('hello', { origin }, { busMain }), false);
-  assert.equal(parentRouted('handoff', { origin }, {}), false, 'a dev fixture home: the socket, without the origin');
+  assert.equal(parentRouted('handoff', { bound: true, origin }, { busMain }), true);
+  assert.equal(parentRouted('handoff', { bound: true, cwd: '/r' }, { busMain }), true, 'bound with no origin (an unverified handle) still goes this way');
+  assert.equal(parentRouted('hello', { bound: true, cwd: '/r' }, { busMain }), true);
+  assert.equal(parentRouted('handoff', { cwd: '/r', unbound: true }, { busMain }), false);
+  assert.equal(parentRouted('handoff', { origin }, { busMain }), false, 'only main\'s bound marks it');
+  assert.equal(parentRouted('status', { bound: true }, { busMain }), false);
+  assert.equal(parentRouted('handoff', { bound: true, origin }, {}), false, 'a dev fixture home: the socket, where it counts as unbound');
 });
 
 test('PR B: the note ops go only to busMain (the helper\'s parentPort); with none they are UNAVAILABLE and nothing is tried on the socket', async () => {

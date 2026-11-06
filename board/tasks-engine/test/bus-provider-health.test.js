@@ -169,6 +169,20 @@ test('D4 switch off: "any" does not move past an unavailable provider', async ()
   } finally { w.cleanup(); }
 });
 
+test('security review #5: a list hand-off only reaches AIs in the person\'s fallback order', async () => {
+  const w = await world({ fallback: { enabled: true, order: ['claude'] } });
+  try {
+    const refused = await w.hand({ provider: ['codex'] });
+    assert.equal(refused.reason, 'PROVIDER_UNAVAILABLE', JSON.stringify(refused));
+    assert.equal(refused.provider, 'codex');
+    assert.equal([...w.engine.tasks.values()].length, 0, 'no run started');
+    const mixed = await w.hand({ provider: ['codex', 'claude'] });
+    assert.equal(mixed.provider, 'claude', 'codex is skipped, not tried first');
+    assert.equal(w.bus.health.choose(['codex', 'claude'], { order: ['claude', 'codex'] }).provider, 'codex', 'the caller\'s order within the person\'s');
+    assert.ok(w.bus.health.choose(['codex'], { order: [] }).unavailable);
+  } finally { w.cleanup(); }
+});
+
 test('G5: the asker gets exactly one Plexiform note with the handoff_id and outcome, for done and failed; a halted bus refuses first; none without a verified origin', async () => {
   const w = await world();
   try {

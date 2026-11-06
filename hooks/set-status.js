@@ -100,7 +100,18 @@ const awarenessTurn = signal === 'prompt-submit' && !gateDeny && !process.env.PL
   ? require('./awareness.js').check({ adapter: 'claude', event: 'UserPromptSubmit', payload: data, root: ROOT_DIR }) : null;
 // Mid-turn notes notice (BACKBONE plan G1): a tool call that finished may carry the one-line notice of new notes,
 // rate-limited inside awareness.js. Decided from files alone, like the turn's; with nothing new the fast path stays.
-const awarenessMid = signal === 'tool-done' && !gateDeny && !process.env.PLEXIFORM_NO_FAST
+// midTurn only ever speaks for a non-empty notices list in roster.json, so one bounded read and a regex decide
+// whether loading awareness.js (~10 ms) is worth it on this tool call. No roster (the app is not running), one over
+// awareness.js's own size cap, or no notice for anyone: skipped.
+function rosterHasNotices() {
+  try {
+    const file = path.join(ROOT_DIR, 'awareness', 'roster.json');
+    const st = fs.statSync(file);
+    if (!st.isFile() || st.size > 64 * 1024) return false;
+    return /"notices"\s*:\s*\[\s*[^\]\s]/.test(fs.readFileSync(file, 'utf8'));
+  } catch { return false; }
+}
+const awarenessMid = signal === 'tool-done' && !gateDeny && !process.env.PLEXIFORM_NO_FAST && rosterHasNotices()
   ? require('./awareness.js').midTurn({ adapter: 'claude', payload: data, root: ROOT_DIR }) : null;
 // The app's own in-process run sets NO_FAST: it must never forward to itself.
 const fastEndpoint = !gateDeny && !needsTurnBrief && !awarenessTurn && !awarenessMid && !process.env.PLEXIFORM_NO_FAST && Fast.eligible(signal, data) ? Fast.readEndpoint(ROOT_DIR) : null;
@@ -494,11 +505,21 @@ function nextSession(prev, { hostApp, pid, terminal, owned }) {
     owned: owned !== undefined ? (owned || undefined) : prev?.owned,
     // Agent awareness: a person's session is a peer (`claude -p` and the SDK are not), and when it started.
     // Same rule as awareness.js claudeInteractive (Remote Control server sessions count), inlined to keep this hook fast.
-    interactive: typeof process.env.CLAUDE_CODE_ENTRYPOINT === 'string'
-      ? process.env.CLAUDE_CODE_ENTRYPOINT === 'cli' || (process.env.CLAUDE_CODE_ENTRYPOINT === 'sdk-cli' && process.env.CLAUDE_CODE_ENVIRONMENT_KIND === 'bridge')
-      : prev?.interactive,
+    // A bridge session counts only when its claude process's parent is `claude remote-control` (a `claude -p` from its
+    // Bash inherits the variable too): checked with ps once per claude process, then kept.
+    interactive: interactiveOf(prev, pid),
     startedAt: resolved === 'session-start' ? now : prev?.startedAt,
   };
+}
+
+function interactiveOf(prev, pid) {
+  const entry = process.env.CLAUDE_CODE_ENTRYPOINT;
+  if (typeof entry !== 'string') return prev?.interactive;
+  if (entry === 'cli') return true;
+  if (entry !== 'sdk-cli' || process.env.CLAUDE_CODE_ENVIRONMENT_KIND !== 'bridge') return false;
+  if (pid && prev?.claudePid === pid && typeof prev?.interactive === 'boolean') return prev.interactive;
+  if (!pid) return false;
+  return require('./awareness.js').bridgeParentSync({ pid });
 }
 
 // The read has to happen under the lock too, or a hook running alongside

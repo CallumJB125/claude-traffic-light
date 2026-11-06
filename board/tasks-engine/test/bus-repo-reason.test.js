@@ -18,7 +18,7 @@ function worktreeOf(checkout) {
   git(checkout, 'worktree', 'add', '-q', '-b', `wt-${process.pid}-${Date.now().toString(36)}`, wt);
   return fs.realpathSync(wt);
 }
-const hello = async (b, cwd) => (await b.bus('hello', { provider: 'claude' }, { provider: 'claude', cwd })).policy_summary;
+const hello = async (b, cwd) => (await b.bus('hello', { provider: 'claude' }, { provider: 'claude', cwd, bound: true })).policy_summary;
 
 test('auto scope: every repository is on the bus, with no session needed (AUTO); a worktree too', async () => {
   const b = await auto();
@@ -28,7 +28,7 @@ test('auto scope: every repository is on the bus, with no session needed (AUTO);
     assert.equal(p.repo_enabled, true);
     assert.equal(p.repo_why, 'AUTO');
     assert.equal(p.repo_reason, undefined);
-    assert.equal((await b.handoff({}, { provider: 'claude', cwd: wt })).state, 'offered');
+    assert.equal((await b.handoff({}, { provider: 'claude', cwd: wt, bound: true })).state, 'offered');
     p = await hello(b, b.h.repo.checkout);
     assert.equal(p.repo_enabled, true);
     assert.equal(p.repo_why, 'AUTO');
@@ -53,7 +53,7 @@ test('auto scope: list entries only add (LISTED for a listed repo, AUTO for the 
     assert.equal(p.repo_enabled, false);
     assert.equal(p.repo_reason, 'LISTED_ONLY');
     assert.equal(p.repo_reason_text, Contract.REPO_REASON_TEXT.LISTED_ONLY);
-    assert.equal((await b.handoff({}, { provider: 'claude', cwd: b.h.repo.checkout })).repo_reason, 'LISTED_ONLY');
+    assert.equal((await b.handoff({}, { provider: 'claude', cwd: b.h.repo.checkout, bound: true })).repo_reason, 'LISTED_ONLY');
     await b.bus('busSetContext', { scope: 'listed', repos: [b.h.repo.checkout], folders: [] });
     p = await hello(b, wt);
     assert.equal(p.repo_enabled, true);
