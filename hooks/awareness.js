@@ -162,7 +162,7 @@ function remoteControlServer(args) {
 const SHELL_NAMES = new Set(['sh', 'bash', 'zsh', 'dash', 'fish']);
 function bridgeParentSync({ pid = null, run = null } = {}) {
   if (process.platform !== 'darwin' && process.platform !== 'linux' && !run) return false;
-  const exec = run || ((file, args) => require('child_process').execFileSync(file, args, { encoding: 'utf8', timeout: 1500 }));
+  const exec = run || ((file, args) => require('child_process').execFileSync(file, args, { encoding: 'utf8', timeout: 1500 })); // privacy-flow: agent-awareness-local
   const parentOf = (p) => {
     const m = /^\s*(\d+)\s+(.*?)\s*$/.exec(String(exec('/bin/ps', ['-o', 'ppid=,comm=', '-p', String(p)])).split('\n')[0] || '');
     return m ? { ppid: Number(m[1]), comm: m[2] } : null;
