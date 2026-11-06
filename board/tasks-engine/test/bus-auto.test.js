@@ -1,8 +1,8 @@
-// Automatic mode (AGENT-BUS.md §5 "Which repos"): with no "only these" list, any
-// git checkout main sees a Claude or Codex session working in is on the bus with
-// no opt-in; a caller's cwd alone never is; the exclude list always wins and
-// covers child folders and linked worktrees; a listed scope restricts; $HOME,
-// protected folders (~/.claude, ~/Library, ...) and non-git folders never are.
+// Automatic mode (AGENT-BUS.md §5 "Which repos"): every git checkout is on the bus
+// with no opt-in and no session needed (owner decision, 6 Nov); list entries only
+// add; the exclude list always wins and covers child folders and linked worktrees;
+// only scope "listed" restricts; $HOME, protected folders (~/.claude, ~/Library,
+// ...) and non-git folders never are.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -23,32 +23,42 @@ const gitInit = (dir) => {
   return fs.realpathSync(dir);
 };
 
-test('automatic: a caller cwd alone is not enough; a session folder main pushed is, and it is remembered as a restart cache', async () => {
+test('automatic: any checkout is on the bus with no session; a session folder is still remembered as a restart cache', async () => {
   const b = await auto();
   try {
     const hello = await b.bus('hello', { provider: 'claude' });
-    assert.equal(hello.policy_summary.repo_enabled, false, 'a bare caller cwd does not self-authorise');
-    assert.equal((await b.handoff({ request_id: rid('auto') })).reason, 'NO_ELIGIBLE_AGENT');
-    assert.deepEqual(remembered(b), {}, 'nothing remembered from a refused caller');
-    await assert.rejects(b.engine.createTask({ requestId: rid('auto'), spec: busSpec(b) }), (e) => e.code === 'POLICY_DENIED');
+    assert.equal(hello.policy_summary.repo_enabled, true);
+    assert.equal(hello.policy_summary.repo_why, 'AUTO');
+    assert.equal((await b.handoff({ request_id: rid('auto') })).state, 'offered');
+    assert.equal(await b.engine.busRepoAllowed(realTop(b)), true);
     const sub = path.join(b.h.repo.checkout, 'pkg');
     fs.mkdirSync(sub);
     await b.bus('busSetContext', { folders: [sub] });
-    assert.equal((await b.bus('hello', { provider: 'claude' })).policy_summary.repo_enabled, true);
-    assert.equal((await b.handoff({ request_id: rid('auto') })).state, 'offered');
+    await b.bus('hello', { provider: 'claude' });
     assert.ok(remembered(b)[realTop(b)] > 0);
-    // The session went away: the restart cache still covers it (an offer can start after a restart).
-    await b.bus('busSetContext', { folders: [] });
-    assert.equal(await b.engine.busRepoAllowed(realTop(b)), true);
   } finally { await b.cleanup(); }
 });
 
-test('automatic: a nested checkout\'s folder does not put the outer repo on', async () => {
+test('automatic: an unbound caller (main marks it) still needs a session or task folder there; its own cwd never self-authorises', async () => {
+  const b = await auto();
+  try {
+    const unbound = { provider: 'codex', cwd: b.h.repo.checkout, unbound: true };
+    const p = (await b.bus('hello', { provider: 'codex' }, unbound)).policy_summary;
+    assert.deepEqual([p.repo_enabled, p.repo_reason], [false, 'NO_SESSION']);
+    assert.equal((await b.handoff({ request_id: rid('unb') }, unbound)).repo_reason, 'NO_SESSION');
+    assert.deepEqual(remembered(b), {}, 'nothing remembered from a refused caller');
+    await b.bus('busSetContext', { folders: [b.h.repo.checkout] });
+    assert.equal((await b.bus('hello', { provider: 'codex' }, unbound)).policy_summary.repo_why, 'SESSION');
+    assert.equal((await b.handoff({ request_id: rid('unb') }, unbound)).state, 'offered');
+  } finally { await b.cleanup(); }
+});
+
+test('automatic: a nested checkout and the repo around it are both on the bus', async () => {
   const b = await auto();
   try {
     const nested = gitInit(path.join(b.h.repo.checkout, 'nested'));
     await b.bus('busSetContext', { folders: [nested] });
-    assert.equal(await b.engine.busRepoAllowed(realTop(b)), false);
+    assert.equal(await b.engine.busRepoAllowed(realTop(b)), true);
     assert.equal(await b.engine.busRepoAllowed(nested), true);
   } finally { await b.cleanup(); }
 });
@@ -91,13 +101,15 @@ test('exclude always wins: over automatic, "only these" and bus_auto; by remote;
   } finally { await b.cleanup(); }
 });
 
-test('"only these": a non-empty list, or scope listed with an empty one, restricts automatic mode', async () => {
+test('"only these": scope listed restricts (also with an empty list); in automatic mode the list only adds', async () => {
   const b = await auto();
   try {
-    await b.bus('busSetContext', { repos: [path.join(b.h.dir, 'other')], folders: [b.h.repo.checkout] });
+    await b.bus('busSetContext', { repos: [path.join(b.h.dir, 'other')], folders: [] });
+    assert.equal((await b.bus('hello', { provider: 'codex' })).policy_summary.repo_enabled, true, 'automatic with an unrelated list entry');
+    await b.bus('busSetContext', { scope: 'listed', repos: [path.join(b.h.dir, 'other')] });
     assert.equal((await b.bus('hello', { provider: 'codex' })).policy_summary.repo_enabled, false);
     assert.equal((await b.handoff({ request_id: rid('only') })).reason, 'NO_ELIGIBLE_AGENT');
-    await b.bus('busSetContext', { repos: [b.h.repo.checkout] });
+    await b.bus('busSetContext', { scope: 'listed', repos: [b.h.repo.checkout] });
     assert.equal((await b.handoff({ request_id: rid('only'), title: 'Listed' })).state, 'offered');
     // Migrated pre-automatic configs: listed, nothing listed, only policy.json bus_auto keys.
     await b.bus('busSetContext', { scope: 'listed', repos: [] });

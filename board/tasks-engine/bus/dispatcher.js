@@ -182,16 +182,17 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   }
   // repo_enabled with its reason (contract REPO_REASON); halted is reported apart, as before.
   // offIsReason: hello reports a bus turned off as the repo's reason; a hand-off leaves that to the guard (POLICY_DENIED).
-  async function repoVerdict(top, cwd = null, { offIsReason = false } = {}) {
+  // unbound: set only by main's relay (agent-awareness) for a caller it could not bind; see engine.busRepoReason.
+  async function repoVerdict(top, cwd = null, { offIsReason = false, unbound = false } = {}) {
     if (offIsReason && !settings().enabled) return { allowed: false, reason: 'BUS_OFF' };
-    if (engine.busRepoReason) return engine.busRepoReason(top, undefined, { cwd });
+    if (engine.busRepoReason) return engine.busRepoReason(top, undefined, { cwd, unbound });
     return top && (await engine.busRepoAllowed(top)) ? { allowed: true, why: null } : { allowed: false, reason: top ? 'NO_SESSION' : 'NOT_GIT' };
   }
   const repoRefusal = (reason) => ({ reason: reason === 'NOT_GIT' ? 'NO_LOCAL_CHECKOUT' : 'NO_ELIGIBLE_AGENT', repo_reason: reason, message: Contract.REPO_REASON_TEXT[reason] ?? 'The agent bus does not run in this repository on this Mac.' });
 
   // Repos map only from policy keys, the Preferences lists, folders main knows (task folders, live sessions)
   // and repos sessions called from; never a picker. Returns {root} or a refusal.
-  async function resolveRepo(target) {
+  async function resolveRepo(target, { unbound = false } = {}) {
     let top = null;
     if (typeof target === 'string' && path.isAbsolute(target)) top = await gitTop(target);
     else if (typeof target === 'string') {
@@ -204,7 +205,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       }
     }
     if (!top) return typeof target === 'string' && path.isAbsolute(target) ? repoRefusal((await repoVerdict(null, target)).reason) : { reason: 'NO_LOCAL_CHECKOUT', message: 'No registered checkout of that repository on this Mac.' };
-    const v = await repoVerdict(top);
+    const v = await repoVerdict(top, null, { unbound });
     if (!v.allowed) return repoRefusal(v.reason);
     return { root: top };
   }
@@ -539,7 +540,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
         const a = parse(HelloArgs, rawArgs);
         const top = await gitTop(caller?.cwd);
         await rememberSession(top);
-        const v = await repoVerdict(top, caller?.cwd ?? null, { offIsReason: true });
+        const v = await repoVerdict(top, caller?.cwd ?? null, { offIsReason: true, unbound: caller?.unbound === true });
         return { agent_id: agentFor(a.provider, top ?? caller?.cwd ?? ''), tier: 'local_attested', scope_allowed: ['local'],
           policy_summary: { enabled: s.enabled, halted: log.state('halted', false), repo_enabled: v.allowed === true,
             ...(v.allowed ? { repo_why: v.why ?? null } : { repo_reason: v.reason, repo_reason_text: Contract.REPO_REASON_TEXT[v.reason] ?? null }),
@@ -550,7 +551,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
         await rememberSession(await gitTop(caller?.cwd));
         // Halted comes first: a stopped bus says so before anything about the repository.
         const repo = log.state('halted', false) ? { reason: 'HALTED', message: 'The agent bus is stopped on this Mac. Your person can resume it from the tray or Sessions.' }
-          : await resolveRepo(a.repo ?? caller?.cwd);
+          : await resolveRepo(a.repo ?? caller?.cwd, { unbound: caller?.unbound === true });
         const provider = callerProvider(a, caller);
         if (repo.reason) {
           const agent_id = agentFor(provider, caller?.cwd ?? '');

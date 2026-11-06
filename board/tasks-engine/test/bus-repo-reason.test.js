@@ -1,6 +1,6 @@
-// BACKBONE G3: repo_enabled always comes with a reason (src/bus-contract.js REPO_REASON). A linked git worktree of a
-// repository a live session works in counts as that repository; the person's "only these" list still restricts and
-// covers its worktrees; $HOME is PROTECTED; every false answer names why.
+// BACKBONE G3: repo_enabled always comes with a reason (src/bus-contract.js REPO_REASON). Automatic scope takes every
+// repository (owner decision, 6 Nov): its list only adds. Scope "listed" restricts to the list and covers the listed
+// repositories' worktrees; $HOME is PROTECTED; every false answer names why.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -20,45 +20,47 @@ function worktreeOf(checkout) {
 }
 const hello = async (b, cwd) => (await b.bus('hello', { provider: 'claude' }, { provider: 'claude', cwd })).policy_summary;
 
-test('G3: a worktree whose main checkout has a live session is on the bus (WORKTREE); without one, NO_SESSION with a sentence', async () => {
+test('auto scope: every repository is on the bus, with no session needed (AUTO); a worktree too', async () => {
   const b = await auto();
   try {
     const wt = worktreeOf(b.h.repo.checkout);
     let p = await hello(b, wt);
-    assert.equal(p.repo_enabled, false);
-    assert.equal(p.repo_reason, 'NO_SESSION');
-    assert.equal(p.repo_reason_text, Contract.REPO_REASON_TEXT.NO_SESSION);
-    const refused = await b.handoff({}, { provider: 'claude', cwd: wt });
-    assert.equal(refused.reason, 'NO_ELIGIBLE_AGENT');
-    assert.equal(refused.repo_reason, 'NO_SESSION');
-    // The person's session works in the main checkout.
-    await b.bus('busSetContext', { folders: [b.h.repo.checkout] });
-    p = await hello(b, wt);
     assert.equal(p.repo_enabled, true);
-    assert.equal(p.repo_why, 'WORKTREE');
+    assert.equal(p.repo_why, 'AUTO');
     assert.equal(p.repo_reason, undefined);
     assert.equal((await b.handoff({}, { provider: 'claude', cwd: wt })).state, 'offered');
-    // The checkout itself: SESSION.
-    assert.equal((await hello(b, b.h.repo.checkout)).repo_why, 'SESSION');
+    p = await hello(b, b.h.repo.checkout);
+    assert.equal(p.repo_enabled, true);
+    assert.equal(p.repo_why, 'AUTO');
   } finally { await b.cleanup(); }
 });
 
-test('G3: the "only these" list restricts even in automatic mode (LISTED_ONLY), and a listed checkout covers its worktrees', async () => {
+test('auto scope: list entries only add (LISTED for a listed repo, AUTO for the rest); scope "listed" restricts and covers worktrees', async () => {
   const b = await auto();
   try {
     const wt = worktreeOf(b.h.repo.checkout);
-    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-other-'));
+    const other = path.join(b.h.dir, 'other');
+    fs.mkdirSync(other);
     git(other, 'init', '-q');
-    await b.bus('busSetContext', { scope: 'auto', repos: [other], folders: [b.h.repo.checkout] });
+    // The owner's Mac on 6 Nov: Automatic with two listed repositories. The unlisted one is still on the bus.
+    await b.bus('busSetContext', { scope: 'auto', repos: [other], folders: [] });
     let p = await hello(b, b.h.repo.checkout);
+    assert.equal(p.repo_enabled, true);
+    assert.equal(p.repo_why, 'AUTO');
+    assert.equal((await hello(b, fs.realpathSync(other))).repo_why, 'LISTED');
+    await b.bus('busSetContext', { scope: 'listed', repos: [other], folders: [] });
+    p = await hello(b, b.h.repo.checkout);
     assert.equal(p.repo_enabled, false);
     assert.equal(p.repo_reason, 'LISTED_ONLY');
-    assert.match(p.repo_reason_text, /Only these repositories/);
+    assert.equal(p.repo_reason_text, Contract.REPO_REASON_TEXT.LISTED_ONLY);
+    assert.equal((await b.handoff({}, { provider: 'claude', cwd: b.h.repo.checkout })).repo_reason, 'LISTED_ONLY');
     await b.bus('busSetContext', { scope: 'listed', repos: [b.h.repo.checkout], folders: [] });
     p = await hello(b, wt);
     assert.equal(p.repo_enabled, true);
     assert.equal(p.repo_why, 'LISTED');
-    fs.rmSync(other, { recursive: true, force: true });
+    // Excluded still wins over a listing in either scope.
+    await b.bus('busSetContext', { scope: 'auto', repos: [b.h.repo.checkout], exclude: [b.h.repo.checkout] });
+    assert.equal((await hello(b, b.h.repo.checkout)).repo_reason, 'EXCLUDED');
   } finally { await b.cleanup(); }
 });
 

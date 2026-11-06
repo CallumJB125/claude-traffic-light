@@ -29,8 +29,8 @@ const TIER_CAN = freeze({
 const REPO_REASON = freeze({
   EXCLUDED: 'EXCLUDED', // on the person's "never these" list
   PROTECTED: 'PROTECTED', // the home folder, a folder holding it, a dot folder in it, ~/Library, Plexiform's data
-  LISTED_ONLY: 'LISTED_ONLY', // the "only these" list has entries (or scope is listed) and this repo is not on it
-  NO_SESSION: 'NO_SESSION', // automatic mode, and no Claude/Codex session Plexiform sees works in this repo
+  LISTED_ONLY: 'LISTED_ONLY', // scope is "only these repositories" and this repo is not on the list
+  NO_SESSION: 'NO_SESSION', // automatic mode, an unbound caller, and no session or task folder Plexiform sees in this repo
   NOT_GIT: 'NOT_GIT', // the folder is not inside a git checkout
   BUS_OFF: 'BUS_OFF', // the agent bus is turned off in Preferences or policy.json
 });
@@ -38,13 +38,15 @@ const REPO_REASON = freeze({
 const REPO_REASON_TEXT = freeze({
   EXCLUDED: 'This repository is on the "never these" list in Plexiform Preferences → Advanced → Agent bus.',
   PROTECTED: 'This folder is protected (your home folder, a hidden folder in it, ~/Library or Plexiform\'s data), so the bus never runs work here.',
-  LISTED_ONLY: 'The "Only these repositories" list in Plexiform Preferences → Advanced → Agent bus has entries, and this repository is not one of them.',
+  LISTED_ONLY: 'Plexiform Preferences → Advanced → Agent bus is set to "Only these repositories", and this repository is not on the list.',
   NO_SESSION: 'No Claude Code or Codex session Plexiform can see is working in this repository.',
   NOT_GIT: 'This folder is not a git checkout. Hand-offs need one, because the work runs in its own git worktree.',
   BUS_OFF: 'The agent bus is turned off in Plexiform Preferences.',
 });
 // Why a repository IS on the bus (repo_why, informational).
-const REPO_ALLOWED = freeze({ POLICY: 'POLICY', LISTED: 'LISTED', SESSION: 'SESSION', WORKTREE: 'WORKTREE' });
+// AUTO: automatic mode, which takes every repository that is not excluded or protected for a bound caller. SESSION and
+// WORKTREE: the same for an unbound caller, through a session or task folder in the repository (or a worktree of it).
+const REPO_ALLOWED = freeze({ POLICY: 'POLICY', LISTED: 'LISTED', AUTO: 'AUTO', SESSION: 'SESSION', WORKTREE: 'WORKTREE' });
 
 // Refusal codes a bus op can return as {reason, message}. The existing ones keep their meaning.
 const BUS_REASON = freeze({

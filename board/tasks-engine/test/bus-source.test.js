@@ -83,8 +83,8 @@ test('awaitingConfirm: false for local scope with auto_accept, true when policy 
 test('listed ("only these") mode: bus_auto passes, remote_tasks alone does not (engine and bus op)', async () => {
   const b = await startBus({ wait: true }, { policy: (repo) => ({ repos: { [repo]: { remote_tasks: true } } }) });
   try {
-    // A non-empty Preferences list restricts the bus to it: the caller's own checkout is not on it.
-    await b.bus('busSetContext', { repos: [path.join(b.h.dir, 'elsewhere')], folders: [] });
+    // Scope "listed" restricts the bus to the list (in automatic mode the list only adds): the caller's checkout is not on it.
+    await b.bus('busSetContext', { scope: 'listed', repos: [path.join(b.h.dir, 'elsewhere')], folders: [] });
     await assert.rejects(b.engine.createTask({ requestId: rid('opt'), spec: busSpec(b) }), (e) => e.code === 'POLICY_DENIED');
     const refused = await b.handoff({ request_id: rid('opt') });
     assert.equal(refused.reason, 'NO_ELIGIBLE_AGENT');
@@ -93,7 +93,7 @@ test('listed ("only these") mode: bus_auto passes, remote_tasks alone does not (
     assert.ok((await b.engine.createTask({ requestId: rid('opt'), spec: busSpec(b) })).id);
     // The Preferences opt-in list (busSetContext) counts the same, with no policy.json key.
     writePolicy(b.h.dataDir, {});
-    await b.bus('busSetContext', { repos: [b.h.repo.checkout], folders: [] });
+    await b.bus('busSetContext', { scope: 'listed', repos: [b.h.repo.checkout], folders: [] });
     const ok = await b.handoff({ request_id: rid('opt'), title: 'Via Preferences' });
     assert.equal(ok.state, 'offered');
   } finally { await b.cleanup(); }

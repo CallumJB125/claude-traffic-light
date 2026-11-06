@@ -962,8 +962,9 @@ export class TasksEngine extends EventEmitter {
    * a DENY_READ path (~/.ssh, ~/.claude, ~/.codex, ~/.claude-traffic-light, ...) or Plexiform's data folder, or a repo
    * on (or under, or a worktree of one on) the Preferences exclude list. Then policy.repos[<realpath|canonical>].bus_auto,
    * the only way past the next check. Never a protected folder (a dot-folder or ~/Library under $HOME, here or where
-   * the sibling worktree would go). Then the "only these" list when it is in force; else (automatic, the default)
-   * any checkout a Claude or Codex session on this Mac works in. remote_tasks never counts.
+   * the sibling worktree would go). Then, with scope 'listed', only the listed repositories; else (automatic, the
+   * default) every repository, the list only adding to it, except that a caller main could not bind still needs a
+   * session or task folder in it (busRepoReason unbound). remote_tasks never counts.
    */
   async busRepoAllowed(top, policy = this.#policy()) {
     return (await this.busRepoReason(top, policy)).allowed;
@@ -974,7 +975,9 @@ export class TasksEngine extends EventEmitter {
    * {allowed: true, why} or {allowed: false, reason}. A linked worktree counts as its repository: an "only these"
    * entry or a live session in any checkout sharing the git-common-dir covers it (BACKBONE plan G3).
    */
-  async busRepoReason(top, policy = this.#policy(), { cwd = null } = {}) {
+  // unbound: the caller is one main could not bind to a live session (agent-awareness relay), so its folder is only what
+  // it reported. Automatic mode then still needs a session or task of Plexiform's own in that repository (NO_SESSION).
+  async busRepoReason(top, policy = this.#policy(), { cwd = null, unbound = false } = {}) {
     let home;
     try { home = await fs.promises.realpath(this.env.HOME ?? os.homedir()); } catch { home = this.env.HOME ?? os.homedir(); }
     // No checkout: the home folder (or a protected folder in it) says so first, since that is what the person can act on.
@@ -1005,8 +1008,12 @@ export class TasksEngine extends EventEmitter {
     };
     if (await matches(Object.entries(policy.repos).filter(([, v]) => v?.bus_auto === true).map(([k]) => k))) return { allowed: true, why: 'POLICY' };
     if (RepoScope.protectedReason(top, home)) return { allowed: false, reason: 'PROTECTED' };
-    // The person's "only these" list restricts even with Automatic on (Preferences says so); it is never widened here.
-    if (ctx.scope === 'listed' || ctx.repos?.length) return (await matches(ctx.repos ?? [])) ? { allowed: true, why: 'LISTED' } : { allowed: false, reason: 'LISTED_ONLY' };
+    // Only scope 'listed' restricts to the list. Automatic (the default) takes every repository that passed the checks
+    // above; its list entries only add (owner decision, 2026-11-06), so a listed match just says why.
+    const listed = await matches(ctx.repos ?? []);
+    if (ctx.scope === 'listed') return listed ? { allowed: true, why: 'LISTED' } : { allowed: false, reason: 'LISTED_ONLY' };
+    if (listed) return { allowed: true, why: 'LISTED' };
+    if (!unbound) return { allowed: true, why: 'AUTO' };
     const seen = await this.agentBus?.sessionRepo(top);
     if (seen === 'worktree') return { allowed: true, why: 'WORKTREE' };
     return seen ? { allowed: true, why: 'SESSION' } : { allowed: false, reason: 'NO_SESSION' };
