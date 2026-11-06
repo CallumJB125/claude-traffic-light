@@ -24,6 +24,7 @@ const METHODS = new Set(['initialize', 'thread/loaded/list', 'thread/list', 'thr
 const REQUEST_MS = 15_000;
 const MAX_MESSAGE = 4 * 1024 * 1024;
 const MAX_THREADS = 50;
+const MAX_METADATA_PAGES = 20;
 const OPT_IN = 'Let Plexiform message Codex CLI sessions running on the shared Codex daemon';
 // The exact commands the human runs, with the CLI's real path (it is often not on PATH).
 const commands = (bin) => { const codex = !bin || bin === 'codex' ? 'codex' : `'${bin.replace(/'/g, "'\\''")}'`; return { attach: codex, start: `${codex} app-server daemon start` }; };
@@ -59,9 +60,9 @@ function checkSocket(socketPath, { fsImpl = fs, uid = process.getuid?.() } = {})
 const clean = (v, max) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max) : '');
 // Metadata allowlist. `preview`, `path`, `gitInfo`, `turns` and every other field are dropped here.
 // Only interactive CLI threads: sub-agent, exec, app-server, ephemeral and unknown-source threads are never listed or attached.
-// Codex < 0.163 reports TUI threads as source "cli"; 0.163+ reports source "vscode" with originator codex-tui / codex_work_desktop and threadSource "user".
-const INTERACTIVE_ORIGINATORS = new Set(['codex-tui', 'codex_work_desktop']);
-const isInteractive = (t) => t.source === 'cli' || (t.source === 'vscode' && t.threadSource === 'user' && INTERACTIVE_ORIGINATORS.has(t.originator));
+// Keep public-daemon discovery and lifecycle hooks on the same thread kinds.
+// Legacy CLI threads predate the desktop creation-source fields.
+const isInteractive = (t) => t.source === 'cli' || require('../hooks/codex-interactive').isInteractive(t);
 function threadMeta(t) {
   if (!t || typeof t.id !== 'string' || !t.id || t.id.length > 100 || t.parentThreadId || t.ephemeral !== false || !isInteractive(t) || t.agentNickname || t.agentRole) return null;
   return { id: t.id, title: clean(t.name, 120), project: clean(path.basename(clean(t.cwd, 1000)), 120), status: clean(t.status?.type, 20) || 'unknown', updatedAt: Number.isSafeInteger(t.updatedAt) ? t.updatedAt : null };
@@ -178,15 +179,31 @@ function createCodexDaemon({ bin, enabled = () => false, socketPath = defaultSoc
     return ready;
   }
 
+  // A resumed CLI thread can be older than the first page of stored history.
+  // Scan bounded metadata pages until each loaded id has been seen, rather
+  // than silently treating that running session as absent. Never read turns.
+  async function metadataFor(ids) {
+    const meta = new Map(), unseen = new Set(ids), cursors = new Set();
+    let cursor;
+    for (let page = 0; page < MAX_METADATA_PAGES && unseen.size; page++) {
+      const listed = await request('thread/list', { limit: MAX_THREADS, useStateDbOnly: true, ...(cursor ? { cursor } : {}) });
+      for (const t of (Array.isArray(listed?.data) ? listed.data : []).slice(0, MAX_THREADS)) {
+        if (!unseen.delete(t?.id)) continue;
+        const m = threadMeta(t); if (m) meta.set(m.id, m);
+      }
+      const next = listed?.nextCursor;
+      if (typeof next !== 'string' || !next || next.length > 4096 || cursors.has(next)) break;
+      cursors.add(next); cursor = next;
+    }
+    return meta;
+  }
   // Threads loaded on the daemon right now, metadata only.
   async function discover() {
     await start();
     const loaded = await request('thread/loaded/list', { limit: MAX_THREADS });
     const ids = new Set((Array.isArray(loaded?.data) ? loaded.data : []).filter((id) => typeof id === 'string').slice(0, MAX_THREADS));
     if (!ids.size) return [];
-    const listed = await request('thread/list', { limit: MAX_THREADS, useStateDbOnly: true });
-    const meta = new Map();
-    for (const t of Array.isArray(listed?.data) ? listed.data : []) { const m = threadMeta(t); if (m && ids.has(m.id)) meta.set(m.id, m); }
+    const meta = await metadataFor(ids);
     return [...ids].filter((id) => meta.has(id)).map((id) => meta.get(id));
   }
   // Subscribe to exactly this thread. It must still be loaded on the daemon;
@@ -196,8 +213,7 @@ function createCodexDaemon({ bin, enabled = () => false, socketPath = defaultSoc
     const loaded = await request('thread/loaded/list', { limit: MAX_THREADS });
     if (!Array.isArray(loaded?.data) || !loaded.data.includes(target)) throw new Error('That Codex session is no longer running on the daemon');
     // Checked before subscribing: a sub-agent, exec, app-server or ephemeral thread is never resumed.
-    const listed = await request('thread/list', { limit: MAX_THREADS, useStateDbOnly: true });
-    if (!(Array.isArray(listed?.data) ? listed.data : []).some((t) => t?.id === target && threadMeta(t))) throw new Error('Plexiform only messages interactive Codex CLI sessions');
+    if (!(await metadataFor([target])).has(target)) throw new Error('Plexiform only messages interactive Codex CLI sessions');
     const result = await request('thread/resume', { threadId: target, excludeTurns: true });
     if (result?.thread?.id !== target) throw new Error('Codex resumed a different thread');
     subs.set(target, (subs.get(target) ?? 0) + 1);

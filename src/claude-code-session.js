@@ -4,8 +4,8 @@
 // stream-json` child started by Plexiform with a session id Plexiform picked.
 // The CLI uses its own login (it reads its own keychain/config); nothing here
 // reads, copies or stores credentials. Interactive Claude Code sessions the
-// user started in a terminal have no supported inbound channel and are never
-// reachable from this adapter.
+// user started in a terminal are never reachable from this adapter. An explicit
+// terminal MCP channel is a separate opt-in adapter (claude-channel-session.js).
 //
 // Wire facts (claude 2.1.287, verified against a real run, see docs/headless):
 //   our user line carries uuid = the hub's clientId
@@ -32,7 +32,7 @@ const NO_TOOLS = '';
 const EDIT_TOOLS = 'Read,Glob,Grep,Edit,Write';
 const MAX_LINE = 4 * 1024 * 1024;
 const ACK_MS = 30_000, CONTROL_MS = 5_000, KILL_GRACE_MS = 3_000;
-const EXISTING_SESSIONS_REASON = 'Claude Code terminal sessions have no supported inbound message channel; only sessions Plexiform starts with claude -p stream-json can be driven.';
+const EXISTING_SESSIONS_REASON = require('./provider-capabilities.json').platforms.find(p => p.id === 'claude').reasons.existing;
 
 function findClaudeBin({ env = process.env, exists = (p) => { try { fs.accessSync(p, fs.constants.X_OK); return true; } catch { return false; } } } = {}) {
   const candidates = [env.HOME && path.join(env.HOME, '.local/bin/claude'), env.HOME && path.join(env.HOME, '.claude/local/claude'),

@@ -34,6 +34,34 @@ test('a Claude Code MCP child bound by its parent, its stdio and its own env; a 
   assert.ok(!w.logs.some((l) => l.includes(w.T) || l.includes(w.repoA) || l.includes('X ')));
 });
 
+test('desktop voice and agent-created chats bind through their verified MCP connection; background subagents stay refused', async (t) => {
+  const w = world(t);
+  for (const type of ['voice_chat', 'agent_created_thread']) {
+    w.rollout(w.T, w.repoB, { originator: 'codex_work_desktop', thread_source: type });
+    const aw = w.make({ mcpCaps: () => ({ claude: true, codex: true }), halted: () => false });
+    const peers = await aw.busOp('peers', { ...w.call(201), threadId: w.T });
+    assert.equal(peers.bound, true, type);
+    assert.deepEqual(peers.binding, { state: 'ready' });
+    assert.equal(peers.notes, true);
+  }
+  w.rollout(w.T, w.repoB, { originator: 'codex_work_desktop', thread_source: 'subagent' });
+  assert.equal((await w.make().bindCaller({ ...w.call(201), threadId: w.T })).bound, false);
+});
+
+test('unbound diagnostics identify recovery without exposing identity or claiming health proves delivery', async (t) => {
+  const w = world(t);
+  w.state.sessions = [w.claudeSession(), w.codexSession(w.T, { codexInteractive: false })];
+  const aw = w.make();
+  const p = await aw.busOp('peers', { ...w.call(201), threadId: w.T });
+  assert.equal(p.bound, false);
+  assert.equal(p.binding.state, 'unsupported-thread');
+  assert.match(p.binding.next, /Update Plexiform/);
+  assert.ok(!JSON.stringify(p.binding).includes(w.T));
+  const n = await aw.relay('note', {}, {}, { ...w.call(201), threadId: w.T }, { forward: () => { throw new Error('unbound callers must not send'); } });
+  assert.equal(n.reason, 'NOT_BOUND');
+  assert.deepEqual(n.binding, p.binding);
+});
+
 test('AW11: forged body fields are never identity: a detached process naming another session\'s ppid, session_id and thread is unbound', async (t) => {
   const w = world(t);
   const aw = w.make();

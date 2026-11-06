@@ -93,6 +93,35 @@ test('discovery: only interactive CLI threads loaded on the daemon, metadata onl
   } finally { await r.done(); }
 });
 
+test('discovery and attachment find a running session beyond the first stored-history page', async () => {
+  const r = await rig({ withThread: false });
+  try {
+    for (let i = 0; i < 55; i++) r.fake.addThread({ loaded: false, name: `Archived ${i}` });
+    const target = r.fake.addThread({ name: 'Resumed older work' });
+    const found = await r.adapter.discover();
+    assert.deepEqual(found.map(t => t.id), [target]);
+    const attached = await r.adapter.attach({ target });
+    assert.equal(attached.target, target);
+    assert(r.fake.calls.some(c => c.method === 'thread/list' && c.params.cursor === '50'));
+    noTranscriptCalls(r.fake);
+    assert.equal(r.fake.calls.filter(c => c.method === 'thread/resume').length, 1);
+  } finally { await r.done(); }
+});
+
+test('hostile history cursors terminate; missing and non-interactive sessions are never resumed', async () => {
+  const r = await rig({ withThread: false });
+  try {
+    r.fake.addThread({ loaded: false });
+    const hidden = r.fake.addThread({ source: 'exec' });
+    r.fake.metadataPageSize = 1; r.fake.repeatMetadataCursor = true;
+    assert.deepEqual(await r.adapter.discover(), []);
+    await assert.rejects(r.adapter.attach({ target: hidden }), /interactive Codex CLI/);
+    assert.equal(r.fake.calls.filter(c => c.method === 'thread/list').length, 4, 'two bounded pages per attempt');
+    assert.equal(r.fake.calls.some(c => c.method === 'thread/resume'), false);
+    noTranscriptCalls(r.fake);
+  } finally { await r.done(); }
+});
+
 test('attach + send: unmanaged label, resume without turns, provider ack, own echo, streamed reply to OUR message', async () => {
   const r = await rig();
   try {
@@ -453,6 +482,11 @@ test('threadMeta: Codex 0.163 TUI shape and legacy cli shape are interactive; ex
   assert.deepEqual(threadMeta({ ...base, source: 'cli' }), want, 'legacy');
   assert.deepEqual(threadMeta({ ...base, source: 'vscode', originator: 'codex-tui', threadSource: 'user' }), want, '0.163 TUI');
   assert.deepEqual(threadMeta({ ...base, source: 'vscode', originator: 'codex_work_desktop', threadSource: 'user' }), want, '0.163 desktop');
+  for (const threadSource of ['voice_chat', 'agent_created_thread']) {
+    assert.deepEqual(threadMeta({ ...base, source: 'vscode', originator: 'codex_work_desktop', threadSource }), want, threadSource);
+    assert.equal(threadMeta({ ...base, source: 'vscode', originator: 'codex-tui', threadSource }), null);
+    assert.equal(threadMeta({ ...base, source: 'vscode', originator: 'codex_work_desktop', threadSource, parentThreadId: 'p' }), null);
+  }
   for (const t of [
     { source: 'vscode', originator: 'codex-tui', threadSource: 'subagent' },
     { source: 'vscode', originator: 'codex-tui' },

@@ -79,7 +79,9 @@ function emitAdapter(payload) {
       if (Number.isInteger(process.ppid) && process.ppid > 1) next.codexServerPid = process.ppid;
       if (payload.source !== 'compact') next.codexStartedAt = new Date().toISOString();
     }
-    if (event === 'SessionStart' || typeof prev?.codexInteractive !== 'boolean') {
+    // Recheck on a person's next turn too: an app update can add support for
+    // a chat kind that an older hook persisted as non-interactive.
+    if (event === 'SessionStart' || event === 'UserPromptSubmit' || typeof prev?.codexInteractive !== 'boolean') {
       const meta = require('./awareness.js').codexSessionMeta(payload.transcript_path);
       next.codexInteractive = meta ? meta.interactive : false;
       // Main lists the thread only if its server holds this rollout open and the rollout names this thread.

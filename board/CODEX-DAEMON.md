@@ -55,11 +55,15 @@ marked *source* were read in `main`, which can be newer than 0.159.2.
 - **Discovery** = loaded thread ids ∩ `thread/list`, keeping only id, name,
   cwd basename, status, updatedAt; `preview`, `path`, `gitInfo`, turns are
   dropped at parse. Only interactive threads (`source: "cli"` on Codex < 0.163; on 0.163+
-  `source: "vscode"` with `threadSource: "user"` and `originator` `codex-tui` or
-  `codex_work_desktop`), `ephemeral: false`, without
+  `source: "vscode"` with `originator: "codex-tui"` and `threadSource: "user"`,
+  or `originator: "codex_work_desktop"` and `threadSource` `user`, `voice_chat` or
+  `agent_created_thread`), `ephemeral: false`, without
   `parentThreadId` / `agentNickname` / `agentRole` are kept; a loaded id
   without such metadata is not listed at all (sub-agent, exec, app-server,
-  ephemeral, custom and unknown-source threads never appear). The renderer
+  ephemeral, custom and unknown-source threads never appear). The main process
+  scans up to 20 pages of 50 stored-thread metadata rows so that a running
+  session resumed from older history can be found; invalid/repeated cursors
+  stop the scan, and anything still missing remains unavailable. The renderer
   gets opaque per-discovery handles, never thread ids; a new discovery retires
   old handles, and a window that goes away has its handles pruned.
 - **Attach** re-checks the thread is still loaded and passes the same metadata

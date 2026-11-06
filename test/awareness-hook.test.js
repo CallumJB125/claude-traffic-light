@@ -272,6 +272,22 @@ test('Codex: exec, sub-agent and unknown threads are not a person\'s thread, and
   assert.deepEqual(Hook.codexSessionMeta('relative.jsonl'), null);
 });
 
+test('Codex desktop voice and agent-created chats receive lifecycle awareness; other origins cannot borrow those types', (t) => {
+  const w = world(t);
+  for (const type of ['voice_chat', 'agent_created_thread']) {
+    const transcript = w.transcript('codex_work_desktop', 'vscode', type);
+    assert.ok(w.codex('SessionStart', { transcript_path: transcript }).stdout, type);
+    const file = JSON.parse(fs.readFileSync(State.sessionFileFor(path.join(w.root, 'sessions'), HOST, 'codex', 't1'), 'utf8'));
+    assert.equal(file.codexInteractive, true, type);
+    assert.equal(Hook.codexSessionMeta(w.transcript('codex-tui', 'vscode', type)).interactive, false);
+    assert.equal(Hook.codexSessionMeta(w.transcript('custom-client', 'vscode', type)).interactive, false);
+    const p = { id: 't1', cwd: w.repo, source: 'vscode', originator: 'codex_work_desktop', thread_source: type };
+    for (const guard of [{ ephemeral: true }, { parent_thread_id: 'parent' }, { agent_role: 'worker' }]) {
+      assert.equal(Hook.sessionMetaOf(JSON.stringify({ type: 'session_meta', payload: { ...p, ...guard } }) + '\n').interactive, false);
+    }
+  }
+});
+
 test('Gemini: SessionStart gets the roster, with no self line (unverifiable in v1) and no tool names', (t) => {
   const w = world(t);
   const r = spawnSync(process.execPath, [EMIT, '--adapter', 'gemini', 'SessionStart'], { input: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'g1', cwd: w.repo, source: 'startup' }), encoding: 'utf8', timeout: 10_000, env: w.env });

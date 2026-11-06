@@ -33,8 +33,8 @@
       "advertised": true,
       "installedHere": "2.1.287",
       "hosting": "local CLI; Claude Code on the web / --cloud sessions are Anthropic-hosted",
-      "management": "owned: Plexiform-started `claude -p` stream-json child (built); existing terminal/IDE sessions: observe only",
-      "channel": "Owned: `claude -p --input-format stream-json --output-format stream-json --replay-user-messages` (src/claude-code-session.js). Existing: hooks (hooks/set-status.js) for observation only.",
+      "management": "owned: Plexiform-started `claude -p` stream-json child (built); existing terminal: explicit opt-in Claude terminal channel (built, fixture-tested; real provider acceptance pending); other terminal/IDE sessions: observe only",
+      "channel": "Owned: `claude -p --input-format stream-json --output-format stream-json --replay-user-messages` (src/claude-code-session.js). Existing terminal: explicitly load the Plexiform MCP channel and attach the discovered connection (src/claude-channel-session.js). Ordinary hooks are observation only.",
       "matrix": {
         "discovery": {
           "status": "built",
@@ -50,11 +50,11 @@
         },
         "receive": {
           "status": "built",
-          "how": "Owned sessions only: our stream-json user line with our uuid; ack = command_lifecycle queued/started for that uuid in our --session-id."
+          "how": "Owned: our stream-json user line with our uuid; ack = command_lifecycle queued/started for that uuid in our --session-id. Opted-in terminal channel: exact message-id and text receipt through plexiform_accept; a notification write is unconfirmed."
         },
         "reply": {
           "status": "built",
-          "how": "Owned: stream_event text_delta + result in our session id."
+          "how": "Owned: stream_event text_delta + result in our session id. Opted-in terminal channel: plexiform_reply correlated to the accepted message id; no steering, interruption or permission relay."
         },
         "resume": {
           "status": "supported-not-built",
@@ -70,29 +70,32 @@
         },
         "remoteControl": {
           "status": "provider-only",
-          "how": "Remote Control (`claude --remote-control`) lets claude.ai/code and the Claude apps drive a local session; Pro/Max/Team/Enterprise login, not an API for other apps."
+          "how": "Remote Control (`claude --remote-control`) lets claude.ai/code and the Claude apps drive a local session; Pro/Max/Team/Enterprise login, not an API for other apps. Local Remote Control sessions can report hooks; this does not grant Plexiform inbound control. Terminal messaging requires the separate explicit channel opt-in."
         }
       },
       "handoff": {
         "midTurn": false,
         "betweenTurns": true,
-        "channel": "owned stream-json new turn",
-        "ack": "command_lifecycle for our uuid",
-        "existingSessions": "A Stop hook may return decision:block with a reason that continues the turn (documented); Plexiform does not use it: no delivery ack and it only fires when the turn ends."
+        "channel": "owned stream-json new turn; explicitly opted-in terminal MCP channel",
+        "ack": "command_lifecycle for our uuid; terminal channel plexiform_accept with exact id and text",
+        "existingSessions": "Overview \u2192 Connect a Claude terminal prepares a private config for the user to run and confirm in their chosen project. Discover and attach that exact channel. Ordinary hooks, Remote Control and MCP registration alone do not grant inbound control."
       },
-      "prerequisite": "None for owned sessions (Claude Code installed and signed in with its own login). Existing sessions: none possible.",
+      "prerequisite": "Owned: Claude Code installed and signed in with its own login. Terminal channel: explicit startup opt-in and research-preview confirmation; organization policy may block Channels. Fixture-tested; real provider acceptance is still required (docs/claude-channel-integration.md).",
       "tos": "Plexiform runs the user's own CLI with its own login; it never reads, copies or proxies Claude credentials. Remote Control is Anthropic's own surface and is not used.",
       "reasons": {
         "owned": "",
         "notInstalled": "unavailable: claude not installed",
-        "existing": "Claude Code terminal sessions have no supported inbound message channel; only sessions Plexiform starts with claude -p stream-json can be driven."
+        "existing": "Ordinary Claude Code terminal sessions have no supported inbound channel. In Overview, choose Connect a Claude terminal, run and confirm the command yourself, then Find sessions under Claude terminal channel. Existing work can be resumed with that explicit opt-in. Remote Control alone does not grant Plexiform control."
       },
       "evidence": [
         "https://code.claude.com/docs/en/headless",
         "https://code.claude.com/docs/en/hooks",
         "https://code.claude.com/docs/en/remote-control",
         "local: `claude --help` 2.1.287 (--input-format, --replay-user-messages, --remote-control)",
-        "test: test/owned-adapters.test.js (fake stream-json fixture); real run notes plexiform-codex-claude-notes/session-interaction"
+        "test: test/owned-adapters.test.js (fake stream-json fixture); real run notes plexiform-codex-claude-notes/session-interaction",
+        "https://code.claude.com/docs/en/channels",
+        "https://code.claude.com/docs/en/channels-reference",
+        "docs/claude-channel-integration.md (fixture-tested; real provider acceptance pending)"
       ]
     },
     {

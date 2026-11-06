@@ -62,7 +62,11 @@ async function startFakeDaemon({ socketMode = 0o600, transport = process.platfor
   const handlers = {
     initialize: () => ({ userAgent: 'fake' }),
     'thread/loaded/list': () => ({ data: [...threads.values()].filter((t) => t.loaded).map((t) => t.id), nextCursor: null }),
-    'thread/list': () => ({ data: [...threads.values()].map(({ loaded, active, approvalPolicy, sandbox, ...t }) => ({ ...t, turns: [] })), nextCursor: null }),
+    'thread/list': (p) => {
+      const all = [...threads.values()], offset = Number(p.cursor) || 0;
+      const size = Math.min(p.limit || 50, fake.metadataPageSize);
+      return { data: all.slice(offset, offset + size).map(({ loaded, active, approvalPolicy, sandbox, ...t }) => ({ ...t, turns: [] })), nextCursor: fake.repeatMetadataCursor ? 'repeat' : offset + size < all.length ? String(offset + size) : null };
+    },
     'thread/resume': (p) => {
       const t = threads.get(p.threadId);
       if (!t || !t.loaded) throw new Error('no such thread');
@@ -140,7 +144,7 @@ async function startFakeDaemon({ socketMode = 0o600, transport = process.platfor
     fs.symlinkSync(real, socketPath);
   }
   const fake = {
-    socketPath, realPath: real, adapterOptions, modeledPosix, calls, responses, threads, addThread, resumeOverrides, duplicateResponses: false,
+    socketPath, realPath: real, adapterOptions, modeledPosix, calls, responses, threads, addThread, resumeOverrides, duplicateResponses: false, metadataPageSize: 50, repeatMetadataCursor: false,
     get connections() { return connections; },
     // The human's own turn in their terminal: other clients see it stream.
     foreignTurn(threadId) {

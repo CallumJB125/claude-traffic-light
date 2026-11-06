@@ -38,8 +38,9 @@ function addZ(w) {
   w.state.sessions.push(w.claudeSession('Z', { claudePid: 110, cwd: w.repoC }));
 }
 
-async function setup(t, { halted = () => false, config = {} } = {}) {
+async function setup(t, { halted = () => false, config = {}, desktopSource } = {}) {
   const w = world(t);
+  if (desktopSource) w.rollout(w.T, w.repoB, { originator: 'codex_work_desktop', thread_source: desktopSource });
   addZ(w);
   w.state.config = config;
   const h = await helper(t);
@@ -86,6 +87,28 @@ function claudeHook(w, sessionId = 'X', cwd = w.repoA) {
 }
 
 const until = async (f, ms = 5000) => { const end = Date.now() + ms; for (;;) { const v = await f(); if (v || Date.now() > end) return v; await new Promise((r) => setTimeout(r, 20)); } };
+
+for (const desktopSource of ['voice_chat', 'agent_created_thread']) {
+  test(`desktop ${desktopSource}: discovery → send → read receipt → correlated peer reply through the real bus transport`, async (t) => {
+    const s = await setup(t, { desktopSource });
+    const me = s.handleOf(`codex|${s.w.T}`), peer = s.handleOf('claude|X');
+    const p = await M.busCall('peers', {}, s.as.codex());
+    assert.equal(p.bound, true);
+    assert.ok(p.peers.some(row => row.handle === peer && row.takes_notes));
+    const sent = await M.busCall('note', { to: peer, text: 'Isolated diagnostic request alpha.', request_id: `req-${desktopSource}-01` }, s.as.codex());
+    assert.equal(sent.state, 'queued');
+    const received = await M.busCall('notes', {}, s.as.claude());
+    assert.equal(received.notes[0].note_id, sent.note_id);
+    assert.match(JSON.stringify(received.notes), /Isolated diagnostic request alpha/);
+    const status = await M.busCall('notes', { status: true }, s.as.codex());
+    assert.equal(status.sent[0].state, 'read');
+    const reply = await M.busCall('note', { to: me, text: `Diagnostic alpha acknowledged: ${sent.note_id}`, request_id: `req-${desktopSource}-02` }, s.as.claude());
+    assert.equal(reply.state, 'queued');
+    const answer = await M.busCall('notes', {}, s.as.codex());
+    assert.equal(answer.notes[0].note_id, reply.note_id);
+    assert.match(JSON.stringify(answer.notes), new RegExp(sent.note_id));
+  });
+}
 
 test('AW7: X notes Y; Y\'s real hook prints a notice with no body; Y pulls the framed, scrubbed text; status goes queued → notified → read', async (t) => {
   const s = await setup(t);

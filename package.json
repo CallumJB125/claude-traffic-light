@@ -32,7 +32,10 @@
     "test:native-darwin": "npm run setups-helper && npm run account-storage-parent && PLEXIFORM_TEST_HELPER=$PWD/native/setups-build/buddy-setups node --test --test-concurrency=1 test/native-darwin/*.test.js",
     "build:site": "node site/build.js",
     "gallery:check": "node site/gallery-build.js --check",
-    "build:phone": "node board/web/scripts/build-phone.mjs"
+    "build:phone": "node board/web/scripts/build-phone.mjs",
+    "terminal:build": "node scripts/build-terminal.js --development",
+    "test:terminal": "node --test apps/terminal/test/*.test.cjs",
+    "test:terminal:native": "node scripts/smoke-terminal-keeper.js"
   },
   "author": "",
   "license": "MIT",

@@ -155,7 +155,9 @@ function sessionMetaOf(text) {
     const line = JSON.parse(text.slice(0, nl));
     const p = line && line.type === 'session_meta' && line.payload && typeof line.payload === 'object' ? line.payload : null;
     if (!p) return null;
-    const interactive = p.source === 'vscode' && p.thread_source === 'user' && ['codex-tui', 'codex_work_desktop'].includes(p.originator) && p.ephemeral !== true;
+    const interactive = require('./codex-interactive').isInteractive({ source: p.source, originator: p.originator,
+      threadSource: p.thread_source, ephemeral: p.ephemeral, parentThreadId: p.parent_thread_id,
+      agentRole: p.agent_role, agentNickname: p.agent_nickname });
     return { interactive, id: typeof p.id === 'string' ? p.id : null, cwd: typeof p.cwd === 'string' ? p.cwd : null };
   } catch { return null; }
 }

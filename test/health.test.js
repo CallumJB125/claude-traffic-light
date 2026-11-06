@@ -54,6 +54,17 @@ function machine({ hooks = 'current', sessions = {}, locks = {}, transcripts = t
 }
 const byId = (report, id) => report.checks.find((c) => c.id === id);
 
+test('registered tools and reachable app do not make an unbound chat healthy', () => {
+  const m = machine();
+  const r = Health.runChecks({ ...m.ctx, busCaller: { bound: false, binding: { state: 'unsupported-thread', next: 'Update Plexiform.' } } });
+  assert.equal(r.ok, false);
+  assert.equal(byId(r, 'bus-caller').status, 'fail');
+  assert.equal(byId(r, 'bus-caller').next, 'Update Plexiform.');
+  const bound = byId(Health.runChecks({ ...m.ctx, busCaller: { bound: true } }), 'bus-caller');
+  assert.equal(bound.status, 'ok');
+  assert.match(bound.detail, /does not confirm message delivery/);
+});
+
 test('a healthy machine: every check ok but the update check, which is not configured', () => {
   const m = machine({ sessions: { a: { sessionId: 'a', signal: 'tool-use', updatedAt: iso(3 * 60000) } } });
   const r = Health.runChecks(m.ctx);

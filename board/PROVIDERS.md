@@ -24,7 +24,7 @@ Cell legend:
 
 | Platform | Hosting | Managed vs existing | Discovery | Telemetry/hooks | Task reporting | Receive message | Reply | Resume | Steer busy turn | Interrupt | Remote control | AI handoff |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **Claude Code** | local CLI; Claude Code on the web / --cloud sessions are Anthropic-hosted | owned: Plexiform-started `claude -p` stream-json child (built); existing terminal/IDE sessions: observe only | **built** | **built** | **built** | **built** | **built** | docs: not built | none | **built** | provider-only | between turns |
+| **Claude Code** | local CLI; Claude Code on the web / --cloud sessions are Anthropic-hosted | owned: Plexiform-started `claude -p` stream-json child (built); existing terminal: explicit opt-in MCP channel (fixture-tested; real acceptance pending); other terminal/IDE sessions: observe only | **built** | **built** | **built** | **built** | **built** | docs: not built | none | **built** | provider-only | between turns |
 | **Codex** | local app-server; Codex Cloud tasks are OpenAI-hosted | owned: Plexiform-spawned `codex app-server` stdio threads (built); existing desktop/IDE threads: observe only; existing CLI sessions on the shared daemon: opt-in messaging (built) | **built** | **built** | **built** | **built** | **built** | docs: not built | **built** | **built** | **built** | mid-turn + between turns |
 | **Cursor** | Cursor IDE and CLI local; Cloud Agents on Cursor-hosted VMs (or self-hosted pools) | owned: `agent acp` adapter wired but unavailable (not installed, isolation unverified); existing IDE/CLI chats: observe only | **built** | **built** | **built** | wired, unverified | wired, unverified | docs: not built | none | wired, unverified | docs: not built | between turns |
 | **Gemini CLI** | local CLI | owned: `gemini --acp` adapter built but unavailable (not installed, isolation unverified); existing sessions: observe only (hooks, best effort) | **built** | **built** | **built** | wired, unverified | wired, unverified | docs: not built | none | wired, unverified | none | between turns |
@@ -72,20 +72,22 @@ Input to the handoff contract: which sessions can take a message while a turn ru
 
 - Ids/aliases: `claude`, `claude-code`, `Claude`
 - Installed here: 2.1.287. Advertised by Plexiform: yes.
-- Exact supported channel: Owned: `claude -p --input-format stream-json --output-format stream-json --replay-user-messages` (src/claude-code-session.js). Existing: hooks (hooks/set-status.js) for observation only.
+- Exact supported channel: Owned: `claude -p --input-format stream-json --output-format stream-json --replay-user-messages` (src/claude-code-session.js). Existing terminal: explicitly load Plexiform’s MCP channel and attach the discovered connection (src/claude-channel-session.js). Ordinary hooks remain observation only.
 - Discovery: `built`. Hooks (SessionStart/UserPromptSubmit/PreToolUse/Stop/SubagentStart/SubagentStop/SessionEnd) report sessions to Plexiform.
 - Telemetry/hooks: `built`. Hooks: working, waiting on permission, subagents, cost/limits.
 - Task reporting: `built`. Board/MCP self-report (native-board) and work capture; task text is self-reported, never read from transcripts.
-- Receive message: `built`. Owned sessions only: our stream-json user line with our uuid; ack = command_lifecycle queued/started for that uuid in our --session-id.
-- Reply: `built`. Owned: stream_event text_delta + result in our session id.
+- Receive message: `built`. Owned: our stream-json user line with our uuid; ack = command_lifecycle queued/started for that uuid in our --session-id. Explicit terminal channel: `plexiform_accept` with the exact message id and text; a transport write is unconfirmed. Fixture-tested; real provider acceptance pending.
+- Reply: `built`. Owned: stream_event text_delta + result in our session id. Explicit terminal channel: `plexiform_reply` correlated to the accepted id; no steering, interruption or permission relay.
 - Resume: `docs: not built`. `claude -p --resume <id>` continues a finished session in a NEW process; it is not inbound control of a live terminal session. The board runner (board/runner/backends/claude.js) uses it for managed runs.
 - Steer busy turn: `none`. No expected-turn precondition: a message sent mid-turn is queued as the next turn.
 - Interrupt: `built`. Owned: stream-json control_request {subtype:'interrupt'} with control_response.
-- Remote control: `provider-only`. Remote Control (`claude --remote-control`) lets claude.ai/code and the Claude apps drive a local session; Pro/Max/Team/Enterprise login, not an API for other apps.
-- Missing prerequisite / human handoff: None for owned sessions (Claude Code installed and signed in with its own login). Existing sessions: none possible.
+- Remote control: `provider-only`. Remote Control (`claude --remote-control`) lets claude.ai/code and the Claude apps drive a local session; Pro/Max/Team/Enterprise login, not an API for other apps. Those local sessions can report hooks; this does not grant inbound control to Plexiform. Terminal messaging uses the separate explicit channel opt-in.
+- Missing prerequisite / human handoff: Owned: Claude Code installed and signed in with its own login. Existing terminal: Overview → Connect a Claude terminal, run and confirm the generated command in the selected project, then Find sessions under Claude terminal channel. Resume prior work with the same explicit opt-in. Organization policy can disable Channels. Real provider acceptance remains required (docs/claude-channel-integration.md).
 - ToS: Plexiform runs the user's own CLI with its own login; it never reads, copies or proxies Claude credentials. Remote Control is Anthropic's own surface and is not used.
-- Shown on a session Plexiform did not start: "Claude Code terminal sessions have no supported inbound message channel; only sessions Plexiform starts with claude -p stream-json can be driven."
+- Shown on a session Plexiform did not start: "Ordinary Claude Code terminal sessions have no supported inbound channel. In Overview, choose Connect a Claude terminal, run and confirm the command yourself, then Find sessions under Claude terminal channel. Existing work can be resumed with that explicit opt-in. Remote Control alone does not grant Plexiform control."
 - Evidence: <https://code.claude.com/docs/en/headless>; <https://code.claude.com/docs/en/hooks>; <https://code.claude.com/docs/en/remote-control>; local: `claude --help` 2.1.287 (--input-format, --replay-user-messages, --remote-control); test: test/owned-adapters.test.js (fake stream-json fixture); real run notes plexiform-codex-claude-notes/session-interaction
+
+See [Claude terminal setup and Remote Control recovery](../docs/claude-channel-integration.md#remote-control-and-ordinary-terminal-recovery) for the supported setup and remaining acceptance gates.
 
 ### Codex
 

@@ -9,6 +9,72 @@ https://code.claude.com/docs/en/channels-reference. Organization policy can
 disable Channels. A successful transport connection does not prove that Claude
 received a message.
 
+## Remote Control and ordinary terminal recovery
+
+Claude's `--remote-control` flag starts an interactive local session with
+Anthropic's phone/web control enabled (installed Claude 2.1.318 `--help`). It
+does not give Plexiform an inbound API. The local session can still report
+activity through installed hooks. Do not treat a green provider-health check,
+hook activity or a Remote Control connection as proof of Plexiform delivery.
+
+To receive Plexiform messages, open Overview → **Connect a Claude terminal**,
+select the project, and run the generated command yourself in that project.
+Confirm Claude's research-preview channel prompt, then select **Claude terminal
+channel** → **Find sessions** and attach the connection. To continue prior work,
+add `--resume` using Claude's normal resume workflow. An ordinary already-running
+terminal cannot be attached silently; connecting it requires that explicit
+startup opt-in. Retain its existing permission policy.
+
+Use `--remote-control` alongside the generated startup arguments only where the
+provider permits both features. Coexistence requires a real Claude acceptance
+run; the local channel fixtures do not prove Remote Control compatibility. A
+`claude remote-control` server which spawns sessions, a hosted cloud session and
+a session on another computer are separate cases: a loopback grant on this Mac
+does not attach to those remote processes. Use the existing paired/team sharing
+path for another device, with its own explicit session share.
+
+If Claude's own Remote Control is unavailable while Burst is enabled, inspect
+Burst's actual mode in Plexiform settings. Base-URL mode reports Remote Control
+off; transparent mode reports it expected to work. This is a mode diagnostic,
+not a completed provider test. A mode change is a separate explicit setup action.
+
+Before claiming success, verify the selected terminal/project, one harmless
+message, Claude's exact acceptance receipt and correlated reply, and the visible
+response/state in Plexiform. Repeat with Remote Control enabled if that is the
+intended workflow. A receipt timeout is unconfirmed and must not trigger an
+automatic retry.
+
+### Windows controlling a Mac through Plexiform
+
+This is a separate feature from Claude Remote Control. Plexiform's own-account
+relay requires the Mac's **Let my other devices use sessions Plexiform started
+on this Mac** opt-in and both devices signed in to the same account on the same
+hub. Its list contains sessions launched through the account remote host;
+ordinary terminal sessions and sessions started in Overview are outside that
+list. Turning on hosting does not attach to them.
+
+Team sessions use a separate explicit share: watch permits reads; Allow sending
+permits supported sends, steering and interruption by acting teammates. The
+owner's host checks its own share record as well as the hub's authorization.
+The team-share route refuses the owner's own account, so it is not an alternate
+way to reach a Mac Overview session from that owner's Windows device. A new
+own-device connection to an existing Overview session needs an explicit
+owner-device grant and UI; it is not supplied by the current terminal channel.
+
+Own-device relay callers have a client device role. A desktop currently hosting
+sessions cannot also use that own-device route with its host credential; a
+separately enrolled browser client has its own client credential. Hosting
+desktops can still use another owner's explicitly shared team session. Do not
+change device roles or turn off team sharing automatically to make a request fit.
+
+`board/hub/test/interaction-relay.test.js` proves same-account "Windows" → "Mac"
+send, provider acknowledgement, exact recorded input, correlated reply and
+completion over a disposable local accounts hub with a fake provider.
+`interaction-shares.test.js` checks team control, scope/role enforcement and
+revocation; `relay-e2e.test.js` checks paired encrypted transport. These labels
+model device roles on the test host. They do not prove a Windows installer,
+Windows-to-Mac network, deployed hub, retained login or real-provider acceptance.
+
 ## Main-process setup boundary
 
 1. Register `createClaudeChannelSession()` as `claude-channel` with the interaction

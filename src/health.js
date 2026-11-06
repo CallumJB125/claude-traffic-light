@@ -464,6 +464,13 @@ const CHECKS = [
   ['bus-mcp-claude', 'Agent bus tools (Claude Code)', busRow('claude')],
   ['bus-mcp-codex', 'Agent bus tools (Codex)', busRow('codex')],
   ['bus-codex-hook', 'Codex agent bus hook', checkBusHook],
+  ['bus-caller', 'This chat’s session connection', (c) => {
+    const b = c.busCaller;
+    if (!b) return null;
+    if (b.bound === true) return { status: 'ok', detail: 'Plexiform verified which chat is calling. This does not confirm message delivery.' };
+    return { status: 'fail', detail: 'Plexiform has not verified which chat is calling; session notes are unavailable.',
+      next: b.binding?.next || 'Check Plexiform activity hooks and reconnect the integration in this chat.' };
+  }],
   ['mcp-node', 'Node for the MCP server (development)', checkMcpNode],
   ['agents', 'Agents added from Find agents', checkAgents],
   ['transcripts', 'Transcripts', checkTranscripts],

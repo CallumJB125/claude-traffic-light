@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Plexiform Terminal</title>
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+  <link rel="stylesheet" href="style.css">
+  <script defer src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script defer src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">P</span><div><strong>Plexiform Terminal</strong><span class="subtitle">A place for your agents to work</span></div></div>
+    <div class="launch-actions" aria-label="Start a session">
+      <button data-spawn="shell" class="primary" title="Choose a folder and start a shell (⌘T)"><span aria-hidden="true">＋</span> New shell</button>
+      <button data-spawn="claude">Claude</button>
+      <button data-spawn="codex">Codex</button>
+      <button id="toggle-overview" aria-expanded="true" aria-controls="overview" title="Toggle agents overview">Overview</button>
+    </div>
+  </header>
+  <div id="development" class="development" hidden>Development build · local testing only. Public signing and notarization are not verified.</div>
+  <main class="workspace">
+    <section class="terminal-workspace" aria-label="Terminal sessions">
+      <nav id="tabs" class="tabs" role="tablist" aria-label="Sessions"></nav>
+      <div class="session-bar" id="session-bar" hidden>
+        <div class="session-location"><span id="session-kind" class="kind"></span><span id="session-cwd" class="path"></span></div>
+        <div class="session-actions"><button id="detach" title="Hide this tab and keep its process running">Detach</button><button id="stop" class="danger" title="Stop this session's process">Stop…</button></div>
+      </div>
+      <div id="terminal" role="tabpanel" aria-label="Terminal output" hidden></div>
+      <div id="empty" class="empty-state">
+        <div class="empty-mark" aria-hidden="true">⌘</div>
+        <h1>Your terminal. Your agents.</h1>
+        <p>Start a shell, Claude, or Codex in a folder you choose.<br>Opening this window starts no shell or agent.</p>
+        <button data-spawn="shell" class="primary">Choose a folder & start a shell</button>
+        <div class="persistence"><span aria-hidden="true">◈</span><p>Sessions run in the Session Keeper.<br>Closing this window leaves them running.</p></div>
+      </div>
+      <footer class="terminal-footer"><span id="connection">Connecting to Session Keeper…</span><span id="dimensions"></span></footer>
+    </section>
+    <aside id="overview" class="overview" aria-label="Agents overview">
+      <div class="overview-heading"><div><h2>Agents overview</h2><p id="overview-summary">Waiting for observed activity</p></div><span id="agent-count" class="count">—</span></div>
+      <div id="attention" class="attention" hidden></div>
+      <div class="overview-section"><h3>Keeper sessions <span id="keeper-count">0</span></h3><div id="keeper-sessions"></div></div>
+      <div class="overview-section"><h3>Observed agent activity</h3><p class="source-note">Reported by Plexiform. Missing telemetry is shown as unavailable.</p><div id="agents"></div></div>
+      <div class="overview-footnote">Input goes only to the selected terminal while this window is focused.<br>⌘T new shell · ⌘1–9 switch tabs</div>
+    </aside>
+  </main>
+  <div id="notice" class="notice" role="status" aria-live="polite" hidden><span id="notice-text"></span><button id="dismiss-notice" aria-label="Dismiss notice">×</button></div>
+</body>
+</html>

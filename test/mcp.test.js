@@ -234,7 +234,8 @@ test('stdio: the server starts, lists thirty-five tools and answers buddy_status
     assert.equal(tools.length, 35);
     // The same synthetic home on every host, without an installed Codex profile.
     const health = JSON.parse((await client.callTool({ name: 'buddy_health', arguments: {} })).content[0].text);
-    assert.equal(health.checks.length, 8);
+    assert.equal(health.checks.length, 9);
+    assert.equal(health.checks.find((c) => c.id === 'bus-caller').status, 'fail');
     assert.equal(health.checks.find((c) => c.id === 'signal').status, 'fail');
     const r = await client.callTool({ name: 'buddy_status', arguments: {} });
     const st = JSON.parse(r.content[0].text);

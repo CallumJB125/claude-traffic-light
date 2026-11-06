@@ -89,7 +89,10 @@ test('terminal channel: wrong token, browser origin, wrong link, duplicate conne
 });
 
 test('terminal channel: another valid grant cannot accept or reply to the selected target', async t => {
-  const f = await fixture(t), second = f.adapter.createGrant({ cwd: '/synthetic/other' });
+  // Several real HTTP round trips exercise foreign-grant refusals before the
+  // valid receipt; do not race that isolation check against a 100 ms deadline.
+  // The dedicated deadline test below keeps its short real timeout.
+  const f = await fixture(t, { ackMs: 1000 }), second = f.adapter.createGrant({ cwd: '/synthetic/other' });
   const token = second.env.PLEXIFORM_CLAUDE_CHANNEL_TOKEN;
   const other = async (route, value, link = null) => {
     const response = await fetch(f.origin + route, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...(link ? { 'x-plexiform-link': link } : {}) }, body: JSON.stringify(value) });

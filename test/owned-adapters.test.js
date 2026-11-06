@@ -69,7 +69,7 @@ test('Claude edit tools exist only for a cwd inside an explicit safe root', asyn
   assert.equal(buildClaudeArgs({ sessionId: 'x' }).includes('acceptEdits'), false);
   const root = tmp(), calls = [];
   const fakeSpawn = (bin, args) => { calls.push(args); const { EventEmitter } = require('node:events'); const c = new EventEmitter(); c.stdout = new EventEmitter(); c.stdout.setEncoding = () => {}; c.stderr = new EventEmitter(); c.stdin = Object.assign(new EventEmitter(), { write() {} }); c.pid = 999999; c.kill = () => {}; return c; };
-  const a = createClaudeCodeSession({ bin: '/x/claude', spawn: fakeSpawn, safeRoot: root });
+  const a = createClaudeCodeSession({ bin: '/x/claude', spawn: fakeSpawn, safeRoot: root, env: ENV });
   fs.mkdirSync(path.join(root, 'w')); fs.mkdirSync(`${root}-evil`); t.after(() => fs.rmSync(`${root}-evil`, { recursive: true, force: true }));
   const outside = tmp(); fs.symlinkSync(outside, path.join(root, 'link'), process.platform === 'win32' ? 'junction' : 'dir');
   await a.open({ cwd: path.join(root, 'w') }); await a.open({ cwd: tmp() }); await a.open({ cwd: `${root}-evil` });
