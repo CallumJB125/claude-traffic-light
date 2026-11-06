@@ -58,3 +58,9 @@ test('buddy_health asks the bus for its provider health and shows a row for an A
   const quiet = await tool.run({}, { bus: async () => { throw new Error('down'); }, root, home: testTempDir('ctl-mcphealth-home-'), live: null, statfs: () => ({ bavail: 1e6, bsize: 1e6 }) });
   assert.equal(quiet.checks.find((c) => c.id === 'bus-providers'), undefined);
 });
+
+test('bus_hello\'s description names the field each case carries: repo_why when on, repo_reason when off (contract)', () => {
+  const d = M.TOOLS.find((t) => t.name === 'bus_hello').description;
+  assert.match(d, /repo_why/);
+  assert.match(d, /repo_reason/);
+});

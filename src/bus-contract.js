@@ -43,7 +43,8 @@ const REPO_REASON_TEXT = freeze({
   NOT_GIT: 'This folder is not a git checkout. Hand-offs need one, because the work runs in its own git worktree.',
   BUS_OFF: 'The agent bus is turned off in Plexiform Preferences.',
 });
-// Why a repository IS on the bus (repo_why, informational).
+// Why a repository IS on the bus (policy_summary.repo_why, informational; present only when repo_enabled is true, so
+// exactly one of repo_why and repo_reason is ever set and a client may branch on which).
 // AUTO: automatic mode, which takes every repository that is not excluded or protected for a bound caller. SESSION and
 // WORKTREE: the same for an unbound caller, through a session or task folder in the repository (or a worktree of it).
 const REPO_ALLOWED = freeze({ POLICY: 'POLICY', LISTED: 'LISTED', AUTO: 'AUTO', SESSION: 'SESSION', WORKTREE: 'WORKTREE' });

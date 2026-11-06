@@ -27,7 +27,7 @@ test('auto scope: every repository is on the bus, with no session needed (AUTO);
     let p = await hello(b, wt);
     assert.equal(p.repo_enabled, true);
     assert.equal(p.repo_why, 'AUTO');
-    assert.equal(p.repo_reason, undefined);
+    assert.equal(p.repo_reason, undefined, 'exactly one of repo_why / repo_reason (contract)');
     assert.equal((await b.handoff({}, { provider: 'claude', cwd: wt, bound: true })).state, 'offered');
     p = await hello(b, b.h.repo.checkout);
     assert.equal(p.repo_enabled, true);
