@@ -277,6 +277,24 @@ test('a person\'s own Codex task that parks on its limit opens the breaker too: 
   } finally { w.cleanup(); }
 });
 
+test('review #1: a parked task re-sent after its reset has passed never reopens the breaker; its own finished run closes it', async () => {
+  const w = await world();
+  try {
+    w.engine.tasks.set('tsk_mine02', { id: 'tsk_mine02', source: 'local', sourceMeta: {}, state: 'parked', parkReason: 'limit', limitResetAt: 1000, ai: { id: 'codex' } });
+    w.engine.emit('event', { type: 'state', taskId: 'tsk_mine02', prevState: 'running' });
+    assert.equal(w.bus.health.get('codex').state, 'closed', 'a reset already past says nothing about now');
+    const resetAt = Date.now() + 3_600_000;
+    w.engine.tasks.set('tsk_mine03', { id: 'tsk_mine03', source: 'local', sourceMeta: {}, state: 'parked', parkReason: 'limit', limitResetAt: resetAt, ai: { id: 'codex' } });
+    w.engine.emit('event', { type: 'state', taskId: 'tsk_mine03', prevState: 'parked' });
+    assert.equal(w.bus.health.get('codex').state, 'closed', 'the same parked state sent again is not a new limit');
+    w.engine.emit('event', { type: 'state', taskId: 'tsk_mine03', prevState: 'running' });
+    assert.equal(w.bus.health.get('codex').state, 'open');
+    w.engine.tasks.get('tsk_mine03').state = 'done';
+    w.engine.emit('event', { type: 'state', taskId: 'tsk_mine03', prevState: 'running' });
+    assert.equal(w.bus.health.get('codex').state, 'closed', 'Codex finishing a run means it has quota again');
+  } finally { w.cleanup(); }
+});
+
 test('item 7: given traceFile (main\'s data folder), the helper traces there, not in its own data folder', async () => {
   const dir = tmpDir('pxtr-');
   const shared = tmpDir('pxtr-main-');

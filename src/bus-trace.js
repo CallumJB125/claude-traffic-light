@@ -51,7 +51,10 @@ function resultOf(r, err = null) {
   return { result: 'ok', reason: null };
 }
 
-function createTrace({ file, now = Date.now, maxBytes = MAX_BYTES, fsp = fs.promises } = {}) {
+// rotates: false for the second writer (the Tasks helper), so only main ever renames the shared file; the helper
+// just appends, and leaves it alone unless it has grown far past the cap (main gone).
+function createTrace({ file, now = Date.now, maxBytes = MAX_BYTES, fsp = fs.promises, rotates = true } = {}) {
+  const cap = rotates ? maxBytes : maxBytes * 4;
   let size = null;
   let queue = Promise.resolve();
   function write(text) {
@@ -59,8 +62,8 @@ function createTrace({ file, now = Date.now, maxBytes = MAX_BYTES, fsp = fs.prom
       if (size === null) size = await fsp.stat(file).then((s) => s.size, () => 0);
       // Two writers share the file (main and the Tasks helper): before rotating, read the real size, so one writer's
       // stale count never moves a file the other has just rotated.
-      if (size + text.length > maxBytes) size = await fsp.stat(file).then((s) => s.size, () => 0);
-      if (size + text.length > maxBytes) { await fsp.rename(file, `${file}.1`).catch(() => {}); size = 0; }
+      if (size + text.length > cap) size = await fsp.stat(file).then((s) => s.size, () => 0);
+      if (size + text.length > cap) { await fsp.rename(file, `${file}.1`).catch(() => {}); size = 0; }
       await fsp.appendFile(file, text, { mode: 0o600 });
       size += Buffer.byteLength(text);
     }).catch(() => { size = null; });

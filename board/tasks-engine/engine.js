@@ -1941,7 +1941,7 @@ export class TasksEngine extends EventEmitter {
       if (pe) throw new ApiError('VALIDATION', `payload: ${pe.message}`);
       const actor = share !== null ? { kind: 'relay', source: SHARE_SOURCE, id: `${SHARE_SOURCE}:${share.key}`, userId: share.by.memberId, by: share.by.name } : this.principal(ctx);
       this.#audit(task, actor.kind === 'relay' ? actor.source === 'mcp' ? 'agent' : 'remote' : 'user', action, action === 'openPr' ? payload.phase : Object.keys(payload).length && action !== 'message' ? JSON.stringify(payload) : null);
-      const out = await this.#doAct(task, action, payload, actor);
+      const out = await this.#doAct(task, action, payload, actor, ctx.stoppedBy === 'Plexiform' ? 'Plexiform' : 'you');
       this.#save(task);
       return { ok: true, task: this.#view(task), ...out };
     });
@@ -1961,7 +1961,7 @@ export class TasksEngine extends EventEmitter {
     throw new ApiError('SESSION_BUSY', 'the chat is working; a teammate can send when it is idle');
   }
 
-  async #doAct(task, action, payload, actor) {
+  async #doAct(task, action, payload, actor, stoppedBy = 'you') {
     const run = this.runs.get(task.id);
     switch (action) {
       case 'openPr': {
@@ -2026,7 +2026,7 @@ export class TasksEngine extends EventEmitter {
       case 'stop': {
         if (run) await this.#stopRun(task, run);
         else this.#restorePendingProvider(task, task.pendingStart);
-        task.stoppedBy = 'you';
+        task.stoppedBy = stoppedBy;
         if (task.openAsk) this.#closeAsk(task, null);
         this.#failTask(task, 'stopped', null);
         return {};

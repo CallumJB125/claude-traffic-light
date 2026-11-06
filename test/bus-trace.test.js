@@ -62,3 +62,19 @@ test('two writers share one file (main and the Tasks helper): a stale size never
   assert.equal(fs.readFileSync(`${file}.1`, 'utf8'), rotated, 'the rotated file is kept');
   assert.deepEqual(fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l).result), ['ok', 'refused', 'refused']);
 });
+
+test('review #3: a second writer (rotates:false) never renames the shared file; main does', async () => {
+  const dir = testTempDir('pf-trace-rot-');
+  try {
+    const file = path.join(dir, 'bus-trace.jsonl');
+    const helper = T.createTrace({ file, maxBytes: 500, rotates: false });
+    for (let i = 0; i < 5; i += 1) helper.append({ op: 'note', result: 'ok' });
+    await helper.flush();
+    assert.equal(fs.existsSync(`${file}.1`), false, 'the helper only appends');
+    assert.ok(fs.statSync(file).size > 500, 'past the cap, still one file');
+    const main = T.createTrace({ file, maxBytes: 500 });
+    main.append({ op: 'note', result: 'ok' });
+    await main.flush();
+    assert.equal(fs.existsSync(`${file}.1`), true, 'main rotates');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

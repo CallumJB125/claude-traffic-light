@@ -109,7 +109,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger, t
   // The trace (src/bus-trace.js): this helper's half, same shape and trace_ids as main's. A hand-off's trace_id is
   // kept on its offer, so its claim, start, result and returned note are lines of the same collaboration.
   // traceFile: main's <Plexiform data>/bus-trace.jsonl (utility-entry passes it), so both halves share one file.
-  const trace = BusTrace.createTrace({ file: traceFile ?? path.join(dataDir, 'bus-trace.jsonl'), now });
+  const trace = BusTrace.createTrace({ file: traceFile ?? path.join(dataDir, 'bus-trace.jsonl'), now, rotates: !traceFile });
   const traceOf = (ev) => (Contract.isTraceId(ev?.data?.trace_id) ? ev.data.trace_id : undefined);
   const span = (ev, op, extra = {}) => trace.append({ trace_id: traceOf(ev), op, provider: ev?.to?.provider ?? null, repo_key_hash: BusTrace.repoKeyHash(ev?.repo?.root), ref: ev?.handoff_id ?? null, ...extra });
   const health = createProviderHealth({ log, now, onChange: (h) => {
@@ -436,7 +436,11 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger, t
       ...runCost(task), branch: task.branch, task_id: task.id, provider: task.ai?.id ?? null, providerReason,
     });
     // A parked run has its result now (and maybe a fallback): end it, so a later "resume" never redoes the work unseen.
-    if (task.state === 'parked') engine.act({ id: task.id, action: 'stop', requestId: `bus-parked-${task.id}` }).catch(() => {});
+    // A sign-in park stays resumable ("I logged in: resume"); a usage-limit park would only rerun what the fallback does.
+    if (task.state === 'parked' && task.parkReason === 'limit') {
+      engine.act({ id: task.id, action: 'stop', requestId: `bus-parked-${task.id}` }, { stoppedBy: 'Plexiform' })
+        .catch((err) => logger?.warn?.('bus parked stop', { task: task.id, code: err?.code ?? null }));
+    }
   }
   // Any run of this Mac's that parks on its usage limit (a person's own task too) says the provider is out of quota
   // until its reset: the breaker opens, so a hand-off naming it is refused up front and 'any' skips it.
@@ -444,7 +448,12 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger, t
     if (e.type !== 'state') return;
     const t = engine.tasks.get(e.taskId);
     if (!t) return;
-    if (t.source !== 'bus' && t.state === 'parked' && t.parkReason === 'limit' && Contract.PROVIDERS.includes(t.ai?.id)) health.failed(t.ai.id, Contract.BREAKER_REASON.QUOTA, { retryAt: t.limitResetAt ?? null });
+    // Only on the move into parked: the engine re-sends the same state later (e.g. "Wait for the reset"), and a reset
+    // time already past would otherwise open the breaker for a fresh default hour.
+    const reset = Number(t.limitResetAt) || null;
+    if (t.source !== 'bus' && t.state === 'parked' && t.parkReason === 'limit' && e.prevState !== 'parked' && !(reset && reset <= now())
+      && Contract.PROVIDERS.includes(t.ai?.id)) health.failed(t.ai.id, Contract.BREAKER_REASON.QUOTA, { retryAt: t.limitResetAt ?? null });
+    else if (t.source !== 'bus' && t.state === 'done' && Contract.PROVIDERS.includes(t.ai?.id)) health.succeeded(t.ai.id);
     onTaskState(t);
   };
   engine.on('event', onEvent);
