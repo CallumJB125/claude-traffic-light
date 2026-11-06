@@ -5384,7 +5384,7 @@ utilityHandle('aitools:terminal-open', aiToolsPage, async () => {
   return p.app ? TerminalGet.open(p.app.path) : { ok: false, code: 'NOT_INSTALLED' };
 });
 if (IS_MAC) setTimeout(() => { detectTerminal().catch(() => {}); }, 5000).unref?.();
-const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: aiToolsPage, focusAllowed: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }), onClaudeHooks: (installed) => noteAskHooks(installed && !!loadConfig().askFromWidget) });
+const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: aiToolsPage, focusAllowed: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }), onClaudeHooks: (installed) => noteAskHooks(installed && !!loadConfig().askFromWidget), bus: McpAuto });
 const aiToolsOpen = (destination) => AiTools.open(destination);
 // Find agents (src/agents-find-main.js). The ledger key lives only here: it
 // is made on the first add, peeked (never made) for reads, and Health sees it
