@@ -304,6 +304,7 @@ test('Remote Control: a bridge session\'s hook records it interactive; its MCP c
   await s.aw.relay('handoff', { title: 'From the phone' }, { provider: 'claude', cwd: s.w.repoA }, s.w.call(101), { forward: async (op, args, caller) => { fwd.push(caller); return { state: 'offered' }; } });
   assert.equal(fwd[0].provider, 'claude');
   assert.equal(fwd[0].unbound, undefined);
+  assert.equal(fwd[0].bound, true);
   assert.equal(fwd[0].origin?.key, 'claude|X');
   assert.equal(fwd[0].origin?.handle, y);
 });

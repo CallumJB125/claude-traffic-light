@@ -21,9 +21,10 @@ const UNREAD_SCAN_MIN_MS = 4000;
 const LOCAL_SOURCES = ['local', 'cli'];
 const { isDirWithin: isDirDefault } = require('./bounded-io.js');
 
-// After the socket is up and has the bus context (so the repo rules are the person's), a hand-off main relays for a
-// session it bound goes over parentPort with its caller: only that channel carries the origin (engine.bus).
-const parentRouted = (op, caller, opts) => op === 'handoff' && !!caller && !!caller.origin && typeof opts.busMain === 'function';
+// After the socket is up and has the bus context (so the repo rules are the person's), a hand-off or hello main relays
+// for a session it bound goes over parentPort with its caller: only that channel can say bound, or carry the origin
+// (engine.bus). Through the socket every caller is unbound.
+const parentRouted = (op, caller, opts) => (op === 'handoff' || op === 'hello') && !!caller && caller.bound === true && typeof opts.busMain === 'function';
 
 async function loadApi() {
   const [client, protocol, face] = await Promise.all(['client.js', 'protocol.js', 'face.js'].map((f) => import(pathToFileURL(path.join(API_DIR, f)).href))); // privacy-flow: tasks-local
@@ -844,8 +845,8 @@ function createTasksService(opts) {
     const channel = client;
     if (op !== 'busSetContext' && opts.busContext) await (busContextFor === channel ? busContextSent : pushBusContext(channel));
     const timeoutMs = op === 'wait' ? (Math.min(120, Math.max(0, Number(args?.timeout_s ?? 60) || 0)) + 10) * 1000 : 12_000;
-    // A hand-off main relays for a session it bound names that session (caller.origin) for the result note: only
-    // parentPort carries that (engine.bus). With no parentPort (a dev fixture home) it goes without, as before.
+    // A bound caller (and a hand-off's origin, for the result note) is believed only over parentPort (engine.bus).
+    // With no parentPort (a dev fixture home) it goes through the socket and counts as unbound.
     if (parentRouted(op, caller, opts)) return opts.busMain(op, args, { caller, timeoutMs });
     return channel.bus(op, args, caller, { timeoutMs });
   }

@@ -1,7 +1,8 @@
 // G5 in the app's real path: who asked (caller.origin, the session main bound) reaches the dispatcher only over the
 // helper's parentPort, which only main holds. Through tasks.sock, which any same-user process holding tasks.token can
 // reach, an origin is dropped, so no such process can aim a hand-off's result note at a session (PR B's note rule).
-// unbound and a trace id pass either way: one only narrows, the other only joins log lines.
+// So does bound (main's word that it bound the caller): through the socket every caller is unbound. A trace id
+// passes either way: it only joins log lines.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startBus, rid } from './bus-helpers.js';
@@ -19,8 +20,8 @@ test('a hand-off\'s origin is kept over parentPort and dropped over the socket; 
     const viaSocket = await b.socketBus('handoff', { request_id: rid('ps'), to: { provider: 'codex' }, title: 'Forged' }, caller);
     assert.equal(viaSocket.state, 'offered');
     assert.equal(log.handoff(viaSocket.handoff_id).data.origin, undefined, 'the socket never carries an origin');
-    // The note ops still refuse a caller, and only a hand-off takes one over parentPort.
-    await assert.rejects(b.viaParent('hello', {}, caller), (e) => e.code === 'VALIDATION');
+    // Only a hand-off and hello take a caller over parentPort; anything else is refused there.
+    await assert.rejects(b.viaParent('status', {}, caller), (e) => e.code === 'VALIDATION');
     // A bad request over parentPort says what is wrong, as the socket does.
     await assert.rejects(b.viaParent('handoff', { request_id: 'x', title: 'Bad' }, caller), (e) => e.code === 'VALIDATION' && e.message !== 'VALIDATION' && e.message.length > 0);
   } finally { await b.cleanup(); }

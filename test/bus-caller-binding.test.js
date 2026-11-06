@@ -577,6 +577,8 @@ test('auto scope: an unbound caller (a run, a headless or unverifiable session) 
   w.proc(300, { ppid: 1, exe: '/opt/homebrew/bin/node', cwd: w.repoA, args: 'node x' });
   await aw.relay('handoff', { title: 'x' }, { provider: 'codex', cwd: w.repoA }, w.call(300), { forward });
   assert.deepEqual(seen.map((c) => c.unbound === true), [false, true]);
+  // Only the bound one is marked bound: tasks-service sends it over parentPort, the one channel the helper believes that on.
+  assert.deepEqual(seen.map((c) => c.bound === true), [true, false]);
 });
 
 test('review #6: a caller\'s environment is read only after the parent, program and stdio checks pass, and only three names leave the reader', async (t) => {

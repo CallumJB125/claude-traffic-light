@@ -1039,7 +1039,7 @@ function boardAnswer(board) {
         const origin = me && me.verified === true && typeof me.handle === 'string' ? { key: b.key, handle: me.handle, ...(originBoard ? { board: originBoard } : {}) } : null;
         if (origin) rememberOrigin(b.key);
         if (me && typeof me.handle === 'string') tc.from_handle = me.handle;
-        caller = { ...caller, provider: b.provider, ...(typeof b.session.cwd === 'string' && path.isAbsolute(b.session.cwd) ? { cwd: b.session.cwd } : {}),
+        caller = { ...caller, bound: true, provider: b.provider, ...(typeof b.session.cwd === 'string' && path.isAbsolute(b.session.cwd) ? { cwd: b.session.cwd } : {}),
           ...(op === 'handoff' && noteReaders.has(b.key) ? { after_note: true } : {}), ...(origin ? { origin } : {}) };
       } else if (b.client) {
         // A client that named itself (Gemini, Cursor, ...): unverified_client, read-only (owner decision D2).

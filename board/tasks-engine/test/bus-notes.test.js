@@ -266,8 +266,8 @@ test('parentPort handler: only a tasks.bus with a short id and a note op reaches
   assert.equal(await parentBus(engine, null), null);
   assert.equal(await parentBus(engine, { type: 'tasks.shutdown', id: 'a' }), null);
   for (const id of [undefined, 7, '', 'x'.repeat(65), 'a b', '../x']) assert.equal(await parentBus(engine, { type: 'tasks.bus', id, op: 'notes', args: {} }), null, String(id));
-  // handoff is taken over parentPort too since G5 (with main's caller; bus-parent-origin.test.js); these never are.
-  for (const op of ['status', 'hello', 'busSetContext', 'halt', '__proto__', undefined]) assert.deepEqual(await parentBus(engine, { type: 'tasks.bus', id: 'a1', op, args: {} }), { type: 'tasks.busResult', id: 'a1', ok: false, code: 'VALIDATION' });
+  // handoff and hello are taken over parentPort too (with main's caller; bus-parent-origin.test.js); these never are.
+  for (const op of ['status', 'busSetContext', 'halt', '__proto__', undefined]) assert.deepEqual(await parentBus(engine, { type: 'tasks.bus', id: 'a1', op, args: {} }), { type: 'tasks.busResult', id: 'a1', ok: false, code: 'VALIDATION' });
   for (const args of [[], 'x', null]) assert.equal((await parentBus(engine, { type: 'tasks.bus', id: 'a2', op: 'notes', args })).code, 'VALIDATION');
   assert.equal(calls.length, 0, 'none of those reached the engine');
   assert.deepEqual(await parentBus(engine, { type: 'tasks.bus', id: 'ok_1', op: 'notes_pending' }), { type: 'tasks.busResult', id: 'ok_1', ok: true, result: { ok: 1 } });

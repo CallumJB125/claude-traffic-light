@@ -53,6 +53,25 @@ test('automatic: an unbound caller (main marks it) still needs a session or task
   } finally { await b.cleanup(); }
 });
 
+test('automatic: through tasks.sock every caller is unbound: no flag, or a forged bound, still needs a session there (security review #1)', async () => {
+  const b = await auto();
+  try {
+    // Any same-user process can read tasks.token: it names a repo no session is in and leaves the unbound flag off.
+    const bare = { provider: 'codex', cwd: b.h.repo.checkout };
+    const forged = { ...bare, bound: true, unbound: false };
+    for (const c of [bare, forged, null]) {
+      const r = await b.socketBus('handoff', { request_id: rid('sock'), to: { provider: 'codex' }, title: 'Run here', repo: b.h.repo.checkout }, c);
+      assert.equal(r.repo_reason ?? r.reason, 'NO_SESSION', JSON.stringify(r));
+      if (c) assert.equal((await b.socketBus('hello', { provider: 'codex' }, c)).policy_summary.repo_reason, 'NO_SESSION');
+    }
+    assert.equal([...b.engine.tasks.values()].length, 0, 'no run started');
+    // Main's bound caller, over parentPort only: automatic mode takes the repo.
+    const viaMain = await b.viaParent('handoff', { request_id: rid('main'), to: { provider: 'codex' }, title: 'Bound', provider: 'claude' }, { ...bare, bound: true });
+    assert.equal(viaMain.state, 'offered', JSON.stringify(viaMain));
+    assert.equal((await b.viaParent('hello', { provider: 'codex' }, { ...bare, bound: true })).policy_summary.repo_why, 'AUTO');
+  } finally { await b.cleanup(); }
+});
+
 test('automatic: a nested checkout and the repo around it are both on the bus', async () => {
   const b = await auto();
   try {
