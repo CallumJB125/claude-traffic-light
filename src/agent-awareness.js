@@ -24,6 +24,7 @@ const { bindingStatus } = require('./bus-binding-status');
 const RESULT_SYNC_MS = 15 * 1000;
 const RESULT_SYNC_FOR_MS = 30 * 60 * 1000;
 const Contract = require('./bus-contract.js');
+const BusTrace = require('./bus-trace.js');
 const DEFAULTS = Object.freeze({ enabled: true, notes: true, midTurnNotices: true });
 const DEBOUNCE_MS = 1000;
 const HEARTBEAT_MS = 2 * 60 * 1000;
@@ -150,7 +151,7 @@ function interactiveOf(s, provider) {
  */
 function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), dataDirs = [], config, sessions, execFile = require('child_process').execFile, fsp = require('fs').promises,
   now = () => Date.now(), startedAt = now(), halted = () => 'unknown', platform = process.platform, log = () => {}, setTimer = setTimeout, clearTimer = clearTimeout,
-  handleKey = crypto.randomBytes(32), buildTimeoutMs = BUILD_TIMEOUT_MS, mcpCaps = () => ({}), boardFor = () => ({ kind: 'unknown' }), selfPid = process.pid, bindRetryMs = 400,
+  trace: traceOpt, handleKey = crypto.randomBytes(32), buildTimeoutMs = BUILD_TIMEOUT_MS, mcpCaps = () => ({}), boardFor = () => ({ kind: 'unknown' }), selfPid = process.pid, bindRetryMs = 400,
   servers = () => [], envPath = process.env.PATH || '', bindCacheMs = 2000,
   // Notes (step 4): bus(op, args) reaches the Tasks helper (main's own ops); busStarted() says whether it runs (a
   // background sync never starts it); refreshHalt() asks it whether the bus is stopped (and starts it).
@@ -714,6 +715,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
         for (const [owner, list] of byOwner) {
           const done = await bus('notified', { to: { key: owner }, note_ids: list }).catch(() => null);
           if (done && Array.isArray(done.notified)) for (const id of list) acked.add(id);
+          if (trace && done && Array.isArray(done.notified)) for (const id of list) trace.append({ trace_id: noteTraces.get(id), op: 'notified', to: book.get(owner)?.handle ?? null, ref: id, result: 'ok' });
         }
         log(`[awareness] notices notified=${fresh.length}`);
       }
@@ -735,7 +737,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
 
   // bus_note and bus_notes (/bus ops note and notes): only for a caller verified as a session, never by anything
   // the request says about who it is from. The helper gets arguments main builds.
-  async function notesOp(op, args, ident, forward) {
+  async function notesOp(op, args, ident, forward, tc = {}) {
     const { aw, exclude } = settings();
     if (!aw.enabled || !aw.notes) return NOTES_OFF;
     const b = await bindCaller(ident);
@@ -747,6 +749,8 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     const roster = await current(b.key);
     const me = roster && has(roster.self, b.key) ? roster.self[b.key] : null;
     if (!me || me.verified !== true || typeof me.handle !== 'string' || !book.has(b.key)) return op === 'notes' ? { ...NOT_BOUND, notes: [] } : NOT_BOUND;
+    tc.from_handle = me.handle;
+    tc.repo_key_hash = typeof me.repo_key === 'string' ? me.repo_key : null;
     if (op === 'notes') {
       const r = await forward('notes', { me: { key: b.key }, ...(status ? { status: true } : {}), ...(typeof args.note_id === 'string' && Hook.NOTE_ID.test(args.note_id) ? { note_id: args.note_id } : {}) }, null);
       const got = !status && r && Array.isArray(r.notes) ? r.notes.map((n) => n && n.note_id).filter((id) => typeof id === 'string' && Hook.NOTE_ID.test(id)) : [];
@@ -778,6 +782,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
       return r;
     }
     const to = typeof args.to === 'string' ? args.to : '';
+    tc.to = to;
     const toKey = byHandle.get(to);
     const target = toKey && toKey !== b.key && has(roster.self, toKey) ? roster.self[toKey] : null;
     if (!target || target.allowed !== true || target.verified !== true || target.bound !== true || !target.caps || target.caps.notes !== true) {
@@ -864,7 +869,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   // bus_card_add (/bus op card_add). Who calls, which folder, which scope, provider and handle all come from the
   // verified session and the book, never from the request (review point 7): args carry only title, details and
   // request_id. The board itself is decided in work capture from that session.
-  async function cardOp(args, ident) {
+  async function cardOp(args, ident, tc = {}) {
     const { aw, exclude } = settings();
     if (!aw.enabled) return { reason: 'AWARENESS_OFF', message: 'Your person turned off "Let my AI sessions see each other" in Plexiform, so AI sessions cannot add cards.' };
     const b = await bindCaller(ident);
@@ -874,6 +879,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     const me = roster && has(roster.self, b.key) ? roster.self[b.key] : null;
     const who = book.get(b.key);
     if (!me || me.verified !== true || typeof me.handle !== 'string' || !who) return { reason: 'NOT_BOUND', message: 'Plexiform could not verify this session, so it cannot add a card for it.' };
+    tc.from_handle = me.handle;
     const title = typeof args.title === 'string' ? args.title : '';
     const details = typeof args.details === 'string' ? args.details : undefined;
     if (!title.trim() || title.length > 120 || (details !== undefined && details.length > 800) || typeof args.request_id !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(args.request_id)) {
@@ -977,11 +983,30 @@ function boardAnswer(board) {
 
   // The /bus relay (src/signal-server.js → here): bus_peers and bus_session are answered by main; a hand-off or
   // hello from a bound caller goes on with its real provider in place of the one it declared (signal-server.js:133).
-  async function relay(op, args, caller, ident, { forward, onCodexSession = async () => {} }) {
-    if (op === 'note' || op === 'notes') return notesOp(op, args && typeof args === 'object' ? args : {}, ident, forward);
-    if (op === 'card_add') return cardOp(args && typeof args === 'object' ? args : {}, ident);
+  // The trace (src/bus-trace.js): main writes the line for ops it answers (peers, session, note, notes, card_add);
+  // for the ones it forwards, the helper writes it with the trace_id main passes. ids and labels only.
+  const trace = traceOpt === undefined ? BusTrace.createTrace({ file: path.join(rootDir, 'bus-trace.jsonl'), now }) : traceOpt;
+  const noteTraces = new Map(); // note_id → trace_id, for the notified line
+  const TRACED_HERE = { peers: 'peers', session: 'peers', note: 'note', notes: 'notes', card_add: 'card' };
+  async function relay(op, args, caller, ident, opts) {
+    const t0 = now();
+    const tc = { trace_id: BusTrace.newTraceId(), from_handle: null, to: null, ref: null, repo_key_hash: null };
+    const forward = (o, a, c) => opts.forward(o, a, c && typeof c === 'object' ? { ...c, trace: { trace_id: tc.trace_id, from_handle: tc.from_handle } } : c);
+    let r, err = null;
+    try { r = await relayInner(op, args, caller, ident, { ...opts, forward }, tc); } catch (e) { err = e; }
+    if (trace && Object.hasOwn(TRACED_HERE, op)) {
+      if (op === 'note' && r && typeof r.note_id === 'string') { tc.ref = r.note_id; noteTraces.set(r.note_id, tc.trace_id); while (noteTraces.size > 500) noteTraces.delete(noteTraces.keys().next().value); }
+      trace.append({ trace_id: tc.trace_id, op: TRACED_HERE[op], from_handle: tc.from_handle, to: tc.to, repo_key_hash: tc.repo_key_hash, ref: tc.ref, ms: now() - t0, ...BusTrace.resultOf(r, err) });
+    }
+    if (err) throw err;
+    return r;
+  }
+  async function relayInner(op, args, caller, ident, { forward, onCodexSession = async () => {} }, tc) {
+    if (op === 'note' || op === 'notes') return notesOp(op, args && typeof args === 'object' ? args : {}, ident, forward, tc);
+    if (op === 'card_add') return cardOp(args && typeof args === 'object' ? args : {}, ident, tc);
     if (op === 'peers' || op === 'session') {
       const r = await busOp(op, ident, caller);
+      if (r && typeof r.you === 'string') tc.from_handle = r.you;
       // Only a call shaped as Codex's hook makes it (src/mcp-server.js hookShaped): the model calling bus_session itself does not.
       if (op === 'session' && ident.hook === true && r && r.bound && r.provider === 'codex') Promise.resolve().then(onCodexSession).catch(() => {});
       return r;
@@ -1005,6 +1030,7 @@ function boardAnswer(board) {
         const originBoard = board && board.kind === 'team' && /^[a-f0-9]{64}$/.test(board.key || '') ? board.key : null;
         const origin = me && me.verified === true && typeof me.handle === 'string' ? { key: b.key, handle: me.handle, ...(originBoard ? { board: originBoard } : {}) } : null;
         if (origin) rememberOrigin(b.key);
+        if (me && typeof me.handle === 'string') tc.from_handle = me.handle;
         caller = { ...caller, provider: b.provider, ...(typeof b.session.cwd === 'string' && path.isAbsolute(b.session.cwd) ? { cwd: b.session.cwd } : {}),
           ...(op === 'handoff' && noteReaders.has(b.key) ? { after_note: true } : {}), ...(origin ? { origin } : {}) };
       }

@@ -21,6 +21,7 @@ import untrustedFrame from '../../shared/untrusted-frame.cjs';
 import { createRequire } from 'node:module';
 
 const Contract = createRequire(import.meta.url)('../../../src/bus-contract.js');
+const BusTrace = createRequire(import.meta.url)('../../../src/bus-trace.js');
 
 const { frame, fold } = untrustedFrame;
 const HOUR_MS = 60 * 60 * 1000;
@@ -104,7 +105,15 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   // Notes (plan-agent-awareness §3.6): main's ops only; their events carry handles and states, never the text.
   const notes = createNotes({ log, now, halted: () => log.state('halted', false),
     record: (kind, data) => append(envelope({ topic: 'note', kind, handoff: null, source: systemSource, data })) });
-  const health = createProviderHealth({ log, now, onChange: (h) => logger?.info?.('bus provider', { provider: h.provider, state: h.state, reason: h.reason }) });
+  // The trace (src/bus-trace.js): this helper's half, same shape and trace_ids as main's. A hand-off's trace_id is
+  // kept on its offer, so its claim, start, result and returned note are lines of the same collaboration.
+  const trace = BusTrace.createTrace({ file: path.join(dataDir, 'bus-trace.jsonl'), now });
+  const traceOf = (ev) => (Contract.isTraceId(ev?.data?.trace_id) ? ev.data.trace_id : undefined);
+  const span = (ev, op, extra = {}) => trace.append({ trace_id: traceOf(ev), op, provider: ev?.to?.provider ?? null, repo_key_hash: BusTrace.repoKeyHash(ev?.repo?.root), ref: ev?.handoff_id ?? null, ...extra });
+  const health = createProviderHealth({ log, now, onChange: (h) => {
+    logger?.info?.('bus provider', { provider: h.provider, state: h.state, reason: h.reason });
+    trace.append({ op: 'breaker', provider: h.provider, result: h.state === 'closed' ? 'ok' : 'refused', reason: h.reason ?? null });
+  } });
   const unavailableRefusal = (u) => ({ reason: 'PROVIDER_UNAVAILABLE', provider: u.provider, retry_at: u.retry_at ?? null, provider_reason: u.reason ?? null,
     message: `${AI_NAME[u.provider] ?? 'That AI'} ${BREAKER_WORDS[u.reason] ?? 'cannot take work on this Mac now'}${u.retry_at ? `; Plexiform tries it again after ${new Date(u.retry_at).toISOString()}` : ''}. Ask for to.provider "any" to use the next AI in your person's order.` });
 
@@ -242,7 +251,8 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     }
     const ev = envelope({ topic: 'handoff', kind: 'handoff.offer', handoff, request_id: h.request_id, ttlS: h.ttl_s, body: h.brief || null,
       data: { title: h.title, files: h.files ?? [], branch: h.branch ?? null, requires: { provider: h.to.provider }, budget_usd: h.budget_usd ?? null, reservation, ...(h.after_note ? { after_note: true } : {}),
-        ...(rest.length ? { fallback: rest } : {}), ...(h.origin ? { origin: h.origin } : {}), ...(h.fallback_of ? { fallback_of: h.fallback_of } : {}) } });
+        ...(rest.length ? { fallback: rest } : {}), ...(h.origin ? { origin: h.origin } : {}), ...(h.fallback_of ? { fallback_of: h.fallback_of } : {}),
+        ...(Contract.isTraceId(h.trace_id) ? { trace_id: h.trace_id } : {}) } });
     append(ev, { requestKey: h.requestKey, dedupeKey });
     if (reservation) log.reserve(dayOf(now()), reservation);
     setImmediate(pump);
@@ -263,6 +273,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     if (!claim) return;
     log.setClaim(ev.handoff_id, claim.fence, { reserved_usd: ev.data.reservation ?? 0 });
     append(envelope({ topic: 'claim', kind: 'claim.granted', handoff: ev, source: systemSource, data: { fence: claim.fence } }));
+    span(ev, 'claim', { result: 'ok' });
     // Everything after the claim is inside the try: a granted claim always ends in a start or a result.
     try {
       const s = settings();
@@ -287,6 +298,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       if (closed) return;
       log.setClaim(ev.handoff_id, claim.fence, { state: 'started', task_id: id, lease_until: now() + LEASE_MS });
       append(envelope({ topic: 'claim', kind: 'claim.started', handoff: ev, source: systemSource, data: { fence: claim.fence, task_id: id } }));
+      span(ev, 'start', { result: 'ok' });
       // Halted while it was starting: stop the run (its end posts no result), then release the claim so the
       // handoff starts again on resume. A stop that fails leaves a run that may still be going: lost, never rerun.
       if (stopped()) {
@@ -330,6 +342,8 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
         ...(providerReason ? { provider_reason: providerReason } : {}), ...(next?.handoff_id ? { fallback: { handoff_id: next.handoff_id, provider: next.provider } } : {}) } }));
     for (const w of waiters.get(ev.handoff_id) ?? []) w(r);
     waiters.delete(ev.handoff_id);
+    span(ev, 'result', { provider: provider ?? ev.to?.provider ?? null, result: outcome === 'done' ? 'ok' : outcome === 'failed' ? 'error' : 'deferred',
+      reason: providerReason ?? (outcome === 'done' ? null : outcome.toUpperCase()) });
     returnResult(ev, outcome, { summary, provider: provider ?? ev.to?.provider ?? null, next, providerReason });
     setImmediate(pump);
   }
@@ -347,7 +361,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       const r = post({ request_id: `fb-${ev.handoff_id.slice(4)}`, requestKey: `${ev.source.agent_id}|fb|${ev.handoff_id}`, source: ev.source, to: { provider: rest },
         card_id: ev.card_id ?? undefined, repoRoot: ev.repo?.root, hop: ev.hop, visited: ev.visited, caused_by: ev.handoff_id, title: ev.data.title, brief: ev.body ?? '',
         files: ev.data.files, branch: ev.data.branch ?? undefined, budget_usd: ev.data.budget_usd ?? undefined, ttl_s: Math.min(left, DEFAULT_TTL_S),
-        after_note: ev.data.after_note === true, origin: ev.data.origin, fallback_of: ev.handoff_id });
+        after_note: ev.data.after_note === true, origin: ev.data.origin, fallback_of: ev.handoff_id, trace_id: traceOf(ev) });
       return r?.handoff_id ? r : null;
     } catch (e) { logger?.warn?.('bus fallback failed', { code: e?.code ?? null }); return null; }
   }
@@ -366,7 +380,10 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
           : outcome === 'outcome_unknown' ? `Hand-off ${ev.handoff_id} ("${title}") ended with no known outcome.`
             : `Hand-off ${ev.handoff_id} ("${title}") failed.`;
     const tail = next ? '' : ` Summary: ${String(summary ?? '').replace(/\s+/g, ' ').slice(0, 400)} Full result: bus_wait with this handoff_id.`;
-    try { notes.system({ to: o, handoff_id: ev.handoff_id, text: `${head}${tail}` }); } catch (e) { logger?.warn?.('bus result note failed', { code: e?.code ?? null }); }
+    try {
+      const n = notes.system({ to: o, handoff_id: ev.handoff_id, text: `${head}${tail}` });
+      span(ev, 'returned', { to: o.handle, ...BusTrace.resultOf(n) });
+    } catch (e) { logger?.warn?.('bus result note failed', { code: e?.code ?? null }); }
   }
 
   // A bus task reached an end state: its handoff gets one result.
@@ -498,7 +515,23 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       text: text ? frame({ kind: result ? 'message' : 'handoff', source: who, card_id: ev.card_id, body: text, afterNote: !result && ev.data?.after_note === true }) : null };
   }
 
+  // One trace line per agent-facing op (main traces the notes ops it answers itself).
+  const TRACED = new Set(['hello', 'handoff', 'read', 'wait', 'status', 'halt', 'resume']);
   async function op(name, rawArgs = {}, caller = null) {
+    if (!TRACED.has(name)) return opInner(name, rawArgs, caller);
+    const t0 = now();
+    let r, err = null;
+    try { r = await opInner(name, rawArgs, caller); } catch (e) { err = e; }
+    const a = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
+    trace.append({ trace_id: caller?.trace?.trace_id, op: name, from_handle: caller?.origin?.handle ?? caller?.trace?.from_handle ?? null,
+      to: name === 'handoff' ? (r?.provider ?? (typeof a.to?.provider === 'string' ? a.to.provider : null)) : null,
+      provider: name === 'handoff' ? r?.provider ?? null : null, ref: r?.handoff_id ?? (typeof a.handoff_id === 'string' ? a.handoff_id : null),
+      repo_key_hash: r?.handoff_id ? BusTrace.repoKeyHash(log.handoff(r.handoff_id)?.repo?.root) : null,
+      ms: now() - t0, ...BusTrace.resultOf(r, err) });
+    if (err) throw err;
+    return r;
+  }
+  async function opInner(name, rawArgs = {}, caller = null) {
     if (closed) throw new BusRefusal('INTERNAL', 'the agent bus is closed');
     const s = settings();
     switch (name) {
@@ -530,7 +563,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
         // The session main verified as the caller (agent-awareness relay), for the result note (G5); never the request's.
         const origin = caller?.origin && SESSION_KEY.test(caller.origin.key ?? '') && HANDLE.test(caller.origin.handle ?? '')
           ? { key: caller.origin.key, handle: caller.origin.handle, ...(/^[a-f0-9]{64}$/.test(caller.origin.board ?? '') ? { board: caller.origin.board } : {}) } : null;
-        return post({ ...a, requestKey: `${agent_id}|${a.request_id}`, repoRoot: repo.root, brief: a.brief ?? '', ...(origin ? { origin } : {}),
+        return post({ ...a, requestKey: `${agent_id}|${a.request_id}`, repoRoot: repo.root, brief: a.brief ?? '', ...(origin ? { origin } : {}), trace_id: caller?.trace?.trace_id,
           source: { device_id: deviceId, agent_id, provider, tier: 'local_attested', identity_source: 'local_token' },
           hop: log.hopOf(await hopDomain(caller), now() - HOUR_MS) + 1, visited: [agent_id], after_note: caller?.after_note === true });
       }
@@ -638,7 +671,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   }
 
   return {
-    op, runTool, context, log, sessionRepo, health,
+    op, runTool, context, log, sessionRepo, health, trace,
     close() {
       if (closed) return;
       closed = true;

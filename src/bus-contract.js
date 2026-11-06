@@ -64,7 +64,8 @@ const DEFAULT_FALLBACK = freeze(['claude', 'codex', 'gemini']);
 
 // Provider health (circuit breaker), one per provider:
 //   {provider, state, reason, retry_at, since, failures}
-//   state: closed (healthy) | open (refusing until retry_at) | half_open (one probe run allowed)
+//   state: closed (healthy) | open (refusing until retry_at) | half_open (retry_at passed: runs start again, and the
+//   next provider failure re-opens it at once)
 //   reason: why it opened (null while closed); retry_at: epoch ms or null; since: epoch ms of the last state change.
 const BREAKER_STATE = freeze({ CLOSED: 'closed', OPEN: 'open', HALF_OPEN: 'half_open' });
 const BREAKER_REASON = freeze({ QUOTA: 'QUOTA', AUTH: 'AUTH', MISSING: 'MISSING', CRASH: 'CRASH' });
@@ -93,7 +94,7 @@ const BOARD_WHY = freeze({
 });
 
 // Trace (§3.6 observability). One JSONL line per bus op in <dataDir>/bus-trace.jsonl:
-//   {t, trace_id, span, op, from_handle, to, provider, repo_key_hash, result, reason, ms}
+//   {t, trace_id, span, op, from_handle, to, provider, repo_key_hash, result, reason, ms, ref}
 // trace_id: 'tr_' + 16 lowercase hex, minted at the first op of a collaboration (a note, a hand-off) and carried
 // by everything it causes (notice, read, claim, run, result, card). span: 'sp_' + 8 hex, one per op.
 // No field ever holds a note body, a brief, a title or an absolute path; repo_key_hash is sha256(repo)[:16].
@@ -101,7 +102,8 @@ const TRACE_ID_RE = /^tr_[0-9a-f]{16}$/;
 const SPAN_ID_RE = /^sp_[0-9a-f]{8}$/;
 const TRACE_OPS = freeze(['hello', 'peers', 'note', 'notes', 'notified', 'notice', 'handoff', 'claim', 'start', 'result',
   'returned', 'wait', 'read', 'status', 'card', 'route', 'breaker', 'halt', 'resume']);
-const TRACE_FIELDS = freeze(['t', 'trace_id', 'span', 'op', 'from_handle', 'to', 'provider', 'repo_key_hash', 'result', 'reason', 'ms']);
+// ref: the handoff_id or note_id the line is about (added 2026-11-06 with src/bus-trace.js; ids only, never text).
+const TRACE_FIELDS = freeze(['t', 'trace_id', 'span', 'op', 'from_handle', 'to', 'provider', 'repo_key_hash', 'result', 'reason', 'ms', 'ref']);
 const TRACE_RESULTS = freeze(['ok', 'refused', 'error', 'deferred']);
 const isTraceId = (s) => typeof s === 'string' && TRACE_ID_RE.test(s);
 const isSpanId = (s) => typeof s === 'string' && SPAN_ID_RE.test(s);

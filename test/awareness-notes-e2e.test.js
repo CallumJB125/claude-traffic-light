@@ -196,6 +196,13 @@ test('G1 mid-turn: a note to a working session shows on its next PostToolUse as 
   await s.aw.refresh();
   assert.equal(await claudeHook(s.w, 'X', s.w.repoA, 'tool-done'), null, 'rate-limited mid-turn');
   assert.match((await claudeHook(s.w)) || '', /\[Plexiform: 2 notes waiting/);
+  // Acceptance 7: main's trace has the note and its notified line under one trace_id, and no body or path.
+  const traced = fs.readFileSync(path.join(s.w.root, 'bus-trace.jsonl'), 'utf8');
+  const tl = traced.trim().split('\n').map((l) => JSON.parse(l));
+  const noteLine = tl.find((l) => l.op === 'note' && l.ref === sent.note_id);
+  assert.deepEqual([noteLine.from_handle, noteLine.to, noteLine.result], [x, y, 'ok']);
+  assert.ok(tl.some((l) => l.op === 'notified' && l.ref === sent.note_id && l.trace_id === noteLine.trace_id));
+  for (const bit of ['Rotate', 'AKIA', 'hunter2', 'example.com', 'second', s.w.root, '/Users/', '/private/']) assert.ok(!traced.includes(bit), `trace has ${bit}`);
   // Turned off: nothing mid-turn.
   s.w.state.config = { agentAwareness: { midTurnNotices: false } };
   fs.writeFileSync(path.join(s.w.root, 'config.json'), JSON.stringify(s.w.state.config));

@@ -203,3 +203,28 @@ test('G5: the asker gets exactly one Plexiform note with the handoff_id and outc
     assert.deepEqual(all.map((x) => x.to_key), [ORIGIN.key, ORIGIN.key]);
   } finally { w.cleanup(); }
 });
+
+test('trace (acceptance 7): every op and lifecycle step is one line; a hand-off\'s lines share its trace_id; no title, brief, summary or path', async () => {
+  const w = await world();
+  try {
+    const TRACE = 'tr_0123456789abcdef';
+    const r = await w.bus.op('handoff', { request_id: 'req-trace-0001', to: { provider: 'claude' }, title: 'SECRET-TITLE', brief: 'SECRET-BRIEF at /Users/someone/x', provider: 'claude' },
+      { provider: 'claude', cwd: w.root, origin: ORIGIN, trace: { trace_id: TRACE, from_handle: ORIGIN.handle } });
+    w.engine.end((await w.until(() => w.taskOf(r.handoff_id))).id);
+    await w.until(() => w.bus.log.result(r.handoff_id));
+    await w.bus.op('wait', { handoff_id: r.handoff_id, timeout_s: 0 }, { provider: 'claude', cwd: w.root });
+    await w.bus.trace.flush();
+    const text = fs.readFileSync(`${w.dir}/bus-trace.jsonl`, 'utf8');
+    const lines = text.trim().split('\n').map((l) => JSON.parse(l));
+    const mine = lines.filter((l) => l.trace_id === TRACE).map((l) => l.op);
+    assert.deepEqual(mine, ['handoff', 'claim', 'start', 'result', 'returned']);
+    assert.ok(lines.some((l) => l.op === 'wait' && l.ref === r.handoff_id));
+    const h = lines.find((l) => l.trace_id === TRACE && l.op === 'handoff');
+    assert.deepEqual([h.from_handle, h.to, h.provider, h.result, h.ref], [ORIGIN.handle, 'claude', 'claude', 'ok', r.handoff_id]);
+    assert.match(h.repo_key_hash, /^[0-9a-f]{16}$/);
+    for (const l of lines) assert.deepEqual(Object.keys(l).sort(), ['from_handle', 'ms', 'op', 'provider', 'reason', 'ref', 'repo_key_hash', 'result', 'span', 't', 'to', 'trace_id']);
+    for (const bit of ['SECRET', 'Parser fixed', '/Users/', w.root, 'Job ']) assert.ok(!text.includes(bit), `trace has ${bit}`);
+    assert.doesNotMatch(text, /"(?:\/|~\/)[^"]*"/, 'no absolute path anywhere');
+  } finally { w.cleanup(); }
+});
+
