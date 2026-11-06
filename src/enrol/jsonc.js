@@ -157,6 +157,11 @@ function chunkFor(src, obj, key, value) {
 // Adds path/name = value. The file must not already have it. → {text, chunk}
 function add(src, path, name, value) {
   const s = String(src);
+  // VS Code leaves a zero-byte mcp.json behind; an empty (or comments-only) file means "no settings yet".
+  if (!tokens(s).length) {
+    const chunk = `${JSON.stringify(nest(path, name, value), null, 2)}\n`;
+    return { text: (s.trim() ? `${s.replace(/\s*$/, '')}\n` : '') + chunk, chunk };
+  }
   const w = walk(s, path);
   let r;
   if (w.missing) {

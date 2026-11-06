@@ -376,3 +376,16 @@ test('JSONC duplicate keys we would touch are a conflict, never edited', (t) => 
   assert.throws(() => Jsonc.remove(dupName, ['mcpServers'], 'plexiform-bus'), { code: 'DUPLICATE' });
   assert.equal(Jsonc.get('{"a":1,"a":2,"mcpServers":{}}', ['mcpServers'], 'plexiform-bus'), undefined, 'duplicates elsewhere are not ours to judge');
 });
+
+test('an empty mcp.json (VS Code leaves a zero-byte one) is enrolled, and undo puts the empty file back', (t) => {
+  const w = world(t, { files: { ...ORIGINAL, vscode: '', cursor: '// nothing yet\n' } });
+  const reg = w.make();
+  reg.enrolAll({ mcpOurs: { codex: true } });
+  assert.equal(reg.caps().find((c) => c.id === 'vscode').mcp, 'ours');
+  assert.equal(entryIn(w, 'vscode', ['servers']).env.PLEXIFORM_CLIENT, 'vscode');
+  assert.equal(entryIn(w, 'cursor', ['mcpServers']).env.PLEXIFORM_CLIENT, 'cursor');
+  assert.ok(w.read('cursor').startsWith('// nothing yet\n'), 'a comment-only file keeps its comment');
+  reg.unenrolAll();
+  assert.equal(w.read('vscode'), '');
+  assert.equal(w.read('cursor'), '// nothing yet\n');
+});
