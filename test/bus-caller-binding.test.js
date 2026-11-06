@@ -581,6 +581,32 @@ test('auto scope: an unbound caller (a run, a headless or unverifiable session) 
   assert.deepEqual(seen.map((c) => c.bound === true), [true, false]);
 });
 
+test('security review #3: a headless caller is read-only (TIER_CAN.headless); one that failed a genuine-session check is unverified_client; a transient miss stays unbound', async (t) => {
+  const w = world(t);
+  const seen = [];
+  const forward = async (op, args, caller) => { seen.push({ op, caller }); return op === 'hello' ? { agent_id: 'a', tier: 'local_attested', policy_summary: {} } : { state: 'offered' }; };
+  // claude -p in a session repo: before, it went on unbound and the session there let it through.
+  w.procs.get(101).env = w.procs.get(101).env.replace('ENTRYPOINT=cli', 'ENTRYPOINT=sdk-cli');
+  let aw = w.make();
+  const h = await aw.relay('handoff', { title: 'x' }, { provider: 'claude', cwd: w.repoA }, w.call(101), { forward });
+  assert.deepEqual([h.reason, h.tier], ['POLICY_DENIED', 'headless']);
+  assert.equal(seen.length, 0, 'a refused hand-off never reaches the helper');
+  const hello = await aw.relay('hello', {}, { provider: 'claude', cwd: w.repoA }, w.call(101), { forward });
+  assert.deepEqual([hello.tier, hello.can], ['headless', ['peers']]);
+  assert.equal(seen[0].caller.unbound, true);
+  // Code injected into our server (NODE_OPTIONS): failed a check, so read-only too.
+  w.procs.get(101).env = w.procs.get(101).env.replace('ENTRYPOINT=sdk-cli', 'ENTRYPOINT=cli') + ' NODE_OPTIONS=--require=/tmp/x.js';
+  aw = w.make();
+  assert.equal((await aw.bindCaller(w.call(101))).reason, 'INJECTED');
+  const r = await aw.relay('handoff', { title: 'x' }, { provider: 'claude', cwd: w.repoA }, w.call(101), { forward });
+  assert.deepEqual([r.reason, r.tier], ['POLICY_DENIED', 'unverified_client']);
+  // A detached process (ppid 1): could be a session caught mid-exit, so it stays unbound and the helper decides.
+  w.proc(300, { ppid: 1, exe: '/opt/homebrew/bin/node', cwd: w.repoA, args: 'node x' });
+  seen.length = 0;
+  assert.equal((await aw.relay('handoff', { title: 'x' }, { provider: 'codex', cwd: w.repoA }, w.call(300), { forward })).state, 'offered');
+  assert.equal(seen[0].caller.unbound, true);
+});
+
 test('review #6: a caller\'s environment is read only after the parent, program and stdio checks pass, and only three names leave the reader', async (t) => {
   const w = world(t);
   const aw = w.make();

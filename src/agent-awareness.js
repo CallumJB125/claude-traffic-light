@@ -731,6 +731,15 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   }
 
   const UNVERIFIED_HANDOFF = 'This app is connected to Plexiform read-only, so it cannot hand off work. Ask your person to hand it off from Claude Code or Codex.';
+  const HEADLESS_HANDOFF = 'This is not a session your person is in (claude -p, an SDK or a script), so it cannot hand off work. A run Plexiform started hands on with its own bus_handoff.';
+  const FAILED_HANDOFF = 'Plexiform could not verify this session, so it cannot hand off work. Ask your person to hand it off from Claude Code or Codex.';
+  // Callers that are not a person's session, or that failed a check a genuine one passes (another program, a command
+  // the model ran, injected code, a folder or process not the session's): read-only, like a named client (TIER_CAN).
+  // The rest (no session file yet, a tie, a thread mid-move, a pid gone) can be an interactive session caught early or
+  // late, so they stay unbound: automatic mode still wants a session there. A run's own hand-on never comes this way
+  // (board/mcp/task-tools.js on its per-run socket).
+  const READ_ONLY = Object.freeze({ HEADLESS: Contract.TIERS.HEADLESS, NOT_OUR_SERVER: Contract.TIERS.UNVERIFIED_CLIENT, LISTENING: Contract.TIERS.UNVERIFIED_CLIENT,
+    NOT_STDIO: Contract.TIERS.UNVERIFIED_CLIENT, INJECTED: Contract.TIERS.UNVERIFIED_CLIENT, CWD: Contract.TIERS.UNVERIFIED_CLIENT, OWNER: Contract.TIERS.UNVERIFIED_CLIENT });
   const NOT_BOUND = { reason: 'NOT_BOUND', message: 'Plexiform could not tell which AI session is calling, so it cannot send or read notes for it.' };
   const NOTES_OFF = { reason: 'AWARENESS_OFF', message: 'Your person turned off notes between AI sessions in Plexiform.' };
   const NOTES_HALTED = { reason: 'HALTED', message: 'The agent bus is stopped on this Mac, so notes are held. Your person can resume it from the tray or Sessions.' };
@@ -1041,11 +1050,13 @@ function boardAnswer(board) {
         if (me && typeof me.handle === 'string') tc.from_handle = me.handle;
         caller = { ...caller, bound: true, provider: b.provider, ...(typeof b.session.cwd === 'string' && path.isAbsolute(b.session.cwd) ? { cwd: b.session.cwd } : {}),
           ...(op === 'handoff' && noteReaders.has(b.key) ? { after_note: true } : {}), ...(origin ? { origin } : {}) };
-      } else if (b.client) {
-        // A client that named itself (Gemini, Cursor, ...): unverified_client, read-only (owner decision D2).
-        if (op === 'handoff') return { reason: 'POLICY_DENIED', tier: Contract.TIERS.UNVERIFIED_CLIENT, message: UNVERIFIED_HANDOFF };
+      } else if (b.client || Object.hasOwn(READ_ONLY, b.reason)) {
+        // A client that named itself (Gemini, Cursor, ...): unverified_client, read-only (owner decision D2). A headless
+        // or failed caller likewise, with its own tier (security review #3).
+        const tier = b.client ? Contract.TIERS.UNVERIFIED_CLIENT : READ_ONLY[b.reason];
+        if (op === 'handoff') return { reason: 'POLICY_DENIED', tier, message: b.client ? UNVERIFIED_HANDOFF : tier === Contract.TIERS.HEADLESS ? HEADLESS_HANDOFF : FAILED_HANDOFF };
         const r = await forward(op, args, { ...caller, unbound: true });
-        return r && typeof r === 'object' && !Array.isArray(r) && typeof r.tier === 'string' ? { ...r, tier: Contract.TIERS.UNVERIFIED_CLIENT, can: [...Contract.TIER_CAN.unverified_client] } : r;
+        return r && typeof r === 'object' && !Array.isArray(r) && typeof r.tier === 'string' ? { ...r, tier, can: [...Contract.TIER_CAN[tier]] } : r;
       } else {
         // Its folder is only what it reported: automatic mode still wants a session or task folder of Plexiform's there.
         caller = { ...caller, unbound: true };
