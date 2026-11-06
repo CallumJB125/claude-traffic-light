@@ -263,6 +263,20 @@ test('a hand-off run blocked on an approval tells the asker in one line: no titl
   } finally { w.cleanup(); }
 });
 
+test('a person\'s own Codex task that parks on its limit opens the breaker too: the next codex hand-off is refused up front', async () => {
+  const w = await world();
+  try {
+    const resetAt = Date.parse('2026-11-12T17:42:00Z');
+    w.engine.tasks.set('tsk_mine01', { id: 'tsk_mine01', source: 'local', sourceMeta: {}, state: 'parked', parkReason: 'limit', limitResetAt: resetAt, ai: { id: 'codex' } });
+    w.engine.emit('event', { type: 'state', taskId: 'tsk_mine01' });
+    assert.deepEqual([w.bus.health.get('codex').state, w.bus.health.get('codex').retry_at], ['open', resetAt]);
+    const r = await w.hand({ provider: 'codex' });
+    assert.deepEqual([r.reason, r.retry_at], ['PROVIDER_UNAVAILABLE', resetAt]);
+    const st = await w.bus.op('status', {});
+    assert.equal(st.providers.find((p) => p.provider === 'codex').retry_at, resetAt, 'bus_status (and so buddy_health) shows it');
+  } finally { w.cleanup(); }
+});
+
 test('D4 switch off: "any" does not move past an unavailable provider', async () => {
   const w = await world({ fallback: { enabled: false, order: ['codex', 'claude'] } });
   try {

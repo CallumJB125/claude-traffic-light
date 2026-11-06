@@ -42,3 +42,19 @@ test('busCall waits past teamCall\'s 6 s default (a held bus_wait is not cut off
     assert.equal(seen.body.args.cwd, process.cwd(), 'the caller folder goes along; the relay moves it out of args');
   } finally { server.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('buddy_health asks the bus for its provider health and shows a row for an AI that cannot take hand-offs', async () => {
+  const tool = M.TOOLS.find((t) => t.name === 'buddy_health');
+  const asked = [];
+  const reset = Date.parse('2026-11-12T17:42:00Z');
+  const bus = async (op) => { asked.push(op); return op === 'status' ? { providers: [{ provider: 'claude', state: 'closed' }, { provider: 'codex', state: 'open', reason: 'QUOTA', retry_at: reset }] } : { bound: true }; };
+  const root = testTempDir('ctl-mcphealth-');
+  const h = await tool.run({}, { bus, root, home: testTempDir('ctl-mcphealth-home-'), live: null, statfs: () => ({ bavail: 1e6, bsize: 1e6 }) });
+  assert.deepEqual(asked.sort(), ['peers', 'status']);
+  const row = h.checks.find((c) => c.id === 'bus-providers');
+  assert.equal(row.status, 'warn');
+  assert.match(row.detail, /^Codex is out of its usage quota until 2026-11-12 17:42 UTC\./);
+  // A bus that does not answer: the rest of the report still comes back, with no provider row.
+  const quiet = await tool.run({}, { bus: async () => { throw new Error('down'); }, root, home: testTempDir('ctl-mcphealth-home-'), live: null, statfs: () => ({ bavail: 1e6, bsize: 1e6 }) });
+  assert.equal(quiet.checks.find((c) => c.id === 'bus-providers'), undefined);
+});

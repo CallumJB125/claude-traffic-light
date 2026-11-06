@@ -470,3 +470,15 @@ test('C-P: a new install (askFromWidget on, permission hook installed) is health
   const off = byId(Health.runChecks({ ...m.ctx, askFromWidget: false }), 'hooks');
   assert.equal(off.status, 'warn');
 });
+
+test('bus-providers: a provider out of quota is a warn row with its reset time; all available is ok; absent without bus status', () => {
+  const by = (ctx) => Health.runChecks({ home: testTempDir('ctl-health-prov-'), now: NOW, ...ctx }).checks.find((c) => c.id === 'bus-providers');
+  assert.equal(by({}), undefined, 'no bus status: no row');
+  const reset = Date.parse('2026-11-12T17:42:00Z');
+  const down = by({ busProviders: [{ provider: 'claude', state: 'closed' }, { provider: 'codex', state: 'open', reason: 'QUOTA', retry_at: reset }, { provider: 'gemini', state: 'closed' }] });
+  assert.equal(down.status, 'warn');
+  assert.equal(down.detail, 'Codex is out of its usage quota until 2026-11-12 17:42 UTC. Hand-offs asked for "any" go to Claude.');
+  assert.deepEqual(down.providers, [{ provider: 'codex', state: 'open', reason: 'QUOTA', retry_at: reset }]);
+  const up = by({ busProviders: [{ provider: 'claude', state: 'closed' }, { provider: 'codex', state: 'half_open', reason: 'QUOTA' }] });
+  assert.deepEqual([up.status, up.detail], ['ok', 'Claude and Codex can take hand-offs.']);
+});

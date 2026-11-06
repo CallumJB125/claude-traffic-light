@@ -577,14 +577,14 @@ function hookRuntime(root, dir = __dirname, execPath = process.execPath) {
   return Runtime.make({ execPath: packaged ? execPath : null, hooksDir: path.join(packaged ? path.dirname(dir) : dir, 'hooks'), dataDir: root });
 }
 
-async function buddyHealth({ root, now = Date.now(), home = os.homedir(), live, runtime = hookRuntime(root), projectsDir, statfs, mcpConnected = false, busCaller } = {}) {
+async function buddyHealth({ root, now = Date.now(), home = os.homedir(), live, runtime = hookRuntime(root), projectsDir, statfs, mcpConnected = false, busCaller, busProviders } = {}) {
   const Health = require('./src/health.js');
   const McpInstall = require('./mcp-install.js');
   const port = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172);
   const liveStatus = live === undefined ? await fetchLive(port) : live;
   const packaged = /\.asar$/.test(__dirname);
   const report = Health.runChecks({
-    now, home, root, runtime, projectsDir, statfs, mcpConnected, busCaller,
+    now, home, root, runtime, projectsDir, statfs, mcpConnected, busCaller, busProviders,
     askFromWidget: !!loadConfig(root).askFromWidget,
     version: require('./package.json').version,
     mcp: McpInstall.status({ home, entry: McpInstall.launch({ packaged, execPath: process.execPath, appPath: __dirname, dir: __dirname, root: process.env.CLAUDE_TRAFFIC_LIGHT_HOME, nodeVersion: process.version }) }),
@@ -693,7 +693,10 @@ const TOOLS = [
   { name: 'buddy_git_status', description: 'Git and CI signals: which GitHub repos the widget watches (from session folders\' git remotes and Preferences), as which gh login, the PR/CI/deploy events showing now and the last few that fired, the GitHub rate limit left, and when it polls next. Read-only; reads what the app last wrote.', run: (a, c) => buddyGitStatus(c) },
   { name: 'buddy_spend', description: 'How much you have spent on Claude Code today and this week (priced per turn at API list prices from the transcripts), against the daily/weekly budgets set in Plexiform, plus any runaway session burning faster than the threshold (e.g. "$47.20 in 18 min"). Answers "how much have I spent today?".', run: (a, c) => buddySpend(c) },
   { name: 'buddy_usage_history', description: 'Spend and token history from the permanent daily record, which reaches back further than the transcripts Claude Code keeps: "how much did I spend on Opus in August?". `range` is today, 7d, 30d, 90d, 1y, all, YYYY-MM, or YYYY-MM-DD..YYYY-MM-DD (at most 400 days). `groupBy` is day, model, family, project or source. Project names are folder names only.', input: (z) => ({ range: z.string().optional().describe('default 30d'), groupBy: z.enum(['day', 'model', 'family', 'project', 'source']).optional().describe('default day') }), run: (a, c) => buddyUsageHistory({ ...c, range: a.range, groupBy: a.groupBy }) },
-  { name: 'buddy_health', description: 'Is Plexiform set up right? Checks that the Claude Code hooks are installed and point at this copy of the app (not a moved app or an old checkout), the last hook event and its age, the signal server, this MCP registration, session files and stale locks, transcripts, disk space and the app version. Each problem comes with the one-click fix Plexiform offers or the step to take by hand.', short: 'Is Plexiform set up right? Each problem comes with its fix.', run: async (a, c) => buddyHealth({ ...c, mcpConnected: true, busCaller: await (c.bus || busCall)('peers', {}, c).catch(() => ({ bound: false })) }) },
+  { name: 'buddy_health', description: 'Is Plexiform set up right? Checks that the Claude Code hooks are installed and point at this copy of the app (not a moved app or an old checkout), the last hook event and its age, the signal server, this MCP registration, session files and stale locks, transcripts, disk space and the app version. Each problem comes with the one-click fix Plexiform offers or the step to take by hand.', short: 'Is Plexiform set up right? Each problem comes with its fix.', run: async (a, c) => {
+    const [busCaller, busStatus] = await Promise.all([(c.bus || busCall)('peers', {}, c).catch(() => ({ bound: false })), (c.bus || busCall)('status', {}, c).catch(() => null)]);
+    return buddyHealth({ ...c, mcpConnected: true, busCaller, busProviders: Array.isArray(busStatus?.providers) ? busStatus.providers : undefined });
+  } },
   { name: 'buddy_pending_requests', description: 'Permission requests currently blocked waiting for an answer from the widget (PermissionRequest hook), with how long the hook will keep waiting.', run: (a, c) => aiPendingRequests(c) },
   { name: 'buddy_burst_status', description: 'Claude Burst, if installed and running: which route requests take (primary or secondary), whether the secondary is ready, rate-limited models and when they come back, and primary failures. Says "Burst not present" when Burst is not running. Read-only; reads a snapshot the app wrote.', run: (a, c) => buddyBurstStatus(c) },
   { name: 'buddy_burst_coordination', description: 'Burst session coordination: which session masters which file ("who masters path X?"). `path` is a file path or its tail; omit it for every session and the files it masters. Says "Burst not present" when Burst is not running.', input: (z) => ({ path: z.string().optional().describe('file path (or its tail) to look up') }), run: (a, c) => buddyBurstCoordination({ ...c, path: a.path }) },

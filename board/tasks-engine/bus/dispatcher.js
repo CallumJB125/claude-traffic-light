@@ -437,7 +437,15 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     // A parked run has its result now (and maybe a fallback): end it, so a later "resume" never redoes the work unseen.
     if (task.state === 'parked') engine.act({ id: task.id, action: 'stop', requestId: `bus-parked-${task.id}` }).catch(() => {});
   }
-  const onEvent = (e) => { if (e.type === 'state') { const t = engine.tasks.get(e.taskId); if (t) onTaskState(t); } };
+  // Any run of this Mac's that parks on its usage limit (a person's own task too) says the provider is out of quota
+  // until its reset: the breaker opens, so a hand-off naming it is refused up front and 'any' skips it.
+  const onEvent = (e) => {
+    if (e.type !== 'state') return;
+    const t = engine.tasks.get(e.taskId);
+    if (!t) return;
+    if (t.source !== 'bus' && t.state === 'parked' && t.parkReason === 'limit' && Contract.PROVIDERS.includes(t.ai?.id)) health.failed(t.ai.id, Contract.BREAKER_REASON.QUOTA, { retryAt: t.limitResetAt ?? null });
+    onTaskState(t);
+  };
   engine.on('event', onEvent);
 
   // An offer that expired before it started: one result, and its reservation is released.

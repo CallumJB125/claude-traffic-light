@@ -461,6 +461,24 @@ function checkBurstConsole(ctx) {
   return { status: 'info', detail: 'Burst\'s activity log, route test and repairs are in its own console.', fix: 'open-burst-console' };
 }
 
+// Provider availability (the agent bus's breakers, bus_status providers): which AIs can take a hand-off now, and
+// until when one cannot (a usage limit's own reset time when the run reported it). Codes and times only.
+const PROVIDER_NAME = { claude: 'Claude', codex: 'Codex' };
+const PROVIDER_WHY = { QUOTA: 'is out of its usage quota', AUTH: 'needs you to sign in again', MISSING: 'is not installed or not signed in', CRASH: 'kept failing to start' };
+function checkBusProviders(c) {
+  if (!Array.isArray(c.busProviders)) return null;
+  const rows = c.busProviders.filter((p) => p && Object.hasOwn(PROVIDER_NAME, p.provider));
+  if (!rows.length) return null;
+  const down = rows.filter((p) => p.state === 'open');
+  const when = (t) => (Number.isFinite(t) ? new Date(t).toISOString().replace(/:\d\d\.\d{3}Z$/, ' UTC').replace('T', ' ') : null);
+  const ok = rows.filter((p) => p.state !== 'open').map((p) => PROVIDER_NAME[p.provider]);
+  if (!down.length) return { status: 'ok', detail: `${ok.join(' and ')} can take hand-offs.` };
+  const said = down.map((p) => `${PROVIDER_NAME[p.provider]} ${PROVIDER_WHY[p.reason] || 'is unavailable'}${when(p.retry_at) ? ` until ${when(p.retry_at)}` : ''}`);
+  return { status: 'warn', detail: `${said.join('; ')}.${ok.length ? ` Hand-offs asked for "any" go to ${ok.join(' or ')}.` : ''}`,
+    providers: down.map((p) => ({ provider: p.provider, state: p.state, reason: p.reason ?? null, retry_at: Number.isFinite(p.retry_at) ? p.retry_at : null })),
+    next: 'Plexiform tries it again on its own after that time.' };
+}
+
 const CHECKS = [
   ['hooks', 'Claude Code hooks', checkHooks],
   ['codex-hooks', 'Codex session activity', checkCodexHooks],
@@ -479,6 +497,7 @@ const CHECKS = [
     return { status: 'fail', detail: 'Plexiform has not verified which chat is calling; session notes are unavailable.',
       next: b.binding?.next || 'Check Plexiform activity hooks and reconnect the integration in this chat.' };
   }],
+  ['bus-providers', 'AI providers for hand-offs', checkBusProviders],
   ['mcp-node', 'Node for the MCP server (development)', checkMcpNode],
   ['agents', 'Agents added from Find agents', checkAgents],
   ['transcripts', 'Transcripts', checkTranscripts],

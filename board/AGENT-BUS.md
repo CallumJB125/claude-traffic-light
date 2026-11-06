@@ -102,6 +102,8 @@ A hand-off naming an open provider is refused at once: `PROVIDER_UNAVAILABLE {pr
 - `any` and lists use the person's order (`agentBus.fallbackOrder`, default claude → codex → gemini, filtered to the providers that can take bus runs) and skip open breakers.
 - If a run asked that way fails for `QUOTA`, `AUTH` or `MISSING`, the dispatcher posts it once to the next provider: same hop, `caused_by` and `data.fallback_of` set, same caps. The first result's `data.fallback` names the new hand-off.
 - `agentBus.fallback: false` is the one switch that turns this off.
+- A breaker opens on a hand-off run's failure (`failKind`), on its park (`parkReason: limit` → `QUOTA` until the run's own `limitResetAt`, `auth` → `AUTH`), and on any other task of this Mac's that parks on its usage limit. A hand-off result for a provider failure carries `reason: PROVIDER_UNAVAILABLE`, `provider_reason` and `retry_at` (also in `bus_wait`).
+- `bus_status` lists every provider's breaker; `buddy_health` turns it into the `bus-providers` row ("Codex is out of its usage quota until …").
 
 ### 7.5 Results come back (G5)
 Main passes the verified asker (`caller.origin = {key, handle, board?}`) on a hand-off, and the offer keeps it. When the hand-off ends (`done`, `failed`, `expired`, `outcome_unknown`), the dispatcher writes one note from `plexiform` to that session (`notes.system`, one per hand-off and recipient, 24 h). The note is one line of outcome with the `handoff_id`, the start of the summary, and a pointer to `bus_wait`; it is read framed like any note.
