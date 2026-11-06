@@ -40,7 +40,7 @@ test('PR B addAgentCard: a linked repo goes to its team board with Plexiform\'s 
   const r = rig(t);
   const res = await add(r);
   assert.equal(res.card_id, 'team-1');
-  assert.deepEqual(res.board, { kind: 'team', name: 'App board' });
+  assert.deepEqual(res.board, { kind: 'team', name: 'App board', why: 'linked_repo' });
   assert.equal(res.title, 'Fix the parser \u00b7 added by Codex');
   assert.equal(r.calls.length, 1);
   const { kind, body, destination } = r.calls[0];
@@ -64,20 +64,16 @@ test('PR B addAgentCard: a linked repo goes to its team board with Plexiform\'s 
 test('PR B addAgentCard: no linked repo goes to My board; the folder, scope and provider are the bound session\'s, never the arguments\'', async (t) => {
   const r = rig(t, { resolveRepo: async (cwd) => { r.repos.push(cwd); return null; } });
   const res = await add(r, { cwd: '/working/other-team-repo', personal: false, provider: 'claude', destination: { kind: 'team', ...R } });
-  assert.deepEqual(res.board, { kind: 'personal' });
+  assert.deepEqual(res.board, { kind: 'personal', why: 'no_repo' });
   assert.equal(r.calls[0].kind, 'local');
   assert.deepEqual(r.repos, ['/working/app'], 'only the session\'s own folder was looked up');
   assert.match(r.calls[0].body.title, / \u00b7 added by Codex$/, 'the provider is the session\'s');
 });
 
-test('PR B addAgentCard refusals send nothing: personal, untracked, choose, read-only, cards off, incomplete or failed catalog, a board that fails', async (t) => {
-  const B = { ...R, team_id: 'team-b', board_id: 'board-b', repo_id: 'repo-b', board_name: 'Other' };
+test('PR B addAgentCard refusals send nothing: personal, untracked, read-only, cards off, a board that fails (G8: choose and a hub offline no longer refuse)', async (t) => {
   const cases = [
     ['PERSONAL', {}, session({ scope: { state: 'personal' } })],
-    ['CHOOSE_BOARD', { getRoutes: async () => ({ routes: [R, B], complete: true }) }],
     ['READ_ONLY', { getRoutes: async () => ({ routes: [{ ...R, role: 'viewer' }], complete: true }) }],
-    ['UNAVAILABLE', { getRoutes: async () => ({ routes: [R], complete: false }) }],
-    ['UNAVAILABLE', { getRoutes: async () => { throw new Error('offline'); } }],
     ['UNAVAILABLE', { sendTeam: async () => ({ ok: false }) }],
   ];
   for (const [reason, opts, raw] of cases) {
@@ -100,10 +96,10 @@ test('PR B addAgentCard refusals send nothing: personal, untracked, choose, read
   off.wc.setEnabled(false);
   assert.equal((await add(off)).reason, 'CARDS_OFF');
   assert.equal(off.calls.length, 0);
-  // An incomplete catalog never falls back to My board.
+  // G8 rule 6 before rule 7: no repo is My board whether or not the hub answers.
   const partial = rig(t, { getRoutes: async () => ({ routes: [], complete: false }), resolveRepo: async () => null });
-  assert.equal((await add(partial)).reason, 'UNAVAILABLE');
-  assert.equal(partial.calls.length, 0);
+  assert.deepEqual((await add(partial)).board, { kind: 'personal', why: 'no_repo' });
+  assert.equal(partial.calls[0].kind, 'local');
   // A bad request_id or a title with nothing left.
   const v = rig(t);
   assert.equal((await add(v, { request_id: 'x' })).reason, 'VALIDATION');

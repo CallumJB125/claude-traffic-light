@@ -23,6 +23,7 @@ const { bindingStatus } = require('./bus-binding-status');
 // midTurnNotices on by default (owner decision D3, 2026-11-06): one line, at most every 2 minutes, never the body.
 const RESULT_SYNC_MS = 15 * 1000;
 const RESULT_SYNC_FOR_MS = 30 * 60 * 1000;
+const Contract = require('./bus-contract.js');
 const DEFAULTS = Object.freeze({ enabled: true, notes: true, midTurnNotices: true });
 const DEBOUNCE_MS = 1000;
 const HEARTBEAT_MS = 2 * 60 * 1000;
@@ -914,19 +915,29 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   }
 
 // bus_peers' board: the caller's own repo only, never another board; why is a closed enum and fix one fixed sentence.
+// why names are src/bus-contract.js BOARD_WHY (the routing rule that decided, BACKBONE §3.5); each kind has a default.
 const BOARD_WHY = Object.freeze({
   team: ['linked_repo', null],
   personal: ['no_link', 'To share this work, link the repo to a team board in Plexiform.'],
   untracked: ['personal_mark', 'Your person marked this work personal; it gets no cards.'],
-  choose: ['multiple_links_unchosen', 'Pick a default board for this repo in Plexiform (This Mac).'],
-  readonly: ['read_only_role', 'Your team role is read-only; ask a team admin, or keep it on My board.'],
+  choose: ['choose', 'Cards wait on My board until your person picks a default board for this repo in Plexiform (This Mac).'],
+  readonly: ['read_only', 'Your team role is read-only; ask a team admin, or keep it on My board.'],
   off: ['cards_off', 'Automatic cards are off in Plexiform.'],
   unknown: ['unknown', 'Plexiform does not know yet. Try again in a minute; never guess the board.'],
 });
+const WHY_FIX = Object.freeze({
+  deferred: 'Plexiform could not reach the team boards just now: cards wait on My board and move when it can.',
+  no_link_suggested: 'A team board already links a repo from this GitHub org: your person can link this one in Plexiform.',
+  no_repo: 'This folder is not a git repo with a remote, so its cards go to My board.',
+  inherited: null, repo_default: null, linked_repo: null,
+});
+const KNOWN_WHY = new Set(Object.values(Contract.BOARD_WHY));
 function boardAnswer(board) {
   const b = Hook.boardOf({ board });
-  const [why, fix] = BOARD_WHY[b.kind];
-  return { kind: b.kind, ...(b.kind === 'team' && b.name ? { name: b.name } : {}), why, ...(fix ? { fix } : {}) };
+  const [dflt, dfix] = BOARD_WHY[b.kind];
+  const why = b.kind !== 'unknown' && board && KNOWN_WHY.has(board.why) ? board.why : dflt;
+  const fix = Object.hasOwn(WHY_FIX, why) ? WHY_FIX[why] : dfix;
+  return { kind: b.kind, ...(b.kind === 'team' && b.name ? { name: b.name } : {}), why, ...(fix ? { fix } : {}), ...(board && board.pending_route === true && b.kind === 'personal' ? { pending_route: true } : {}) };
 }
 
   // bus_peers and bus_session (/bus ops "peers" and "session"): main answers them itself.
@@ -988,7 +999,11 @@ function boardAnswer(board) {
       if (b.bound) {
         // Who asked, as main verified it: the hand-off's result comes back to this session as a note (G5).
         const me = op === 'handoff' && lastRoster && has(lastRoster.self, b.key) ? lastRoster.self[b.key] : null;
-        const origin = me && me.verified === true && typeof me.handle === 'string' ? { key: b.key, handle: me.handle } : null;
+        let board = null;
+        try { board = op === 'handoff' ? boardFor(b.session) : null; } catch { board = null; }
+        // Rule 2 (G8): the hand-off carries the board the asker's own cards go to, as an opaque route key.
+        const originBoard = board && board.kind === 'team' && /^[a-f0-9]{64}$/.test(board.key || '') ? board.key : null;
+        const origin = me && me.verified === true && typeof me.handle === 'string' ? { key: b.key, handle: me.handle, ...(originBoard ? { board: originBoard } : {}) } : null;
         if (origin) rememberOrigin(b.key);
         caller = { ...caller, provider: b.provider, ...(typeof b.session.cwd === 'string' && path.isAbsolute(b.session.cwd) ? { cwd: b.session.cwd } : {}),
           ...(op === 'handoff' && noteReaders.has(b.key) ? { after_note: true } : {}), ...(origin ? { origin } : {}) };
@@ -1109,7 +1124,9 @@ function boardAnswer(board) {
   function boardOf(s) {
     let b;
     try { b = boardFor(s); } catch { b = null; }
-    return Hook.boardOf({ board: b });
+    const base = Hook.boardOf({ board: b });
+    // The rule that decided (a closed name) rides along for bus_peers; the route key never leaves main.
+    return { ...base, ...(base.kind !== 'unknown' && b && KNOWN_WHY.has(b.why) ? { why: b.why } : {}), ...(base.kind === 'personal' && b && b.pending_route === true ? { pending_route: true } : {}) };
   }
 
   async function build() {

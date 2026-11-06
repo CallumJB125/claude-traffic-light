@@ -154,6 +154,33 @@ function routeFor(repo,routes,choice) {
   if(matches.length===1)return matches[0].role==='viewer'?{kind:'local',needs_routing:true,reason:'team_read_only'}:{kind:'team',...matches[0]};
   return {kind:'local',needs_routing:true};
 }
+// Which board a piece of work goes to (BACKBONE plan §3.5, G8): the first rule that matches wins, and the answer
+// always says why (src/bus-contract.js BOARD_WHY). An agent never picks; Plexiform decides with this alone.
+//  1 personal mark → none · 2 inherited (a hand-off or card carries the originator's board) · 3 linked to one team
+//  board · 4 several: the person's default, else My board with a "pick board" chip · 5 not linked: My board, with a
+//  link suggestion when its GitHub org matches a linked team repo's · 6 no repo → My board · 7 catalog unknown (hub
+//  offline) → My board marked pending_route, re-routed when the catalog arrives.
+// destination is work capture's own form (routeFor); kind is bus_peers' (none, personal, team, choose).
+const WRITABLE=['owner','admin','member'];
+const orgOf=u=>typeof u==='string'?(/^([^/]+\/[^/]+)\//.exec(u)||[])[1]??null:null;
+function routeBoard({personal=false,inherited=null,repo=null,routes=[],choice=null,catalogComplete=true}={}){
+  if(personal)return {kind:'none',why:'personal_mark',destination:null};
+  if(inherited&&catalogComplete){
+    const r=routes.find(x=>routeKey(x)===inherited&&WRITABLE.includes(x.role));
+    if(r)return {kind:'team',why:'inherited',destination:{kind:'team',...r}};
+  }
+  if(!repo)return {kind:'personal',why:'no_repo',destination:{kind:'local'}};
+  if(!catalogComplete)return {kind:'personal',why:'deferred',pending_route:true,destination:{kind:'local'}};
+  const d=routeFor(repo,routes,choice);
+  const linked=routes.filter(r=>r.canonical_url===repo);
+  if(d.kind==='team')return {kind:'team',why:linked.length>1?'repo_default':'linked_repo',destination:d};
+  if(d.reason==='team_read_only')return {kind:'personal',why:'read_only',destination:d};
+  if(d.needs_routing)return {kind:'choose',why:'choose',destination:d};
+  if(linked.length)return {kind:'personal',why:'repo_default',destination:d};
+  const org=orgOf(repo);
+  const suggest=!!org&&routes.some(r=>WRITABLE.includes(r.role)&&orgOf(r.canonical_url)===org);
+  return {kind:'personal',why:suggest?'no_link_suggested':'no_link',destination:d};
+}
 // Cards an AI session adds with bus_card_add (PR B). The text is the AI's, so it is folded first (the same fold the
 // note frame uses), then scrubbed, and Plexiform's own provenance is appended where the AI cannot reach it: any
 // "added by" wording and every middot are taken out of its title first, and the title is cut to leave room, so no
@@ -281,7 +308,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
   // O3: wrapped (person-started Tasks) records come after at most 50 sessions, at most 20 of them, through the same
   // loop; each is one piece of work by its task id, never folded into a session with the same title.
   async function pass({sessions,wrapped}) {
-    if(now()-lastCatalogAt>15000||!lastCatalogAt){catalog=await getRoutes();lastCatalogAt=now();}
+    if(now()-lastCatalogAt>15000||!lastCatalogAt){catalog=await getRoutes();lastCatalogAt=now();if(catalog.complete===true)void reroutePending(catalog);}
     const routesByKey=new Map((catalog.routes??[]).map(r=>[routeKey(r),r]));
     const current=new Set();
     // Repeated sessions with the same provider/cwd/explicit title are one piece of work:
@@ -322,7 +349,9 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
         if(stopped||state.enabled===false)return;
         if(!fresh(raw))continue;
         if(!o.personal&&!catalog.complete){log('automatic card routing awaits a current team catalog');continue;}
-        const destination=compactDestination(o.personal?{kind:'local'}:routeFor(repo,catalog.routes??[],choiceOf(repo)));
+        // G8 rule 2: a run a hand-off started (originBoard, a route key) goes to the asker's board when it can write there.
+        const inherited=typeof raw.originBoard==='string'&&HASH.test(raw.originBoard)?routeBoard({inherited:raw.originBoard,repo,routes:catalog.routes??[],choice:choiceOf(repo)}):null;
+        const destination=compactDestination(o.personal?{kind:'local'}:inherited?.why==='inherited'?inherited.destination:routeFor(repo,catalog.routes??[],choiceOf(repo)));
         if(!commit(next=>{next.tasks[key]={destination,repo,provider:o.provider,session_id:o.session_id,task_id:o.task_id,title:o.title,status:null,card_id:null,last_seen:now()};},ACK_RESERVE_BYTES))continue;
         entry=state.tasks[key];changed();}
       const currentRoute=routesByKey.get(routeKey(entry.destination));
@@ -425,24 +454,29 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
   function boardFor(raw){
     const unknown={kind:'unknown'};
     if(stopped)return unknown;
-    if(state.enabled===false)return {kind:'off'};
+    if(state.enabled===false)return {kind:'off',why:'cards_off'};
     const o=observation(raw,{ownedRoots,host});if(!o)return unknown;
-    if(o.personal)return {kind:'untracked'};
+    if(o.personal)return {kind:'untracked',why:'personal_mark'};
     const entry=state.tasks[crypto.createHash('sha256').update(JSON.stringify([o.provider,o.session_id,o.task_id])).digest('hex')];
-    if(entry?.untracked)return {kind:'untracked'};
-    let d=entry?.destination;
+    if(entry?.untracked)return {kind:'untracked',why:'personal_mark'};
+    let d=entry?.destination,why=entry?.why??null;
     // A card kept on My board while the repo had no default board stays there once one is picked.
-    if(d&&d.kind==='local'&&d.needs_routing&&!d.reason&&entry.repo&&choiceOf(entry.repo))return {kind:'personal'};
+    if(d&&d.kind==='local'&&d.needs_routing&&!d.reason&&entry.repo&&choiceOf(entry.repo))return {kind:'personal',why:'repo_default'};
     if(!d||d.kind==='team'){
-      if(!lastCatalogAt||!catalog.complete)return unknown;
       if(!d){
         if(typeof o.cwd!=='string'||!path.isAbsolute(o.cwd))return unknown;
         const r=repoOf(o.cwd);if(!r)return unknown;
-        d=routeFor(r.repo,catalog.routes??[],choiceOf(r.repo));
-      }
+        // Not fetched yet: unknown (ask again soon). Fetched but incomplete (hub offline), rule 7: My board for now.
+        if(!lastCatalogAt)return unknown;
+        const route=routeBoard({repo:r.repo,routes:catalog.routes??[],choice:choiceOf(r.repo),catalogComplete:catalog.complete===true});
+        if(route.kind==='none')return {kind:'untracked',why:route.why};
+        d=route.destination;why=route.why;
+        if(route.pending_route)return {kind:'personal',why,pending_route:true};
+      } else if(!lastCatalogAt||!catalog.complete)return unknown;
     }
-    if(d.kind==='team'){const route=(catalog.routes??[]).find(x=>routeKey(x)===routeKey(d));return {kind:'team',name:typeof route?.board_name==='string'?route.board_name.slice(0,200):''};}
-    return {kind:d.reason==='team_read_only'?'readonly':d.needs_routing?'choose':'personal'};
+    if(d.kind==='team'){const route=(catalog.routes??[]).find(x=>routeKey(x)===routeKey(d));return {kind:'team',name:typeof route?.board_name==='string'?route.board_name.slice(0,200):'',why:why??'linked_repo',key:routeKey(d)};}
+    if(entry?.pending_route)return {kind:'personal',why:'deferred',pending_route:true};
+    return {kind:d.reason==='team_read_only'?'readonly':d.needs_routing?'choose':'personal',why:why??(d.reason==='team_read_only'?'read_only':d.needs_routing?'choose':'no_link')};
   }
   // The session's own hook facts (files it edited, when it started), for main's soft real-work check.
   function sessionFacts(raw){const o=observation(raw,{ownedRoots,host});return o?factsOf(run(o)):null;}
@@ -464,6 +498,9 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     const route=(catalog.routes??[]).find(x=>routeKey(x)===routeKey(d));
     return {kind:'team',name:typeof route?.board_name==='string'?route.board_name.slice(0,200):''};
   };
+  // bus_card_add's board answer: kind and name as before, the rule that decided (why), and pending_route (rule 7).
+  const agentBoard=(destination,why,pending)=>({...(destination.kind==='local'&&destination.needs_routing&&!destination.reason?{kind:'choose'}:boardOfDestination(destination)),
+    ...(why?{why}:{}),...(pending?{pending_route:true}:{})});
   async function addAgentCard(raw,a={}){
     if(stopped)return refuse('UNAVAILABLE');
     if(state.enabled===false)return refuse('CARDS_OFF');
@@ -473,7 +510,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     const task_id=`agent-${crypto.createHash('sha256').update(`${state.install_id}|${o.provider}|${o.session_id}|${a.request_id}`).digest('hex').slice(0,24)}`;
     const key=crypto.createHash('sha256').update(JSON.stringify([o.provider,o.session_id,task_id])).digest('hex');
     const prior=state.tasks[key];
-    if(prior?.agent&&prior.card_id)return {card_id:prior.card_id,title:prior.title,board:boardOfDestination(prior.destination),duplicate:true};
+    if(prior?.agent&&prior.card_id)return {card_id:prior.card_id,title:prior.title,board:agentBoard(prior.destination,prior.why??null,prior.pending_route===true),duplicate:true};
     const title=agentTitle(a.title,o.provider);
     if(!title)return {reason:'VALIDATION',message:'title: nothing is left once it is cleaned.'};
     if(o.personal)return refuse('PERSONAL');
@@ -481,28 +518,31 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     if(own?.untracked)return refuse('PERSONAL');
     let fresh=null;
     try{fresh=await getRoutes();}catch{fresh=null;}
-    if(stopped||!fresh||fresh.complete!==true)return refuse('UNAVAILABLE');
-    catalog=fresh;lastCatalogAt=now();
+    if(stopped)return refuse('UNAVAILABLE');
+    // Rule 7 (G8): an incomplete catalog (hub offline) no longer refuses: the card waits on My board, pending_route.
+    const complete=!!fresh&&fresh.complete===true;
+    if(complete){catalog=fresh;lastCatalogAt=now();}
     const repo=safeCanonical(await resolveRepo(o.cwd));
     remember(o.cwd,repo);
     if(stopped)return refuse('UNAVAILABLE');
     if(state.enabled===false)return refuse('CARDS_OFF');
     // A retry of a request whose answer was lost (the hub may already hold that card) resends exactly what was sent
     // first, to the same board, so it can never rewrite the card; that board must still be one this person can write to.
-    let destination,cardTitle=title,summary;
+    let destination,cardTitle=title,summary,why,pending=false;
     if(prior?.agent){
-      if(prior.destination.kind==='team'&&!(fresh.routes??[]).some(x=>routeKey(x)===routeKey(prior.destination)&&['owner','admin','member'].includes(x.role)))return refuse('UNAVAILABLE');
-      destination=prior.destination;cardTitle=prior.title;summary=typeof prior.summary==='string'?prior.summary:null;
+      if(prior.destination.kind==='team'&&(!complete||!(fresh.routes??[]).some(x=>routeKey(x)===routeKey(prior.destination)&&WRITABLE.includes(x.role))))return refuse('UNAVAILABLE');
+      destination=prior.destination;cardTitle=prior.title;summary=typeof prior.summary==='string'?prior.summary:null;why=prior.why??null;pending=prior.pending_route===true;
     } else {
-      const d=routeFor(repo,fresh.routes??[],choiceOf(repo));
-      if(d.kind==='local'&&d.reason==='team_read_only')return refuse('READ_ONLY');
-      if(d.kind==='local'&&d.needs_routing)return refuse('CHOOSE_BOARD');
+      // Rule 2: a hand-off carries the originator's board (a route key main took from boardFor); else rules 3 to 7.
+      const route=routeBoard({inherited:typeof a.origin_board==='string'&&HASH.test(a.origin_board)?a.origin_board:null,repo,routes:complete?fresh.routes??[]:[],choice:choiceOf(repo),catalogComplete:complete});
+      if(route.why==='read_only')return refuse('READ_ONLY');
       if(Object.keys(state.tasks).length>=2000)return refuse('UNAVAILABLE');
-      destination=compactDestination(d);
+      // Rule 4 with no default: My board with the "pick board" chip (needs_routing), never a refusal.
+      destination=compactDestination(route.destination);why=route.why;pending=route.pending_route===true;
       summary=agentSummary({provider:o.provider,handle:a.handle,folder:a.folder,afterNote:a.after_note===true,details:a.details});
       // Scrubbed for a team board before it is saved, so what is stored is what is sent, and a retry sends it byte for byte.
       if(destination.kind==='team')({title:cardTitle,summary}=teamBody(destination,{title:cardTitle,summary}));
-      if(!commit(next=>{next.tasks[key]={destination,repo,provider:o.provider,session_id:o.session_id,task_id,title:cardTitle,summary,status:null,card_id:null,agent:true,last_seen:now()};},ACK_RESERVE_BYTES))return refuse('UNAVAILABLE');
+      if(!commit(next=>{next.tasks[key]={destination,repo,provider:o.provider,session_id:o.session_id,task_id,title:cardTitle,summary,status:null,card_id:null,agent:true,last_seen:now(),why,...(pending?{pending_route:true}:{})};},ACK_RESERVE_BYTES))return refuse('UNAVAILABLE');
       changed();
     }
     // The board's to-do state, never "Needs you": 'idle' is a status no hub moves to its own column, and the sweep and
@@ -514,7 +554,37 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     if(!result?.ok||!id){log('agent card deferred');return refuse('UNAVAILABLE');}
     if(commit(next=>{const e=next.tasks[key];if(e){e.card_id=id;e.status='idle';e.sent_at=now();}}))changed();
     log('agent card added');
-    return {card_id:id,title:cardTitle,board:boardOfDestination(destination)};
+    if(complete)void reroutePending(fresh);
+    return {card_id:id,title:cardTitle,board:agentBoard(destination,why,pending)};
+  }
+  // Rule 7's second half: cards written to My board while the hub was offline go to the board the catalog now
+  // gives. A team board gets the card (team-scrubbed); the My board copy is closed with one line saying it moved.
+  // A send that fails leaves it pending for the next catalog. One pass at a time.
+  let rerouting=null;
+  function reroutePending(fresh){
+    if(rerouting||!fresh||fresh.complete!==true)return rerouting;
+    rerouting=(async()=>{
+      for(const [key,e] of Object.entries(state.tasks)){
+        if(stopped||state.enabled===false)return;
+        if(!e.agent||!e.pending_route||!e.card_id)continue;
+        const route=routeBoard({repo:e.repo,routes:fresh.routes??[],choice:choiceOf(e.repo),catalogComplete:true});
+        if(route.kind!=='team'){
+          if(commit(next=>{const x=next.tasks[key];if(x){delete x.pending_route;x.why=route.why;if(route.destination)x.destination=compactDestination(route.destination);}}))changed();
+          continue;
+        }
+        const destination=compactDestination(route.destination);
+        const scrubbed=teamBody(destination,{title:e.title,summary:typeof e.summary==='string'?e.summary:null});
+        const body={install_id:state.install_id,provider:e.provider,session_id:e.session_id,task_id:e.task_id,repo_id:destination.repo_id??null,title:scrubbed.title,status:'idle',...(scrubbed.summary!=null?{summary:scrubbed.summary}:{})};
+        let result;
+        try{result=await sendTeam(destination,teamBody(destination,body));}catch{result=null;}
+        const id=typeof result?.card?.id==='string'&&ID.test(result.card.id)?result.card.id:null;
+        if(!result?.ok||!id){log('agent card re-route deferred');continue;}
+        try{await sendLocal({install_id:state.install_id,provider:e.provider,session_id:e.session_id,task_id:e.task_id,repo_id:null,title:e.title,status:'ended',summary:'Moved to the team board once Plexiform could reach it.'});}catch{/* the team card is what counts */}
+        if(commit(next=>{const x=next.tasks[key];if(x){x.destination=destination;x.card_id=id;x.title=scrubbed.title;x.summary=scrubbed.summary??null;x.why=route.why;delete x.pending_route;}}))changed();
+        log('agent card re-routed');
+      }
+    })().catch(()=>{}).finally(()=>{rerouting=null;});
+    return rerouting;
   }
   async function drain() {while(latest&&!stopped){const next=latest;latest=null;await pass(next);}}
   function kick(){if(stopped||state.enabled===false)return;
@@ -645,4 +715,4 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     backfill,startBackfill,
     async stop(){stopped=true;latest=null;if(backfillTimer){clearTimeout(backfillTimer);backfillTimer=null;}await active;},idle:()=>active??Promise.resolve()};
 }
-module.exports={createWorkCapture,agentTitle,agentSummary,AGENT_TITLE_MAX,observation,isBackgroundSession,BACKGROUND_TITLE,routeFor,repoFor,clean,hubTitle,phase,routeKey,prBody};
+module.exports={createWorkCapture,agentTitle,agentSummary,AGENT_TITLE_MAX,observation,isBackgroundSession,BACKGROUND_TITLE,routeFor,routeBoard,repoFor,clean,hubTitle,phase,routeKey,prBody};

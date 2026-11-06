@@ -849,7 +849,7 @@ test('PR B: the roster and bus_peers carry where the caller\'s own cards go, as 
   const forged = await aw2.relay('peers', { cwd: w.repoB, session_id: 'Y' }, { provider: 'claude', cwd: w.repoB }, w.call(101), { forward });
   assert.equal(forged.board.name, 'Own board');
   assert.ok(!asks.includes(w.repoB), 'main never asked about the folder the request named');
-  for (const [kind, why] of [['personal', 'no_link'], ['untracked', 'personal_mark'], ['choose', 'multiple_links_unchosen'], ['readonly', 'read_only_role'], ['off', 'cards_off'], ['bogus', 'unknown']]) {
+  for (const [kind, why] of [['personal', 'no_link'], ['untracked', 'personal_mark'], ['choose', 'choose'], ['readonly', 'read_only'], ['off', 'cards_off'], ['bogus', 'unknown']]) {
     answer = { kind, name: 'Leaked' };
     await aw.refresh();
     r = await aw.relay('peers', {}, {}, w.call(101), { forward });
