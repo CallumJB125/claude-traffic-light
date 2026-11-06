@@ -2,8 +2,8 @@
 // The agent bus's trace (BACKBONE plan §3.6, G11): one JSONL line per bus op, so "why didn't Codex get it" has an
 // answer. Shape is src/bus-contract.js TRACE_FIELDS plus ref (the handoff or note id). Every field passes a closed
 // pattern or is dropped, so no note body, brief, title, path or CLI text can reach the file whatever a caller passes.
-// Main writes <Plexiform data>/bus-trace.jsonl; the Tasks helper writes the same shape in its own data folder. Lines
-// of one collaboration share a trace_id across both. Appends are queued and async (main never blocks on the bus);
+// One file, <Plexiform data>/bus-trace.jsonl (~/.claude-traffic-light): main and the Tasks helper both append to it
+// (O_APPEND, one short line per write), so one collaboration's lines, which share a trace_id, are in one place. Appends are queued and async (main never blocks on the bus);
 // the file is 0600 and rotates to .1 at 5 MB. A write that fails is dropped: tracing never breaks the bus.
 const fs = require('fs');
 const crypto = require('crypto');
@@ -57,6 +57,9 @@ function createTrace({ file, now = Date.now, maxBytes = MAX_BYTES, fsp = fs.prom
   function write(text) {
     queue = queue.then(async () => {
       if (size === null) size = await fsp.stat(file).then((s) => s.size, () => 0);
+      // Two writers share the file (main and the Tasks helper): before rotating, read the real size, so one writer's
+      // stale count never moves a file the other has just rotated.
+      if (size + text.length > maxBytes) size = await fsp.stat(file).then((s) => s.size, () => 0);
       if (size + text.length > maxBytes) { await fsp.rename(file, `${file}.1`).catch(() => {}); size = 0; }
       await fsp.appendFile(file, text, { mode: 0o600 });
       size += Buffer.byteLength(text);

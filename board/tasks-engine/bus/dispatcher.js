@@ -67,7 +67,7 @@ export function scrubRun(text, max, root = null) {
  * engine: {createTask, act, tasks, on/off('event'), git, busPolicy(), busRepoAllowed(top)}.
  * Returns {op(op, args, caller), runTool(task, name, args), context, sessionRepo(top), close()}.
  */
-export function createAgentBus({ engine, dataDir, now = Date.now, log: logger }) {
+export function createAgentBus({ engine, dataDir, now = Date.now, log: logger, traceFile = null }) {
   const log = openBusLog(path.join(dataDir, 'bus.db'), { now });
   const deviceId = log.state('device_id') ?? (() => { const id = crypto.randomBytes(8).toString('hex'); log.setState('device_id', id); return id; })();
   // ready: main has pushed its Preferences (busSetContext) since this helper started. Until then nothing
@@ -108,7 +108,8 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     record: (kind, data) => append(envelope({ topic: 'note', kind, handoff: null, source: systemSource, data })) });
   // The trace (src/bus-trace.js): this helper's half, same shape and trace_ids as main's. A hand-off's trace_id is
   // kept on its offer, so its claim, start, result and returned note are lines of the same collaboration.
-  const trace = BusTrace.createTrace({ file: path.join(dataDir, 'bus-trace.jsonl'), now });
+  // traceFile: main's <Plexiform data>/bus-trace.jsonl (utility-entry passes it), so both halves share one file.
+  const trace = BusTrace.createTrace({ file: traceFile ?? path.join(dataDir, 'bus-trace.jsonl'), now });
   const traceOf = (ev) => (Contract.isTraceId(ev?.data?.trace_id) ? ev.data.trace_id : undefined);
   const span = (ev, op, extra = {}) => trace.append({ trace_id: traceOf(ev), op, provider: ev?.to?.provider ?? null, repo_key_hash: BusTrace.repoKeyHash(ev?.repo?.root), ref: ev?.handoff_id ?? null, ...extra });
   const health = createProviderHealth({ log, now, onChange: (h) => {

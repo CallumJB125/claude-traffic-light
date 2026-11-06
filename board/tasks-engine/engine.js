@@ -238,7 +238,7 @@ export class TasksEngine extends EventEmitter {
     await this.#detect();
     this.#recover();
     this.#prune();
-    this.agentBus = createAgentBus({ engine: this, dataDir: this.dataDir, now: this.now, log: this.log });
+    this.agentBus = createAgentBus({ engine: this, dataDir: this.dataDir, now: this.now, log: this.log, traceFile: this.opts.busTraceFile ?? null });
     this.tick = setInterval(() => this.#tick(), this.opts.tickMs ?? 1000);
     this.tick.unref?.();
     this.detectTimer = setInterval(() => { this.#prune(); this.#detect().catch(() => {}); }, DETECT_EVERY_MS);

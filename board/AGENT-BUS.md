@@ -131,7 +131,6 @@ A hand-off run is carded from the moment the engine creates it: the engine's wor
 
 ### 7.7 Trace (G11)
 `src/bus-trace.js` appends one JSONL line per bus op, shaped `{t, trace_id, span, op, from_handle, to, provider, repo_key_hash, result, reason, ms, ref}`. The file is 0600 and rotates at 5 MB. Every field passes a closed pattern, so no body, brief, title, path or CLI text can be written.
-- Main writes `<Plexiform data>/bus-trace.jsonl` for the ops it answers: `peers`, `note`, `notes`, `card`, `notified`.
-- The Tasks helper writes `<tasks data>/bus-trace.jsonl` for `hello`, `handoff`, `read`, `wait`, `status`, `halt`, `resume`, each hand-off's `claim`, `start`, `result` and `returned`, and `breaker` changes.
+- One file, `<Plexiform data>/bus-trace.jsonl` (`~/.claude-traffic-light`), with two writers appending to it. Main writes the ops it answers: `peers`, `note`, `notes`, `card`, `notified`. The Tasks helper writes `hello`, `handoff`, `read`, `wait`, `status`, `halt`, `resume`, each hand-off's `claim`, `start`, `result` and `returned`, and `breaker` changes. `utility-entry.js` passes it the path as `busTraceFile`. A writer re-reads the real size before it rotates, so neither moves a file the other just rotated. Before this change the helper wrote `<Plexiform app support>/tasks/bus-trace.jsonl`; that older file is no longer written.
 - A hand-off's lines share the `trace_id` main minted.
 

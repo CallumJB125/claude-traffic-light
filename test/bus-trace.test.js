@@ -40,3 +40,25 @@ test('append writes 0600 JSONL, rotates to .1 at the cap, drops unknown ops, and
   assert.ok(broken.append({ op: 'peers' }));
   await broken.flush();
 });
+
+test('two writers share one file (main and the Tasks helper): a stale size never rotates the file the other just rotated', async (t) => {
+  const dir = testTempDir('pf-trace2-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'bus-trace.jsonl');
+  const line = Buffer.byteLength(`${JSON.stringify(T.sanitize({ op: 'peers', result: 'ok' }, Date.now()))}\n`);
+  const max = line * 10 - 1; // nine lines fit
+  const main = T.createTrace({ file, maxBytes: max });
+  const helper = T.createTrace({ file, maxBytes: max });
+  for (let i = 0; i < 8; i += 1) main.append({ op: 'peers', result: 'ok' });
+  await main.flush();
+  // The helper adds a line (nine), then rotates on the tenth and writes it to a fresh file.
+  for (let i = 0; i < 2; i += 1) helper.append({ op: 'claim', result: 'ok' });
+  await helper.flush();
+  const rotated = fs.readFileSync(`${file}.1`, 'utf8');
+  assert.equal(rotated.trim().split('\n').length, 9);
+  // Main still counts eight lines of its own; the file has one. Its next two lines must not rotate again.
+  for (let i = 0; i < 2; i += 1) main.append({ op: 'peers', result: 'refused' }); // a little longer than 'ok': past main's stale count
+  await main.flush();
+  assert.equal(fs.readFileSync(`${file}.1`, 'utf8'), rotated, 'the rotated file is kept');
+  assert.deepEqual(fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l).result), ['ok', 'refused', 'refused']);
+});

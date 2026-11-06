@@ -60,6 +60,8 @@ try {
     claudeCarry: productionCarry({ log: () => {}, loginShellEnv: loginEnv.loginShellEnv }),
     codexCarry: productionCodexCarry({ log: () => {}, loginShellEnv: loginEnv.loginShellEnv }),
     spendGate: () => SpendGate.readGate(appRoot),
+    // The bus trace is one file with main's (src/bus-trace.js), not one per process.
+    busTraceFile: path.join(appRoot, 'bus-trace.jsonl'),
     log: makeLogger(process.stderr, { quiet: true }),
     stopGraceMs: 1500,
     onRuns: (runs) => { try { parent?.postMessage({ type: 'tasks.runs', runs }); } catch { /* main is gone */ } },

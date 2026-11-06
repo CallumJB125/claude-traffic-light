@@ -277,6 +277,22 @@ test('a person\'s own Codex task that parks on its limit opens the breaker too: 
   } finally { w.cleanup(); }
 });
 
+test('item 7: given traceFile (main\'s data folder), the helper traces there, not in its own data folder', async () => {
+  const dir = tmpDir('pxtr-');
+  const shared = tmpDir('pxtr-main-');
+  const repo = makeRepo(dir);
+  const root = fs.realpathSync(repo.checkout);
+  const engine = stubEngine(root);
+  const bus = createAgentBus({ engine, dataDir: dir, traceFile: `${shared}/bus-trace.jsonl` });
+  try {
+    await bus.op('busSetContext', {});
+    await bus.op('status', {});
+    await bus.trace.flush();
+    assert.match(fs.readFileSync(`${shared}/bus-trace.jsonl`, 'utf8'), /"op":"status"/);
+    assert.equal(fs.existsSync(`${dir}/bus-trace.jsonl`), false);
+  } finally { bus.close(); rm(dir); rm(shared); }
+});
+
 test('D4 switch off: "any" does not move past an unavailable provider', async () => {
   const w = await world({ fallback: { enabled: false, order: ['codex', 'claude'] } });
   try {
