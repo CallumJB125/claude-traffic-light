@@ -89,3 +89,39 @@ test('renderer writes telemetry as text only and keeps escape-sequence guards', 
   assert.match(main, /sessions\.some\(\(s\) => s\.sessionId === id\)/);
   assert.match(main, /Only the focused terminal can receive input/);
 });
+const takeover = require('../takeover');
+test('take-over accepts only a user-owned regular .command file', (t) => {
+  const dir = fixtureDir(t), file = path.join(dir, 'continue.command');
+  fs.writeFileSync(file, '#!/bin/zsh\necho hi\n', { mode: 0o700 });
+  assert.equal(takeover.commandFileProblem(file), null);
+  assert.match(takeover.commandFileProblem('relative.command'), /Only \.command/);
+  assert.match(takeover.commandFileProblem(path.join(dir, 'x.sh')), /Only \.command/);
+  assert.match(takeover.commandFileProblem(path.join(dir, 'a\nb.command')), /cannot be run safely/);
+  fs.symlinkSync(file, path.join(dir, 'link.command')); assert.match(takeover.commandFileProblem(path.join(dir, 'link.command')), /regular/);
+  fs.writeFileSync(path.join(dir, 'big.command'), ' '.repeat(256 * 1024 + 1)); assert.match(takeover.commandFileProblem(path.join(dir, 'big.command')), /too large/);
+  assert.match(takeover.commandFileProblem(file, { uid: process.getuid() + 1 }), /another user/);
+});
+test('take-over recognises only Plexiform hand-off files without asking', () => {
+  assert.equal(takeover.isPlexiformHandoff('/tmp/x/plexiform-terminal-Ab12Cd/continue.command', ['/tmp/x']), true);
+  assert.equal(takeover.isPlexiformHandoff('/tmp/x/plexiform-terminal-Ab12Cd/other.command', ['/tmp/x']), false);
+  assert.equal(takeover.isPlexiformHandoff('/Users/me/Downloads/plexiform-terminal-Ab12Cd/continue.command', ['/tmp/x']), false);
+  assert.equal(takeover.isPlexiformHandoff('/tmp/x/plexiform-terminal-../continue.command', ['/tmp/x']), false);
+});
+test('take-over run line quotes the path so it is one argument', () => {
+  assert.equal(takeover.runLine("/tmp/it's $(x);.command"), " exec /bin/zsh -- '/tmp/it'\\''s $(x);.command'\r");
+});
+test('quarantined files are detected', async (t) => {
+  const dir = fixtureDir(t), file = path.join(dir, 'q.command'); fs.writeFileSync(file, 'x');
+  assert.equal(await takeover.quarantined(file), false);
+  require('node:child_process').execFileSync('/usr/bin/xattr', ['-w', 'com.apple.quarantine', '0081;00000000;Test;', file]);
+  assert.equal(await takeover.quarantined(file), true);
+});
+test('packaged app declares take-over and .command handling without claiming the default', () => {
+  const config = require('../electron-builder.config.cjs');
+  assert.equal(config.mac.extendInfo.PlexiformTakeover, true);
+  assert.deepEqual(config.fileAssociations.map((a) => [a.ext, a.rank]), [['command', 'Alternate']]);
+  assert(config.files.includes('takeover.js'));
+  assert.equal(require('../package.json').version, '0.2.0');
+  const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+  assert.doesNotMatch(main, /showOpenDialog/, 'new tabs open without a folder picker');
+});

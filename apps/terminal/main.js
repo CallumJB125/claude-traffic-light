@@ -10,6 +10,7 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
   const manifest = require('./manifest.json');
   const { KeeperClient } = require('./keeper-client');
   const { readMetadata, readSpend, readCi, gitInfo, trackTimeline } = require('./metadata');
+  const takeover = require('./takeover');
   const native = require('./native/keeper-socket/keeper-socket.node');
   let window, client, sessions = [], rows = [], active = null, channel = null, selectedEpoch = 0, attaching = null;
   let polling = null, refreshQueued = false, quitting = false, finishStartup;
@@ -25,6 +26,9 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
   }
   const keepSpellcheckOffline = ses => { if (process.platform === 'darwin') return; ses.setSpellCheckerEnabled(false); ses.setSpellCheckerDictionaryDownloadURL('http://127.0.0.1:9/'); }; // privacy-flow: spellcheck-off
   app.on('session-created', keepSpellcheckOffline);
+  // Files can arrive before the window or keeper exist; they wait in order.
+  const pendingFiles = []; let drainFiles = null;
+  app.on('open-file', (event, file) => { event.preventDefault(); pendingFiles.push(file); drainFiles?.(); });
   if (!app.requestSingleInstanceLock()) app.quit();
   else {
     const html = path.join(__dirname, 'renderer/index.html');
@@ -105,18 +109,51 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
     handle('reconnect', true, async () => {
       if (client && !client.socket.destroyed) return { ok: true };
       reconnecting ??= (async () => { client = null; active = null; channel = null; ++selectedEpoch; await connect(); })().finally(() => { reconnecting = null; });
-      await reconnecting; return { ok: true };
+      await reconnecting; void startDrain(); return { ok: true };
     });
     handle('ready', false, async () => { await startup; await refresh(); return snapshot(); });
-    handle('spawn', true, async (value) => {
-      const kind = value?.kind; const exe = executable(kind);
-      const picked = await dialog.showOpenDialog(window, { title: 'Choose the project for this terminal', properties: ['openDirectory'], buttonLabel: 'Open terminal here' });
-      if (picked.canceled || !picked.filePaths[0]) return { cancelled: true };
-      if (!window.isFocused() || !window.isVisible()) throw Error('Focus the terminal and try again; nothing started.');
-      const result = await client.call('spawn', { kind, argv: kind === 'shell' ? [exe, '-l'] : [exe], cwd: picked.filePaths[0], env: {}, origin: { by: 'terminal', taskId: null }, cols: 100, rows: 30, reveal: true });
-      await refresh(); const session = sessions.find((s) => s.sessionId === result.sessionId);
-      return { session };
-    });
+    const home = () => labArg ? app.getPath('userData') : os.homedir();
+    const isDir = (dir) => { try { return typeof dir === 'string' && path.isAbsolute(dir) && fs.statSync(dir).isDirectory(); } catch { return false; } };
+    // New tabs start where the selected tab is (keeper tab or observed agent),
+    // otherwise in the home folder. Paths never come from the renderer.
+    function folderFor(from) {
+      const dir = typeof from === 'string' ? (sessions.find((s) => s.sessionId === from)?.cwd ?? observed.find((r) => r.id === from)?.cwd) : null;
+      return isDir(dir) ? dir : home();
+    }
+    async function start(kind, cwd) {
+      if (!client || client.socket.destroyed) throw Error('Session Keeper is offline. Choose Reconnect first.');
+      const exe = executable(kind);
+      const result = await client.call('spawn', { kind, argv: kind === 'shell' ? [exe, '-l'] : [exe], cwd, env: {}, origin: { by: 'terminal', taskId: null }, cols: 100, rows: 30, reveal: true });
+      await refresh(); return sessions.find((s) => s.sessionId === result.sessionId);
+    }
+    handle('spawn', true, async (value) => ({ session: await start(value?.kind, folderFor(value?.from)) }));
+    // Take-over: open-file for a .command. The script runs in a new tab of our
+    // own (never an existing or external session) once the window attaches it.
+    async function openCommand(file) {
+      const problem = takeover.commandFileProblem(file);
+      if (problem) throw Error(problem);
+      if (await takeover.quarantined(file)) throw Error('That .command file was downloaded and is quarantined; it was not run.');
+      window.show(); window.focus();
+      const tmp = [os.tmpdir(), fs.realpathSync(os.tmpdir())].map((d) => d.replace(/\/+$/, ''));
+      if (!takeover.isPlexiformHandoff(file, tmp)) {
+        const r = await dialog.showMessageBox(window, { type: 'question', buttons: ['Cancel', 'Run in new tab'], defaultId: 0, cancelId: 0, message: `Run “${path.basename(file)}” in a new terminal tab?`, detail: `${file}\n\nThis script can run any command as you.` });
+        if (r.response !== 1) return;
+      }
+      const session = await start('shell', path.dirname(file));
+      if (!session) throw Error('The new tab did not start.');
+      send('open', { sessionId: session.sessionId });
+      for (let i = 0; i < 40 && (active !== session.sessionId || !channel); i++) await new Promise((r) => setTimeout(r, 100));
+      if (active !== session.sessionId || !channel) await select(session.sessionId);
+      if (!client.write(channel, takeover.runLine(file))) throw Error('The script could not be started in its tab.');
+    }
+    function startDrain() {
+      let running = false;
+      drainFiles = async () => {
+        if (running) return; running = true;
+        try { while (pendingFiles.length) { const file = pendingFiles.shift(); try { await openCommand(file); } catch (e) { notice(e.message); } } } finally { running = false; }
+      };
+      return drainFiles();
+    }
     handle('select', false, async (id) => {
       // Serialize attaches; the keeper has exactly one data owner per tab.
       if (attaching) await attaching.catch(() => {});
@@ -194,6 +231,9 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
       await window.loadFile(html); window.show();
       try { await connect(); } catch (e) { finishStartup(); notice(e.message); send('state', snapshot()); await dialog.showMessageBox(window, { type: 'error', message: 'Plexiform Terminal could not connect', detail: e.message }); } finally { finishStartup(); }
       const timer = setInterval(refresh, 3000); timer.unref();
+      // Like any terminal: with no tabs and nothing handed over, open a shell at home.
+      if (!labArg && client && !pendingFiles.length && !sessions.length) { try { await start('shell', home()); } catch (e) { notice(e.message); } }
+      if (client) void startDrain();
       // Fixed disposable packaged acceptance. Available only in a dev artifact
       // with an isolated clean HOME/socket; no arbitrary commands or paths.
       if (manifest.development && labArg && process.argv.includes('--lab-smoke')) {

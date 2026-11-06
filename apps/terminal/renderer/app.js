@@ -378,7 +378,7 @@
       button.addEventListener('click', () => open(item));
       terms.append(button);
     }
-    if (!tabs) terms.append(el('p', 'empty-line', 'No terminals open. Use Shell, Claude or Codex in the sidebar to start one in a project folder.'));
+    if (!tabs) terms.append(el('p', 'empty-line', 'No terminals open. Press ⌘T for a new shell.'));
     $('keeper-sessions').replaceChildren(terms);
   }
 
@@ -484,6 +484,11 @@
       const fresh = snapshot.sessions.find(session => !knownIds.has(session.sessionId) && running(session));
       if (fresh) void openTab(fresh.sessionId, { focus: false });
     }
+    // Terminal first: at launch, the most recent running tab opens.
+    if (!knownIds && !activeId) {
+      const recent = [...snapshot.sessions].reverse().find(running);
+      if (recent) void openTab(recent.sessionId, { focus: true });
+    }
     knownIds = new Set(ids);
   }
 
@@ -559,7 +564,8 @@
     spawning = true;
     document.querySelectorAll('[data-spawn]').forEach(item => { item.disabled = true; });
     try {
-      const result = checked(await api.spawn({ kind }));
+      const from = view.name === 'detail' ? itemByKey(view.key)?.row?.id : activeId;
+      const result = checked(await api.spawn({ kind, from: from || null }));
       if (result?.session) {
         const id = result.session.sessionId;
         if (!sessionById(id)) snapshot.sessions.push(result.session);
@@ -626,6 +632,7 @@
   let receivedLiveState = false;
   api.onState(state => { receivedLiveState = true; update(state); });
   api.onNotice(notice);
+  api.onOpen?.(event => { if (typeof event?.sessionId === 'string') { knownIds?.add(event.sessionId); void openTab(event.sessionId); } });
   api.onData(event => {
     if (!term || event?.sessionId !== activeId) return;
     if (event.reset) term.reset();

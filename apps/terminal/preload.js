@@ -20,4 +20,5 @@ contextBridge.exposeInMainWorld('terminal', Object.freeze({
   onData: callback => subscribe('data', callback),
   onState: callback => subscribe('state', callback),
   onNotice: callback => subscribe('notice', callback),
+  onOpen: callback => subscribe('open', callback),
 }));
