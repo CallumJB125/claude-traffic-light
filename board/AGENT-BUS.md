@@ -98,7 +98,7 @@ Claude Code Remote Control: `claude --remote-control` is the ordinary CLI (entry
 - Past `retry_at` it is half open: runs start, and the next provider failure re-opens it.
 
 A hand-off naming an open provider is refused at once: `PROVIDER_UNAVAILABLE {provider, retry_at, provider_reason}`.
-- `to.provider` is `any` (the default from `bus_handoff`), one provider, or a list.
+- `to.provider` is `any` (the default from `bus_handoff`), one provider, or a list. A list is tried in the caller's order but only over AIs in the person's fallback order; one left out of it is never tried (`["codex"]` with Codex not in the order is `PROVIDER_UNAVAILABLE`, security review #5). A single named provider is the caller's explicit pick and is not limited by the order.
 - `any` and lists use the person's order (`agentBus.fallbackOrder`, default claude → codex → gemini, filtered to the providers that can take bus runs) and skip open breakers.
 - If a run asked that way fails for `QUOTA`, `AUTH` or `MISSING`, the dispatcher posts it once to the next provider: same hop, `caused_by` and `data.fallback_of` set, same caps. The first result's `data.fallback` names the new hand-off.
 - `agentBus.fallback: false` is the one switch that turns this off.
