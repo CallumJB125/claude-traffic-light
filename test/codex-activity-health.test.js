@@ -57,6 +57,19 @@ test('Codex health reports observed age without inventing current work or trusti
   assert.match(f.check().detail, /No lifecycle event/);
 });
 
+test('Codex health keeps the last lifecycle event after every Codex thread has ended', t => {
+  const f = fixture(t);
+  const saved = (codexAt) => fs.writeFileSync(path.join(f.root, Health.LAST_HOOK_FILE), JSON.stringify({ at: new Date(NOW).toISOString(), source: 'claude', codexAt }));
+  saved(new Date(NOW - 120000).toISOString());
+  assert.equal(f.check().status, 'ok');
+  assert.match(f.check().detail, /Last lifecycle event: 2 min ago/);
+  saved(new Date(NOW + 1000).toISOString());
+  assert.match(f.check().detail, /No lifecycle event/, 'a future stamp is never trusted');
+  saved(undefined);
+  assert.match(f.check().detail, /No lifecycle event/, 'the generic last hook (any tool) is not Codex activity');
+  assert.equal(Health.newestCodexLifecycleAt([{ source: 'codex', codexLifecycle: 1, codexHookAt: new Date(NOW).toISOString() }, { source: 'codex', updatedAt: new Date(NOW + 5).toISOString() }], NOW + 10), NOW);
+});
+
 test('Codex health detects moved configuration despite an old recent event', t => {
   const f = fixture(t);
   f.event({ source: 'codex', codexLifecycle: 1, codexHookAt: new Date(NOW).toISOString() });

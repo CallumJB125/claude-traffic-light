@@ -158,12 +158,11 @@ function checkCodexHooks(ctx) {
     return { status: 'warn', detail: 'Codex session activity is not configured for this copy of Plexiform.', fix: 'connect-codex', next };
   }
   let at = 0;
-  try {
-    for (const s of scanSessions(ctx).datas) {
-      const t = Date.parse(s.codexHookAt || '');
-      if (s.source === 'codex' && s.codexLifecycle === 1 && Number.isFinite(t) && t <= ctx.now && t > at) at = t;
-    }
-  } catch { /* Session-file health reports unreadable storage separately. */ }
+  try { at = newestCodexLifecycleAt(scanSessions(ctx).datas, ctx.now); } catch { /* Session-file health reports unreadable storage separately. */ }
+  // SessionEnd deletes the row and Codex desktop ends threads when it quits, so
+  // the app also keeps the newest lifecycle stamp it saw (saveLastHook in main.js).
+  const saved = Date.parse(readJson(ctx.fs, path.join(ctx.root, LAST_HOOK_FILE))?.codexAt || '');
+  if (Number.isFinite(saved) && saved <= ctx.now && saved > at) at = saved;
   if (!at) return { status: 'info', detail: 'Codex hooks are configured. No lifecycle event has been received yet.', next };
   const detail = `Codex hooks are configured. Last lifecycle event: ${ago(ctx.now - at)}.`;
   return ctx.now - at <= 5 * 60000 ? { status: 'ok', detail, at: new Date(at).toISOString() }
@@ -278,6 +277,15 @@ function newestHookAt(datas) {
     if (at && (!best || at > best.at)) best = { at, source: d.source || 'claude' };
   }
   return best;
+}
+
+function newestCodexLifecycleAt(datas, now = Infinity) {
+  let at = 0;
+  for (const s of datas || []) {
+    const t = Date.parse(s?.codexHookAt || '');
+    if (s?.source === 'codex' && s.codexLifecycle === 1 && Number.isFinite(t) && t <= now && t > at) at = t;
+  }
+  return at;
 }
 
 // The newest hook event on record: the live session files, or, once every
@@ -589,6 +597,6 @@ function diagnostics({ report, versions = {}, platform = {}, logText = '', scrub
 
 module.exports = {
   FIXES, LAST_HOOK_FILE, STALE_LOCK_AGE_MS,
-  runChecks, likelyCause, clearStaleLocks, newestHookAt, lastHookEvent, notConfigured, hookPaths, logExcerpt, diagnostics, ago,
+  runChecks, likelyCause, clearStaleLocks, newestHookAt, newestCodexLifecycleAt, lastHookEvent, notConfigured, hookPaths, logExcerpt, diagnostics, ago,
   checkHooks, checkAgents, checkCodexHooks, checkVersion, checkMcp, checkSignal, checkSessions, checkLastHook, checkTranscripts, checkDisk,
 };

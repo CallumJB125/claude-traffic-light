@@ -855,13 +855,16 @@ function sweepSessionFiles() {
 // newest hook stamp is saved (at most every 30 s) for Health's "last hook
 // event" to outlive the session.
 const LAST_HOOK_FILE = path.join(ROOT_DIR, Health.LAST_HOOK_FILE);
-let lastHookSaved = 0;
-try { lastHookSaved = Date.parse(JSON.parse(fs.readFileSync(LAST_HOOK_FILE, 'utf8')).at) || 0; } catch { /* none yet */ }
+let lastHookSaved = 0, codexLifecycleSaved = 0;
+try { const saved = JSON.parse(fs.readFileSync(LAST_HOOK_FILE, 'utf8')); lastHookSaved = Date.parse(saved.at) || 0; codexLifecycleSaved = Date.parse(saved.codexAt) || 0; } catch { /* none yet */ }
 function saveLastHook() {
-  const ev = Health.newestHookAt([...sessionFileCache.values()].map((e) => e.data));
+  const datas = [...sessionFileCache.values()].map((e) => e.data);
+  const ev = Health.newestHookAt(datas);
   if (!ev || ev.at - lastHookSaved < 30000) return;
   lastHookSaved = ev.at;
-  try { SessionState.writeJsonAtomic(LAST_HOOK_FILE, { at: new Date(ev.at).toISOString(), source: ev.source }); } catch { /* the next event retries */ }
+  // Codex's own stamp too, so Health's Codex row outlives the thread (Codex desktop ends them all when it quits).
+  codexLifecycleSaved = Math.max(codexLifecycleSaved, Health.newestCodexLifecycleAt(datas, Date.now()));
+  try { SessionState.writeJsonAtomic(LAST_HOOK_FILE, { at: new Date(ev.at).toISOString(), source: ev.source, ...(codexLifecycleSaved ? { codexAt: new Date(codexLifecycleSaved).toISOString() } : {}) }); } catch { /* the next event retries */ }
 }
 
 // Every change in what a session presents is logged, so a flicker report can

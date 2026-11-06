@@ -191,6 +191,11 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
 
   // Where a folder sits: its git top, git dirs and repo key, and the shared verdict.
   // Unresolved (git could not answer) is excluded.
+  // $HOME, a root and dot-folders are never on the bus (repo-scope.js); a session started there is told where to start instead.
+  function excludedPeersMessage(reason) {
+    if (reason === 'HOME' || reason === 'ROOT' || reason === 'PROTECTED') return 'This session runs in your home folder (or a system folder), which Plexiform never shares with other AI sessions. Start the session inside a project folder to see and message the others there.';
+    return 'Plexiform does not show other AI sessions to this folder.';
+  }
   function classify(cwd, exclude) {
     const key = JSON.stringify(exclude);
     const hit = classified.get(cwd);
@@ -904,7 +909,7 @@ function boardAnswer(board) {
     // Unbound: the folder the calling process really runs in; with none, nothing (never the folder it named).
     const viewCwd = b.bound ? b.session.cwd : b.cwd || null;
     const cls = typeof viewCwd === 'string' && path.isAbsolute(viewCwd) ? await classify(viewCwd, exclude) : { allowed: false };
-    if (!cls.allowed) return { reason: 'EXCLUDED', message: 'Plexiform does not show other AI sessions to this folder.' };
+    if (!cls.allowed) return { reason: 'EXCLUDED', message: excludedPeersMessage(cls.reason) };
     const roster = await current(b.bound ? b.key : null);
     if (!roster) return { reason: 'UNAVAILABLE', message: 'Plexiform has no roster yet. Try again in a few seconds.' };
     const me = b.bound && has(roster.self, b.key) ? roster.self[b.key] : null;
