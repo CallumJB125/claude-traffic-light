@@ -21,6 +21,10 @@ const UNREAD_SCAN_MIN_MS = 4000;
 const LOCAL_SOURCES = ['local', 'cli'];
 const { isDirWithin: isDirDefault } = require('./bounded-io.js');
 
+// After the socket is up and has the bus context (so the repo rules are the person's), a hand-off main relays for a
+// session it bound goes over parentPort with its caller: only that channel carries the origin (engine.bus).
+const parentRouted = (op, caller, opts) => op === 'handoff' && !!caller && !!caller.origin && typeof opts.busMain === 'function';
+
 async function loadApi() {
   const [client, protocol, face] = await Promise.all(['client.js', 'protocol.js', 'face.js'].map((f) => import(pathToFileURL(path.join(API_DIR, f)).href))); // privacy-flow: tasks-local
   return { client, P: protocol, taskFace: face.taskFace };
@@ -840,6 +844,9 @@ function createTasksService(opts) {
     const channel = client;
     if (op !== 'busSetContext' && opts.busContext) await (busContextFor === channel ? busContextSent : pushBusContext(channel));
     const timeoutMs = op === 'wait' ? (Math.min(120, Math.max(0, Number(args?.timeout_s ?? 60) || 0)) + 10) * 1000 : 12_000;
+    // A hand-off main relays for a session it bound names that session (caller.origin) for the result note: only
+    // parentPort carries that (engine.bus). With no parentPort (a dev fixture home) it goes without, as before.
+    if (parentRouted(op, caller, opts)) return opts.busMain(op, args, { caller, timeoutMs });
     return channel.bus(op, args, caller, { timeoutMs });
   }
 
@@ -856,4 +863,4 @@ function createTasksService(opts) {
   return { start, stop, retryNow, refresh, snapshot, openTask, closeTask, act, shownHash, saveCheckpoint, copyTakeover, openTerminal, create, preflight, route, composerInfo, registerFolder, markSeen, chatRow, chatDetail, watchChat, shareMessage, chatConnected: () => connected(), folderOf: (handle) => folders.get(handle) ?? null, folderPaths: () => [...folders.values()], bus };
 }
 
-module.exports = { createTasksService, OFFLINE };
+module.exports = { createTasksService, OFFLINE, parentRouted };

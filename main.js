@@ -2420,7 +2420,7 @@ function getTasks() {
     boardHome: dataDir,
     ensureSupervisor: () => tasksProcess?.ensure(),
     // The note ops, over the helper's parentPort only (none in a dev fixture home: UNAVAILABLE).
-    ...(tasksProcess ? { busMain: (op, args) => tasksProcess.busMain(op, args) } : {}),
+    ...(tasksProcess ? { busMain: (op, args, o) => tasksProcess.busMain(op, args, o) } : {}),
     homeDir: os.homedir(),
     detectedTools: () => AiTools.quick(),
     startGuard: (cwd) => (taskStartGuard ? taskStartGuard(cwd) : null),

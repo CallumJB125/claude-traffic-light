@@ -130,6 +130,9 @@ export class ApiError extends Error {
 
 // The note ops: main's only, over the utilityProcess parentPort (board/tasks-engine/parent-bus.js), never the socket.
 export const MAIN_ONLY = new Set(['note', 'notes', 'notes_ack', 'notes_pending', 'notified']);
+// Also taken over parentPort, with a caller: a hand-off main relays for a session it bound carries that session as
+// its origin, which the socket never passes (engine.bus).
+export const PARENT_CALLER_OPS = new Set(['handoff']);
 
 export function defaultMaxParallel(ramGb) {
   return ramGb >= 32 ? 4 : ramGb >= 16 ? 2 : 1;
@@ -2324,8 +2327,15 @@ export class TasksEngine extends EventEmitter {
     if (this.principal(ctx)?.kind === 'relay') throw new ApiError('POLICY_DENIED', 'only the local app can use the agent bus');
     if (!BUS_OPS.includes(op)) throw new ApiError('VALIDATION', 'unknown bus op');
     if (MAIN_ONLY.has(op) && !this.#isMain(ctx)) throw new ApiError('POLICY_DENIED', 'notes come only from Plexiform');
+    // unbound only narrows what a caller may reach, and a trace id only joins log lines, so either channel may send them.
+    // origin (who a hand-off's result note goes to) only from main over parentPort: through the socket, any process
+    // holding tasks.token could aim a result note at any session (the note ops' rule, PR B).
+    const main = this.#isMain(ctx);
+    const trace = caller?.trace && typeof caller.trace === 'object' && /^tr_[0-9a-f]{16}$/.test(caller.trace.trace_id ?? '')
+      ? { trace_id: caller.trace.trace_id, from_handle: typeof caller.trace.from_handle === 'string' ? caller.trace.from_handle.slice(0, 40) : null } : null;
     const c = caller && typeof caller === 'object' ? { provider: typeof caller.provider === 'string' ? caller.provider.slice(0, 12) : null, cwd: typeof caller.cwd === 'string' && path.isAbsolute(caller.cwd) ? caller.cwd.slice(0, 1024) : null,
-      ...(caller.after_note === true ? { after_note: true } : {}) } : null;
+      ...(caller.after_note === true ? { after_note: true } : {}), ...(caller.unbound === true ? { unbound: true } : {}), ...(trace ? { trace } : {}),
+      ...(main && caller.origin && typeof caller.origin === 'object' ? { origin: { key: caller.origin.key, handle: caller.origin.handle, board: caller.origin.board } } : {}) } : null;
     try { return await this.agentBus.op(op, args, c); } catch (e) {
       if (e instanceof BusRefusal) throw new ApiError(['VALIDATION', 'POLICY_DENIED', 'CONFLICT'].includes(e.code) ? e.code : 'INTERNAL', e.message);
       throw e;

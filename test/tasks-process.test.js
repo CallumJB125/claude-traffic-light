@@ -67,6 +67,21 @@ test('busMain: one request per call with a unique id, answered only by the child
   answer(c, ma, { ok: true, result: 'again' });
   await s.stop({ final: true });
 });
+test('busMain: a hand-off carries main\'s caller and its refusal keeps the bus\'s wording; a note op\'s never does', async () => {
+  const { s, children, bus, answer } = await readyHelper();
+  const c = children[0];
+  const caller = { provider: 'claude', cwd: '/r', origin: { key: 'claude|X', handle: 'claude-r-0a1b' } };
+  const h = s.busMain('handoff', { title: 'x' }, { caller });
+  const n = s.busMain('notes', {});
+  const [mh, mn] = bus(c);
+  assert.deepEqual(mh.caller, caller);
+  assert.equal(mn.caller, undefined);
+  answer(c, mh, { ok: false, code: 'VALIDATION', message: 'to.provider must be one of any, claude, codex' });
+  answer(c, mn, { ok: false, code: 'VALIDATION', message: 'SQLITE text' });
+  assert.match((await h.catch((x) => x)).message, /to\.provider/);
+  assert.ok(!(await n.catch((x) => x)).message.includes('SQLITE'));
+  await s.stop({ final: true });
+});
 test('O1b: the helper\'s wrapped runs reach main, and none once it exits; a run\'s bus_peers is answered by main, only for the current helper', async () => {
   const children = []; const runs = []; const asked = [];
   const s = createTasksSupervisor({ fork: () => { const c = new Child(); children.push(c); return c; }, entry, dataDir,

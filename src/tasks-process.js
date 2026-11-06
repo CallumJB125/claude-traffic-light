@@ -54,7 +54,8 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
             if (!p || p.child !== c) return;
             pending.delete(m.id); timers.clearTimeout(p.timer);
             if (m.ok === true) p.resolve(m.result);
-            else p.reject(Object.assign(new Error('The Tasks helper refused the request'), { code: typeof m.code === 'string' ? m.code.slice(0, 32) : 'INTERNAL' }));
+            // Only a hand-off's refusal brings its wording back (board/tasks-engine/parent-bus.js); a note op's never does.
+            else p.reject(Object.assign(new Error(p.op === 'handoff' && typeof m.message === 'string' ? m.message.slice(0, 300) : 'The Tasks helper refused the request'), { code: typeof m.code === 'string' ? m.code.slice(0, 32) : 'INTERNAL' }));
             return;
           }
           if (m?.type === 'tasks.fatal') fail();
@@ -107,7 +108,7 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
     // One note op to the running helper over parentPort. Refused at once (UNAVAILABLE) with no ready helper or
     // BUS_MAX_INFLIGHT in flight; TIMEOUT after timeoutMs, and a late answer is dropped; the helper exiting or
     // being replaced, or stop(), rejects what is pending. A timeout is ambiguous: the helper may have acted.
-    busMain(op, args = {}, { timeoutMs = BUS_TIMEOUT_MS } = {}) {
+    busMain(op, args = {}, { timeoutMs = BUS_TIMEOUT_MS, caller = null } = {}) {
       const c = child;
       if (!c || state !== 'ready' || stopping || disposed) return Promise.reject(busError('UNAVAILABLE'));
       if (pending.size >= BUS_MAX_INFLIGHT) return Promise.reject(busError('UNAVAILABLE'));
@@ -116,8 +117,8 @@ function createTasksSupervisor({ fork, entry, dataDir, env = process.env, onStat
       return new Promise((resolve, reject) => {
         const timer = timers.setTimeout(() => { if (pending.get(id)?.child === c) { pending.delete(id); reject(busError('TIMEOUT')); } }, timeoutMs);
         timer.unref?.();
-        pending.set(id, { child: c, resolve, reject, timer });
-        try { c.postMessage({ type: 'tasks.bus', id, op, args }); } catch { pending.delete(id); timers.clearTimeout(timer); reject(busError('UNAVAILABLE')); }
+        pending.set(id, { child: c, op, resolve, reject, timer });
+        try { c.postMessage({ type: 'tasks.bus', id, op, args, ...(caller ? { caller } : {}) }); } catch { pending.delete(id); timers.clearTimeout(timer); reject(busError('UNAVAILABLE')); }
       });
     },
     async stop({ final = false } = {}) {

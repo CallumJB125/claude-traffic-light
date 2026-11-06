@@ -9,10 +9,10 @@ import { MAIN_ONLY } from '../engine.js';
 let n = 0;
 let parentSeq = 0;
 // One parentPort round trip through the same handler utility-entry.js uses: a reply, or an error with its code.
-export async function viaParent(engine, op, args = {}) {
-  const r = await parentBus(engine, structuredClone({ type: 'tasks.bus', id: `t${++parentSeq}`, op, args }));
+export async function viaParent(engine, op, args = {}, caller = undefined) {
+  const r = await parentBus(engine, structuredClone({ type: 'tasks.bus', id: `t${++parentSeq}`, op, args, ...(caller ? { caller } : {}) }));
   if (!r) throw Object.assign(new Error('ignored'), { code: 'IGNORED' });
-  if (!r.ok) throw Object.assign(new Error(r.code), { code: r.code });
+  if (!r.ok) throw Object.assign(new Error(r.message ?? r.code), { code: r.code });
   return r.result;
 }
 export const rid = (p = 'req') => `${p}-${process.pid}-${++n}-${Date.now().toString(36)}`;
@@ -33,7 +33,7 @@ export async function startBus(scenario = { text: 'Done' }, { policy, engineOpts
     // utility-entry.js runs), everything else over the socket. socketBus is the socket, for any op.
     bus: (op, args = {}, c = caller) => (MAIN_ONLY.has(op) ? viaParent(h.eng.engine, op, args) : h.client.bus(op, args, c, { timeoutMs: 150_000 })),
     socketBus: (op, args = {}, c = caller) => h.client.bus(op, args, c, { timeoutMs: 150_000 }),
-    viaParent: (op, args = {}) => viaParent(h.eng.engine, op, args),
+    viaParent: (op, args = {}, c = undefined) => viaParent(h.eng.engine, op, args, c),
     handoff: (args = {}, c = caller) => h.client.bus('handoff', { request_id: rid('hof'), to: { provider: 'codex' }, title: 'Fix the parser', brief: 'Grammar done, tests not.', provider: 'claude', ...args }, c),
     taskOf: (handoffId) => [...h.eng.engine.tasks.values()].find((t) => t.sourceMeta?.handoffId === handoffId),
     /** The run's own per-run MCP channel, as Codex's board server uses it. */
