@@ -230,8 +230,14 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger, t
     // retry with a new request_id runs.
     const target = h.to?.agent_id ? `agent:${h.to.agent_id}` : JSON.stringify(h.to?.provider ?? Contract.ANY_PROVIDER);
     const dedupeKey = sha(`${h.card_id ?? h.repoRoot}\n${h.title}\n${h.brief}\n${target}${h.fallback_of ? `\n${h.fallback_of}` : ''}`);
-    const dup = h.fallback_of ? null : log.byDedupe(dedupeKey, now() - HOUR_MS);
-    if (dup && !DEAD_END.has(log.result(dup.handoff_id)?.kind)) return { handoff_id: dup.handoff_id, state: stateOf(dup.handoff_id), duplicate: true };
+    let dupId = h.fallback_of ? null : log.byDedupe(dedupeKey, now() - HOUR_MS)?.handoff_id ?? null;
+    // A dead hand-off that fell back lives on in its fallback (a chain at most as long as the provider list).
+    for (let hop = 0; dupId && hop <= Contract.PROVIDERS.length; hop += 1) {
+      const res = log.result(dupId);
+      if (!DEAD_END.has(res?.kind)) break;
+      dupId = res?.data?.fallback?.handoff_id ?? null;
+    }
+    if (dupId && !DEAD_END.has(log.result(dupId)?.kind)) return { handoff_id: dupId, state: stateOf(dupId), duplicate: true };
     // One provider before the offer is written (G4): a named one only if its breaker admits it; 'any' or a list, the
     // first that does, and the rest kept for a fallback.
     let rest = [];

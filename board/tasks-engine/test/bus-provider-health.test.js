@@ -195,7 +195,7 @@ test('live G4: the engine parks a run that hit its limit (parked/limit, no failK
 test('live G4: an "any" hand-off whose run parks on its limit moves to the next AI in order', async () => {
   const w = await world({ fallback: { enabled: true, order: ['codex', 'claude'] } });
   try {
-    const first = await w.hand({ provider: 'any' });
+    const first = await w.hand({ provider: 'any' }, { title: 'Limit job' });
     assert.equal(first.provider, 'codex');
     const t = await w.until(() => w.taskOf(first.handoff_id), 'codex run');
     w.engine.end(t.id, 'parked', { parkReason: 'limit', failKind: null, limitResetAt: null, evidence: null });
@@ -203,6 +203,9 @@ test('live G4: an "any" hand-off whose run parks on its limit moves to the next 
     assert.equal(res.data.reason, 'PROVIDER_UNAVAILABLE');
     assert.equal(res.data.fallback.provider, 'claude');
     assert.equal((await w.until(() => w.taskOf(res.data.fallback.handoff_id), 'claude run')).spec.ai, 'claude');
+    // review #4: a retry of the same work while its fallback is still running joins the fallback, not a second run.
+    const retry = await w.hand({ provider: 'any' }, { title: 'Limit job' });
+    assert.deepEqual([retry.handoff_id, retry.duplicate], [res.data.fallback.handoff_id, true]);
   } finally { w.cleanup(); }
 });
 
