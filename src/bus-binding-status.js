@@ -10,6 +10,7 @@ function bindingStatus(result = {}) {
     case 'HEADLESS': return { state: 'unsupported-thread', next: 'Plexiform classified this as a background or unsupported chat type. Update Plexiform for current desktop chat support; background runs cannot send session notes.' };
     case 'CWD': return { state: 'folder-mismatch', next: 'The integration and chat folders differ. Reconnect the integration from this chat; Plexiform will not guess another session.' };
     case 'CONTESTED': case 'OWNER': case 'THREAD_MISMATCH': return { state: 'ownership-conflict', next: 'More than one session owner or a different chat claimed this connection. Reconnect the intended chat; do not edit session identity files.' };
+    case 'CLIENT_DECLARED': return { state: 'read-only-client', next: 'This app is connected to Plexiform read-only: it can see who is working. Notes and hand-offs need Claude Code or Codex.' };
     default: return { state: 'unverified', next: 'Plexiform could not verify this integration as the chat’s own connection. Check Plexiform Health and reconnect the integration in the intended chat.' };
   }
 }

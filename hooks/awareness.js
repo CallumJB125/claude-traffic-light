@@ -127,7 +127,15 @@ function selfKey(adapter, payload) {
 }
 
 // Claude Code: the interactive CLI says `cli`; `claude -p` says `sdk-cli`, the SDK `sdk-*` (findings §4).
-const claudeInteractive = (env = process.env) => (typeof env.CLAUDE_CODE_ENTRYPOINT === 'string' ? env.CLAUDE_CODE_ENTRYPOINT === 'cli' : null);
+// A person's session: the interactive CLI (with or without --remote-control), or a session the
+// `claude remote-control` server started for the phone or claude.ai. Those run with --print, so their
+// entrypoint is sdk-cli, and Claude marks them CLAUDE_CODE_ENVIRONMENT_KIND=bridge. Plain `claude -p`
+// and the SDK stay headless. hooks/set-status.js and src/agent-awareness.js use this same rule.
+const claudeInteractive = (env = process.env) => {
+  const entry = env.CLAUDE_CODE_ENTRYPOINT;
+  if (typeof entry !== 'string') return null;
+  return entry === 'cli' || (entry === 'sdk-cli' && env.CLAUDE_CODE_ENVIRONMENT_KIND === 'bridge');
+};
 
 // Codex: the rollout's first line (session_meta) says who started the thread
 // (findings §2, §9.3). Interactive = a person's thread in the TUI or the

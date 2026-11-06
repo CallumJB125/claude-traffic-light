@@ -492,8 +492,11 @@ function nextSession(prev, { hostApp, pid, terminal, owned }) {
     deployAt: (resolved === 'tool-done' || resolved === 'tool-failed') && deployCommandOf(data) ? now : prev?.deployAt,
     // Buddy launched this session (owned.js): decided at SessionStart only.
     owned: owned !== undefined ? (owned || undefined) : prev?.owned,
-    // Agent awareness: only the interactive CLI is a peer (`claude -p` and the SDK are not), and when it started.
-    interactive: typeof process.env.CLAUDE_CODE_ENTRYPOINT === 'string' ? process.env.CLAUDE_CODE_ENTRYPOINT === 'cli' : prev?.interactive,
+    // Agent awareness: a person's session is a peer (`claude -p` and the SDK are not), and when it started.
+    // Same rule as awareness.js claudeInteractive (Remote Control server sessions count), inlined to keep this hook fast.
+    interactive: typeof process.env.CLAUDE_CODE_ENTRYPOINT === 'string'
+      ? process.env.CLAUDE_CODE_ENTRYPOINT === 'cli' || (process.env.CLAUDE_CODE_ENTRYPOINT === 'sdk-cli' && process.env.CLAUDE_CODE_ENVIRONMENT_KIND === 'bridge')
+      : prev?.interactive,
     startedAt: resolved === 'session-start' ? now : prev?.startedAt,
   };
 }

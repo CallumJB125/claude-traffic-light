@@ -530,6 +530,55 @@ test('review #3: a signed claude in ~ (hooks off) cannot claim a repository sess
   assert.equal((await w.make().bindCaller(w.call(701))).reason, 'ID_MISMATCH');
 });
 
+test('D2: a client that is not a signed Claude or Codex child (Gemini, Cursor, VS Code, Claude desktop, Hermes) is unverified_client: read-only, hello says so, its env is not read', async (t) => {
+  const w = world(t);
+  const aw = w.make();
+  // Gemini CLI's MCP child as Lane 1 registers it: our server, PLEXIFORM_CLIENT=gemini, under a node parent.
+  const gem = w.proc(500, { exe: '/opt/homebrew/bin/node', cwd: w.repoA, args: 'node gemini' });
+  const kid = w.mcpChild(501, 500, w.repoA, w.procs.get(101));
+  kid.env = 'ELECTRON_RUN_AS_NODE=1 PLEXIFORM_MCP=bus-v1:packaged PLEXIFORM_CLIENT=gemini';
+  w.stdio(kid, gem, 'unix');
+  const envReads = () => w.calls.filter((c) => c[0] === '/bin/ps' && c.includes('eww') && c[c.length - 1] === '501').length;
+  const b = await aw.bindCaller(w.call(501));
+  assert.deepEqual([b.bound, b.reason, b.client], [false, 'NOT_AI_CHILD', true]);
+  assert.equal(envReads(), 0, 'decided without reading its environment (review #6)');
+  const seen = [];
+  const forward = async (op, args, caller) => { seen.push({ op, caller }); return op === 'hello' ? { agent_id: 'a', tier: 'local_attested', policy_summary: {} } : { state: 'offered' }; };
+  const h = await aw.relay('handoff', { title: 'x' }, { provider: 'gemini', cwd: w.repoA }, w.call(501), { forward });
+  assert.equal(h.reason, 'POLICY_DENIED');
+  assert.equal(h.tier, 'unverified_client');
+  assert.equal(seen.length, 0, 'a refused hand-off never reaches the helper');
+  const hello = await aw.relay('hello', {}, { provider: 'gemini', cwd: w.repoA }, w.call(501), { forward });
+  assert.equal(hello.tier, 'unverified_client');
+  assert.deepEqual(hello.can, ['peers', 'card_personal']);
+  assert.equal(seen[0].caller.unbound, true, 'its folder is only what it reported (D7: Hermes is placed by it, never ~/.hermes)');
+  assert.equal((await aw.relay('note', { to: 'claude-x-0000', text: 'hi' }, {}, w.call(501), { forward })).reason, 'NOT_BOUND');
+});
+
+test('D2: PLEXIFORM_CLIENT under a real Claude parent only lowers: never bound, hand-off refused', async (t) => {
+  const w = world(t);
+  w.procs.get(101).env += ' PLEXIFORM_CLIENT=claude-desktop';
+  const aw = w.make();
+  const b = await aw.bindCaller(w.call(101));
+  assert.deepEqual([b.bound, b.reason, b.client], [false, 'CLIENT_DECLARED', true]);
+  const r = await aw.relay('handoff', { title: 'x' }, { provider: 'claude', cwd: w.repoA }, w.call(101), { forward: async () => ({ state: 'offered' }) });
+  assert.equal(r.tier, 'unverified_client');
+  // Without it, the same child binds.
+  w.procs.get(101).env = w.procs.get(101).env.replace(' PLEXIFORM_CLIENT=claude-desktop', '');
+  assert.equal((await w.make().bindCaller(w.call(101))).bound, true);
+});
+
+test('auto scope: an unbound caller (a run, a headless or unverifiable session) is forwarded marked unbound; a bound one is not', async (t) => {
+  const w = world(t);
+  const aw = w.make();
+  const seen = [];
+  const forward = async (op, args, caller) => { seen.push(caller); return { state: 'offered' }; };
+  await aw.relay('handoff', { title: 'x' }, { provider: 'claude', cwd: w.repoA }, w.call(101), { forward });
+  w.proc(300, { ppid: 1, exe: '/opt/homebrew/bin/node', cwd: w.repoA, args: 'node x' });
+  await aw.relay('handoff', { title: 'x' }, { provider: 'codex', cwd: w.repoA }, w.call(300), { forward });
+  assert.deepEqual(seen.map((c) => c.unbound === true), [false, true]);
+});
+
 test('review #6: a caller\'s environment is read only after the parent, program and stdio checks pass, and only three names leave the reader', async (t) => {
   const w = world(t);
   const aw = w.make();

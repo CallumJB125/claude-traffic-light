@@ -491,7 +491,10 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   // are never read. Anything short of all of it is unbound.
   const pins = new Map(); // `${pid}|${start}` → { key, pid, start, at }: one MCP child is one Codex thread for its lifetime
   const keyOf = (s) => `${String(s.source || 'claude')}|${s.sessionId}`;
-  const CLAUDE_ENV = ['CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_PID'];
+  const CLAUDE_ENV = ['CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_ENVIRONMENT_KIND', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_PID', 'PLEXIFORM_CLIENT'];
+  // Lane 1's MCP entries (src/enrol) set PLEXIFORM_CLIENT. Self-reported, so it only ever lowers a caller to
+  // unverified_client (read-only, D2); it never binds or grants anything.
+  const CLIENT_NAME = /^[a-z][a-z0-9-]{1,23}$/;
 
   async function onPath(cmd) {
     for (const d of String(envPath).split(path.delimiter)) {
@@ -527,8 +530,10 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     let provider = null;
     let parent = null;
     for (const p of ['claude', 'codex']) { parent = await aiProcess(me.ppid, p); if (parent) { provider = p; break; } }
-    // A grandchild (a server an agent started from its shell) has a shell or node as its parent.
-    if (!provider) return { ...base, reason: 'NOT_AI_CHILD' };
+    // A grandchild (a server an agent started from its shell) has a shell or node as its parent. So do Gemini, Cursor,
+    // VS Code, the Claude desktop app and Hermes (src/enrol): none can be verified, so each is a read-only client (D2),
+    // decided without reading the caller's environment (review #6).
+    if (!provider) return { ...base, reason: 'NOT_AI_CHILD', client: true };
     const exe = fds.txt && typeof fds.txt.name === 'string' && path.isAbsolute(fds.txt.name) ? await realOr(fds.txt.name) : null;
     if (!exe || !(await ourServers()).some((o) => o.exe === exe && o.args === args)) return { ...base, provider, reason: 'NOT_OUR_SERVER' };
     // Our server only ever connects out: a socket it listens on is an inspector or worse, which another program could drive.
@@ -536,9 +541,11 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     // A command the model ran is a direct child too, but its stdin is /dev/null, a pty, a file or a copy of its stdout.
     const serverText = await Peer.lsof(me.ppid);
     if (!PeerPid.stdioPeered(fds, PeerPid.parseFds(serverText), provider === 'codex' ? 'PIPE' : 'unix')) return { ...base, provider, reason: 'NOT_STDIO' };
-    // Only now its environment, and only three names from it plus whether code is injected.
+    // Only now its environment, and only the CLAUDE_ENV names from it plus whether code is injected.
     const env = await Peer.env(pid, CLAUDE_ENV);
     if (!env || env.args !== args || env.injected) return { ...base, provider, reason: 'INJECTED' };
+    // A server entry that names another client is never bound, even under a Claude or Codex parent: the name only lowers.
+    if (CLIENT_NAME.test(env.vars.PLEXIFORM_CLIENT ?? '')) return { ...base, provider, reason: 'CLIENT_DECLARED', client: true };
     const list = liveSessions();
     const count = (key) => list.filter((x) => keyOf(x) === key).length;
     // A session file left from before this start is not trusted until its session's next hook event.
@@ -578,8 +585,8 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
       return { bound: true, provider, key, sessionId: threadId, session: s, pid, cwd };
     }
     // Claude: the child's own env (Claude sets it; any shell the model runs inherits it too, which is why
-    // the checks above are what count). Interactive only; one live session per claude process.
-    if (env.vars.CLAUDE_CODE_ENTRYPOINT !== 'cli') return { ...base, provider, reason: 'HEADLESS' };
+    // the checks above are what count). A person's session only (Remote Control ones included); one live session per claude process.
+    if (Hook.claudeInteractive({ CLAUDE_CODE_ENTRYPOINT: env.vars.CLAUDE_CODE_ENTRYPOINT ?? undefined, CLAUDE_CODE_ENVIRONMENT_KIND: env.vars.CLAUDE_CODE_ENVIRONMENT_KIND ?? undefined }) !== true) return { ...base, provider, reason: 'HEADLESS' };
     const claudePid = env.vars.CLAUDE_PID;
     if (claudePid !== null && (!/^\d{1,9}$/.test(claudePid) || Number(claudePid) !== me.ppid)) return { ...base, provider, reason: 'PID_MISMATCH' };
     const envId = typeof env.vars.CLAUDE_CODE_SESSION_ID === 'string' && /^[\w.-]{1,120}$/.test(env.vars.CLAUDE_CODE_SESSION_ID) ? env.vars.CLAUDE_CODE_SESSION_ID : null;
@@ -723,6 +730,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     return acking;
   }
 
+  const UNVERIFIED_HANDOFF = 'This app is connected to Plexiform read-only, so it cannot hand off work. Ask your person to hand it off from Claude Code or Codex.';
   const NOT_BOUND = { reason: 'NOT_BOUND', message: 'Plexiform could not tell which AI session is calling, so it cannot send or read notes for it.' };
   const NOTES_OFF = { reason: 'AWARENESS_OFF', message: 'Your person turned off notes between AI sessions in Plexiform.' };
   const NOTES_HALTED = { reason: 'HALTED', message: 'The agent bus is stopped on this Mac, so notes are held. Your person can resume it from the tray or Sessions.' };
@@ -1033,6 +1041,14 @@ function boardAnswer(board) {
         if (me && typeof me.handle === 'string') tc.from_handle = me.handle;
         caller = { ...caller, provider: b.provider, ...(typeof b.session.cwd === 'string' && path.isAbsolute(b.session.cwd) ? { cwd: b.session.cwd } : {}),
           ...(op === 'handoff' && noteReaders.has(b.key) ? { after_note: true } : {}), ...(origin ? { origin } : {}) };
+      } else if (b.client) {
+        // A client that named itself (Gemini, Cursor, ...): unverified_client, read-only (owner decision D2).
+        if (op === 'handoff') return { reason: 'POLICY_DENIED', tier: Contract.TIERS.UNVERIFIED_CLIENT, message: UNVERIFIED_HANDOFF };
+        const r = await forward(op, args, { ...caller, unbound: true });
+        return r && typeof r === 'object' && !Array.isArray(r) && typeof r.tier === 'string' ? { ...r, tier: Contract.TIERS.UNVERIFIED_CLIENT, can: [...Contract.TIER_CAN.unverified_client] } : r;
+      } else {
+        // Its folder is only what it reported: automatic mode still wants a session or task folder of Plexiform's there.
+        caller = { ...caller, unbound: true };
       }
     }
     return forward(op, args, caller);
