@@ -25,7 +25,7 @@ const RESULT_SYNC_MS = 15 * 1000;
 const RESULT_SYNC_FOR_MS = 30 * 60 * 1000;
 const Contract = require('./bus-contract.js');
 const BusTrace = require('./bus-trace.js');
-const DEFAULTS = Object.freeze({ enabled: true, notes: true, midTurnNotices: true });
+const DEFAULTS = Object.freeze({ enabled: true, notes: true, midTurnNotices: true, v: Hook.AWARENESS_V });
 const DEBOUNCE_MS = 1000;
 const HEARTBEAT_MS = 2 * 60 * 1000;
 const CLASSIFY_TTL_MS = 10 * 60 * 1000;
@@ -55,7 +55,9 @@ const OWN_WORKTREE = /-buddy-[0-9a-f]{12}(?:[\\/]|$)/;
 
 function normalize(cfg) {
   const c = cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : {};
-  return { enabled: c.enabled !== false, notes: c.notes !== false, midTurnNotices: c.midTurnNotices !== false };
+  // One-time migration (see Hook.midTurnOn): an unversioned false predates any control for it, so it becomes on.
+  const midTurnNotices = c.midTurnNotices !== false || !(Number(c.v) >= Hook.AWARENESS_V);
+  return { enabled: c.enabled !== false, notes: c.notes !== false, midTurnNotices, v: Hook.AWARENESS_V };
 }
 
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');

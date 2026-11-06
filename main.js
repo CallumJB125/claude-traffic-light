@@ -340,7 +340,7 @@ const DEFAULT_CONFIG = {
   // Claude or Codex session here works in; repos non-empty means only those, exclude keeps repos off the bus.
   agentBus: { enabled: true, autoAccept: true, scope: 'auto', repos: [], exclude: [], wallClockMin: 20, caps: { enabled: false, memberUsd: 20, handoffUsd: 5 } },
   // Agent awareness (src/agent-awareness.js): every interactive AI session here is told about its peers. On by default.
-  agentAwareness: { enabled: true, notes: true, midTurnNotices: false },
+  agentAwareness: { enabled: true, notes: true, midTurnNotices: true, v: 2 },
   // The bus-only MCP registration, once it ships (plan-agent-awareness §3.9): true after Undo or turning it off.
   mcpBusUserOff: false,
   // The AI tools page's Claude integration switch, turned off by the person (from step 3 on it is remembered).

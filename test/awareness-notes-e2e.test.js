@@ -225,7 +225,7 @@ test('G1 mid-turn: a note to a working session shows on its next PostToolUse as 
   assert.ok(tl.some((l) => l.op === 'notified' && l.ref === sent.note_id && l.trace_id === noteLine.trace_id));
   for (const bit of ['Rotate', 'AKIA', 'hunter2', 'example.com', 'second', s.w.root, '/Users/', '/private/']) assert.ok(!traced.includes(bit), `trace has ${bit}`);
   // Turned off: nothing mid-turn.
-  s.w.state.config = { agentAwareness: { midTurnNotices: false } };
+  s.w.state.config = { agentAwareness: { midTurnNotices: false, v: 2 } };
   fs.writeFileSync(path.join(s.w.root, 'config.json'), JSON.stringify(s.w.state.config));
   await M.busCall('note', { to: y, text: 'third', request_id: 'req-e2e-mid3' }, s.as.codex());
   await s.aw.refresh();

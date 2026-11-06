@@ -358,7 +358,13 @@ function noticeBlock({ adapter, event, self, key, root, now, start }) {
 // agentAwareness.midTurnNotices false. Files only, no git: it runs on every tool call.
 const MID_TURN_MS = 2 * 60 * 1000;
 const MID_TURN_ADAPTERS = new Set(['claude', 'codex']);
-const midTurnOn = (config) => !(config.agentAwareness && typeof config.agentAwareness === 'object' && config.agentAwareness.midTurnNotices === false);
+// agentAwareness.v marks a config saved since midTurnNotices defaulted on. Before that no control could set the flag,
+// so an unversioned false is the old default written back, not a choice: it reads as on. A versioned false sticks.
+const AWARENESS_V = 2;
+const midTurnOn = (config) => {
+  const a = config.agentAwareness;
+  return !(a && typeof a === 'object' && a.midTurnNotices === false && Number(a.v) >= AWARENESS_V);
+};
 function midTurn({ adapter = 'claude', payload = {}, root = rootDir(), now = Date.now() } = {}) {
   try {
     if (!MID_TURN_ADAPTERS.has(adapter)) return null;
@@ -569,6 +575,6 @@ function combine(event, ...outs) {
 }
 
 module.exports = {
-  check, decideSync, run, midTurn, MID_TURN_MS, SYSTEM_HANDLE, isSystemNotice, combine, enabled, readRoster, viewOf, versionOf, render, introLine, liveCount, boardLabel, boardOf, boardClause, BOARD_KINDS, BOARD_NAME_MAX, INTRO_TAIL, noticesOf, noticeLine, noticeVersion, noticeFile, label, folderLabel, branchLabel, selfKey, codexSessionMeta, sessionMetaOf, claudeEntry, claudeInteractive, remoteControlServer, bridgeParentSync, selfInteractive,
+  check, decideSync, run, midTurn, midTurnOn, AWARENESS_V, MID_TURN_MS, SYSTEM_HANDLE, isSystemNotice, combine, enabled, readRoster, viewOf, versionOf, render, introLine, liveCount, boardLabel, boardOf, boardClause, BOARD_KINDS, BOARD_NAME_MAX, INTRO_TAIL, noticesOf, noticeLine, noticeVersion, noticeFile, label, folderLabel, branchLabel, selfKey, codexSessionMeta, sessionMetaOf, claudeEntry, claudeInteractive, remoteControlServer, bridgeParentSync, selfInteractive,
   classifySelf, HEADER, PROVIDERS, STATUS, WAITING, EVENTS, HANDLE, NOTE_ID, NOTICE_MAX, INTRO_MAX, BLOCK_MAX, OUTPUT_MAX, MAX_LINES, STALE_MS, REFRESH_MS, START_BUDGET_MS, META_MAX_BYTES,
 };

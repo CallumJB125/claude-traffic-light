@@ -393,8 +393,8 @@ test('halt is "unknown" until the helper says; the roster file is 0600 in a 0700
   await aw.refresh();
   assert.equal(fs.existsSync(file), false);
   // Owner decision D3: mid-turn notices on by default, off only when turned off.
-  assert.deepEqual(A.normalize(undefined), { enabled: true, notes: true, midTurnNotices: true });
-  assert.deepEqual(A.normalize({ enabled: false, notes: false, midTurnNotices: false }), { enabled: false, notes: false, midTurnNotices: false });
+  assert.deepEqual(A.normalize(undefined), { enabled: true, notes: true, midTurnNotices: true, v: 2 });
+  assert.deepEqual(A.normalize({ enabled: false, notes: false, midTurnNotices: false, v: 2 }), { enabled: false, notes: false, midTurnNotices: false, v: 2 });
   aw.stop();
 });
 

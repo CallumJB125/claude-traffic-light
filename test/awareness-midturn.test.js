@@ -65,7 +65,7 @@ test('a new note set inside 2 minutes waits; after 2 minutes it shows', (t) => {
 });
 
 test('off with midTurnNotices false; never for a subagent, a non-interactive session, gemini, or without notes', (t) => {
-  assert.equal(world(t, { config: { agentAwareness: { midTurnNotices: false } } }).mid(), null);
+  assert.equal(world(t, { config: { agentAwareness: { midTurnNotices: false, v: Hook.AWARENESS_V } } }).mid(), null);
   assert.equal(world(t, { config: { agentAwareness: { enabled: false } } }).mid(), null);
   assert.equal(world(t).mid(Date.now(), { agent_id: 'sub-1' }), null);
   assert.equal(world(t).mid(Date.now(), {}, 'gemini'), null);
@@ -97,4 +97,21 @@ test('latency: with nothing new, a PostToolUse check costs at most 5 ms (p95)', 
   const q = [];
   for (let i = 0; i < 200; i += 1) { const t0 = process.hrtime.bigint(); quiet.mid(); q.push(Number(process.hrtime.bigint() - t0) / 1e6); }
   assert.ok(p95(q) <= 5, `quiet p95 ${p95(q).toFixed(2)} ms`);
+});
+
+test('migration: an unversioned stored false (the old default, no control could write it) reads as on; a versioned false sticks', (t) => {
+  // A config.json saved before the backbone: {enabled, notes, midTurnNotices:false} and no v.
+  assert.ok(world(t, { config: { agentAwareness: { enabled: true, notes: true, midTurnNotices: false } } }).mid());
+  assert.equal(Hook.midTurnOn({ agentAwareness: { midTurnNotices: false } }), true);
+  assert.equal(Hook.midTurnOn({ agentAwareness: { midTurnNotices: false, v: 1 } }), true);
+  assert.equal(Hook.midTurnOn({ agentAwareness: { midTurnNotices: false, v: Hook.AWARENESS_V } }), false);
+  assert.equal(Hook.midTurnOn({}), true);
+  // Main's normalize does the same and stamps v, so the next save makes a later explicit off stick.
+  const A = require('../src/agent-awareness.js');
+  const migrated = A.normalize({ enabled: true, notes: true, midTurnNotices: false });
+  assert.deepEqual(migrated, { enabled: true, notes: true, midTurnNotices: true, v: Hook.AWARENESS_V });
+  const off = A.normalize({ ...migrated, midTurnNotices: false });
+  assert.equal(off.midTurnNotices, false);
+  assert.equal(A.normalize(off).midTurnNotices, false, 'stays off across later loads and saves');
+  assert.equal(Hook.midTurnOn({ agentAwareness: off }), false);
 });
