@@ -91,9 +91,10 @@ export function createNotes({ log, now = Date.now, halted = () => false, record 
   // A hand-off result for the session that asked (BACKBONE plan G5): from the dispatcher only, never an op anyone can
   // call. One per handoff and recipient (a retry is the same note); no sender rate limits, since the bus is the sender.
   // Held like any note while halted; read like any note through bus_notes.
-  function system({ to, handoff_id, text }) {
+  // kind: 'result' (one per hand-off and recipient) or 'blocked' (one per blocking ask, keyed by its id).
+  function system({ to, handoff_id, text, kind = 'result', key = null }) {
     if (!to || !SESSION_KEY.test(to.key ?? '') || !HANDLE.test(to.handle ?? '') || typeof handoff_id !== 'string') return { reason: 'VALIDATION', message: 'no recipient' };
-    const requestKey = `${SYSTEM.key}|result|${handoff_id}|${to.key}`;
+    const requestKey = kind === 'result' ? `${SYSTEM.key}|result|${handoff_id}|${to.key}` : `${SYSTEM.key}|${kind}|${handoff_id}|${String(key ?? '').slice(0, 40)}|${to.key}`;
     const prior = log.noteByRequest(requestKey);
     if (prior) return { note_id: prior.note_id, state: prior.state, duplicate: true };
     const body = clean(String(text ?? ''));

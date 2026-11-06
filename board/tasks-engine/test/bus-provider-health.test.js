@@ -232,6 +232,37 @@ test('dedupe: never hands back a failed, expired or unknown-outcome hand-off; a 
   } finally { w.cleanup(); }
 });
 
+test('a hand-off run blocked on an approval tells the asker in one line: no title, brief, tool input or path; once per ask', async () => {
+  const w = await world();
+  try {
+    const r = await w.hand({ provider: 'claude' }, { title: 'Secret title /Users/me/x', brief: 'Brief body words.' });
+    const t = await w.until(() => w.taskOf(r.handoff_id), 'claude run');
+    const block = (approvalId) => {
+      Object.assign(t, { state: 'blocked', blockedKind: 'permission', openApprovals: [{ approvalId, tool: 'Bash', inputSummary: `Bash {"command":"git commit -m x in ${w.root}"}` }] });
+      w.engine.emit('event', { type: 'state', taskId: t.id });
+    };
+    block('apr_0001');
+    block('apr_0001'); // the same ask re-emitted: no second note
+    const got = await w.notesFor(ORIGIN.key);
+    assert.equal(got.notes.length, 1);
+    const text = got.notes[0].text;
+    assert.match(text, new RegExp(`Hand-off ${r.handoff_id}: Claude running in Plexiform is waiting for your person to get a step approved`));
+    const line = text.slice(text.indexOf(`Hand-off ${r.handoff_id}`));
+    for (const bit of ['Secret title', 'Brief body', 'git commit', 'Bash', '/Users/', w.root]) assert.ok(!line.includes(bit), `note has ${bit}`);
+    assert.equal(line.split('\n')[0].length > 0, true);
+    // A later, different ask is a new note; the run's end still brings its one result.
+    Object.assign(t, { state: 'running', openApprovals: [] });
+    block('apr_0002');
+    assert.equal((await w.notesFor(ORIGIN.key)).notes.length, 2, 'one more for the new ask');
+    w.engine.end(t.id);
+    await w.until(() => w.bus.log.result(r.handoff_id), 'result');
+    assert.equal((await w.notesFor(ORIGIN.key)).notes.length, 3, 'and the result note');
+    await w.bus.trace.flush();
+    const trace = fs.readFileSync(`${w.dir}/bus-trace.jsonl`, 'utf8');
+    assert.ok(trace.includes('"reason":"BLOCKED"'));
+  } finally { w.cleanup(); }
+});
+
 test('D4 switch off: "any" does not move past an unavailable provider', async () => {
   const w = await world({ fallback: { enabled: false, order: ['codex', 'claude'] } });
   try {

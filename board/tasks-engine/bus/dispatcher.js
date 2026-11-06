@@ -395,9 +395,27 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     } catch (e) { logger?.warn?.('bus result note failed', { code: e?.code ?? null }); }
   }
 
+  // A hand-off run that stops for its person (a tool approval, a plan to approve) tells the asker in one line: the
+  // handoff_id and the AI, never the title, brief, tool input or a path. One note per blocking ask.
+  function noteBlocked(task) {
+    const ev = log.handoff(task.sourceMeta.handoffId);
+    const o = ev?.data?.origin;
+    if (!ev || !o || !SESSION_KEY.test(o.key ?? '') || !HANDLE.test(o.handle ?? '') || log.result(ev.handoff_id)) return;
+    if (log.claimOf(ev.handoff_id)?.task_id !== task.id) return;
+    const ask = task.openApprovals?.[0]?.approvalId ?? task.openAsk?.askId ?? task.blockedKind ?? 'blocked';
+    const what = task.blockedKind === 'plan' ? 'its plan approved' : 'a step approved';
+    const text = `Hand-off ${ev.handoff_id}: ${AI_NAME[task.ai?.id ?? ev.to?.provider] ?? 'The AI'} running in Plexiform is waiting for your person to get ${what} (Needs you in Plexiform). It goes on once they answer; nothing for you to do.`;
+    try {
+      const n = notes.system({ to: o, handoff_id: ev.handoff_id, text, kind: 'blocked', key: ask });
+      const r = BusTrace.resultOf(n);
+      if (!n.duplicate) span(ev, 'returned', { to: o.handle, ...r, reason: r.reason ?? 'BLOCKED' });
+    } catch (e) { logger?.warn?.('bus blocked note failed', { code: e?.code ?? null }); }
+  }
+
   // A bus task reached an end state: its handoff gets one result.
   function onTaskState(task) {
     if (task.source !== 'bus' || !task.sourceMeta?.handoffId) return;
+    if (task.state === 'blocked') { noteBlocked(task); return; }
     const outcome = task.state === 'in_review' || (task.state === 'done' && task.outcome !== 'discarded') ? 'done'
       : task.state === 'failed' || task.state === 'done' || (task.state === 'parked' && task.parkReason !== 'user') ? 'failed' : null;
     if (!outcome) return;
