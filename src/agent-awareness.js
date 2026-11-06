@@ -521,6 +521,15 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     return out;
   }
 
+  // Whether claude process pid was started by the `claude remote-control` server: its parent's command line says so and
+  // that parent is a real, signed claude (a renamed program could print the same command line).
+  async function remoteControlParent(pid) {
+    const p = await Peer.proc(pid);
+    if (!p || p.ppid <= 1) return false;
+    if (!Hook.remoteControlServer(await Peer.args(p.ppid))) return false;
+    return !!(await aiProcess(p.ppid, 'claude'));
+  }
+
   async function bindOnce(pid, me, threadId) {
     const [childText, args] = await Promise.all([Peer.lsof(pid), Peer.args(pid)]);
     const fds = PeerPid.parseFds(childText);
@@ -586,7 +595,10 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     }
     // Claude: the child's own env (Claude sets it; any shell the model runs inherits it too, which is why
     // the checks above are what count). A person's session only (Remote Control ones included); one live session per claude process.
-    if (Hook.claudeInteractive({ CLAUDE_CODE_ENTRYPOINT: env.vars.CLAUDE_CODE_ENTRYPOINT ?? undefined, CLAUDE_CODE_ENVIRONMENT_KIND: env.vars.CLAUDE_CODE_ENVIRONMENT_KIND ?? undefined }) !== true) return { ...base, provider, reason: 'HEADLESS' };
+    // A bridge child counts only under the `claude remote-control` server itself, a real claude: a `claude -p` the
+    // session ran from its Bash inherits CLAUDE_CODE_ENVIRONMENT_KIND=bridge too (security review #4).
+    const kind = Hook.claudeEntry({ CLAUDE_CODE_ENTRYPOINT: env.vars.CLAUDE_CODE_ENTRYPOINT ?? undefined, CLAUDE_CODE_ENVIRONMENT_KIND: env.vars.CLAUDE_CODE_ENVIRONMENT_KIND ?? undefined });
+    if (kind !== 'cli' && !(kind === 'bridge' && await remoteControlParent(me.ppid))) return { ...base, provider, reason: 'HEADLESS' };
     const claudePid = env.vars.CLAUDE_PID;
     if (claudePid !== null && (!/^\d{1,9}$/.test(claudePid) || Number(claudePid) !== me.ppid)) return { ...base, provider, reason: 'PID_MISMATCH' };
     const envId = typeof env.vars.CLAUDE_CODE_SESSION_ID === 'string' && /^[\w.-]{1,120}$/.test(env.vars.CLAUDE_CODE_SESSION_ID) ? env.vars.CLAUDE_CODE_SESSION_ID : null;
