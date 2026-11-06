@@ -8,6 +8,11 @@
 <header><div><h1>AI tools</h1><p>Plug in the tools you use. Each one shows up in the widget and on your board.</p></div>
 <div class="actions"><button id="connect-all" type="button" class="primary" hidden>Connect all detected</button><button id="refresh" type="button">Check again</button></div></header>
 <p id="status" role="status" aria-live="polite">Looking for your AI tools…</p>
+<section id="terminal" class="panel" aria-labelledby="terminal-title" hidden>
+<div class="top"><div><h2 id="terminal-title">Plexiform Terminal</h2><p id="terminal-text" class="muted">Run Claude Code, Codex and your shell in tabs Plexiform can see and keep alive.</p></div>
+<div class="row-actions"><button id="terminal-action" type="button" class="primary">Get Plexiform Terminal</button></div></div>
+<p id="terminal-status" role="status" aria-live="polite" class="muted"></p>
+</section>
 <section id="all-preview" class="panel" hidden aria-label="Connect all detected tools"></section>
 <div id="list"></div>
 <section class="panel" aria-labelledby="custom-title">

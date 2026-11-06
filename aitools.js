@@ -166,7 +166,41 @@ allBtn.addEventListener('click', () => act(async () => {
   allBox.scrollIntoView({ block: 'nearest' });
 }));
 
-$('refresh').addEventListener('click', () => act(async () => { previews.clear(); results.clear(); await refresh(); }));
+// Plexiform Terminal: Get it when it is missing, Open it when it is there.
+let terminal = null;
+async function drawTerminal() {
+  terminal = await api.terminal?.().catch(() => null);
+  const box = $('terminal'), btn = $('terminal-action'), text = $('terminal-text');
+  if (!terminal?.mac) { box.hidden = true; return; }
+  box.hidden = false;
+  btn.disabled = !!terminal.getting;
+  if (terminal.installed) {
+    btn.textContent = 'Open Plexiform Terminal';
+    text.textContent = `Installed${terminal.version ? `, version ${terminal.version}` : ''}${terminal.preview ? ' (development preview)' : ''}.${terminal.keeperRunning ? ' Its session keeper is running.' : ''}`;
+  } else {
+    btn.textContent = terminal.getting ? 'Getting Plexiform Terminal…' : 'Get Plexiform Terminal';
+    text.textContent = 'Run Claude Code, Codex and your shell in tabs Plexiform can see and keep alive. Get downloads it, checks it and puts it in Applications.';
+  }
+}
+$('terminal-action').addEventListener('click', () => act(async () => {
+  const btn = $('terminal-action'), out = $('terminal-status');
+  btn.disabled = true;
+  out.className = 'muted';
+  if (terminal?.installed) {
+    const r = await api.terminalOpen();
+    out.textContent = r?.ok ? 'Opening Plexiform Terminal…' : 'Plexiform Terminal could not be opened. Check again, then try once more.';
+    if (!r?.ok) out.className = 'error';
+  } else {
+    btn.textContent = 'Getting Plexiform Terminal…';
+    out.textContent = 'Downloading and checking Plexiform Terminal…';
+    const r = await api.terminalGet();
+    out.className = r?.ok ? 'muted' : 'error';
+    out.textContent = r?.ok ? `Plexiform Terminal${r.version ? ` ${r.version}` : ''} is in Applications${r.opened ? ' and opening' : ''}.` : (r?.text || 'Plexiform Terminal could not be installed.');
+  }
+  await drawTerminal();
+}));
+
+$('refresh').addEventListener('click', () => act(async () => { previews.clear(); results.clear(); await refresh(); await drawTerminal(); }));
 $('custom-form').addEventListener('submit', (e) => {
   e.preventDefault();
   act(async () => {
@@ -193,3 +227,4 @@ if (inSheet) {
   api.onShown?.(() => { if (!busy && !previews.size) refresh().catch(() => {}); });
 } else window.addEventListener('focus', () => { takeFocus().catch(() => {}); });
 refresh().then(inSheet ? undefined : takeFocus).catch(() => { status.textContent = 'Could not look for tools. Try Check again.'; });
+drawTerminal().catch(() => {});

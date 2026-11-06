@@ -18,10 +18,17 @@ const ghosttyDockLauncher = ({ detect = GhosttyDock.detect, run = GhosttyDock.ru
   if (!r.ok) throw new Error(r.reason || 'Ghostty Dock did not open the tab');
 };
 // The launcher for each app terminalApp() can name (plan-agent-terminal PR 0s).
-// Terminal is launchTaskTerminal's own default, the same function; T3 adds
-// 'plexiform'. Ghostty Dock is built per launch, as main built it before.
+// Terminal is launchTaskTerminal's own default, the same function. Ghostty Dock
+// is built per launch, as main built it before. Plexiform Terminal opens the
+// file with the exact app detect() found (it says ready only for a Terminal
+// that declares take-over support), never one LaunchServices picks by name.
 const launchers = Object.freeze({ Terminal: () => openTerminal, 'Ghostty Dock': () => ghosttyDockLauncher() });
-function launcherFor(app) {
+const PLEXIFORM_APP = /^\/(?:.+\/)?Applications\/Plexiform Terminal\.app$/;
+const plexiformLauncher = appPath => file => new Promise((resolve, reject) => {
+  execFile('/usr/bin/open', ['-a', appPath, file], { timeout: 10000 }, error => error ? reject(error) : resolve()); // privacy-flow: tasks-terminal
+});
+function launcherFor(app, { appPath } = {}) {
+  if (app === 'Plexiform Terminal' && typeof appPath === 'string' && PLEXIFORM_APP.test(appPath) && path.normalize(appPath) === appPath && !appPath.includes('\0')) return plexiformLauncher(appPath);
   if (!Object.hasOwn(launchers, app)) throw Object.assign(new Error(`No launcher for ${String(app).slice(0, 40)}.`), { code: 'CAPABILITY_MISSING' });
   return launchers[app]();
 }

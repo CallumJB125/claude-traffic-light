@@ -153,3 +153,16 @@ test('Backups names the state file as left out on purpose', () => {
   const Backups = require('../src/backups');
   assert.ok(Backups.EXCLUDED.some((e) => e.name === 'terminal-state.json' && e.why));
 });
+
+test('Plexiform Terminal: launcherFor opens the file with the exact app path detect() found', async () => {
+  await withExecFile(async (T, calls) => {
+    for (const appPath of ['/Applications/Plexiform Terminal.app', '/Users/fixture/Applications/Plexiform Terminal.app']) {
+      await T.launcherFor('Plexiform Terminal', { appPath })('/tmp/a b/continue.command', '/Users/fixture/acme');
+      assert.deepEqual(calls.pop().slice(0, 2), ['/usr/bin/open', ['-a', appPath, '/tmp/a b/continue.command']]);
+    }
+    for (const appPath of [undefined, 'Plexiform Terminal', '/tmp/Plexiform Terminal.app', '/Applications/Evil.app', '/Applications/Plexiform Terminal.app/../Evil.app', '/Applications/../tmp/Applications/Plexiform Terminal.app']) {
+      assert.throws(() => T.launcherFor('Plexiform Terminal', { appPath }), { code: 'CAPABILITY_MISSING' }, String(appPath));
+    }
+    assert.equal(calls.length, 0);
+  });
+});

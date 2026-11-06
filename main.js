@@ -54,6 +54,13 @@ const Setup = require('./setup.js');
 const Help = require('./help.js');
 const GitSignals = require('./src/github-signals.js');
 const GhosttyDock = require('./src/ghostty-dock.js');
+// Plexiform Terminal: installed or not (src/terminal-presence.js), and its Get (src/terminal-presence-get.js).
+const TerminalPresence = require('./src/terminal-presence.js');
+const TerminalGet = require('./src/terminal-presence-get.js').create();
+let terminalPresence = null;
+function detectTerminal(fresh = false) {
+  return TerminalPresence.detect({ fresh, signed: require('./package.json').plexiformSignedMac === true }).then((p) => (terminalPresence = p));
+}
 const NeedingQueue = require('./src/needing-queue.js');
 const Voice = require('./src/voice.js');
 const Compaction = require('./src/compaction.js');
@@ -2421,8 +2428,13 @@ function getTasks() {
     onBusReady: () => { AgentBusMain.refresh().then(() => AgentAwareness.syncNotes()).catch(() => {}); },
     copy: (text) => clipboard.writeText(text),
     // Ghostty Dock when it is on and trusted; the native confirmation names whichever app it is.
-    ...(IS_MAC ? { terminalApp: () => (GhosttyDock.modeOf(loadConfig()) !== 'off' && GhosttyDock.detect().canOpen ? GhosttyDock.APP : 'Terminal') } : {}),
-    ...(IS_MAC ? { launchTerminal: async (descriptor, current, appName) => { const T = require('./src/tasks-terminal'); return T.stampTakeover(await T.launchTaskTerminal(descriptor, { current, launch: T.launcherFor(appName) }), ROOT_DIR); } } : {}),
+    // Ghostty Dock when it is on and trusted, else Plexiform Terminal when it can take a take-over, else Terminal.
+    ...(IS_MAC ? { terminalApp: () => {
+      if (GhosttyDock.modeOf(loadConfig()) !== 'off' && GhosttyDock.detect().canOpen) return GhosttyDock.APP;
+      detectTerminal().catch(() => {});
+      return TerminalPresence.resolveOpenIn(loadConfig().terminal, terminalPresence).app || 'Terminal';
+    } } : {}),
+    ...(IS_MAC ? { launchTerminal: async (descriptor, current, appName) => { const T = require('./src/tasks-terminal'); return T.stampTakeover(await T.launchTaskTerminal(descriptor, { current, launch: T.launcherFor(appName, { appPath: terminalPresence?.app?.path }) }), ROOT_DIR); } } : {}),
     onChange: (snap) => {
       for (const wc of tasksPages()) wc.send('tasks:changed', snap);
       Compose.onChange(snap);
@@ -5356,6 +5368,22 @@ utilityHandle('mcp-set-enabled', aiToolsPage, (_e, on) => {
   }
 });
 
+// Plexiform Terminal on the AI tools page: whether it is installed, Get (download,
+// checksum, install, open) and Open (that exact app). No path or URL comes from the page.
+const terminalView = (p) => ({ mac: IS_MAC, installed: !!p?.app, version: p?.app?.version || null, preview: !!p?.app?.preview, keeperRunning: !!p?.keeper?.running, canGet: TerminalGet.available(), getting: TerminalGet.busy() });
+utilityHandle('aitools:terminal', aiToolsPage, async () => terminalView(IS_MAC ? await detectTerminal(true) : null));
+utilityHandle('aitools:terminal-get', aiToolsPage, async () => {
+  const r = await TerminalGet.get();
+  if (!r.ok) return { ok: false, text: r.text };
+  await detectTerminal(true);
+  const opened = await TerminalGet.open(r.path);
+  return { ok: true, opened: opened.ok, version: r.version || null };
+});
+utilityHandle('aitools:terminal-open', aiToolsPage, async () => {
+  const p = await detectTerminal(true);
+  return p.app ? TerminalGet.open(p.app.path) : { ok: false, code: 'NOT_INSTALLED' };
+});
+if (IS_MAC) setTimeout(() => { detectTerminal().catch(() => {}); }, 5000).unref?.();
 const AiTools = require('./src/ai-tools-wire.js').wire({ ipcMain, shell, clipboard, home: os.homedir(), runtime: HOOK_RUNTIME, rootDir: ROOT_DIR, fromPage: aiToolsPage, focusAllowed: (e) => fromUtilityPage(e, 'aitools'), askFromWidget: () => !!loadConfig().askFromWidget, ephemeral: EPHEMERAL, openPage: openBuddy, onClaudeConsent: (on) => saveConfig({ claudeAutoConnect: on }), onClaudeHooks: (installed) => noteAskHooks(installed && !!loadConfig().askFromWidget) });
 const aiToolsOpen = (destination) => AiTools.open(destination);
 // Find agents (src/agents-find-main.js). The ledger key lives only here: it

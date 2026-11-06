@@ -31,6 +31,9 @@ handle aitools:open-install
 handle aitools:preview
 handle aitools:remove-custom
 handle aitools:scan
+handle aitools:terminal
+handle aitools:terminal-get
+handle aitools:terminal-open
 handle aitools:undo
 handle answer-input
 handle away-dismiss
