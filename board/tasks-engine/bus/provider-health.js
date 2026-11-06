@@ -39,10 +39,14 @@ export function parseRetryAt(text, now) {
 
 /**
  * What a failed start or run says about its provider: a breaker reason, or null (the task's own fault).
- * failKind is shared/failure.js's (limit, auth, provider, network, error); code is a createTask error code.
+ * failKind is shared/failure.js's (limit, auth, provider, network, error); code is a createTask error code;
+ * parkReason is the engine's park (limit, auth; user is the person's own pause, never the provider's).
  */
-export function reasonOf({ failKind = null, code = null } = {}) {
+export function reasonOf({ failKind = null, code = null, parkReason = null } = {}) {
   if (code === 'AI_UNAVAILABLE') return C.BREAKER_REASON.MISSING;
+  // The engine parks a run that hit its usage limit or was signed out (parkReason) and leaves failKind null.
+  if (parkReason === 'limit') return C.BREAKER_REASON.QUOTA;
+  if (parkReason === 'auth') return C.BREAKER_REASON.AUTH;
   if (failKind === 'limit') return C.BREAKER_REASON.QUOTA;
   if (failKind === 'auth') return C.BREAKER_REASON.AUTH;
   if (failKind === 'provider' || failKind === 'network') return C.BREAKER_REASON.CRASH;
@@ -86,14 +90,16 @@ export function createProviderHealth({ log, now = Date.now, onChange = () => {} 
     return !!h && h.state !== C.BREAKER_STATE.OPEN;
   }
 
-  function failed(p, reason, { text = null } = {}) {
+  // retryAt: the provider's own reset time when the run reported one (a limit park's limitResetAt), else parsed from text.
+  function failed(p, reason, { text = null, retryAt = null } = {}) {
     if (!health[p] || !reason) return get(p);
     const prev = { ...health[p] };
     const failures = prev.failures + 1;
     const opens = reason !== C.BREAKER_REASON.CRASH || failures >= C.CRASH_THRESHOLD || prev.state !== C.BREAKER_STATE.CLOSED;
     if (!opens) { health[p] = { ...prev, failures, reason }; save(p, prev); return get(p); }
     const t = now();
-    const said = reason === C.BREAKER_REASON.QUOTA ? parseRetryAt(text, t) : null;
+    const known = Number.isFinite(retryAt) && retryAt > t && retryAt - t <= MAX_RETRY_MS ? retryAt : null;
+    const said = reason === C.BREAKER_REASON.QUOTA ? known ?? parseRetryAt(text, t) : null;
     health[p] = C.providerHealth(p, { state: C.BREAKER_STATE.OPEN, reason, retry_at: said ?? t + C.BREAKER_COOLDOWN_MS[reason], since: t, failures });
     save(p, prev);
     return get(p);

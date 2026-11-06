@@ -159,6 +159,53 @@ test('D4 fallback: an "any" hand-off whose provider runs out of quota moves to t
   } finally { w.cleanup(); }
 });
 
+test('live G4: the engine parks a run that hit its limit (parked/limit, no failKind): PROVIDER_UNAVAILABLE, breaker open at its reset, refused up front next time; "any" falls back', async () => {
+  const w = await world({ fallback: { enabled: true, order: ['claude', 'codex', 'gemini'] } });
+  try {
+    assert.equal(reasonOf({ parkReason: 'limit' }), 'QUOTA');
+    assert.equal(reasonOf({ parkReason: 'auth' }), 'AUTH');
+    assert.equal(reasonOf({ parkReason: 'user' }), null, 'the person\'s own pause is not the provider\'s');
+    const resetAt = Date.parse('2026-11-12T17:42:00Z');
+    const stopped = [];
+    const act = w.engine.act;
+    w.engine.act = async (a) => { stopped.push(a); return act(a); };
+    // Explicit codex: the contract's explicit pick. No fallback, but the result says PROVIDER_UNAVAILABLE.
+    const first = await w.hand({ provider: 'codex' });
+    assert.equal(first.provider, 'codex');
+    const t = await w.until(() => w.taskOf(first.handoff_id), 'codex run');
+    w.engine.end(t.id, 'parked', { parkReason: 'limit', failKind: null, failReason: null, limitResetAt: resetAt, evidence: null });
+    const res = await w.until(() => w.bus.log.result(first.handoff_id), 'result');
+    assert.equal(res.kind, 'result.failed');
+    assert.deepEqual([res.data.reason, res.data.provider_reason, res.data.retry_at], ['PROVIDER_UNAVAILABLE', 'QUOTA', resetAt]);
+    assert.equal(res.data.fallback, undefined, 'an explicit provider does not fall back');
+    const h = w.bus.health.get('codex');
+    assert.deepEqual([h.state, h.reason, h.retry_at], ['open', 'QUOTA', resetAt]);
+    const waited = await w.bus.op('wait', { handoff_id: first.handoff_id, timeout_s: 0 });
+    assert.deepEqual([waited.result.reason, waited.result.retry_at], ['PROVIDER_UNAVAILABLE', resetAt]);
+    assert.ok(stopped.some((a) => a.id === t.id && a.action === 'stop'), 'the parked run is ended, so a resume never redoes it unseen');
+    // Next explicit codex: refused up front.
+    const again = await w.hand({ provider: 'codex' });
+    assert.deepEqual([again.reason, again.provider, again.retry_at], ['PROVIDER_UNAVAILABLE', 'codex', resetAt]);
+    // 'any' (and a list with codex first) go to Claude straight away.
+    assert.equal((await w.hand({ provider: 'any' })).provider, 'claude');
+    assert.equal((await w.hand({ provider: ['codex', 'claude'] })).provider, 'claude');
+  } finally { w.cleanup(); }
+});
+
+test('live G4: an "any" hand-off whose run parks on its limit moves to the next AI in order', async () => {
+  const w = await world({ fallback: { enabled: true, order: ['codex', 'claude'] } });
+  try {
+    const first = await w.hand({ provider: 'any' });
+    assert.equal(first.provider, 'codex');
+    const t = await w.until(() => w.taskOf(first.handoff_id), 'codex run');
+    w.engine.end(t.id, 'parked', { parkReason: 'limit', failKind: null, limitResetAt: null, evidence: null });
+    const res = await w.until(() => w.bus.log.result(first.handoff_id), 'result');
+    assert.equal(res.data.reason, 'PROVIDER_UNAVAILABLE');
+    assert.equal(res.data.fallback.provider, 'claude');
+    assert.equal((await w.until(() => w.taskOf(res.data.fallback.handoff_id), 'claude run')).spec.ai, 'claude');
+  } finally { w.cleanup(); }
+});
+
 test('D4 switch off: "any" does not move past an unavailable provider', async () => {
   const w = await world({ fallback: { enabled: false, order: ['codex', 'claude'] } });
   try {

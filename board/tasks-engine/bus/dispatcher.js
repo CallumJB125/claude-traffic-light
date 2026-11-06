@@ -340,11 +340,13 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     const next = outcome === 'failed' ? fallbackFor(ev, providerReason) : null;
     const r = append(envelope({ topic: 'result', kind: `result.${outcome}`, handoff: ev, source: systemSource,
       data: { fence, summary, evidence, cost_usd, cost_basis, branch, task_id, provider: provider ?? ev.to?.provider ?? null,
-        ...(providerReason ? { provider_reason: providerReason } : {}), ...(next?.handoff_id ? { fallback: { handoff_id: next.handoff_id, provider: next.provider } } : {}) } }));
+        // The provider, not the task, failed: the contract's PROVIDER_UNAVAILABLE with the breaker's retry_at.
+        ...(providerReason ? { reason: Contract.BUS_REASON.PROVIDER_UNAVAILABLE, provider_reason: providerReason, retry_at: health.get(provider ?? ev.to?.provider)?.retry_at ?? null } : {}),
+        ...(next?.handoff_id ? { fallback: { handoff_id: next.handoff_id, provider: next.provider } } : {}) } }));
     for (const w of waiters.get(ev.handoff_id) ?? []) w(r);
     waiters.delete(ev.handoff_id);
     span(ev, 'result', { provider: provider ?? ev.to?.provider ?? null, result: outcome === 'done' ? 'ok' : outcome === 'failed' ? 'error' : 'deferred',
-      reason: providerReason ?? (outcome === 'done' ? null : outcome.toUpperCase()) });
+      reason: providerReason ? Contract.BUS_REASON.PROVIDER_UNAVAILABLE : outcome === 'done' ? null : outcome.toUpperCase() });
     returnResult(ev, outcome, { summary, provider: provider ?? ev.to?.provider ?? null, next, providerReason });
     setImmediate(pump);
   }
@@ -401,13 +403,15 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     try { report = c?.report ? JSON.parse(c.report) : null; } catch { report = null; }
     const own = outcome === 'done' ? task.evidence?.summary ?? task.lastAssistant ?? 'Done.' : failedText(task);
     const worker = task.ai?.id ?? ev.to?.provider;
-    const providerReason = outcome === 'failed' ? reasonOf({ failKind: task.failKind }) : null;
-    if (providerReason) health.failed(worker, providerReason, { text: task.failReason });
+    const providerReason = outcome === 'failed' ? reasonOf({ failKind: task.failKind, parkReason: task.state === 'parked' ? task.parkReason : null }) : null;
+    if (providerReason) health.failed(worker, providerReason, { text: task.failReason, retryAt: task.limitResetAt ?? null });
     else if (outcome === 'done') health.succeeded(worker);
     finish(ev, task.sourceMeta.fence, report?.outcome === 'failed' ? 'failed' : outcome, {
       summary: report?.summary ?? scrubRun(own, LIMITS.summary, task.worktree), evidence: report?.evidence ?? [],
       ...runCost(task), branch: task.branch, task_id: task.id, provider: task.ai?.id ?? null, providerReason,
     });
+    // A parked run has its result now (and maybe a fallback): end it, so a later "resume" never redoes the work unseen.
+    if (task.state === 'parked') engine.act({ id: task.id, action: 'stop', requestId: `bus-parked-${task.id}` }).catch(() => {});
   }
   const onEvent = (e) => { if (e.type === 'state') { const t = engine.tasks.get(e.taskId); if (t) onTaskState(t); } };
   engine.on('event', onEvent);
@@ -513,6 +517,8 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     return { offset: ev.offset, topic: ev.topic, kind: ev.kind, handoff_id: ev.handoff_id, card_id: ev.card_id, hop: ev.hop, at: ev.created_at,
       from, title: ev.data?.title ?? null,
       ...(result ? { cost_usd: ev.data.cost_usd, cost_basis: ev.data.cost_basis, branch: ev.data.branch } : {}),
+      ...(result && ev.data?.reason ? { reason: ev.data.reason, provider: worker, provider_reason: ev.data.provider_reason ?? null, retry_at: ev.data.retry_at ?? null } : {}),
+      ...(result && ev.data?.fallback ? { fallback: ev.data.fallback } : {}),
       text: text ? frame({ kind: result ? 'message' : 'handoff', source: who, card_id: ev.card_id, body: text, afterNote: !result && ev.data?.after_note === true }) : null };
   }
 
