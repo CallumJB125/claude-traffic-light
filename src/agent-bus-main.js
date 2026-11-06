@@ -8,6 +8,9 @@ const DEFAULTS = Object.freeze({
   // scope 'auto': any checkout a Claude or Codex session here works in; 'listed', or any repos listed: only these.
   // exclude always wins.
   enabled: true, autoAccept: true, scope: 'auto', repos: [], exclude: [], wallClockMin: 20,
+  // Owner decision D4 (2026-11-06): a hand-off for 'any' AI moves to the next one in this order when one is out of
+  // quota, signed out or missing, within the caps below. false is the one switch that turns it off.
+  fallback: true, fallbackOrder: ['claude', 'codex', 'gemini'],
   // Owner decision 2026-10-22: spend caps exist and default off.
   caps: { enabled: false, memberUsd: 20, handoffUsd: 5 },
 });
@@ -20,6 +23,8 @@ function normalize(cfg) {
   return {
     enabled: c.enabled !== false, autoAccept: c.autoAccept !== false, scope: c.scope === 'listed' ? 'listed' : 'auto',
     repos: list(c.repos), exclude: list(c.exclude),
+    fallback: c.fallback !== false,
+    fallbackOrder: (() => { const o = (Array.isArray(c.fallbackOrder) ? c.fallbackOrder : []).filter((p, i, l) => ['claude', 'codex', 'gemini'].includes(p) && l.indexOf(p) === i); return o.length ? o : [...DEFAULTS.fallbackOrder]; })(),
     wallClockMin: Math.round(num(c.wallClockMin, DEFAULTS.wallClockMin, 1, 24 * 60)),
     caps: { enabled: caps.enabled === true, memberUsd: num(caps.memberUsd, DEFAULTS.caps.memberUsd, 0, 10000), handoffUsd: num(caps.handoffUsd, DEFAULTS.caps.handoffUsd, 0.01, 100) },
   };
@@ -32,6 +37,7 @@ function contextOf(cfg, folders = []) {
   return {
     settings: { enabled: n.enabled, auto_accept: n.autoAccept, wall_clock_min: n.wallClockMin, allow_pr: false,
       caps: { enabled: n.caps.enabled, member_usd: n.caps.memberUsd, handoff_usd: n.caps.handoffUsd } },
+    fallback: { enabled: n.fallback, order: n.fallbackOrder },
     scope: n.scope, repos: n.repos, exclude: n.exclude, folders: [...new Set(folders.filter((f) => typeof f === 'string' && f))].slice(0, 200),
   };
 }

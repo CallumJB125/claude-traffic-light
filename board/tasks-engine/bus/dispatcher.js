@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { openBusLog, DEAD_AFTER } from './local-log.js';
 import { createNotes } from './notes.js';
+import { createProviderHealth, reasonOf } from './provider-health.js';
 import { machine } from '../../shared/brand.js';
 import { admit, strictSettings, dayOf } from './guard.js';
 import { runCost } from './pricing.js';
@@ -31,7 +32,12 @@ const DEFAULT_TTL_S = 24 * 60 * 60;
 const SESSION_REPO_MS = 2 * 24 * HOUR_MS;
 const SESSION_REPO_MAX = 100;
 const ACTIVE = new Set(['queued', 'claimed', 'running', 'quiet', 'blocked', 'handing_over', 'handed_over', 'suspended', 'unresponsive']);
-const AI_NAME = { claude: 'Claude', codex: 'Codex' };
+const AI_NAME = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' };
+const SESSION_KEY = /^(?:claude|codex|gemini)\|[\w.-]{1,120}$/;
+const HANDLE = /^(?:claude|codex|gemini)-[a-z0-9-]{1,16}-[0-9a-f]{4,6}$/;
+// Breaker reasons that mean the provider, not the task, failed: a run asked with 'any' or a list moves on (D4).
+const MOVE_ON = new Set(['QUOTA', 'AUTH', 'MISSING']);
+const BREAKER_WORDS = { QUOTA: 'is out of its usage quota', AUTH: 'needs its person to sign in again', MISSING: 'is not installed or not signed in', CRASH: 'kept failing to start' };
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
 export class BusRefusal extends Error {
@@ -64,7 +70,8 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   const deviceId = log.state('device_id') ?? (() => { const id = crypto.randomBytes(8).toString('hex'); log.setState('device_id', id); return id; })();
   // ready: main has pushed its Preferences (busSetContext) since this helper started. Until then nothing
   // starts, so a reopened claim or a queued offer never runs on defaults or misses a Preferences-ticked repo.
-  const context = { ready: false, settings: null, scope: 'auto', repos: [], exclude: [], folders: [], self: null };
+  // fallback (owner decision D4): 'any' and lists move to the next provider in order when one is unavailable.
+  const context = { ready: false, settings: null, scope: 'auto', repos: [], exclude: [], folders: [], self: null, fallback: { enabled: true, order: [...Contract.DEFAULT_FALLBACK] } };
   const tops = new Map(); // dir → its git top, until main's next push (git runs once per folder per push)
   const commons = new Map(); // git top → its git-common-dir (shared by every linked worktree of one repository)
   const halting = new Set(); // task ids being stopped by a halt mid-start: their end posts no result
@@ -97,6 +104,9 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   // Notes (plan-agent-awareness §3.6): main's ops only; their events carry handles and states, never the text.
   const notes = createNotes({ log, now, halted: () => log.state('halted', false),
     record: (kind, data) => append(envelope({ topic: 'note', kind, handoff: null, source: systemSource, data })) });
+  const health = createProviderHealth({ log, now, onChange: (h) => logger?.info?.('bus provider', { provider: h.provider, state: h.state, reason: h.reason }) });
+  const unavailableRefusal = (u) => ({ reason: 'PROVIDER_UNAVAILABLE', provider: u.provider, retry_at: u.retry_at ?? null, provider_reason: u.reason ?? null,
+    message: `${AI_NAME[u.provider] ?? 'That AI'} ${BREAKER_WORDS[u.reason] ?? 'cannot take work on this Mac now'}${u.retry_at ? `; Plexiform tries it again after ${new Date(u.retry_at).toISOString()}` : ''}. Ask for to.provider "any" to use the next AI in your person's order.` });
 
   async function gitTop(dir) {
     if (typeof dir !== 'string' || !path.isAbsolute(dir)) return null;
@@ -198,12 +208,29 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   }
 
   // Post a handoff after admission. h: {request_id, requestKey, source, to, card_id, repoRoot, hop, visited, caused_by, title, brief, files, branch, budget_usd, ttl_s}
-  function post(h) {
+  function post(input) {
+    let h = input;
     const prior = log.byRequest(h.requestKey);
     if (prior) return { handoff_id: prior.handoff_id, state: stateOf(prior.handoff_id), duplicate: true };
-    const dedupeKey = sha(`${h.card_id ?? h.repoRoot}\n${h.title}\n${h.brief}`);
-    const dup = log.byDedupe(dedupeKey, now() - HOUR_MS);
+    const dedupeKey = sha(`${h.card_id ?? h.repoRoot}\n${h.title}\n${h.brief}${h.fallback_of ? `\n${h.fallback_of}` : ''}`);
+    const dup = h.fallback_of ? null : log.byDedupe(dedupeKey, now() - HOUR_MS);
     if (dup) return { handoff_id: dup.handoff_id, state: stateOf(dup.handoff_id), duplicate: true };
+    // One provider before the offer is written (G4): a named one only if its breaker admits it; 'any' or a list, the
+    // first that does, and the rest kept for a fallback.
+    let rest = [];
+    const want = h.to?.provider ?? (h.to?.agent_id ? null : Contract.ANY_PROVIDER);
+    // A single provider that cannot take bus runs at all (Gemini today) is the guard's NO_ELIGIBLE_AGENT, not an outage.
+    if (want != null && !(typeof want === 'string' && want !== Contract.ANY_PROVIDER && !Contract.RECEIVE_PROVIDERS.includes(want))) {
+      const pick = health.choose(want, { order: context.fallback.order, fallback: context.fallback.enabled });
+      if (pick.unavailable) {
+        const r = unavailableRefusal(pick.unavailable);
+        append(envelope({ topic: 'handoff', kind: 'handoff.refused', request_id: h.request_id, data: { reason: r.reason, title: h.title, provider: r.provider },
+          handoff: { handoff_id: null, card_id: h.card_id ?? null, repo: { root: h.repoRoot }, source: h.source, to: { provider: r.provider ?? undefined }, hop: h.hop, visited: h.visited, caused_by: h.caused_by ?? null } }));
+        return r;
+      }
+      h = { ...h, to: { ...h.to, provider: pick.provider } };
+      rest = pick.rest;
+    }
     const s = settings();
     const reservation = s.caps.enabled ? h.budget_usd ?? s.caps.handoff_usd : 0;
     const handoff = { handoff_id: `hof_${crypto.randomBytes(8).toString('hex')}`, card_id: h.card_id ?? null, repo: { root: h.repoRoot }, source: h.source,
@@ -214,11 +241,12 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       return refusal;
     }
     const ev = envelope({ topic: 'handoff', kind: 'handoff.offer', handoff, request_id: h.request_id, ttlS: h.ttl_s, body: h.brief || null,
-      data: { title: h.title, files: h.files ?? [], branch: h.branch ?? null, requires: { provider: h.to.provider }, budget_usd: h.budget_usd ?? null, reservation, ...(h.after_note ? { after_note: true } : {}) } });
+      data: { title: h.title, files: h.files ?? [], branch: h.branch ?? null, requires: { provider: h.to.provider }, budget_usd: h.budget_usd ?? null, reservation, ...(h.after_note ? { after_note: true } : {}),
+        ...(rest.length ? { fallback: rest } : {}), ...(h.origin ? { origin: h.origin } : {}), ...(h.fallback_of ? { fallback_of: h.fallback_of } : {}) } });
     append(ev, { requestKey: h.requestKey, dedupeKey });
     if (reservation) log.reserve(dayOf(now()), reservation);
     setImmediate(pump);
-    return { handoff_id: handoff.handoff_id, state: 'offered', hop: h.hop };
+    return { handoff_id: handoff.handoff_id, state: 'offered', hop: h.hop, provider: h.to.provider ?? null, ...(h.fallback_of ? { fallback_of: h.fallback_of } : {}) };
   }
 
   function taskText(ev) {
@@ -239,6 +267,14 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     try {
       const s = settings();
       const provider = ev.to.provider;
+      // Its breaker opened after the offer was written (another run hit the quota): no start, and 'any' moves on.
+      if (!health.admits(provider)) {
+        const h = health.get(provider);
+        log.setClaim(ev.handoff_id, claim.fence, { state: 'released' });
+        append(envelope({ topic: 'claim', kind: 'claim.denied', handoff: ev, source: systemSource, data: { fence: claim.fence, reason: 'PROVIDER_UNAVAILABLE' } }));
+        finish(ev, claim.fence, 'failed', { summary: `Not started: ${unavailableRefusal(h ?? { provider }).message}`, cost_usd: 0, cost_basis: 'native', providerReason: h?.reason ?? null });
+        return;
+      }
       const spec = {
         text: taskText(ev), title: ev.data.title.slice(0, 120), cwd: ev.repo.root, ai: provider, surface: 'background', permissionLevel: 'auto-edits', planFirst: false,
         source: 'bus', sourceMeta: { displayName: 'Agent bus', handoffId: ev.handoff_id, fence: claim.fence, originTier: ev.source.tier, scope: 'local', ...(ev.card_id ? { cardId: ev.card_id } : {}) },
@@ -271,24 +307,64 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       // Shutting down mid-start: the claim stays granted and reopens on the next start (recover()).
       if (closed) return;
       const code = typeof e?.details?.reason === 'string' ? e.details.reason : typeof e?.code === 'string' ? e.code : 'INTERNAL';
+      const providerReason = reasonOf({ code: e?.code ?? null });
+      if (providerReason) health.failed(ev.to.provider, providerReason);
       log.setClaim(ev.handoff_id, claim.fence, { state: 'released' });
       append(envelope({ topic: 'claim', kind: 'claim.denied', handoff: ev, source: systemSource, data: { fence: claim.fence, reason: code } }));
-      finish(ev, claim.fence, 'failed', { summary: `Not started: ${scrubRun(e?.message ?? 'the run could not start', 300)}`, cost_usd: 0, cost_basis: 'native' });
+      finish(ev, claim.fence, 'failed', { summary: `Not started: ${scrubRun(e?.message ?? 'the run could not start', 300)}`, cost_usd: 0, cost_basis: 'native', providerReason });
     }
   }
 
-  function finish(ev, fence, outcome, { summary, evidence = [], cost_usd, cost_basis, branch = null, task_id = null, provider = null }) {
+  function finish(ev, fence, outcome, { summary, evidence = [], cost_usd, cost_basis, branch = null, task_id = null, provider = null, providerReason = null }) {
     if (log.result(ev.handoff_id)?.data?.fence === fence) return;
     const c = log.claimOf(ev.handoff_id);
     if (c && c.fence !== fence) return; // a stale fence's result is refused
     // Settled against the day it was reserved, so a run that crosses midnight strands nothing.
     log.settle(dayOf(ev.created_at), c?.reserved_usd ?? ev.data.reservation ?? 0, cost_usd);
     log.setClaim(ev.handoff_id, fence, { state: outcome === 'outcome_unknown' ? 'lost' : 'done' });
+    const next = outcome === 'failed' ? fallbackFor(ev, providerReason) : null;
     const r = append(envelope({ topic: 'result', kind: `result.${outcome}`, handoff: ev, source: systemSource,
-      data: { fence, summary, evidence, cost_usd, cost_basis, branch, task_id, provider: provider ?? ev.to?.provider ?? null } }));
+      data: { fence, summary, evidence, cost_usd, cost_basis, branch, task_id, provider: provider ?? ev.to?.provider ?? null,
+        ...(providerReason ? { provider_reason: providerReason } : {}), ...(next?.handoff_id ? { fallback: { handoff_id: next.handoff_id, provider: next.provider } } : {}) } }));
     for (const w of waiters.get(ev.handoff_id) ?? []) w(r);
     waiters.delete(ev.handoff_id);
+    returnResult(ev, outcome, { summary, provider: provider ?? ev.to?.provider ?? null, next, providerReason });
     setImmediate(pump);
+  }
+
+  // D4: a hand-off asked with 'any' or a list whose provider failed for a provider reason goes to the next one in
+  // order, once per provider, within the same caps (post() reserves and admits it like any offer). Same hop: it is the
+  // same work, not an onward hand-off. Nothing moves on while halted or off.
+  function fallbackFor(ev, providerReason) {
+    if (!providerReason || !MOVE_ON.has(providerReason) && health.admits(ev.to?.provider)) return null;
+    const rest = Array.isArray(ev.data?.fallback) ? ev.data.fallback.filter((p) => p !== ev.to?.provider) : [];
+    if (!rest.length || !context.fallback.enabled || log.state('halted', false) || !settings().enabled) return null;
+    const left = Math.floor((ev.expires_at - now()) / 1000);
+    if (left < 60) return null;
+    try {
+      const r = post({ request_id: `fb-${ev.handoff_id.slice(4)}`, requestKey: `${ev.source.agent_id}|fb|${ev.handoff_id}`, source: ev.source, to: { provider: rest },
+        card_id: ev.card_id ?? undefined, repoRoot: ev.repo?.root, hop: ev.hop, visited: ev.visited, caused_by: ev.handoff_id, title: ev.data.title, brief: ev.body ?? '',
+        files: ev.data.files, branch: ev.data.branch ?? undefined, budget_usd: ev.data.budget_usd ?? undefined, ttl_s: Math.min(left, DEFAULT_TTL_S),
+        after_note: ev.data.after_note === true, origin: ev.data.origin, fallback_of: ev.handoff_id });
+      return r?.handoff_id ? r : null;
+    } catch (e) { logger?.warn?.('bus fallback failed', { code: e?.code ?? null }); return null; }
+  }
+
+  // G5: the result goes back to the session that asked, as a note from Plexiform it hears about at its next tool call
+  // or prompt. One line of outcome, the handoff_id, the start of the summary (framed as data when read). The full
+  // result stays in bus_wait and bus_read. Main re-addresses it to a same-repo successor if that session has ended.
+  function returnResult(ev, outcome, { summary, provider, next, providerReason }) {
+    const o = ev.data?.origin;
+    if (!o || !SESSION_KEY.test(o.key ?? '') || !HANDLE.test(o.handle ?? '')) return;
+    const who = AI_NAME[provider] ?? 'An AI';
+    const title = String(ev.data?.title ?? '').slice(0, 80);
+    const head = next ? `Hand-off ${ev.handoff_id} ("${title}"): ${who} ${BREAKER_WORDS[providerReason] ?? 'could not take it'}, so Plexiform gave it to ${AI_NAME[next.provider] ?? 'the next AI'} as ${next.handoff_id}. That result will follow.`
+      : outcome === 'done' ? `Hand-off ${ev.handoff_id} ("${title}") is done, by ${who} running in Plexiform.`
+        : outcome === 'expired' ? `Hand-off ${ev.handoff_id} ("${title}") expired before it started.`
+          : outcome === 'outcome_unknown' ? `Hand-off ${ev.handoff_id} ("${title}") ended with no known outcome.`
+            : `Hand-off ${ev.handoff_id} ("${title}") failed.`;
+    const tail = next ? '' : ` Summary: ${String(summary ?? '').replace(/\s+/g, ' ').slice(0, 400)} Full result: bus_wait with this handoff_id.`;
+    try { notes.system({ to: o, handoff_id: ev.handoff_id, text: `${head}${tail}` }); } catch (e) { logger?.warn?.('bus result note failed', { code: e?.code ?? null }); }
   }
 
   // A bus task reached an end state: its handoff gets one result.
@@ -304,9 +380,13 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     let report = null;
     try { report = c?.report ? JSON.parse(c.report) : null; } catch { report = null; }
     const own = outcome === 'done' ? task.evidence?.summary ?? task.lastAssistant ?? 'Done.' : failedText(task);
+    const worker = task.ai?.id ?? ev.to?.provider;
+    const providerReason = outcome === 'failed' ? reasonOf({ failKind: task.failKind }) : null;
+    if (providerReason) health.failed(worker, providerReason, { text: task.failReason });
+    else if (outcome === 'done') health.succeeded(worker);
     finish(ev, task.sourceMeta.fence, report?.outcome === 'failed' ? 'failed' : outcome, {
       summary: report?.summary ?? scrubRun(own, LIMITS.summary, task.worktree), evidence: report?.evidence ?? [],
-      ...runCost(task), branch: task.branch, task_id: task.id, provider: task.ai?.id ?? null,
+      ...runCost(task), branch: task.branch, task_id: task.id, provider: task.ai?.id ?? null, providerReason,
     });
   }
   const onEvent = (e) => { if (e.type === 'state') { const t = engine.tasks.get(e.taskId); if (t) onTaskState(t); } };
@@ -445,7 +525,9 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
           return repo;
         }
         const agent_id = agentFor(provider, repo.root);
-        return post({ ...a, requestKey: `${agent_id}|${a.request_id}`, repoRoot: repo.root, brief: a.brief ?? '',
+        // The session main verified as the caller (agent-awareness relay), for the result note (G5); never the request's.
+        const origin = caller?.origin && SESSION_KEY.test(caller.origin.key ?? '') && HANDLE.test(caller.origin.handle ?? '') ? { key: caller.origin.key, handle: caller.origin.handle } : null;
+        return post({ ...a, requestKey: `${agent_id}|${a.request_id}`, repoRoot: repo.root, brief: a.brief ?? '', ...(origin ? { origin } : {}),
           source: { device_id: deviceId, agent_id, provider, tier: 'local_attested', identity_source: 'local_token' },
           hop: log.hopOf(await hopDomain(caller), now() - HOUR_MS) + 1, visited: [agent_id], after_note: caller?.after_note === true });
       }
@@ -475,7 +557,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       }
       case 'status': {
         const a = parse(StatusArgs, rawArgs);
-        if (!a.handoff_id) return { halted: log.state('halted', false), enabled: s.enabled, head: log.head() };
+        if (!a.handoff_id) return { halted: log.state('halted', false), enabled: s.enabled, head: log.head(), providers: health.all() };
         const chain = log.chain(a.handoff_id);
         if (!chain.length) return { reason: 'NOT_FOUND', message: 'No such handoff.' };
         const c = log.claimOf(a.handoff_id);
@@ -484,7 +566,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
       }
       case 'list': {
         const day = log.spend(dayOf(now()));
-        return { halted: log.state('halted', false), settings: s, spend_today: { reserved_usd: day.reserved, spent_usd: day.spent },
+        return { halted: log.state('halted', false), settings: s, providers: health.all(), fallback: { ...context.fallback }, spend_today: { reserved_usd: day.reserved, spent_usd: day.spent },
           events: log.recent(Math.min(200, Math.max(1, Number(rawArgs?.limit) || 100))).map((e) => ({ offset: e.offset, topic: e.topic, kind: e.kind,
             handoff_id: e.handoff_id, card_id: e.card_id, at: e.created_at, hop: e.hop, tier: e.source.tier, provider: e.source.provider,
             to: e.to?.provider ?? null, title: e.data?.title ?? null, reason: e.data?.reason ?? null, cost_usd: e.data?.cost_usd ?? null })) };
@@ -500,6 +582,10 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
         commons.clear();
         context.exclude = abs(a.exclude) ?? context.exclude;
         context.folders = abs(a.folders) ?? context.folders;
+        if (a.fallback && typeof a.fallback === 'object') {
+          const order = Array.isArray(a.fallback.order) ? a.fallback.order.filter((p, i, l) => Contract.PROVIDERS.includes(p) && l.indexOf(p) === i) : null;
+          context.fallback = { enabled: a.fallback.enabled !== false, order: order?.length ? order : [...Contract.DEFAULT_FALLBACK] };
+        }
         if (a.self !== undefined) context.self = a.self && typeof a.self.userId === 'string' ? { userId: a.self.userId } : null;
         append(envelope({ topic: 'control', kind: 'control.policy_changed', handoff: null, source: systemSource, data: { repos: context.repos.length } }));
         setImmediate(pump);
@@ -549,7 +635,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   }
 
   return {
-    op, runTool, context, log, sessionRepo,
+    op, runTool, context, log, sessionRepo, health,
     close() {
       if (closed) return;
       closed = true;

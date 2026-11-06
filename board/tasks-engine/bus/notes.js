@@ -11,7 +11,12 @@ import untrustedFrame from '../../shared/untrusted-frame.cjs';
 
 const { frame, fold } = untrustedFrame;
 const HOUR_MS = 60 * 60 * 1000;
-const NAMES = Object.freeze({ claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI' });
+const NAMES = Object.freeze({ claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', plexiform: 'Plexiform' });
+// The bus's own sender (src/bus-contract.js SYSTEM_NOTE): hand-off results coming back to the session that asked.
+const SYSTEM = Object.freeze({ key: 'plexiform|bus', handle: 'plexiform', provider: 'plexiform', folder: 'bus' });
+const SYSTEM_TTL_MS = 24 * HOUR_MS;
+const SESSION_KEY = /^(?:claude|codex|gemini)\|[\w.-]{1,120}$/;
+const HANDLE = /^(?:claude|codex|gemini)-[a-z0-9-]{1,16}-[0-9a-f]{4,6}$/;
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 // Main folded and scrubbed the text (src/signal-server.js busScrub); the same fold again is a no-op for it and keeps any
 // other caller's text to what a model reads: compatibility forms folded, invisible and control characters dropped.
@@ -83,6 +88,24 @@ export function createNotes({ log, now = Date.now, halted = () => false, record 
     return { read: ids };
   }
 
+  // A hand-off result for the session that asked (BACKBONE plan G5): from the dispatcher only, never an op anyone can
+  // call. One per handoff and recipient (a retry is the same note); no sender rate limits, since the bus is the sender.
+  // Held like any note while halted; read like any note through bus_notes.
+  function system({ to, handoff_id, text }) {
+    if (!to || !SESSION_KEY.test(to.key ?? '') || !HANDLE.test(to.handle ?? '') || typeof handoff_id !== 'string') return { reason: 'VALIDATION', message: 'no recipient' };
+    const requestKey = `${SYSTEM.key}|result|${handoff_id}|${to.key}`;
+    const prior = log.noteByRequest(requestKey);
+    if (prior) return { note_id: prior.note_id, state: prior.state, duplicate: true };
+    const body = clean(String(text ?? ''));
+    if (!body.trim()) return { reason: 'VALIDATION', message: 'text: the note is empty.' };
+    const t = now();
+    const row = { note_id: `note_${crypto.randomBytes(10).toString('hex')}`, request_key: requestKey, from_key: SYSTEM.key, from_handle: SYSTEM.handle, from_provider: SYSTEM.provider,
+      from_folder: SYSTEM.folder, to_key: to.key, to_handle: to.handle, text: body, text_hash: sha(body), created_at: t, expires_at: t + SYSTEM_TTL_MS };
+    log.addNote(row);
+    mark('note.queued', [row]);
+    return { note_id: row.note_id, state: 'queued', expires_at: row.expires_at };
+  }
+
   // Metadata only, for main's notices: who each unread note is for and from. Never the text.
   function pending() {
     expire();
@@ -100,7 +123,7 @@ export function createNotes({ log, now = Date.now, halted = () => false, record 
   }
 
   return {
-    expire,
+    expire, system,
     op(name, args) {
       if (name === 'note') return note(args);
       if (name === 'notes') return notes(args);

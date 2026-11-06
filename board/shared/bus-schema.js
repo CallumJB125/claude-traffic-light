@@ -9,7 +9,7 @@ export const TIERS = Object.freeze(['person', 'run_capability', 'local_attested'
 export const PROVIDERS = Object.freeze(['claude', 'codex', 'gemini']);
 // The providers a bus run may start on: the ones with an OS sandbox and network off (AC7).
 export const BUS_RUN_PROVIDERS = Object.freeze(['claude', 'codex']);
-export const REASONS = Object.freeze(['HALTED', 'SPEND_CAP', 'LOOP', 'RATE', 'NOT_MEMBER', 'TIER_NOT_ACCEPTED', 'NO_ELIGIBLE_AGENT', 'NO_LOCAL_CHECKOUT', 'NOT_FOUND', 'VALIDATION']);
+export const REASONS = Object.freeze(['HALTED', 'SPEND_CAP', 'LOOP', 'RATE', 'NOT_MEMBER', 'TIER_NOT_ACCEPTED', 'NO_ELIGIBLE_AGENT', 'NO_LOCAL_CHECKOUT', 'NOT_FOUND', 'VALIDATION', 'PROVIDER_UNAVAILABLE']);
 export const KINDS = Object.freeze({
   handoff: ['handoff.offer', 'handoff.refused'],
   claim: ['claim.granted', 'claim.denied', 'claim.started', 'claim.released', 'claim.lost'],
@@ -24,7 +24,11 @@ const requestId = z.string().regex(/^[a-zA-Z0-9_-]{8,100}$/).describe('Unique re
 const cardId = z.string().regex(/^[A-Za-z0-9_.:-]{1,100}$/);
 const agentId = z.string().regex(/^[a-z]+:(?:local|run):[A-Za-z0-9_-]{1,64}$/);
 const handoffId = z.string().regex(/^hof_[a-f0-9]{12,32}$/);
-const to = z.object({ provider: z.enum(PROVIDERS).optional(), user: z.string().max(200).optional(), agent_id: agentId.optional() }).strict()
+// provider: one provider, 'any' (the person's fallback order), or a list in the caller's order (BACKBONE plan G4).
+// The dispatcher settles it to one provider before the offer is written.
+export const ANY_PROVIDER = 'any';
+const toProvider = z.union([z.enum([...PROVIDERS, ANY_PROVIDER]), z.array(z.enum(PROVIDERS)).min(1).max(PROVIDERS.length)]);
+const to = z.object({ provider: toProvider.optional(), user: z.string().max(200).optional(), agent_id: agentId.optional() }).strict()
   .refine((t) => t.provider || t.agent_id, 'to needs a provider or an agent_id');
 const handoffFields = {
   request_id: requestId, to, scope: z.enum(['local', 'team']).optional(), card_id: cardId.optional(),

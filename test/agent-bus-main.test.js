@@ -7,7 +7,9 @@ const assert = require('node:assert/strict');
 const { register, normalize, contextOf, migrate } = require('../src/agent-bus-main.js');
 
 test('defaults: on, auto-accept, caps off, 20 minute wall clock; context carries allow_pr false', () => {
-  assert.deepEqual(normalize(undefined), { enabled: true, autoAccept: true, scope: 'auto', repos: [], exclude: [], wallClockMin: 20, caps: { enabled: false, memberUsd: 20, handoffUsd: 5 } });
+  assert.deepEqual(normalize(undefined), { enabled: true, autoAccept: true, scope: 'auto', repos: [], exclude: [], fallback: true, fallbackOrder: ['claude', 'codex', 'gemini'], wallClockMin: 20, caps: { enabled: false, memberUsd: 20, handoffUsd: 5 } });
+  // D4: one switch turns the provider fallback off; the order keeps only known providers, once each.
+  assert.deepEqual(contextOf({ fallback: false, fallbackOrder: ['codex', 'codex', 'x', 'claude'] }).fallback, { enabled: false, order: ['codex', 'claude'] });
   const c = contextOf({ repos: [' /a ', '', 7], exclude: [' /x ', null], wallClockMin: 9999, caps: { enabled: true, memberUsd: -1 } }, ['/f', '/f', '', 3]);
   assert.deepEqual(c.repos, ['/a']);
   assert.deepEqual(c.exclude, ['/x']);

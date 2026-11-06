@@ -366,7 +366,10 @@ test('roster caps.mcp follows the registered bus tools per provider (the hook\'s
   caps = { claude: true, codex: true };
   r = await aw.build();
   assert.equal(r.self[`codex|${w.T}`].caps.mcp, true);
-  assert.equal(r.self['claude|X'].caps.notes, false, 'no notes before step 4');
+  // BACKBONE G2: a halt state not known yet leaves notes on; a known halt turns them off.
+  assert.equal(r.self['claude|X'].caps.notes, true, 'notes on while the halt state is unknown');
+  const halted = w.make({ mcpCaps: () => caps, halted: () => true });
+  assert.equal((await halted.build()).self['claude|X'].caps.notes, false, 'no notes while halted');
   const broken = w.make({ mcpCaps: () => { throw new Error('x'); } });
   assert.equal((await broken.build()).self['claude|X'].caps.mcp, false);
 });

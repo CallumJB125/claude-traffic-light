@@ -280,10 +280,18 @@ test('caps on: a start that fails, and an offer that expires, release their rese
     const create = b.engine.createTask;
     b.engine.createTask = async () => { throw Object.assign(new Error('Codex is not logged in'), { code: 'AI_UNAVAILABLE' }); };
     // $10 a day at $5 a handoff: a leaked reservation would refuse the third with SPEND_CAP.
+    // The first failed start opens Codex's breaker (MISSING, G4): later hand-offs are refused at once with retry_at,
+    // and reserve nothing.
     for (let i = 0; i < 3; i++) {
       const r = await b.hand();
-      assert.ok(r.handoff_id, r.reason);
-      await b.until(() => b.bus.log.result(r.handoff_id)?.kind === 'result.failed', 'failed start');
+      if (i === 0) {
+        assert.ok(r.handoff_id, r.reason);
+        await b.until(() => b.bus.log.result(r.handoff_id)?.kind === 'result.failed', 'failed start');
+      } else {
+        assert.equal(r.reason, 'PROVIDER_UNAVAILABLE');
+        assert.equal(r.provider, 'codex');
+        assert.ok(r.retry_at > b.clock.t);
+      }
     }
     assert.deepEqual({ ...b.bus.log.spend('2026-10-22') }, { reserved: 0, spent: 0 }, 'failed starts lock nothing');
     b.clock.t += 61 * 60_000; // past the failure circuit breaker's hour

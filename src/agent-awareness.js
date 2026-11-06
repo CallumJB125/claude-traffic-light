@@ -21,6 +21,8 @@ const PeerPid = require('./peer-pid.js');
 const { bindingStatus } = require('./bus-binding-status');
 
 // midTurnNotices on by default (owner decision D3, 2026-11-06): one line, at most every 2 minutes, never the body.
+const RESULT_SYNC_MS = 15 * 1000;
+const RESULT_SYNC_FOR_MS = 30 * 60 * 1000;
 const DEFAULTS = Object.freeze({ enabled: true, notes: true, midTurnNotices: true });
 const DEBOUNCE_MS = 1000;
 const HEARTBEAT_MS = 2 * 60 * 1000;
@@ -649,7 +651,21 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
   const acked = new Set();       // note ids the helper has marked notified
   let byHandle = new Map();      // handle → session key, from the last build (never written out)
   let book = new Map();          // session key → { handle, provider, folder }
-  const NOTICE_SHAPE = (n) => !!n && typeof n === 'object' && Hook.NOTE_ID.test(n.note_id || '') && Hook.HANDLE.test(n.from_handle || '') && has(Hook.PROVIDERS, n.from_provider) && Number.isFinite(n.expires_at);
+  const NOTICE_SHAPE = (n) => !!n && typeof n === 'object' && Hook.NOTE_ID.test(n.note_id || '') && Number.isFinite(n.expires_at)
+    && (Hook.isSystemNotice(n) || (Hook.HANDLE.test(n.from_handle || '') && has(Hook.PROVIDERS, n.from_provider)));
+  // G5 successors: a hand-off result for a session that has ended goes to the newest live session in the same repo.
+  // keyRepo remembers each session's repo key past its end (bounded); successors is rebuilt with every roster.
+  const keyRepo = new Map();
+  let successors = new Map(); // ended session key → live session key that hears of its results
+  // After a hand-off from a verified session, notes are synced every RESULT_SYNC_MS for a while, so its result
+  // (a note the helper writes) reaches the next tool call's notice in seconds, not at the 2-minute heartbeat.
+  let resultSyncUntil = 0;
+  const rememberOrigin = (key) => {
+    resultSyncUntil = now() + RESULT_SYNC_FOR_MS;
+    const r = keyRepo.get(key);
+    if (r !== undefined) { keyRepo.delete(key); keyRepo.set(key, r); }
+  };
+  const ownerOf = (id) => { for (const [k, m] of notices) if (m.has(id)) return k; return null; };
   function addNotice(toKey, n) {
     if (!NOTICE_SHAPE(n)) return;
     if (!notices.has(toKey)) notices.set(toKey, new Map());
@@ -683,15 +699,21 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     acking = (async () => {
       for (const [key, versions] of noticeShown) {
         const m = notices.get(key);
-        if (!m || ![...m.keys()].some((id) => !acked.has(id)) || !has(self, key)) continue;
+        const orphans = [...successors].filter(([, live]) => live === key).map(([k]) => notices.get(k)).filter(Boolean);
+        if (![m, ...orphans].some((x) => x && [...x.keys()].some((id) => !acked.has(id))) || !has(self, key)) continue;
         const r = await readHead(fsp, Hook.noticeFile(rootDir, key.slice(0, key.indexOf('|')), key.slice(key.indexOf('|') + 1)), 2048);
         let rec = null;
         try { rec = r ? JSON.parse(r.text) : null; } catch { rec = null; }
         const ids = rec && rec.v === 1 && rec.status === 'hook_output_written' && versions.get(rec.version);
-        const fresh = ids ? ids.filter((id) => m.has(id) && !acked.has(id)) : [];
+        const fresh = ids ? ids.filter((id) => !acked.has(id) && ownerOf(id)) : [];
         if (!fresh.length) continue;
-        const done = await bus('notified', { to: { key }, note_ids: fresh }).catch(() => null);
-        if (done && Array.isArray(done.notified)) for (const id of fresh) acked.add(id);
+        // A successor's notice can name an ended session's results: each is marked under the key it was sent to.
+        const byOwner = new Map();
+        for (const id of fresh) { const o = ownerOf(id); if (!byOwner.has(o)) byOwner.set(o, []); byOwner.get(o).push(id); }
+        for (const [owner, list] of byOwner) {
+          const done = await bus('notified', { to: { key: owner }, note_ids: list }).catch(() => null);
+          if (done && Array.isArray(done.notified)) for (const id of list) acked.add(id);
+        }
         log(`[awareness] notices notified=${fresh.length}`);
       }
     })().catch(() => {}).finally(() => { acking = null; });
@@ -736,6 +758,20 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
         readNote(b.key);
         if (read.length) dropNotices(b.key, read);
         schedule();
+      }
+      // Results for an ended session this one succeeds (G5): only Plexiform's own notes, read under their own key.
+      if (!status && !args.note_id && r && Array.isArray(r.notes)) {
+        for (const [orphan, live] of successors) {
+          if (live !== b.key || r.notes.length >= 5) continue;
+          const o = await forward('notes', { me: { key: orphan } }, null).catch(() => null);
+          const mine = o && Array.isArray(o.notes) ? o.notes.filter((n) => n && n.from && n.from.handle === Hook.SYSTEM_HANDLE && Hook.NOTE_ID.test(n.note_id || '')).slice(0, 5 - r.notes.length) : [];
+          if (!mine.length) continue;
+          const ack = await forward('notes_ack', { me: { key: orphan }, note_ids: mine.map((n) => n.note_id) }, null).catch(() => null);
+          const read = ack && Array.isArray(ack.read) ? ack.read : [];
+          if (read.length) dropNotices(orphan, read);
+          r.notes.push(...mine);
+          schedule();
+        }
       }
       log(`[awareness] notes got=${got.length} read=${read.length}${r && r.reason ? ` ${String(r.reason).toLowerCase()}` : ''}`);
       return r;
@@ -949,7 +985,14 @@ function boardAnswer(board) {
     if (op === 'handoff' || op === 'hello') {
       const b = await bindCaller(ident);
       // The folder main verified for this session, not the one its MCP process reported: the repo rule (G3) reads it.
-      if (b.bound) caller = { ...caller, provider: b.provider, ...(typeof b.session.cwd === 'string' && path.isAbsolute(b.session.cwd) ? { cwd: b.session.cwd } : {}), ...(op === 'handoff' && noteReaders.has(b.key) ? { after_note: true } : {}) };
+      if (b.bound) {
+        // Who asked, as main verified it: the hand-off's result comes back to this session as a note (G5).
+        const me = op === 'handoff' && lastRoster && has(lastRoster.self, b.key) ? lastRoster.self[b.key] : null;
+        const origin = me && me.verified === true && typeof me.handle === 'string' ? { key: b.key, handle: me.handle } : null;
+        if (origin) rememberOrigin(b.key);
+        caller = { ...caller, provider: b.provider, ...(typeof b.session.cwd === 'string' && path.isAbsolute(b.session.cwd) ? { cwd: b.session.cwd } : {}),
+          ...(op === 'handoff' && noteReaders.has(b.key) ? { after_note: true } : {}), ...(origin ? { origin } : {}) };
+      }
     }
     return forward(op, args, caller);
   }
@@ -1160,8 +1203,23 @@ function boardAnswer(board) {
       if (gone.length) dropNotices(k, gone);
     }
     for (const e of entries) {
-      if (!e.entry.caps.notes || !notices.has(e.key)) continue;
-      const list = [...notices.get(e.key).values()].reverse().map(({ note_id, from_handle, from_provider, from_folder }) => ({ note_id, from_handle, from_provider, from_folder }));
+      if (e.wrapped || !e.entry.repo_key) continue;
+      keyRepo.delete(e.key);
+      keyRepo.set(e.key, e.entry.repo_key);
+      while (keyRepo.size > 300) keyRepo.delete(keyRepo.keys().next().value);
+    }
+    const nextSuccessors = new Map();
+    for (const [k, m] of notices) {
+      if (nextBook.has(k) || ![...m.values()].some(Hook.isSystemNotice)) continue;
+      const repo = keyRepo.get(k);
+      const live = repo ? entries.filter((e) => !e.wrapped && e.entry.repo_key === repo && e.entry.caps.notes).sort((a, b) => b.started - a.started)[0] : null;
+      if (live) nextSuccessors.set(k, live.key);
+    }
+    successors = nextSuccessors;
+    for (const e of entries) {
+      const inherited = [...successors].filter(([, live]) => live === e.key).flatMap(([k]) => [...notices.get(k).values()].filter(Hook.isSystemNotice));
+      if (!e.entry.caps.notes || (!notices.has(e.key) && !inherited.length)) continue;
+      const list = [...(notices.get(e.key) ?? new Map()).values(), ...inherited].reverse().map(({ note_id, from_handle, from_provider, from_folder }) => ({ note_id, from_handle, from_provider, from_folder }));
       e.entry.notices = list;
       // Exactly the set the hook will name, so its receipt's version can be matched back to these notes.
       const named = Hook.noticesOf(e.entry);
@@ -1172,7 +1230,7 @@ function boardAnswer(board) {
       shown.set(version, named.map((n) => n.note_id));
       while (shown.size > 5) shown.delete(shown.keys().next().value);
     }
-    for (const k of noticeShown.keys()) if (!notices.has(k)) noticeShown.delete(k);
+    for (const k of noticeShown.keys()) if (!notices.has(k) && ![...successors.values()].includes(k)) noticeShown.delete(k);
     for (const k of firstSeen.keys()) if (!nextVerdicts.has(k)) firstSeen.delete(k);
     if (at - lastPrune >= CLASSIFY_TTL_MS) { if (ownersLoad) schedulePrune(); else loadOwners(); }
     for (const [k, v] of procChecks) if (at - v.at >= VERIFY_TTL_MS) procChecks.delete(k);
@@ -1242,16 +1300,20 @@ function boardAnswer(board) {
     if (timer || stopped) return;
     timer = setTimer(() => { timer = null; refresh(); }, DEBOUNCE_MS);
   }
+  let resultTick = null;
   function start() {
     stopped = false;
     if (!heartbeat) heartbeat = setInterval(() => { schedule(); syncNotes().catch(() => {}); }, HEARTBEAT_MS);
     if (heartbeat.unref) heartbeat.unref();
+    if (!resultTick) resultTick = setInterval(() => { if (now() < resultSyncUntil) syncNotes().catch(() => {}); }, RESULT_SYNC_MS);
+    if (resultTick.unref) resultTick.unref();
     schedule();
   }
   function stop() {
     stopped = true;
     if (timer) { clearTimer(timer); timer = null; }
     if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+    if (resultTick) { clearInterval(resultTick); resultTick = null; }
   }
   // The exclude list changed: drop every cached verdict and rebuild.
   function invalidate() { classified.clear(); rootsCache = null; schedule(); }
