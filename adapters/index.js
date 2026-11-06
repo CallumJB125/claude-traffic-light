@@ -19,8 +19,13 @@ const EXTRAS = [require('./copilot.js'), require('./goose.js'), require('./cline
 // POST /hook/generic) but is not in list(), which uninstall and the rename walk.
 const BY_ID = new Map([...ADAPTERS, ...EXTRAS, require('./generic.js')].map((a) => [a.id, a]));
 
+// MCP registrations for tools whose bus tools Plexiform adds itself (src/enrol/registry.js): one per tool, by id.
+// Claude Code and Codex register through mcp-install.js and codex-mcp.js instead.
+const MCP_CLIENTS = new Map([require('./gemini-mcp.js'), require('./cursor-mcp.js'), require('./vscode-mcp.js'), require('./claude-desktop-mcp.js'), require('./hermes-mcp.js')].map((a) => [a.id, a]));
+const mcpClient = (id) => MCP_CLIENTS.get(String(id || '')) || null;
+
 const get = (id) => BY_ID.get(String(id || '')) || null;
 const list = () => ADAPTERS.slice();
 const extras = () => EXTRAS.slice();
 
-module.exports = { get, list, extras, Runtime: require('./runtime.js') };
+module.exports = { get, list, extras, mcpClient, mcpClients: () => [...MCP_CLIENTS.keys()], Runtime: require('./runtime.js') };

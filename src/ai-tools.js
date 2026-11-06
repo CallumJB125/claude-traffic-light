@@ -11,6 +11,7 @@ const Adapters = require('../adapters/index.js');
 const Runtime = require('../adapters/runtime.js');
 const Hermes = require('../adapters/hermes-activity.js');
 const Generic = require('./ai-tools-generic.js');
+const Registry = require('./enrol/registry.js');
 const MATRIX = require('./provider-capabilities.json');
 
 // installUrl: each tool's own docs/repo, opened in the browser only when the
@@ -109,7 +110,9 @@ function friendly(err, file, home) {
 function create({
   home, runtime, fs = nodeFs, platform = process.platform, dataDir = runtime.dataDir, sessionsDir = path.join(dataDir, 'sessions'),
   claudeAskFromWidget = () => false, onClaudeHooks = () => {}, blocked = () => null, handoverSources = () => [], now = Date.now,
-  pathDirs = () => String(process.env.PATH || '').split(path.delimiter), run = execFile,
+  pathDirs = () => String(process.env.PATH || '').split(path.delimiter), run = execFile, codexHome = path.join(home, '.codex'),
+  // The agent bus enrolment (src/mcp-auto.js's registry) when main has it; else a read-only one over the same record.
+  enrolment = null,
   // A GUI app's PATH is short; tools usually live in these.
   extraBinDirs = [path.join(home, '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'],
 } = {}) {
@@ -415,7 +418,21 @@ function create({
   }
   const fixRunner = () => { const r = Generic.installRunner({ home, runtime, fs, platform }); return r.ok ? { ok: true, message: 'Reinstalled plexiform-run.' } : { ok: false, error: r.error }; };
 
-  return { scan, quick, preview, connect, connectAll, undo, disconnect, addCustom, removeCustom, fixRunner, installUrl: (id) => BY_ID.get(id)?.installUrl || null, ids: () => TOOLS.map((t) => t.id) };
+  // Connections (BACKBONE-AUDIT-AND-PLAN §3.6): per tool, its MCP entry, hooks, instruction block and bus tier.
+  const registry = enrolment || Registry.create({ home, rootDir: dataDir, codexHome, fs });
+  function connections() {
+    const hooks = {};
+    for (const r of toolRows()) if (r.installed) hooks[r.id] = !!r.connected;
+    return registry.caps({ hooks });
+  }
+  // What Fix would write, as the same diff the Connect preview shows.
+  function connectionPreview(id) {
+    const p = registry.plan(id);
+    if (!p.ok) return { ok: false, id, error: p.error || 'Nothing to change.' };
+    return { ok: true, id, files: p.files.map((f) => ({ file: tilde(f.file, home), existed: f.before !== null, ...diffLines(f.before || '', f.after) })) };
+  }
+
+  return { scan, quick, preview, connect, connectAll, undo, disconnect, addCustom, removeCustom, fixRunner, connections, connectionPreview, installUrl: (id) => BY_ID.get(id)?.installUrl || null, ids: () => TOOLS.map((t) => t.id) };
 }
 
 module.exports = { create, diffLines, summary, nextStep, TOOLS };
