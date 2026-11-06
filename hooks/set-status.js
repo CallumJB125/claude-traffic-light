@@ -100,7 +100,18 @@ const awarenessTurn = signal === 'prompt-submit' && !gateDeny && !process.env.PL
   ? require('./awareness.js').check({ adapter: 'claude', event: 'UserPromptSubmit', payload: data, root: ROOT_DIR }) : null;
 // Mid-turn notes notice (BACKBONE plan G1): a tool call that finished may carry the one-line notice of new notes,
 // rate-limited inside awareness.js. Decided from files alone, like the turn's; with nothing new the fast path stays.
-const awarenessMid = signal === 'tool-done' && !gateDeny && !process.env.PLEXIFORM_NO_FAST
+// midTurn only ever speaks for a non-empty notices list in roster.json, so one bounded read and a regex decide
+// whether loading awareness.js (~10 ms) is worth it on this tool call. No roster (the app is not running), one over
+// awareness.js's own size cap, or no notice for anyone: skipped.
+function rosterHasNotices() {
+  try {
+    const file = path.join(ROOT_DIR, 'awareness', 'roster.json');
+    const st = fs.statSync(file);
+    if (!st.isFile() || st.size > 64 * 1024) return false;
+    return /"notices"\s*:\s*\[\s*[^\]\s]/.test(fs.readFileSync(file, 'utf8'));
+  } catch { return false; }
+}
+const awarenessMid = signal === 'tool-done' && !gateDeny && !process.env.PLEXIFORM_NO_FAST && rosterHasNotices()
   ? require('./awareness.js').midTurn({ adapter: 'claude', payload: data, root: ROOT_DIR }) : null;
 // The app's own in-process run sets NO_FAST: it must never forward to itself.
 const fastEndpoint = !gateDeny && !needsTurnBrief && !awarenessTurn && !awarenessMid && !process.env.PLEXIFORM_NO_FAST && Fast.eligible(signal, data) ? Fast.readEndpoint(ROOT_DIR) : null;

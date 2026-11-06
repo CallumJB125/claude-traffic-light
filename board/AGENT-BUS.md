@@ -106,10 +106,13 @@ A hand-off naming an open provider is refused at once: `PROVIDER_UNAVAILABLE {pr
 ### 7.5 Results come back (G5)
 Main passes the verified asker (`caller.origin = {key, handle, board?}`) on a hand-off, and the offer keeps it. When the hand-off ends (`done`, `failed`, `expired`, `outcome_unknown`), the dispatcher writes one note from `plexiform` to that session (`notes.system`, one per hand-off and recipient, 24 h). The note is one line of outcome with the `handoff_id`, the start of the summary, and a pointer to `bus_wait`; it is read framed like any note.
 - The notice reads "N hand-off results waiting".
-- If the asker has ended, main shows and reads the result for the newest live session in the same repo; otherwise it stays on the asker's key until it expires, and on the card through `bus_read`.
+- If the asker has ended, main shows and reads the result for the newest live session in the same repo; otherwise it stays on the asker's key until it expires, and on the card through `bus_read`. In detail (`src/agent-awareness.js`, successors):
+  - The successor is picked again with every roster: among live, non-wrapped sessions with notes on whose `repo_key` equals the ended asker's, the one that started last. Main remembers each session's `repo_key` past its end (at most 300 keys), so an asker it never saw in a roster has no successor.
+  - Only Plexiform's own result notes pass on (`from: plexiform`, `isSystemNotice`); a peer's `bus_note` to the ended session never does and expires on its key.
+  - The successor's notice counts them with its own; its `bus_notes` (no `note_id`, not `status`) reads up to 5 in all, each read and acknowledged under the ended session's key, so the helper's read receipts stay per recipient.
 - Main syncs notes every 15 s for 30 min after a hand-off.
 
-The origin (which session the result note goes to) reaches the helper only over its parentPort, which only main holds: `tasks-service` sends a hand-off carrying `caller.origin` through `busMain` once the socket is up and has the bus context, and `engine.bus` drops an origin that arrives over `tasks.sock`, so no same-user process can aim a result note at a session. `unbound` and a trace id are accepted on either channel. Over parentPort a hand-off's refusal keeps its wording; the note ops still return a code only.
+The origin (which session the result note goes to) reaches the helper only over its parentPort, which only main holds: `tasks-service` sends a hand-off carrying `caller.origin` through `busMain` once the socket is up and has the bus context, and `engine.bus` drops an origin that arrives over `tasks.sock`, so no same-user process can aim a result note at a session. The same holds for `bound`: through the socket every caller is unbound (security review #1), so main sends every bound caller's `hello` and hand-off over parentPort, origin or not. A trace id is accepted on either channel. Over parentPort a hand-off's refusal keeps its wording; the note ops still return a code only.
 
 ### 7.6 Which board (G8)
 `src/work-capture.js routeBoard`: the first rule that matches wins, and every answer carries `why` (`BOARD_WHY`).
