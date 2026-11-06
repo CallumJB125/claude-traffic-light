@@ -1,6 +1,6 @@
 'use strict';
 // Refuse debugging before loading any app code or connecting to the keeper.
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, nativeTheme, Menu } = require('electron');
 const blocked = ['remote-debugging-port', 'remote-debugging-pipe', 'remote-debugging-address', 'remote-allow-origins', 'js-flags', 'inspect', 'inspect-brk', 'inspect-port', 'debug'];
 if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) => /^--(?:inspect|remote-debugging|debug)/.test(x))) { app.exit(1); } else {
   const fs = require('node:fs');
@@ -9,10 +9,12 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
   const { execFile } = require('node:child_process');
   const manifest = require('./manifest.json');
   const { KeeperClient } = require('./keeper-client');
-  const { readMetadata } = require('./metadata');
+  const { readMetadata, readSpend, readCi, gitInfo, trackTimeline } = require('./metadata');
   const native = require('./native/keeper-socket/keeper-socket.node');
   let window, client, sessions = [], rows = [], active = null, channel = null, selectedEpoch = 0, attaching = null;
   let polling = null, refreshQueued = false, quitting = false, finishStartup;
+  let observed = [], totals = { spendToday: null, unpricedTurns: 0, day: null };
+  const history = new Map(), gitCache = new Map();
   const startup = new Promise(resolve => { finishStartup = resolve; });
   app.setName(manifest.development ? 'Plexiform Terminal Development Preview' : 'Plexiform Terminal');
   const labArg = process.argv.find((x) => x.startsWith('--lab-state-root='));
@@ -26,7 +28,36 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
   if (!app.requestSingleInstanceLock()) app.quit();
   else {
     const html = path.join(__dirname, 'renderer/index.html');
-    const snapshot = () => ({ sessions, rows, development: manifest.development, connected: Boolean(client && !client.socket.destroyed) });
+    const snapshot = () => ({ sessions, rows, totals, development: manifest.development, connected: Boolean(client && !client.socket.destroyed) });
+    const dataDir = () => labArg ? path.join(app.getPath('userData'), 'fixture-data') : path.join(os.homedir(), '.claude-traffic-light');
+    // Folder git status is cached and refreshed in the background so a slow
+    // repository never delays the session list.
+    function git(cwd) {
+      if (!cwd) return null;
+      const entry = gitCache.get(cwd), now = Date.now();
+      if (!entry || (!entry.pending && now - entry.at > 15000)) {
+        if (gitCache.size > 64 && !entry) gitCache.delete(gitCache.keys().next().value);
+        const next = { at: now, info: entry?.info ?? null, pending: true }; gitCache.set(cwd, next);
+        void gitInfo(cwd).then((info) => { next.info = info; next.at = Date.now(); next.pending = false; publish(); });
+      }
+      return entry?.info ?? null;
+    }
+    function publish() {
+      const spend = readSpend(dataDir()), ci = readCi(dataDir());
+      totals = { spendToday: spend.usd, unpricedTurns: spend.unpricedTurns, day: spend.day };
+      const byPid = new Map(sessions.filter((s) => Number.isSafeInteger(s.pid) && s.pid > 1).map((s) => [s.pid, s.sessionId]));
+      for (const row of observed) {
+        const info = git(row.cwd);
+        row.tabId = row.pid && byPid.has(row.pid) ? byPid.get(row.pid) : null;
+        row.branch = info?.branch ?? null; row.changes = info ? { count: info.changed, files: info.files } : null;
+        row.ci = row.branch && ci.get(row.branch) ? { ...ci.get(row.branch), ago_ms: Date.now() - ci.get(row.branch).at } : null;
+        const usd = row.cwd ? spend.byCwd.get(row.cwd) : undefined;
+        row.cost = Number.isFinite(usd) ? { usd: Math.round(usd * 100) / 100, scope: 'folder-today' } : null;
+      }
+      rows = observed.map((row) => ({ ...row }));
+      sessions = sessions.map((s) => { const info = git(s.cwd); return { ...s, branch: info?.branch ?? null, changes: info ? { count: info.changed, files: info.files } : null }; });
+      send('state', snapshot());
+    }
     const send = (event, data) => { if (window && !window.isDestroyed()) window.webContents.send(`terminal:${event}`, data); };
     const notice = (s) => send('notice', String(s).slice(0, 400));
     const assertDocument = (event, focused = false) => {
@@ -35,16 +66,16 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
     };
     const handle = (name, focused, fn) => ipcMain.handle(`terminal:${name}`, async (event, value) => { assertDocument(event, focused); try { return await fn(value, event); } catch (e) { notice(e.message); return { error: e.message }; } });
     function refresh() {
-      if (!client) return Promise.resolve();
       if (polling) { refreshQueued = true; return polling; }
       polling = (async () => {
         do {
           refreshQueued = false;
           try {
-            const result = await client.call('list'); sessions = result.sessions || [];
+            // Observed agents stay visible even when the keeper is unavailable.
+            if (client && !client.socket.destroyed) { try { sessions = (await client.call('list')).sessions || []; } catch (e) { notice(e.message); } } else sessions = sessions.map((s) => ({ ...s, state: s.state === 'running' ? 'unknown' : s.state }));
             const metadataDir = labArg ? path.join(app.getPath('userData'), 'fixture-metadata') : path.join(os.homedir(), '.claude-traffic-light/sessions');
-            rows = readMetadata(metadataDir); send('state', snapshot());
-            const needs = rows.filter((r) => r.bucket === 'needs' && r.age_ms !== null && r.age_ms < 90000).length;
+            observed = readMetadata(metadataDir); trackTimeline(history, observed); publish();
+            const needs = rows.filter((r) => r.bucket === 'needs').length;
             app.dock?.setBadge(needs ? String(needs) : '');
           } catch (e) { notice(e.message); }
         } while (refreshQueued);
@@ -70,6 +101,12 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
       }
       throw Error(`${kind === 'claude' ? 'Claude Code' : 'Codex CLI'} is not installed in a supported location. Install and sign in to it first.`);
     }
+    let reconnecting = null;
+    handle('reconnect', true, async () => {
+      if (client && !client.socket.destroyed) return { ok: true };
+      reconnecting ??= (async () => { client = null; active = null; channel = null; ++selectedEpoch; await connect(); })().finally(() => { reconnecting = null; });
+      await reconnecting; return { ok: true };
+    });
     handle('ready', false, async () => { await startup; await refresh(); return snapshot(); });
     handle('spawn', true, async (value) => {
       const kind = value?.kind; const exe = executable(kind);
@@ -136,14 +173,16 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
         if (e.channel === channel && active) send('data', { sessionId: active, data: e.data.toString('base64') });
       });
       client.on('event', (e) => { if (e.ev === 'session.added' || e.ev === 'session.exited') refresh(); });
-      client.on('notice', notice); client.on('closed', () => { channel = null; send('state', snapshot()); notice('Keeper disconnected. Reopen the preview to reconnect; tabs were not retried.'); });
+      const current = client; client.on('notice', notice); client.on('closed', () => { if (client !== current) return; channel = null; send('state', snapshot()); notice('Session Keeper disconnected. Choose Reconnect in the sidebar; tabs were not retried.'); });
       await refresh();
     }
     app.on('second-instance', () => { window?.show(); window?.focus(); });
     app.on('before-quit', () => { quitting = true; client?.close(); });
     app.on('window-all-closed', () => app.quit());
     app.whenReady().then(async () => {
-      window = new BrowserWindow({ width: 1280, height: 820, minWidth: 760, minHeight: 520, show: false, title: manifest.development ? 'Plexiform Terminal · Development Preview' : 'Plexiform Terminal', backgroundColor: '#151918', webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false, webSecurity: true, devTools: false } });
+      // No View menu: ⌘0–9, ⌘J, ⌘P and ⌘T belong to the window, and reload/zoom are not offered.
+      Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
+      window = new BrowserWindow({ width: 1360, height: 860, minWidth: 820, minHeight: 540, show: false, titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 18 }, title: manifest.development ? 'Plexiform Terminal · Development Preview' : 'Plexiform Terminal', backgroundColor: nativeTheme.shouldUseDarkColors ? '#0e0f12' : '#f7f7f8', webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false, webSecurity: true, devTools: false } });
       keepSpellcheckOffline(window.webContents.session);
       window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
       window.webContents.on('will-navigate', (e) => e.preventDefault());
@@ -178,7 +217,7 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
           if (!output.includes('\r\nPF_PACKAGED_RECEIPT\r\n')) throw Error('Exact shell receipt was not observed.');
           await refresh();
           await new Promise(r => setTimeout(r, 300));
-          const visible = await window.webContents.executeJavaScript("Boolean(document.querySelector('.xterm-screen')) && !document.getElementById('terminal').hidden && document.getElementById('empty').hidden && document.querySelectorAll('[role=tab]').length === 1");
+          const visible = await window.webContents.executeJavaScript("Boolean(document.querySelector('.xterm-screen')) && !document.getElementById('terminal').hidden && !document.getElementById('terminal-view').hidden && document.querySelectorAll('[data-tab-id]').length === 1");
           if (!visible) throw Error('Terminal renderer is absent.');
           const screenshot = await window.webContents.capturePage();
           fs.writeFileSync(path.join(app.getPath('userData'), 'packaged-smoke.png'), screenshot.toPNG(), { mode: 0o600 });

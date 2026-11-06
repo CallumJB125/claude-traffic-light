@@ -12,41 +12,81 @@
   <script defer src="app.js"></script>
 </head>
 <body>
-  <header class="toolbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">P</span><div><strong>Plexiform Terminal</strong><span class="subtitle">A place for your agents to work</span></div></div>
-    <div class="launch-actions" aria-label="Start a session">
-      <button data-spawn="shell" class="primary" title="Choose a folder and start a shell (⌘T)"><span aria-hidden="true">＋</span> New shell</button>
-      <button data-spawn="claude">Claude</button>
-      <button data-spawn="codex">Codex</button>
-      <button id="toggle-overview" aria-expanded="true" aria-controls="overview" title="Toggle agents overview">Overview</button>
-    </div>
-  </header>
-  <div id="development" class="development" hidden>Development build · local testing only. Public signing and notarization are not verified.</div>
-  <main class="workspace">
-    <section class="terminal-workspace" aria-label="Terminal sessions">
-      <nav id="tabs" class="tabs" role="tablist" aria-label="Sessions"></nav>
-      <div class="session-bar" id="session-bar" hidden>
-        <div class="session-location"><span id="session-kind" class="kind"></span><span id="session-cwd" class="path"></span></div>
-        <div class="session-actions"><button id="detach" title="Hide this tab and keep its process running">Detach</button><button id="stop" class="danger" title="Stop this session's process">Stop…</button></div>
+  <div class="app">
+    <aside class="sidebar" aria-label="Sessions">
+      <div class="sidebar-top drag">
+        <span id="development" class="dev-pill" title="Development build for local testing. Not signed or notarized for public release." hidden>Preview</span>
       </div>
-      <div id="terminal" role="tabpanel" aria-label="Terminal output" hidden></div>
-      <div id="empty" class="empty-state">
-        <div class="empty-mark" aria-hidden="true">⌘</div>
-        <h1>Your terminal. Your agents.</h1>
-        <p>Start a shell, Claude, or Codex in a folder you choose.<br>Opening this window starts no shell or agent.</p>
-        <button data-spawn="shell" class="primary">Choose a folder & start a shell</button>
-        <div class="persistence"><span aria-hidden="true">◈</span><p>Sessions run in the Session Keeper.<br>Closing this window leaves them running.</p></div>
+      <div class="sidebar-nav">
+        <button id="nav-overview" class="nav-item" aria-current="page"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1.2"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1.2"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1.2"/><rect x="9" y="9" width="4.5" height="4.5" rx="1.2"/></svg><span>Overview</span><kbd>⌘0</kbd></button>
+        <button id="quick-open" class="nav-item"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25"/><path d="M10.2 10.2 13.5 13.5"/></svg><span>Jump to…</span><kbd>⌘P</kbd></button>
+        <button id="next-needs" class="nav-item needs-jump" hidden><span class="ind" data-s="needs" aria-hidden="true"></span><span id="next-needs-label">Next waiting</span><kbd>⌘J</kbd></button>
       </div>
-      <footer class="terminal-footer"><span id="connection">Connecting to Session Keeper…</span><span id="dimensions"></span></footer>
-    </section>
-    <aside id="overview" class="overview" aria-label="Agents overview">
-      <div class="overview-heading"><div><h2>Agents overview</h2><p id="overview-summary">Waiting for observed activity</p></div><span id="agent-count" class="count">—</span></div>
-      <div id="attention" class="attention" hidden></div>
-      <div class="overview-section"><h3>Keeper sessions <span id="keeper-count">0</span></h3><div id="keeper-sessions"></div></div>
-      <div class="overview-section"><h3>Observed agent activity</h3><p class="source-note">Reported by Plexiform. Missing telemetry is shown as unavailable.</p><div id="agents"></div></div>
-      <div class="overview-footnote">Input goes only to the selected terminal while this window is focused.<br>⌘T new shell · ⌘1–9 switch tabs</div>
+      <nav id="session-list" class="session-list" aria-label="Agent sessions and terminals"></nav>
+      <div class="sidebar-foot">
+        <div class="launch" role="group" aria-label="Start a session">
+          <button data-spawn="shell" title="Choose a folder and start a shell (⌘T)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9"/></svg>Shell</button>
+          <button data-spawn="claude" title="Choose a folder and start Claude Code">Claude</button>
+          <button data-spawn="codex" title="Choose a folder and start Codex">Codex</button>
+        </div>
+        <div class="keeper-state"><span id="keeper-dot" class="keeper-dot" aria-hidden="true"></span><span id="keeper-state">Connecting to Session Keeper…</span><button id="reconnect" class="link" hidden>Reconnect</button></div>
+      </div>
     </aside>
-  </main>
+
+    <main class="main">
+      <section id="overview-view" class="view overview" aria-label="Agents overview">
+        <header class="view-head drag">
+          <div class="head-text"><h1>Overview</h1><p id="overview-summary" class="sub"></p></div>
+        </header>
+        <div class="scroll">
+          <div class="page">
+            <div id="stats" class="stats"></div>
+            <section class="block" aria-labelledby="queue-title">
+              <div class="block-head"><h2 id="queue-title">Needs you</h2><span id="queue-count" class="count"></span></div>
+              <div id="queue" class="queue"></div>
+            </section>
+            <section class="block" aria-labelledby="agents-title">
+              <div class="block-head"><h2 id="agents-title">Agents</h2><span id="agent-count" class="count"></span><span class="block-note">Reported by Plexiform hooks · read-only</span></div>
+              <div id="agents" class="cards"></div>
+            </section>
+            <section id="terminals-block" class="block" aria-labelledby="terminals-title">
+              <div class="block-head"><h2 id="terminals-title">Terminals</h2><span id="keeper-count" class="count"></span><span class="block-note">Kept running by the Session Keeper</span></div>
+              <div id="keeper-sessions" class="terminal-list"></div>
+            </section>
+            <p class="footnote">Input goes only to the selected terminal while this window is focused. Sessions started in other apps are shown here but never receive input from Plexiform Terminal.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="terminal-view" class="view terminal-view" aria-label="Terminal" hidden>
+        <header class="view-head drag session-bar">
+          <div class="session-title">
+            <span id="session-ind" class="ind" aria-hidden="true"></span>
+            <div class="session-text">
+              <div class="session-line"><strong id="session-project"></strong><span id="session-tool" class="chip"></span><span id="session-branch" class="chip mono" hidden></span></div>
+              <div id="session-doing" class="session-doing"></div>
+            </div>
+          </div>
+          <div class="session-actions"><button id="detach" title="Hide this terminal and keep its process running">Detach</button><button id="stop" class="danger" title="End this terminal's process">Stop…</button></div>
+        </header>
+        <div class="terminal-frame"><div id="terminal" role="region" aria-label="Terminal output" hidden></div></div>
+        <footer class="terminal-footer"><span id="connection">Connecting to Session Keeper…</span><span id="session-cwd" class="mono"></span><span id="dimensions" class="mono"></span></footer>
+      </section>
+
+      <section id="detail-view" class="view detail" aria-label="Session details" hidden>
+        <header class="view-head drag"><div id="detail-head" class="detail-head"></div></header>
+        <div class="scroll"><div id="detail-body" class="page"></div></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="palette" class="palette-backdrop" hidden>
+    <div class="palette" role="dialog" aria-modal="true" aria-label="Jump to a session">
+      <input id="palette-input" type="text" placeholder="Jump to a session, project or branch…" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="true" aria-controls="palette-list">
+      <div id="palette-list" class="palette-list" role="listbox" aria-label="Sessions and actions"></div>
+      <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> choose</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div>
+    </div>
+  </div>
   <div id="notice" class="notice" role="status" aria-live="polite" hidden><span id="notice-text"></span><button id="dismiss-notice" aria-label="Dismiss notice">×</button></div>
 </body>
 </html>

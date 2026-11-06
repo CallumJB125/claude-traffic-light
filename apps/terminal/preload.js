@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('terminal', Object.freeze({
   resize: value => invoke('resize', value),
   detach: sessionId => invoke('detach', { sessionId }),
   stop: sessionId => invoke('stop', { sessionId }),
+  reconnect: () => invoke('reconnect'),
   onData: callback => subscribe('data', callback),
   onState: callback => subscribe('state', callback),
   onNotice: callback => subscribe('notice', callback),
