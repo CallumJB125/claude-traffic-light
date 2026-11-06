@@ -79,15 +79,47 @@ function create({ home, rootDir, codexHome = path.join(home, '.codex'), launch =
   }
   // Claude Code's and Codex's own settings carry Remote Control, hooks and trust: this module never writes them.
   // Their MCP entries go through mcp-install.js (one key) and `codex mcp add`; only AGENTS.md is ours to edit here.
-  const forbidden = (file) => {
-    const f = path.resolve(file);
-    return f === path.join(home, '.claude.json') || f.startsWith(`${path.join(home, '.claude')}${path.sep}`)
-      || [path.join(codexHome, 'config.toml'), path.join(codexHome, 'hooks.json')].includes(f);
+  // Writes go through symlinks (writeTextAtomic), so a path is judged by where it really lands: the file's realpath,
+  // or its nearest existing folder's for a file not made yet. A dotfiles AGENTS.md linked to ~/.claude/CLAUDE.md is
+  // refused, as is a home or ~/.claude that is itself a link.
+  const realOf = (p) => {
+    let cur = path.resolve(p);
+    const rest = [];
+    for (;;) {
+      try { return path.join(fs.realpathSync(cur), ...rest); } catch { /* not there yet: try its folder */ }
+      const up = path.dirname(cur);
+      if (up === cur) return path.resolve(p);
+      rest.unshift(path.basename(cur));
+      cur = up;
+    }
   };
+  const forbidden = (file) => {
+    const files = [path.join(home, '.claude.json'), path.join(codexHome, 'config.toml'), path.join(codexHome, 'hooks.json')];
+    const dirs = [path.join(home, '.claude')];
+    const bad = new Set([...files, ...files.map(realOf)]);
+    const badDirs = [...dirs, ...dirs.map(realOf)];
+    return [path.resolve(file), realOf(file)].some((f) => bad.has(f) || badDirs.some((d) => f === d || f.startsWith(`${d}${path.sep}`)));
+  };
+  // A new file is made with link(), which fails if anything appeared there since the read: never written over.
+  function createExclusive(file, text, mode) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.plexiform-tmp.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
+    fs.writeFileSync(tmp, text, { flag: 'wx', mode });
+    try {
+      fs.chmodSync(tmp, mode);
+      fs.linkSync(tmp, file);
+      return true;
+    } catch (e) {
+      if (e.code === 'EEXIST') return false;
+      throw e;
+    } finally {
+      try { fs.unlinkSync(tmp); } catch { /* gone */ }
+    }
+  }
   // change(src|null) → {text: string|null (delete), changed, ...extra}. Written only if nobody wrote in between.
   function edit(file, change, { mode = 0o600 } = {}) {
-    if (forbidden(file)) throw err('FORBIDDEN', `${tilde(file, home)} is not Plexiform's to edit here`);
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (forbidden(file)) throw err('FORBIDDEN', `${tilde(file, home)} is not Plexiform's to edit here`);
       const readAt = Runtime.mtimeOf(file, fs);
       const src = readText(file);
       const out = change(src);
@@ -97,7 +129,7 @@ function create({ home, rootDir, codexHome = path.join(home, '.codex'), launch =
         fs.rmSync(file, { force: true });
         return { ...out, src };
       }
-      if (Runtime.writeTextAtomic(file, out.text, fs, src === null ? undefined : readAt, { newMode: mode })) return { ...out, src };
+      if (src === null ? createExclusive(file, out.text, mode) : Runtime.writeTextAtomic(file, out.text, fs, readAt, { newMode: mode })) return { ...out, src };
     }
     throw err('BUSY', `${file} kept changing; try again`);
   }
@@ -110,7 +142,7 @@ function create({ home, rootDir, codexHome = path.join(home, '.codex'), launch =
       return hit ? { marker: hit.marker, body: hit.body } : undefined;
     }
     let v;
-    try { v = Jsonc.get(src, t.key, NAME); } catch (e) { throw err('UNREADABLE', `${e.message}`); }
+    try { v = Jsonc.get(src, t.key, NAME); } catch (e) { throw err(e.code === 'DUPLICATE' ? 'CONFLICT' : 'UNREADABLE', `${e.message}`); }
     return v === undefined ? undefined : { marker: McpInstall.markerOf(v), value: v };
   }
   function sameAs(t, src, cur, want) {
@@ -120,7 +152,7 @@ function create({ home, rootDir, codexHome = path.join(home, '.codex'), launch =
 
   function mcpState(t, src, want) {
     let cur;
-    try { cur = readEntry(t, src); } catch { return 'error'; }
+    try { cur = readEntry(t, src); } catch (e) { return e.code === 'CONFLICT' ? 'conflict' : 'error'; }
     if (cur === undefined) return 'missing';
     if (!cur.marker) return 'conflict';
     const ours = want ? McpInstall.markerOf(want) : null;
@@ -197,9 +229,27 @@ function create({ home, rootDir, codexHome = path.join(home, '.codex'), launch =
   }
 
   // ---- instruction block ----
+  // Two tools' files can be one file (GEMINI.md linked to AGENTS.md): one block, held by whichever tool's record has
+  // it (the earlier tool in the table when both do); the other is 'shared' and never rewrites or removes it.
+  function sharedWith(t, rec) {
+    const real = realOf(instrOf(t));
+    const mine = !!rec.tools[t.id]?.instructions;
+    for (const u of TOOLS) {
+      if (u === t) { if (mine) return null; continue; }
+      const f = rec.tools[u.id]?.instructions?.file;
+      if (f && realOf(f) === real) return u;
+    }
+    return null;
+  }
+
   function enrolInstr(t, rec) {
     const file = instrOf(t);
     if (!file) return { state: t.instructionsVia || 'none', changed: false };
+    const holder = sharedWith(t, rec);
+    if (holder) {
+      if (rec.tools[t.id]) delete rec.tools[t.id].instructions;
+      return { state: 'shared', with: holder.id, changed: false };
+    }
     const want = Instr.block(t.tier);
     const r = slot(rec, t.id);
     let out;
@@ -208,7 +258,7 @@ function create({ home, rootDir, codexHome = path.join(home, '.codex'), launch =
         const x = Instr.upsert(src, want, r.instructions?.sep ?? null);
         return x.changed ? { text: x.text, changed: true, sep: x.sep, created: src === null } : { changed: false };
       }, { mode: 0o644 });
-    } catch (e) { return { state: e.code === 'CONFLICT' ? 'conflict' : 'error', changed: false }; }
+    } catch (e) { return { state: e.code === 'CONFLICT' ? 'conflict' : 'error', error: e.code || 'error', changed: false }; }
     const prev = r.instructions || {};
     if (!out.changed) { if (!r.instructions) r.instructions = { file, version: want.version, sep: null, created: false, added_at: null, adopted: true }; return { state: 'ours', changed: false }; }
     r.instructions = { file, version: want.version, sep: prev.sep !== undefined && prev.sep !== null ? prev.sep : out.sep, created: prev.created || out.created,
@@ -321,7 +371,8 @@ function create({ home, rootDir, codexHome = path.join(home, '.codex'), launch =
         }
       }
       const ifile = instrOf(t);
-      if (ifile && readRecord().instructionsOff !== true) {
+      const rec = readRecord();
+      if (ifile && rec.instructionsOff !== true && !sharedWith(t, rec) && !forbidden(ifile)) {
         const src = readText(ifile);
         const x = Instr.upsert(src, Instr.block(t.tier));
         if (x.changed) files.push({ file: ifile, before: src, after: x.text });
@@ -351,6 +402,8 @@ function create({ home, rootDir, codexHome = path.join(home, '.codex'), launch =
     const file = instrOf(t);
     if (!file) return t.instructionsVia || 'none';
     if (rec.instructionsOff === true) return 'off';
+    if (forbidden(file)) return 'refused';
+    if (sharedWith(t, rec)) return 'shared';
     let src;
     try { src = readText(file); } catch { return 'error'; }
     if (src === null) return 'missing';
