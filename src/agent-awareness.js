@@ -948,7 +948,8 @@ function boardAnswer(board) {
     }
     if (op === 'handoff' || op === 'hello') {
       const b = await bindCaller(ident);
-      if (b.bound) caller = { ...caller, provider: b.provider, ...(op === 'handoff' && noteReaders.has(b.key) ? { after_note: true } : {}) };
+      // The folder main verified for this session, not the one its MCP process reported: the repo rule (G3) reads it.
+      if (b.bound) caller = { ...caller, provider: b.provider, ...(typeof b.session.cwd === 'string' && path.isAbsolute(b.session.cwd) ? { cwd: b.session.cwd } : {}), ...(op === 'handoff' && noteReaders.has(b.key) ? { after_note: true } : {}) };
     }
     return forward(op, args, caller);
   }

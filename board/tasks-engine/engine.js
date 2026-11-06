@@ -966,28 +966,50 @@ export class TasksEngine extends EventEmitter {
    * any checkout a Claude or Codex session on this Mac works in. remote_tasks never counts.
    */
   async busRepoAllowed(top, policy = this.#policy()) {
-    if (!top) return false;
+    return (await this.busRepoReason(top, policy)).allowed;
+  }
+
+  /**
+   * Whether a git top is on the agent bus, and why (src/bus-contract.js REPO_REASON / REPO_ALLOWED):
+   * {allowed: true, why} or {allowed: false, reason}. A linked worktree counts as its repository: an "only these"
+   * entry or a live session in any checkout sharing the git-common-dir covers it (BACKBONE plan G3).
+   */
+  async busRepoReason(top, policy = this.#policy(), { cwd = null } = {}) {
     let home;
     try { home = await fs.promises.realpath(this.env.HOME ?? os.homedir()); } catch { home = this.env.HOME ?? os.homedir(); }
+    // No checkout: the home folder (or a protected folder in it) says so first, since that is what the person can act on.
+    if (!top) {
+      let real = null;
+      if (typeof cwd === 'string' && path.isAbsolute(cwd)) try { real = await fs.promises.realpath(cwd); } catch { real = null; }
+      return { allowed: false, reason: real && RepoScope.isProtected(real, home) ? 'PROTECTED' : 'NOT_GIT' };
+    }
     const ctx = this.agentBus?.context ?? {};
     // The "never" half is hooks/repo-scope.js, shared with main's awareness roster and its hook.
-    if (await RepoScope.neverReason(top, { home, dataDirs: [this.dataDir], denyRead: DENY_READ, exclude: ctx.exclude ?? [],
-      git: (dir, args) => this.git(dir, args), realpath: (p) => fs.promises.realpath(p), normalize: normalizeRemoteUrl })) return false;
+    const never = await RepoScope.neverReason(top, { home, dataDirs: [this.dataDir], denyRead: DENY_READ, exclude: ctx.exclude ?? [],
+      git: (dir, args) => this.git(dir, args), realpath: (p) => fs.promises.realpath(p), normalize: normalizeRemoteUrl });
+    if (never) return { allowed: false, reason: never === 'EXCLUDED' ? 'EXCLUDED' : never === 'UNRESOLVED' ? 'NOT_GIT' : 'PROTECTED' };
     const url = await this.git(top, ['config', '--get', 'remote.origin.url']).then((x) => x.trim(), () => null);
     const canon = url ? normalizeRemoteUrl(url) : null;
+    const commonOf = (dir) => this.git(dir, ['rev-parse', '--git-common-dir']).then((x) => fs.promises.realpath(path.resolve(dir, x.trim())), () => null);
+    let common;
     const matches = async (keys) => {
       for (const key of keys) {
         if (!path.isAbsolute(key)) { if (canon && (normalizeRemoteUrl(key) ?? key) === canon) return true; continue; }
         let real = key;
         try { real = await fs.promises.realpath(key); } catch { /* as given */ }
         if (real === top) return true;
+        if (common === undefined) common = await commonOf(top);
+        if (common && common === (await commonOf(real))) return true;
       }
       return false;
     };
-    if (await matches(Object.entries(policy.repos).filter(([, v]) => v?.bus_auto === true).map(([k]) => k))) return true;
-    if (RepoScope.protectedReason(top, home)) return false;
-    if (ctx.scope === 'listed' || ctx.repos?.length) return matches(ctx.repos ?? []);
-    return !!(await this.agentBus?.sessionRepo(top));
+    if (await matches(Object.entries(policy.repos).filter(([, v]) => v?.bus_auto === true).map(([k]) => k))) return { allowed: true, why: 'POLICY' };
+    if (RepoScope.protectedReason(top, home)) return { allowed: false, reason: 'PROTECTED' };
+    // The person's "only these" list restricts even with Automatic on (Preferences says so); it is never widened here.
+    if (ctx.scope === 'listed' || ctx.repos?.length) return (await matches(ctx.repos ?? [])) ? { allowed: true, why: 'LISTED' } : { allowed: false, reason: 'LISTED_ONLY' };
+    const seen = await this.agentBus?.sessionRepo(top);
+    if (seen === 'worktree') return { allowed: true, why: 'WORKTREE' };
+    return seen ? { allowed: true, why: 'SESSION' } : { allowed: false, reason: 'NO_SESSION' };
   }
 
   /** A repo opted in to remote work: policy.repos[<realpath or canonical remote>].remote_tasks === true. */

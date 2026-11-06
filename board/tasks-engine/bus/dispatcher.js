@@ -17,6 +17,9 @@ import { KIND_SENTENCE } from '../../shared/failure.js';
 import { cleanPacketText } from '../../shared/packet-text.js';
 import { normalizeRemoteUrl } from '../../shared/scope.js';
 import untrustedFrame from '../../shared/untrusted-frame.cjs';
+import { createRequire } from 'node:module';
+
+const Contract = createRequire(import.meta.url)('../../../src/bus-contract.js');
 
 const { frame, fold } = untrustedFrame;
 const HOUR_MS = 60 * 60 * 1000;
@@ -63,6 +66,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
   // starts, so a reopened claim or a queued offer never runs on defaults or misses a Preferences-ticked repo.
   const context = { ready: false, settings: null, scope: 'auto', repos: [], exclude: [], folders: [], self: null };
   const tops = new Map(); // dir → its git top, until main's next push (git runs once per folder per push)
+  const commons = new Map(); // git top → its git-common-dir (shared by every linked worktree of one repository)
   const halting = new Set(); // task ids being stopped by a halt mid-start: their end posts no result
   const waiters = new Map(); // handoff_id → Set(resolve)
   const failures = new Map(); // offset → tries
@@ -128,12 +132,43 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
     const kept = Object.entries(sessionRoots()).filter(([r]) => r !== top).sort((a, b) => b[1] - a[1]).slice(0, SESSION_REPO_MAX - 1);
     log.setState('session_repos', Object.fromEntries([[top, now()], ...kept]));
   }
-  /** Whether a live or recent Claude or Codex session on this Mac works in this checkout (automatic mode). */
+  async function commonDir(top) {
+    if (!top) return null;
+    if (commons.has(top)) return commons.get(top);
+    const c = await engine.git(top, ['rev-parse', '--git-common-dir']).then((x) => fs.promises.realpath(path.resolve(top, x.trim())), () => null);
+    if (commons.size >= 1000) commons.clear();
+    commons.set(top, c);
+    return c;
+  }
+  // A live session in another linked worktree of the same repository (BACKBONE plan G3): a worktree made for the
+  // work counts as the repository whose session made it.
+  async function worktreeRepo(top) {
+    const mine = await commonDir(top);
+    if (!mine) return false;
+    for (const f of new Set([...context.folders, ...Object.keys(sessionRoots())])) {
+      if (!path.isAbsolute(f)) continue;
+      let real;
+      try { real = await fs.promises.realpath(f); } catch { continue; }
+      const t = await gitTop(real);
+      if (t && t !== top && (await commonDir(t)) === mine) return true;
+    }
+    return false;
+  }
+  /** Whether a live or recent Claude or Codex session on this Mac works in this checkout (automatic mode): true, 'worktree' (in another worktree of the same repository) or false. */
   async function sessionRepo(top) {
     if (!top) return false;
     if (sessionRoots()[top]) return true;
-    return folderRepo(top);
+    if (await folderRepo(top)) return true;
+    return (await worktreeRepo(top)) ? 'worktree' : false;
   }
+  // repo_enabled with its reason (contract REPO_REASON); halted is reported apart, as before.
+  // offIsReason: hello reports a bus turned off as the repo's reason; a hand-off leaves that to the guard (POLICY_DENIED).
+  async function repoVerdict(top, cwd = null, { offIsReason = false } = {}) {
+    if (offIsReason && !settings().enabled) return { allowed: false, reason: 'BUS_OFF' };
+    if (engine.busRepoReason) return engine.busRepoReason(top, undefined, { cwd });
+    return top && (await engine.busRepoAllowed(top)) ? { allowed: true, why: null } : { allowed: false, reason: top ? 'NO_SESSION' : 'NOT_GIT' };
+  }
+  const repoRefusal = (reason) => ({ reason: reason === 'NOT_GIT' ? 'NO_LOCAL_CHECKOUT' : 'NO_ELIGIBLE_AGENT', repo_reason: reason, message: Contract.REPO_REASON_TEXT[reason] ?? 'The agent bus does not run in this repository on this Mac.' });
 
   // Repos map only from policy keys, the Preferences lists, folders main knows (task folders, live sessions)
   // and repos sessions called from; never a picker. Returns {root} or a refusal.
@@ -149,8 +184,9 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
         if (url && normalizeRemoteUrl(url) === want) { top = t; break; }
       }
     }
-    if (!top) return { reason: 'NO_LOCAL_CHECKOUT', message: 'No registered checkout of that repository on this Mac.' };
-    if (!(await engine.busRepoAllowed(top))) return { reason: 'NO_ELIGIBLE_AGENT', message: 'The agent bus does not run in this repository on this Mac (excluded, a protected folder such as your home folder, ~/.claude or ~/Library, not on the "only these" list, or no Claude or Codex session Plexiform sees works in it).' };
+    if (!top) return typeof target === 'string' && path.isAbsolute(target) ? repoRefusal((await repoVerdict(null, target)).reason) : { reason: 'NO_LOCAL_CHECKOUT', message: 'No registered checkout of that repository on this Mac.' };
+    const v = await repoVerdict(top);
+    if (!v.allowed) return repoRefusal(v.reason);
     return { root: top };
   }
 
@@ -388,8 +424,10 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
         const a = parse(HelloArgs, rawArgs);
         const top = await gitTop(caller?.cwd);
         await rememberSession(top);
+        const v = await repoVerdict(top, caller?.cwd ?? null, { offIsReason: true });
         return { agent_id: agentFor(a.provider, top ?? caller?.cwd ?? ''), tier: 'local_attested', scope_allowed: ['local'],
-          policy_summary: { enabled: s.enabled, halted: log.state('halted', false), repo_enabled: top ? await engine.busRepoAllowed(top) : false,
+          policy_summary: { enabled: s.enabled, halted: log.state('halted', false), repo_enabled: v.allowed === true,
+            ...(v.allowed ? { repo_why: v.why ?? null } : { repo_reason: v.reason, repo_reason_text: Contract.REPO_REASON_TEXT[v.reason] ?? null }),
             max_hops: s.max_hops, wall_clock_min: s.wall_clock_min, caps_enabled: s.caps.enabled, auto_accept: s.auto_accept } };
       }
       case 'handoff': {
@@ -459,6 +497,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger })
         context.repos = abs(a.repos) ?? context.repos;
         if (a.scope === 'auto' || a.scope === 'listed') context.scope = a.scope;
         tops.clear();
+        commons.clear();
         context.exclude = abs(a.exclude) ?? context.exclude;
         context.folders = abs(a.folders) ?? context.folders;
         if (a.self !== undefined) context.self = a.self && typeof a.self.userId === 'string' ? { userId: a.self.userId } : null;
