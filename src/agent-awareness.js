@@ -955,7 +955,8 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
 // why names are src/bus-contract.js BOARD_WHY (the routing rule that decided, BACKBONE §3.5); each kind has a default.
 const BOARD_WHY = Object.freeze({
   team: ['linked_repo', null],
-  personal: ['no_link', 'To share this work, link the repo to a team board in Plexiform.'],
+  // Said the same way to a person with no team at all: a fact, not a step they are missing.
+  personal: ['no_link', 'This repo is not linked to a team board, so its cards stay on My board.'],
   untracked: ['personal_mark', 'This work gets no cards: your person marked it personal after it had a team card, or its folder is excluded.'],
   choose: ['choose', 'Cards wait on My board until your person picks a default board for this repo in Plexiform (This Mac).'],
   readonly: ['read_only', 'Your team role is read-only; ask a team admin, or keep it on My board.'],

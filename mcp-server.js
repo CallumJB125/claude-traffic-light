@@ -641,19 +641,19 @@ function buddyBurstRequests({ root, now = Date.now(), session, limit }) {
 // sign-in, so these ask its token-protected local endpoint, never the hub.
 // The folder is this server's cwd, which the AI client starts it in.
 const TEAM_OFF = { available: false, reason: 'app_not_running', message: 'Plexiform is not running, so team activity is unavailable.' };
-function teamCall(op, args, { root, port, timeoutMs = 6000, route = '/team/activity', meta = null } = {}) {
+function teamCall(op, args, { root, port, timeoutMs = 6000, route = '/team/activity', meta = null, off = TEAM_OFF } = {}) {
   let token = null, at = Number(port);
-  try { token = fs.readFileSync(path.join(root, 'token'), 'utf8').trim(); } catch { return Promise.resolve(TEAM_OFF); }
+  try { token = fs.readFileSync(path.join(root, 'token'), 'utf8').trim(); } catch { return Promise.resolve(off); }
   if (!at) { try { at = Number(fs.readFileSync(path.join(root, 'port'), 'utf8').trim()); } catch { at = Number(process.env.CLAUDE_TRAFFIC_LIGHT_PORT || 47172); } }
   const body = Buffer.from(JSON.stringify({ op, args: { ...args, cwd: process.cwd() }, ...(meta ? { meta } : {}) }));
   return new Promise((resolve) => {
     const req = http.request({ host: '127.0.0.1', port: at, path: route, method: 'POST', timeout: timeoutMs, headers: { 'content-type': 'application/json', 'content-length': body.length, 'x-buddy-token': token } }, (res) => { // privacy-flow: local-mcp
       let text = '';
       res.on('data', (c) => { text += c; if (text.length > 2_000_000) req.destroy(); });
-      res.on('end', () => { try { resolve(res.statusCode === 200 ? JSON.parse(text) : TEAM_OFF); } catch { resolve(TEAM_OFF); } });
+      res.on('end', () => { try { resolve(res.statusCode === 200 ? JSON.parse(text) : off); } catch { resolve(off); } });
     });
     req.on('timeout', () => req.destroy());
-    req.on('error', () => resolve(TEAM_OFF));
+    req.on('error', () => resolve(off));
     req.end(body);
   });
 }
@@ -668,7 +668,9 @@ const BUS_TIMEOUT_MS = 130_000;
 // Codex's turn metadata too. Main counts only the first as the hook having run.
 const hookShaped = (m) => Object.keys(m).every((k) => k === 'threadId' || k === 'progressToken');
 const threadMeta = (m) => (m && typeof m === 'object' && typeof m.threadId === 'string' && /^[\w.-]{1,120}$/.test(m.threadId) ? { thread_id: m.threadId, ...(hookShaped(m) ? { hook: true } : {}) } : null);
-const busCall = (op, args, c = {}) => teamCall(op, args, { ...c, route: '/bus', timeoutMs: BUS_TIMEOUT_MS, meta: threadMeta(c.meta) }); // privacy-flow: agent-bus-local
+// The bus is this Mac's, not a team's: a solo person with no team never sees "team activity" in its answer.
+const BUS_OFF = { available: false, reason: 'app_not_running', message: 'Plexiform is not running, so the agent bus is unavailable on this Mac. Start Plexiform and try again.' };
+const busCall = (op, args, c = {}) => teamCall(op, args, { ...c, route: '/bus', timeoutMs: BUS_TIMEOUT_MS, meta: threadMeta(c.meta), off: BUS_OFF }); // privacy-flow: agent-bus-local
 // The bus profile (`--profile bus`, the one Plexiform registers by itself): bus tools and buddy_health only, with
 // short descriptions. Codex never shows a server's instructions, so the data-not-instructions line is in each tool too.
 const BUS_PROFILE = Object.freeze(['bus_peers', 'bus_handoff', 'bus_wait', 'bus_read', 'bus_status', 'bus_note', 'bus_notes', 'bus_card_add', 'buddy_health', 'bus_session']);
