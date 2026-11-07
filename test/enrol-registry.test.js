@@ -389,3 +389,25 @@ test('an empty mcp.json (VS Code leaves a zero-byte one) is enrolled, and undo p
   assert.equal(w.read('vscode'), '');
   assert.equal(w.read('cursor'), '// nothing yet\n');
 });
+
+test('caps(): every MCP state has its own reason; an out-of-date entry never reads as "not connected"', (t) => {
+  const w = world(t);
+  w.make().enrolAll({ mcpOurs: { codex: true } });
+  // Same channel marker, different app path: the entry is ours but from an older install.
+  w.state.launch = { ...PACKAGED, execPath: '/Applications/Plexiform 2.app/Contents/MacOS/Plexiform', appPath: '/Applications/Plexiform 2.app/Contents/Resources/app.asar' };
+  fs.rmSync(path.join(w.home, FILES.cursor));
+  const ext = { claude: { state: 'unknown' }, codex: { state: 'mismatch' } };
+  fs.mkdirSync(path.join(w.home, '.claude'), { recursive: true });
+  const by = Object.fromEntries(w.make({ external: () => ext }).caps().map((c) => [c.id, c]));
+  assert.equal(by.vscode.mcp, 'stale');
+  assert.match(by.vscode.reason, /^Plexiform's entry in ~\/Library\/Application Support\/Code\/User\/mcp\.json is from an older version; press Fix to update it\.$/);
+  assert.equal(by.cursor.mcp, 'missing');
+  assert.match(by.cursor.reason, /^Not connected yet\. Plexiform adds plexiform-bus to ~\/\.cursor\/mcp\.json/);
+  assert.equal(by.codex.mcp, 'mismatch');
+  assert.match(by.codex.reason, /read back different/);
+  assert.equal(by.claude.mcp, 'unknown');
+  assert.match(by.claude.reason, /not checked this tool yet/);
+  const reasons = Object.values(by).map((c) => c.reason);
+  for (const r of reasons) assert.ok(typeof r === 'string' && r, 'every row says something');
+  assert.equal(reasons.filter((r) => /Not connected yet/.test(r)).length, 1, 'only the missing entry says "not connected"');
+});

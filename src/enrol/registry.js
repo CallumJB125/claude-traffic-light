@@ -420,9 +420,13 @@ function create({ home, rootDir, codexHome = path.join(home, '.codex'), launch =
       case 'conflict': return `${where || 'Its config'} already has an MCP server named ${NAME} that is not Plexiform's, so Plexiform left it alone.`;
       case 'other-channel': return `${where || 'Its config'} has ${NAME} from another copy of Plexiform (a development build or the installed app), so this copy left it alone.`;
       case 'error': return `${where || 'Its config'} could not be read, so Plexiform left it alone. Fix or move that file, then try again.`;
-      case 'missing': case 'stale': case 'mismatch': return `Not connected yet. Plexiform adds ${NAME} to ${where || 'it'} when it starts, or press Fix.`;
+      case 'missing': return `Not connected yet. Plexiform adds ${NAME} to ${where || 'it'} when it starts, or press Fix.`;
+      case 'stale': return `Plexiform's entry in ${where || 'its config'} is from an older version; press Fix to update it.`;
+      case 'mismatch': return `Plexiform wrote its entry to ${where || 'its config'}, but it read back different (another app may be editing it); press Fix to try again.`;
       case 'off': return 'The agent bus is turned off in Plexiform Preferences.';
       case 'untrusted': return 'Plexiform found a codex binary it could not verify as OpenAI\'s, so it did not run it.';
+      case 'unknown': return 'Plexiform has not checked this tool yet; it does when it starts.';
+      case 'unsupported': return 'The agent bus tools are only added on a Mac.';
       default: return t.reason;
     }
   }

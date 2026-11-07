@@ -7,6 +7,13 @@
   // Only these states are something Fix (the bus sync) can put right; the rest need the person or another app.
   const FIXABLE = new Set(['missing', 'stale', 'mismatch']);
   const BLOCKED = new Set(['conflict', 'other-channel', 'error', 'untrusted']);
+  // Each fixable state keeps its own words: an out-of-date entry is not "not connected".
+  const FIX_STATUS = { missing: 'Not connected', stale: 'Out of date', mismatch: 'Did not stick' };
+  const FIX_DETAIL = {
+    missing: 'Not connected yet. Press Fix to connect it.',
+    stale: 'Plexiform\'s entry is from an older version; press Fix to update it.',
+    mismatch: 'Plexiform\'s entry read back different (another app may be editing the file); press Fix to try again.',
+  };
   const TIER = {
     local_attested: 'Verified sessions: see peers, send notes, hand off work',
     person: 'Verified sessions: see peers, send notes, hand off work',
@@ -24,7 +31,7 @@
     if (!c.installed || c.mcp === 'not-installed') return { ...base, state: 'missing', status: 'Not installed', detail: 'Not installed here.', fix: false, tier: null, hooks: null };
     if (c.mcp === 'ours') return { ...base, state: 'connected', status: 'Connected', detail: c.reason || 'Connected to Plexiform.', fix: false };
     if (c.mcp === 'off') return { ...base, state: 'off', status: 'Agent bus off', detail: c.reason || 'The agent bus is turned off in Preferences.', fix: false };
-    if (FIXABLE.has(c.mcp)) return { ...base, state: 'fix', status: c.mcp === 'missing' ? 'Not connected' : 'Out of date', detail: c.reason || 'Press Fix to connect it.', fix: true };
+    if (FIXABLE.has(c.mcp)) return { ...base, state: 'fix', status: FIX_STATUS[c.mcp], detail: c.reason || FIX_DETAIL[c.mcp], fix: true };
     if (BLOCKED.has(c.mcp)) return { ...base, state: 'blocked', status: 'Needs you', detail: c.reason || 'Plexiform left its config alone.', fix: false };
     return { ...base, state: 'blocked', status: 'Unknown', detail: c.reason || 'Plexiform could not tell.', fix: false };
   }

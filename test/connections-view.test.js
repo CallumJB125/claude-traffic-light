@@ -54,3 +54,22 @@ test('main\'s fix-connection handler refuses odd ids and calls fixConnection for
   assert.equal((await handlers.get('aitools:fix-connection')({}, 42)).ok, false);
   assert.deepEqual(calls, ['claude-desktop']);
 });
+
+test('every status has matching words: out of date says older version, not "not connected"', () => {
+  const noReason = (id, mcp) => cap(id, mcp, { reason: undefined });
+  const by = Object.fromEntries(V.rows(['ours', 'missing', 'stale', 'mismatch', 'off', 'conflict', 'not-installed', 'weird'].map((m) => noReason(m, m))).map((r) => [r.id, r]));
+  const pairs = Object.fromEntries(Object.entries(by).map(([id, r]) => [id, [r.status, r.detail]]));
+  assert.deepEqual(pairs.stale[0], 'Out of date');
+  assert.match(pairs.stale[1], /older version; press Fix to update it/);
+  assert.doesNotMatch(pairs.stale[1], /Not connected/);
+  assert.deepEqual(pairs.missing[0], 'Not connected');
+  assert.match(pairs.missing[1], /^Not connected yet/);
+  assert.match(pairs.mismatch[1], /try again/);
+  assert.doesNotMatch(pairs.mismatch[1], /Not connected/);
+  assert.deepEqual(pairs.ours, ['Connected', 'Connected to Plexiform.']);
+  assert.deepEqual(pairs.off[0], 'Agent bus off');
+  assert.deepEqual(pairs.conflict[0], 'Needs you');
+  assert.deepEqual(pairs['not-installed'], ['Not installed', 'Not installed here.']);
+  assert.deepEqual(pairs.weird[0], 'Unknown');
+  for (const [id, [s, d]] of Object.entries(pairs)) assert.ok(s && d, id);
+});
