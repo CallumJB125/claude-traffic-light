@@ -61,6 +61,45 @@ const EXTRA_SECRETS = [
   new RegExp(`(?<![\\w.-])(?=[\\w.-]{129})(?=[\\w.-]*?(?:${KEY_WORDS}))(?=([\\w.-]+))\\1["']?[ \\t]{0,8}[:=][ \\t]{0,8}(?<v>"(?:[^"\\\\\\n]|\\\\.){0,2048}"?|'[^'\\n]{0,2048}'?|[^\\s"'\x60][^\\n\\r"'\x60]{0,2047})`, 'gi'),
 ];
 const [PASSWORD_IS, ...LATER_SECRETS] = EXTRA_SECRETS;
+// Prose with no ":" or "=": "always use password <value> for staging", "my pin <digits>", "set the passcode to
+// <value>". A prompt like that once became a board card's title word for word. The word alone is not enough
+// ("fix the password reset flow", "pin to the map"), so the value must look like one: a PIN word takes 4 to 12
+// digits or letters with digits, a password word a digit, a symbol or inner capitals.
+const PROSE_SECRET = /(?<![\w-])(?<w>passwords?|passwd|pass ?codes?|passphrases?|pwd|pw|pins?(?:[ -]?(?:codes?|numbers?))?|pincodes?)(?:[ \t]{0,8}[:=][ \t]{0,8}|[ \t]{1,8}(?:(?:is|was|to|of|=)[ \t]{1,8}(?:[:=][ \t]{0,8})?)?)(?<v>[^\s,;]{1,256})/gi;
+const TRAILING = /[.,;:!?)\]}'"`]+$/;
+function proseValueOk(word, v) {
+  if (!v || v === R || /^<[^>]{0,64}>$/.test(v) || /^<redacted/.test(v) || /^\{\{/.test(v) || /^\$\{?[A-Z_][A-Z0-9_]*\}?$/.test(v)) return false;
+  if (/^pin/i.test(word)) return (/^\d[\d-]{2,14}\d$/.test(v) && v.replace(/\D/g, '').length >= 4) || (v.length >= 4 && /\d/.test(v) && /[A-Za-z]/.test(v));
+  if (v.length < 4) return false;
+  return /\d/.test(v) || (v.length >= 6 && /[^A-Za-z]/.test(v)) || /[a-z][A-Z]/.test(v);
+}
+// A long base64 or base64url run with no prefix to name it (the shared list has 32+ hex only). Random material has
+// digits and both cases in a mixed band; an identifier or a path segment ("SomeComponentName", "src/lib/x") does not.
+// A "/" counts only with base64's own "+" or "=" in the run, so a path is never read as one.
+const BASE64_RUN = /(?<![\w+/=-])[A-Za-z0-9+/_-]{32,512}={0,2}(?![\w+/=-])/g;
+function base64Secret(v) {
+  if (v.includes('/') && !/[+=]/.test(v)) return false;
+  const body = v.replace(/[^A-Za-z0-9]/g, '');
+  const upper = body.replace(/[^A-Z]/g, '').length, lower = body.replace(/[^a-z]/g, '').length, digits = body.replace(/\D/g, '').length;
+  if (body.length < 28 || !upper || !lower || digits < 2) return false;
+  const share = upper / (upper + lower);
+  return share >= 0.2 && share <= 0.8 && !/[a-z]{10,}|[A-Z]{10,}/.test(body);
+}
+function redactBase64(text) {
+  return text.replace(BASE64_RUN, (m) => (base64Secret(m) ? R : m));
+}
+function redactProse(text) {
+  return text.replace(PROSE_SECRET, (m, ...a) => {
+    const g = a[a.length - 1];
+    let v = g.v;
+    const q = /^["'`]/.test(v) ? v[0] : '';
+    if (v.slice(q.length).startsWith(R)) return m;
+    const core = v.slice(q.length).replace(TRAILING, '');
+    if (!proseValueOk(g.w, core)) return m;
+    const at = m.length - v.length;
+    return `${m.slice(0, at)}${q}${R}${v.slice(q.length + core.length)}`;
+  });
+}
 
 const PATTERNS = {
   LONG_LINE: new RegExp(`^[^\\n]{${MAX_LINE + 1},}$`, 'gm'),
@@ -195,8 +234,8 @@ function maskPii(text) {
 
 function redactSecretsPass(text) {
   // "password is: X" goes first: the shared key=value rule would take "is:" as the value and leave X.
-  let out = redactShared(redactExtra(String(text == null ? '' : text), [PASSWORD_IS]));
-  return maskPii(redactExtra(out, LATER_SECRETS));
+  let out = redactShared(redactProse(redactExtra(String(text == null ? '' : text), [PASSWORD_IS])));
+  return maskPii(redactBase64(redactExtra(out, LATER_SECRETS)));
 }
 function redactExtra(out, list) {
   for (const re of list) {

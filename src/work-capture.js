@@ -6,8 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { toolEnv } = require('./tool-path');
-const { redactSecrets } = require('./secret-patterns');
-const { scrubTitle } = require('./scrub');
+const { scrubTitle, redactSecretsPass } = require('./scrub');
 const { withDeadline, GRACE_MS } = require('./bounded-io');
 const WorkRecord = require('./work-record');
 const { untag } = require('../hooks/handover-tap.js');
@@ -40,7 +39,9 @@ const teamBody = (destination,body) => {
   const hubHost=hubHostOf(destination.hub);
   return {...body,title:hubTitle(body.title,destination.hub),...(typeof body.summary==='string'?{summary:body.summary.split('\n').map(l=>scrubTitle(l,{hubHost})).join('\n')}:{})};
 };
-const clean = (text,max) => redactSecrets(String(text??'').slice(0,max*2),{docExamples:false})
+// Every card's text, My board or team, passes the one secret scrubber (src/scrub.js redactSecretsPass): the shared
+// patterns, prose passwords and PINs, long base64, personal numbers. A team body is scrubbed again by teamBody.
+const clean = (text,max) => redactSecretsPass(String(text??'').slice(0,max*2))
   .replace(/\b(?:bdt|brt|btk|btr|inv|clinv|pfi|pfm|pfr|pfc|pfcode)_[A-Za-z0-9_-]{43}\b/g,'<redacted:token>')
   .replace(/\b(?:brt1|bmr1)\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,'<redacted:token>')
   .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g,' ')

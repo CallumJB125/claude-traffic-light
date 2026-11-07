@@ -22,6 +22,8 @@ import { createRequire } from 'node:module';
 
 const Contract = createRequire(import.meta.url)('../../../src/bus-contract.js');
 const BusTrace = createRequire(import.meta.url)('../../../src/bus-trace.js');
+// The same secret scrubber main runs on hand-off and card text (prose passwords and PINs, long base64, personal numbers).
+const { redactSecretsPass } = createRequire(import.meta.url)('../../../src/scrub.js');
 
 const { frame, fold } = untrustedFrame;
 const HOUR_MS = 60 * 60 * 1000;
@@ -59,7 +61,7 @@ function failedText(task) {
 /** Run-originated text (results, onward handoffs) never passes main's scrubber: it is folded and scrubbed here, then truncated. */
 export function scrubRun(text, max, root = null) {
   if (typeof text !== 'string' || !text) return '';
-  const s = redactSecrets(fold(text.slice(0, max * 2)));
+  const s = redactSecretsPass(redactSecrets(fold(text.slice(0, max * 2))));
   return cleanPacketText(s, s.length, root, { anyPath: false }).slice(0, max);
 }
 
