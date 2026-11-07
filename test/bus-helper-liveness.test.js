@@ -105,7 +105,7 @@ test('cold start: the default start wait is about 8 s; a helper that could not s
 });
 
 test('cold start: refusals say when to retry: starting soon, stuck or down later', async () => {
-  for (const [helper, after] of [['starting', 5], ['stuck', 30], ['down', 30]]) {
+  for (const [helper, after] of [['starting', 5], ['stuck', 30], ['down', 30], ['slow', 10]]) {
     const s = await serve(async () => { throw Object.assign(new Error('unavailable'), { code: 'SUPERVISOR_UNREACHABLE', helper }); });
     try {
       const r = await s.post({ op: 'hello', args: { provider: 'claude' } });
@@ -115,15 +115,41 @@ test('cold start: refusals say when to retry: starting soon, stuck or down later
   }
 });
 
-test('D1: a read-only op that hangs in main is answered by the shorter quick deadline, with the stuck hint', async () => {
+test('D1: a read-only op that hangs in main is answered by the shorter quick deadline, as slow: no keychain guess', async () => {
   const s = await serve(() => new Promise(() => {}), { busQuickDeadlineMs: 200, busDeadlineMs: 5000 });
   try {
     const t0 = Date.now();
     const r = await s.post({ op: 'hello', args: { provider: 'claude' } });
     assert.ok(Date.now() - t0 < 2000);
-    assert.equal(r.helper, 'stuck');
-    assert.match(r.message, /keychain/);
+    assert.equal(r.helper, 'slow');
+    assert.match(r.message, /did not answer in time/);
+    assert.doesNotMatch(r.message, /keychain|prompt/, 'only a stopped heartbeat says it may be behind a prompt');
+    // The op's own TIMEOUT from the Tasks service reads the same way.
+    const s2 = await serve(async () => { throw Object.assign(new Error('t'), { code: 'TIMEOUT' }); });
+    try { assert.equal((await s2.post({ op: 'status', args: {} })).helper, 'slow'); } finally { s2.close(); }
   } finally { s.close(); }
+});
+
+test('the quick deadline sits above a slow but healthy helper\'s worst case, below the hand-off deadline', () => {
+  const S = require('../src/signal-server.js')({ rootDir: '/nonexistent', sessionsDir: '/nonexistent', requestsDir: '/nonexistent', aggregateState: () => ({}), broadcastStatus: () => {}, port: 0, app: { on: () => {} } });
+  // main's context push (start wait 8 s + 1 s) + the service's context (5 s) + the op (8 s).
+  assert.ok(S.BUS_QUICK_DEADLINE_MS >= 9_000 + 5_000 + 8_000, String(S.BUS_QUICK_DEADLINE_MS));
+  assert.ok(S.BUS_QUICK_DEADLINE_MS < S.BUS_DEADLINE_MS);
+});
+
+test('a bus refusal (POLICY_DENIED, CONFLICT, HALTED) is answered as that reason, never "helper not running"', async () => {
+  for (const code of ['POLICY_DENIED', 'CONFLICT', 'HALTED', 'NOT_FOUND']) {
+    for (const op of ['hello', 'handoff']) {
+      const s = await serve(async () => { throw Object.assign(new Error(`no: ${code}`), { code }); });
+      try {
+        const r = await s.post({ op, args: op === 'handoff' ? { request_id: 'req-00000003', title: 'x', to: { provider: 'any' } } : { provider: 'claude' } });
+        assert.deepEqual([r.reason, r.available, r.outcome], [code, undefined, undefined], `${op} ${code}: ${JSON.stringify(r)}`);
+        assert.match(r.message, new RegExp(code));
+      } finally { s.close(); }
+    }
+  }
+  const s = await serve(async () => { throw Object.assign(new Error('boom'), { code: 'INTERNAL' }); });
+  try { assert.equal((await s.post({ op: 'hello', args: {} })).reason, 'tasks_helper_unavailable', 'a fault is still unavailable'); } finally { s.close(); }
 });
 
 test('D2: trace results: unavailable and timeouts are errors, refusals refused, never ok', () => {

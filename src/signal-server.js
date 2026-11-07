@@ -38,21 +38,27 @@ const BUS_UNKNOWN = { available: false, reason: 'tasks_helper_unavailable', outc
   message: 'Plexiform did not answer in time, so it is unknown whether this was handed off. Retry with the same request_id: a handoff that was posted comes back as a duplicate, never a second run.' };
 // Above the Tasks service's own worst case for one op (8 s for a starting helper, 5 s for context, 12 s for the op).
 const BUS_DEADLINE_MS = 30_000;
-// Ops that only read (hello, status, read, peers) answer within this: the Tasks service keeps start wait + op to 8 s
-// (at least 1 s for the op), plus 5 s for context, with room.
-const BUS_QUICK_DEADLINE_MS = 15_000;
+// Ops that only read (hello, status, read, peers) answer within this, above a slow but healthy helper's worst case:
+// main's own context push first (src/agent-bus-main.js relay: the start wait plus its op, ≤ 9 s), then the Tasks
+// service's per-connection context (5 s) and the op (8 s). Below the 30 s deadline a hand-off keeps.
+const BUS_QUICK_DEADLINE_MS = 25_000;
 const QUICK_OPS = new Set(['hello', 'status', 'read', 'peers', 'session']);
-// The Tasks helper failed its liveness probe (src/tasks-service.js): not up after the start wait, stuck (often behind
-// a macOS keychain prompt), or down. Nothing reached it, so nothing changed; a later call works once it answers.
-// A helper still starting is seconds away, so it says to retry soon; stuck or down needs longer.
+// The Tasks helper failed its liveness probe (src/tasks-service.js): not up after the start wait, stuck (its heartbeat
+// stopped: often a macOS keychain prompt), or down; or it was reached but did not answer in time (slow: the op's own
+// timeout or this relay's deadline, which says nothing about a prompt). Nothing changed; a later call works once it
+// answers. A helper still starting is seconds away, so it says to retry soon; stuck or down needs longer.
 const HELPER_TEXT = {
   starting: 'Plexiform\'s Tasks helper is still starting.',
   stuck: 'Plexiform\'s Tasks helper is not answering (it may be waiting on a macOS prompt, such as a keychain dialog).',
   down: 'Plexiform\'s Tasks helper is not running.',
+  slow: 'Plexiform\'s Tasks helper did not answer in time.',
 };
-const RETRY_AFTER_S = { starting: 5, stuck: 30, down: 30 };
+// The bus said no (a BusRefusal from the helper or main): the caller gets that reason, never "helper not running".
+// Faults (UNAVAILABLE, INTERNAL) still read as the helper being unavailable.
+const REFUSALS = new Set(Object.values(require('./bus-contract.js').BUS_REASON).filter((r) => !['UNAVAILABLE', 'INTERNAL'].includes(r)));
+const RETRY_AFTER_S = { starting: 5, stuck: 30, down: 30, slow: 10 };
 function helperUnavailable(op, e, deadline = false) {
-  const helper = deadline ? 'stuck' : HELPER_TEXT[e?.helper] ? e.helper : 'down';
+  const helper = deadline ? 'slow' : HELPER_TEXT[e?.helper] ? e.helper : 'down';
   const nothing = op === 'handoff' ? 'Nothing was handed off.' : 'Nothing was changed.';
   const after = RETRY_AFTER_S[helper];
   return { available: false, reason: 'tasks_helper_unavailable', helper, retry_after_s: after,
@@ -173,13 +179,13 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
           const deadlineMs = op === 'wait' ? (Math.min(120, Math.max(0, Number(raw.timeout_s ?? 60) || 0)) + 5) * 1000
             : QUICK_OPS.has(op) ? Math.min(busDeadlineMs, busQuickDeadlineMs) : busDeadlineMs;
           // Only a helper that was never reached means nothing was handed off.
-          // A read-only op that timed out found the helper stuck; it changed nothing either way.
+          // A read-only op that timed out found the helper slow; it changed nothing either way.
           const lost = (e, deadline = false) => (op === 'handoff' && e?.code !== 'SUPERVISOR_UNREACHABLE' ? BUS_UNKNOWN
             : helperUnavailable(op, e, deadline || e?.code === 'TIMEOUT'));
           let timer;
           const deadline = new Promise((resolve) => { timer = setTimeout(() => resolve(lost(null, true)), deadlineMs); });
           Promise.race([Promise.resolve().then(() => agentBus(op, args, caller, ident)), deadline])
-            .then((r) => done(200, r && typeof r === 'object' ? r : lost(null)), (e) => done(200, e?.code === 'VALIDATION' ? { reason: 'VALIDATION', message: String(e.message).slice(0, 300) } : lost(e)))
+            .then((r) => done(200, r && typeof r === 'object' ? r : lost(null)), (e) => done(200, REFUSALS.has(e?.code) ? { reason: e.code, message: String(e.message).slice(0, 300) } : lost(e)))
             .finally(() => clearTimeout(timer));
         });
       }
@@ -272,5 +278,5 @@ module.exports = ({ rootDir, sessionsDir, requestsDir, aggregateState, broadcast
     return Answer.writeAnswer(requestsDir, req.id, decision, { by: 'desk', key: requestKeys.get(req.id), decisionHash: req.decisionHash }).ok;
   }
 
-  return { SIGNAL_PORT, startSignalServer, readRequests, answerRequest, keyFor: (id) => requestKeys.get(id) };
+  return { SIGNAL_PORT, BUS_DEADLINE_MS, BUS_QUICK_DEADLINE_MS, startSignalServer, readRequests, answerRequest, keyFor: (id) => requestKeys.get(id) };
 };
