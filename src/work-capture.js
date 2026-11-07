@@ -3,6 +3,7 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { toolEnv } = require('./tool-path');
@@ -120,10 +121,16 @@ function privateState(file,startEnabled=false) {
   };
   return {state,save};
 }
-async function repoFor(cwd) {
+const realOr=p=>{try{return fs.realpathSync(p);}catch{return path.resolve(p);}};
+// Open decision 6: a folder that is not a checkout itself, under a $HOME that is one (a dotfiles repo), would take the
+// dotfiles remote and could land on a team board. A checkout whose top is $HOME is no repo: My board, no_repo.
+async function repoFor(cwd,{home=os.homedir()}={}) {
   if(typeof cwd!=='string'||!path.isAbsolute(cwd)||cwd.length>2000||cwd.includes('\0'))return null;
-  const raw=await withDeadline(done=>execFile('git',['-C',cwd,'config','--local','--get','remote.origin.url'],
-    {timeout:2000,maxBuffer:4096,env:toolEnv({GIT_OPTIONAL_LOCKS:'0',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:process.platform==='win32'?'NUL':'/dev/null'})},(err,out)=>done(err?null:String(out).trim())),2000+GRACE_MS);
+  const git=(args,max)=>withDeadline(done=>execFile('git',['-C',cwd,...args],
+    {timeout:2000,maxBuffer:max,env:toolEnv({GIT_OPTIONAL_LOCKS:'0',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:process.platform==='win32'?'NUL':'/dev/null'})},(err,out)=>done(err?null:String(out).trim())),2000+GRACE_MS);
+  const top=await git(['rev-parse','--show-toplevel'],8192);
+  if(!top||typeof home==='string'&&home&&realOr(top)===realOr(home))return null;
+  const raw=await git(['config','--local','--get','remote.origin.url'],4096);
   if(!raw||/[?#\u0000-\u001f\u007f]/.test(raw))return null;
   if(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
     // Do not let the permissive shared normalizer reinterpret malformed URL
