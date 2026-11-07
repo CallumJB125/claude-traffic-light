@@ -36,24 +36,27 @@ const CARD_LIMITS = { ...BUS_LIMITS, title: 120, details: 800 };
 // A handoff that timed out, or whose helper went away mid-call, may have been posted.
 const BUS_UNKNOWN = { available: false, reason: 'tasks_helper_unavailable', outcome: 'unknown',
   message: 'Plexiform did not answer in time, so it is unknown whether this was handed off. Retry with the same request_id: a handoff that was posted comes back as a duplicate, never a second run.' };
-// Above the Tasks service's own worst case for one op (4 s liveness probe, 5 s for context, 12 s for the op).
+// Above the Tasks service's own worst case for one op (8 s for a starting helper, 5 s for context, 12 s for the op).
 const BUS_DEADLINE_MS = 30_000;
-// Ops that only read (hello, status, read, peers) answer within this: probe 4 s + op 8 s, with room.
+// Ops that only read (hello, status, read, peers) answer within this: the Tasks service keeps start wait + op to 8 s
+// (at least 1 s for the op), plus 5 s for context, with room.
 const BUS_QUICK_DEADLINE_MS = 15_000;
 const QUICK_OPS = new Set(['hello', 'status', 'read', 'peers', 'session']);
-// The Tasks helper failed its liveness probe (src/tasks-service.js): not up yet, stuck (often behind a macOS
-// keychain prompt), or down. Nothing reached it, so nothing changed; a later call works once it answers.
+// The Tasks helper failed its liveness probe (src/tasks-service.js): not up after the start wait, stuck (often behind
+// a macOS keychain prompt), or down. Nothing reached it, so nothing changed; a later call works once it answers.
+// A helper still starting is seconds away, so it says to retry soon; stuck or down needs longer.
 const HELPER_TEXT = {
   starting: 'Plexiform\'s Tasks helper is still starting.',
   stuck: 'Plexiform\'s Tasks helper is not answering (it may be waiting on a macOS prompt, such as a keychain dialog).',
   down: 'Plexiform\'s Tasks helper is not running.',
 };
-const RETRY_AFTER_S = 30;
+const RETRY_AFTER_S = { starting: 5, stuck: 30, down: 30 };
 function helperUnavailable(op, e, deadline = false) {
   const helper = deadline ? 'stuck' : HELPER_TEXT[e?.helper] ? e.helper : 'down';
   const nothing = op === 'handoff' ? 'Nothing was handed off.' : 'Nothing was changed.';
-  return { available: false, reason: 'tasks_helper_unavailable', helper, retry_after_s: RETRY_AFTER_S,
-    message: `${HELPER_TEXT[helper]} ${nothing} Try again in about ${RETRY_AFTER_S} seconds.` };
+  const after = RETRY_AFTER_S[helper];
+  return { available: false, reason: 'tasks_helper_unavailable', helper, retry_after_s: after,
+    message: `${HELPER_TEXT[helper]} ${nothing} Try again in about ${after} seconds.` };
 }
 
 // Handoff, note and card text is scrubbed here, before it leaves main: folded first (untrusted-frame.cjs fold, as every frame

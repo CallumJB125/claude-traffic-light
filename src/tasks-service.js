@@ -824,15 +824,16 @@ function createTasksService(opts) {
   // Agent bus ops (board/AGENT-BUS.md) go to the helper, which owns bus.db; main only relays. The helper starts lazily,
   // so this waits for it (bounded) and for the connection's bus context push. A helper that cannot start, or
   // exits mid-call, rejects here and the /bus relay answers tasks_helper_unavailable at once.
-  // Worst case for one op stays under the /bus relay's 30 s deadline: 10 s to connect, 5 s for context, 12 s for the op.
+  // Worst case for one op stays under the /bus relay's 30 s deadline: 8 s to start, 5 s for context, 12 s for the op.
   // The note ops (MAIN_ONLY in board/tasks-engine/engine.js) go only over the helper's parentPort (opts.busMain,
   // src/tasks-process.js), never the socket, which refuses them; with no parentPort (a dev fixture home) they are
   // UNAVAILABLE, with no fallback.
   const NOTE_OPS = new Set(['note', 'notes', 'notes_ack', 'notes_pending', 'notified']);
-  // Liveness probe: a helper that is not up and answering within busProbeMs (a cold start, or one stuck behind a
-  // macOS keychain prompt) is refused at once, before anything is sent, instead of holding the caller for the whole
-  // relay deadline. HELPER_STARTING: it is not up yet; HELPER_STUCK: connected, but its heartbeat (every 5 s) stopped.
-  const probeMs = opts.busProbeMs ?? 4_000;
+  // Liveness probe. HELPER_STARTING: not up yet (a cold start just after Plexiform launched): wait for it, up to
+  // busStartMs, so an AI's first bus_hello is not refused for a helper a few seconds from answering. HELPER_DOWN (it
+  // could not start) and HELPER_STUCK (connected, but its heartbeat, every 5 s, stopped: often behind a macOS keychain
+  // prompt) are refused at once, before anything is sent.
+  const startMs = opts.busStartMs ?? opts.busProbeMs ?? 8_000;
   const unreachable = (helper) => Object.assign(new Error('unavailable'), { code: 'SUPERVISOR_UNREACHABLE', helper });
   async function ensureQuick(until) {
     const ensured = opts.ensureSupervisor?.();
@@ -844,10 +845,15 @@ function createTasksService(opts) {
       if ((await Promise.race([ensured, late])) === LATE) throw unreachable('starting');
     } catch (e) { throw e?.helper ? e : unreachable('down'); } finally { clearTimeout(timer); }
   }
-  // Ops that only read answer within this; a hand-off keeps the longer limit, since a timeout there is ambiguous.
+  // Ops that only read answer within this, less whatever was spent waiting for a starting helper, so the whole call
+  // (start wait, 5 s for context, the op) stays under the /bus relay's 15 s quick deadline (src/signal-server.js) and
+  // a slow answer is this op's own TIMEOUT, not the relay's "stuck". A hand-off keeps the longer limit, since a
+  // timeout there is ambiguous.
   const QUICK_OP_MS = 8_000;
+  const MIN_OP_MS = 1_000;
   async function bus(op, args = {}, caller = null) {
-    const until = now() + probeMs;
+    const t0 = now();
+    const until = t0 + startMs;
     if (NOTE_OPS.has(op)) {
       if (typeof opts.busMain !== 'function') throw Object.assign(new Error('unavailable'), { code: 'UNAVAILABLE' });
       await ensureQuick(until);
@@ -859,12 +865,13 @@ function createTasksService(opts) {
       if (stopped || now() > until) throw unreachable('starting');
       await new Promise((r) => setTimeout(r, 100));
     }
+    const waited = now() - t0;
     const channel = client;
     const hbAt = channel.lastHbAt;
     if (typeof hbAt === 'number' && performance.now() - hbAt > (opts.busHbStaleMs ?? 15_000)) throw unreachable('stuck');
     if (op !== 'busSetContext' && opts.busContext) await (busContextFor === channel ? busContextSent : pushBusContext(channel));
     const timeoutMs = op === 'wait' ? (Math.min(120, Math.max(0, Number(args?.timeout_s ?? 60) || 0)) + 10) * 1000
-      : op === 'handoff' ? 12_000 : QUICK_OP_MS;
+      : op === 'handoff' ? 12_000 : Math.max(MIN_OP_MS, QUICK_OP_MS - waited);
     // A bound caller (and a hand-off's origin, for the result note) is believed only over parentPort (engine.bus).
     // With no parentPort (a dev fixture home) it goes through the socket and counts as unbound.
     // timeout_ms lets the helper trace an answer that comes after main stopped waiting as the timeout it was.
