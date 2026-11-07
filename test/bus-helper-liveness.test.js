@@ -161,3 +161,18 @@ test('D2: main traces a forwarded hello or hand-off the helper never answered as
   assert.equal(lines.length, n);
 });
 // The helper's half of D2 (an answer after main stopped waiting is a TIMEOUT): board/tasks-engine/test/bus-trace-timeout.test.js.
+
+test('D2: a hand-off main stopped waiting for (TIMEOUT) is traced deferred, matching the caller\'s unknown outcome; unreachable stays an error', async (t) => {
+  const w = world(t);
+  const lines = [];
+  const aw = w.make({ mcpCaps: () => ({ claude: true, codex: true }), halted: () => false, trace: { append: (e) => { lines.push(e); return e; } } });
+  t.after(() => aw.stop());
+  await aw.build();
+  await aw.refresh();
+  const args = { request_id: 'req-00000002', title: 'x', to: { provider: 'any' } };
+  const timedOut = async () => { throw Object.assign(new Error('timeout'), { code: 'TIMEOUT' }); };
+  await assert.rejects(aw.relay('handoff', args, { provider: 'claude', cwd: w.repoA }, w.call(101), { forward: timedOut }));
+  assert.deepEqual([lines.at(-1).op, lines.at(-1).result, lines.at(-1).reason], ['handoff', 'deferred', 'TIMEOUT']);
+  await assert.rejects(aw.relay('hello', {}, { provider: 'claude', cwd: w.repoA }, w.call(101), { forward: timedOut }));
+  assert.deepEqual([lines.at(-1).op, lines.at(-1).result], ['hello', 'error'], 'a read-only op that timed out failed');
+});

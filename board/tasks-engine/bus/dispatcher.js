@@ -581,14 +581,17 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger, t
     const t0 = now();
     let r, err = null;
     try { r = await opInner(name, rawArgs, caller); } catch (e) { err = e; }
-    // Main gave up on an answer this slow (the helper was stuck): the caller was told it failed, so the line says so.
+    // Main gave up on an answer this slow (the helper was stuck): a read-only caller was told it failed, so the line
+    // says so. A hand-off that was posted anyway is running, and its caller was told the outcome is unknown
+    // (BUS_UNKNOWN, retry with the same request_id): deferred, never a failure.
     const late = Number.isFinite(caller?.timeout_ms) && now() - t0 > caller.timeout_ms;
+    const res = BusTrace.resultOf(r, err);
     const a = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
     trace.append({ trace_id: caller?.trace?.trace_id, op: name, from_handle: caller?.origin?.handle ?? caller?.trace?.from_handle ?? null,
       to: name === 'handoff' ? (r?.provider ?? (typeof a.to?.provider === 'string' ? a.to.provider : null)) : null,
       provider: name === 'handoff' ? r?.provider ?? null : null, ref: r?.handoff_id ?? (typeof a.handoff_id === 'string' ? a.handoff_id : null),
       repo_key_hash: r?.handoff_id ? BusTrace.repoKeyHash(log.handoff(r.handoff_id)?.repo?.root) : null,
-      ms: now() - t0, ...(late ? { result: 'error', reason: 'TIMEOUT' } : BusTrace.resultOf(r, err)) });
+      ms: now() - t0, ...(!late ? res : name === 'handoff' ? (res.result === 'ok' ? { result: 'deferred', reason: 'TIMEOUT' } : res) : { result: 'error', reason: 'TIMEOUT' }) });
     if (err) throw err;
     return r;
   }

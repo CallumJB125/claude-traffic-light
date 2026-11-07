@@ -1037,7 +1037,10 @@ function boardAnswer(board) {
     } else if (trace && FORWARDED.has(op) && (HELPER_FAULTS.has(err?.code) || (r && typeof r === 'object' && r.available === false))) {
       // The helper writes the line for the ops it answers; one it never answered (down, stuck behind a prompt, timed
       // out) would leave none, or a late "ok", so main writes the error line itself.
-      trace.append({ trace_id: tc.trace_id, op, from_handle: tc.from_handle, ms: now() - t0, ...BusTrace.resultOf(r, err) });
+      // A hand-off main stopped waiting for (TIMEOUT) may have been posted and be running: the caller hears the
+      // outcome is unknown, so the line is deferred. One that never reached the helper is still an error.
+      const res = op === 'handoff' && err?.code === 'TIMEOUT' ? { result: 'deferred', reason: 'TIMEOUT' } : BusTrace.resultOf(r, err);
+      trace.append({ trace_id: tc.trace_id, op, from_handle: tc.from_handle, ms: now() - t0, ...res });
     }
     if (err) throw err;
     return r;
