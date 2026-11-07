@@ -445,3 +445,20 @@ test('redactSecrets passes every findSecrets option through', () => {
   assert.equal(redactSecrets(j('{{GH:ghp_', A36, '}}'), { standIns: true }), j('{{GH:ghp_', A36, '}}').replace(j('ghp_', A36), '<redacted:github_token>'));
   assert.throws(() => redactSecrets('x', { classes: ['nope'] }), TypeError);
 });
+
+test('over-redaction: a line starting "password <word>" is prose; "password <credential>" still counts', () => {
+  for (const t of ['password manager rollout', 'Password reset flow', 'password field validation', 'password policy.', 'PASSWORD POLICY', 'passwd manager', '  password Manager, then sync']) {
+    assert.deepEqual(findSecrets(t).map((h) => h.kind), [], t);
+  }
+  for (const [t, v] of [['password hunter2xyz', 'hunter2xyz'], ['  password 9f8e7d6c-1234', '9f8e7d6c-1234'], ['password Zx81nQpLr', 'Zx81nQpLr'], ['password s3cr3t!', 's3cr3t!']]) {
+    const h = findSecrets(t);
+    assert.equal(h.length, 1, t);
+    assert.equal(t.slice(h[0].index, h[0].index + h[0].length), v, t);
+  }
+});
+
+test('over-redaction: "the PIN is 1234." keeps its full stop; inner dots stay in the value', () => {
+  assert.equal(redactSecrets('the PIN is 1234.'), 'the PIN is <redacted:said_password>.');
+  assert.equal(redactSecrets('the password is hunter2...'), 'the password is <redacted:said_password>...');
+  assert.equal(redactSecrets('the password is a.b.c ok'), 'the password is <redacted:said_password> ok');
+});
