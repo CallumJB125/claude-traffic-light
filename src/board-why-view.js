@@ -65,12 +65,14 @@
     }
   }
 
-  // Does a snapshot row belong on the board page that is showing? hub: null for My board, an origin for a team hub.
+  // Does a snapshot row belong on the board page that is showing? hub: null for My board, an origin and one team id
+  // for a team board. A hub with no team (a client hub's page) shows none of this Mac's cards: other teams' names
+  // and card ids at that hub must not reach it.
   function onBoard(row, { hub = null, team = null } = {}) {
     const d = row?.destination;
     if (!d) return false;
     if (hub === null) return d.kind === 'local';
-    return d.kind === 'team' && d.hub === hub && (!team || d.team_id === team);
+    return d.kind === 'team' && d.hub === hub && typeof team === 'string' && !!team && d.team_id === team;
   }
 
   // The board page's answer: { cards: { card_id: chip }, pending } for its own cards only.

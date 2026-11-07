@@ -79,7 +79,9 @@ test('a board page hears only about its own cards: My board, or the one team on 
   const theirs = V.forBoard(rows, { hub: HUB, team: 't1' });
   assert.deepEqual(Object.keys(theirs.cards), ['c-team']);
   assert.equal(theirs.pending, 0);
-  assert.deepEqual(Object.keys(V.forBoard(rows, { hub: HUB }).cards).sort(), ['c-other-team', 'c-team']);
+  assert.deepEqual(V.forBoard(rows, { hub: HUB }).cards, {}, 'a hub with no team (a client hub) hears about no card');
+  assert.deepEqual(V.forBoard(rows, { hub: HUB, team: null }).cards, {});
+  assert.deepEqual(V.forBoard(rows, { hub: HUB, team: '' }).cards, {});
   assert.deepEqual(V.forBoard(null, { hub: null }), { cards: {}, pending: 0 });
 });
 
@@ -125,4 +127,11 @@ test('repeats of one piece of work: This Mac merges them, but every card in the 
   assert.deepEqual(Object.keys(cards).sort(), ['card-1', 'card-2', 'card-3'], 'no card in the group is left without its reason');
   for (const c of Object.values(cards)) assert.equal(c.label, 'Not a repo · stays here');
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8'), /BoardWhy\.forBoard\(workCapture\.snapshot\(\{ merge: false \}\)/, 'main builds card reasons from one row per card');
+});
+
+test('main never sends card reasons to a client hub page (team with no org)', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8');
+  const h = src.slice(src.indexOf("ipcMain.handle('buddy:card-routes'"), src.indexOf("ipcMain.on('buddy:route-fix'"));
+  assert.match(h, /if \(hubInfo\.client \|\| \(hubInfo\.team && !hubInfo\.org\)\) return null;/);
+  assert.ok(h.indexOf('return null;', h.indexOf('hubInfo.client')) < h.indexOf('BoardWhy.forBoard'), 'refused before any chip is built');
 });

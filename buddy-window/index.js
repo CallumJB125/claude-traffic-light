@@ -1430,8 +1430,10 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
   // Why each card on the showing board is there (BOARD_WHY in words) and its one fix. Only that board's cards,
   // from the work records kept here; a pointer card carries no detail at all.
   ipcMain.handle('buddy:card-routes', (e) => {
-    if (!fromHubView(e) || !captureEnabled) return null;
-    const scope = hubInfo.team ? { hub: hubInfo.origin, team: hubInfo.org ?? null } : { hub: null };
+    if (!fromHubView(e) || !captureEnabled || !hubInfo) return null;
+    // A client hub's page (team, no org) is no team board of this person's: nothing about this Mac's cards goes to it.
+    if (hubInfo.client || (hubInfo.team && !hubInfo.org)) return null;
+    const scope = hubInfo.team ? { hub: hubInfo.origin, team: hubInfo.org } : { hub: null };
     const solo = BoardWhy.isSolo(store.list());
     return { ...BoardWhy.forBoard(workCapture.snapshot({ merge: false }), scope, { solo }), solo };
   });
