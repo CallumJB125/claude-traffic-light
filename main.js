@@ -5316,7 +5316,8 @@ const McpAuto = require('./src/mcp-auto.js').create({
 const MCP_AUTO_ON = (app.isPackaged && AUTO_INSTALL_HOOKS) || IS_DEV_RUN;
 const registerBusTools = () => (MCP_AUTO_ON ? McpAuto.sync().then(() => AgentAwareness.schedule()) : Promise.resolve());
 // Once per start, after ready and deferred: the Claude Code write is the one sync config write (plan AW10).
-app.whenReady().then(() => { const t = setTimeout(() => { registerBusTools().catch(() => {}); }, 8000); if (t.unref) t.unref(); });
+// A codex signature check that timed out at a cold boot reads as 'untrusted': try once more when the Mac has settled.
+app.whenReady().then(() => { const t = setTimeout(() => { registerBusTools().then(() => { if (McpAuto.status?.()?.codex?.state !== 'untrusted') return; const r = setTimeout(() => { registerBusTools().catch(() => {}); }, 120000); r.unref?.(); }).catch(() => {}); }, 8000); if (t.unref) t.unref(); });
 let nativeBoardService = null;
 function nativeBoardDir() { return path.join(app.getPath('userData'), 'native-board'); }
 function getNativeBoard() {

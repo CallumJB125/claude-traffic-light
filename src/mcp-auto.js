@@ -58,7 +58,8 @@ async function trustedCodex(bin, { home, codexHome, run, platform = process.plat
  */
 function create({ rootDir, home, config, launch, codexBin, platform = process.platform, codexEnv = process.env, execFile, fsp = fs.promises, mcpInstall = McpInstall, codexAdapter = Codex, now = () => Date.now(), log = () => {},
   trustCodexBin = (bin) => trustedCodex(bin, { home, codexHome: codexEnv.CODEX_HOME || path.join(home, '.codex'), fsp,
-    run: (file, args) => new Promise((resolve, reject) => { require('child_process').execFile(file, args, { timeout: 5000, windowsHide: true }, (err, out) => (err ? reject(err) : resolve(String(out)))); }) }) }) { // privacy-flow: agent-bus-tools-local
+    run: (file, args) => new Promise((resolve, reject) => { require('child_process').execFile(file, args, { timeout: 30000, windowsHide: true }, (err, out) => (err ? reject(err) : resolve(String(out)))); }) }) }) { // privacy-flow: agent-bus-tools-local
+  // codesign on a cold cache (just after a reboot) can take well over 5 s; a timeout there read as 'untrusted'.
   const recordFile = path.join(rootDir, 'mcp-auto.json');
   const entry = () => mcpInstall.launch({ ...launch, profile: 'bus' });
   const marker = () => McpInstall.markerOf(entry());
