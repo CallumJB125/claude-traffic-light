@@ -49,7 +49,7 @@ const PRUNE_BATCH = 10;
 const OPEN_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0);
 const CONTEXT_PROVIDERS = new Set(['claude', 'codex', 'gemini']);
 // The only session-file fields the roster is built from.
-const SESSION_FIELDS = Object.freeze(['source', 'sessionId', 'host', 'remote', 'cwd', 'signal', 'updatedAt', 'codexHookAt', 'claudePid', 'codexServerPid', 'codexTranscript', 'interactive', 'codexInteractive', 'startedAt', 'codexStartedAt', 'signalSince', 'taskId']);
+const SESSION_FIELDS = Object.freeze(['source', 'sessionId', 'host', 'remote', 'cwd', 'signal', 'updatedAt', 'codexHookAt', 'claudePid', 'codexServerPid', 'codexTranscript', 'interactive', 'codexInteractive', 'startedAt', 'codexStartedAt', 'signalSince', 'taskId', 'scope']);
 // Plexiform's own bus and task worktrees (main.js folders()): never peers.
 const OWN_WORKTREE = /-buddy-[0-9a-f]{12}(?:[\\/]|$)/;
 

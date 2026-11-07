@@ -136,7 +136,7 @@ test('TEAM: linked repo, unlinked repo, cross-team hand-off withheld, hub offlin
   // SESSION_FIELDS copies each session without `scope`, so the relay asks src/work-capture.js boardFor/addAgentCard
   // about an unmarked session. A linked repo's stored team card hides it (T5c); an unlinked one shows it: bus_peers says
   // no_link, and the AI's bus_card_add is accepted onto My board instead of refused PERSONAL.
-  await t.test('T5b a personal session in an unlinked repo: bus_peers says personal_mark and its AI\'s bus_card_add is refused PERSONAL', { todo: 'product bug: src/agent-awareness.js:52 SESSION_FIELDS drops `scope`, so the relay never sees a personal mark' }, async () => {
+  await t.test('T5b a personal session in an unlinked repo: bus_peers says personal_mark and its AI\'s bus_card_add is refused PERSONAL', async () => {
     const peers = await a.call('Z', 'peers');
     const card = await a.call('Z', 'card_add', { title: 'Anything', request_id: rid('t5b') });
     assert.deepEqual([peers.board?.why, card.reason], ['personal_mark', 'PERSONAL'], JSON.stringify({ board: peers.board, card }));
@@ -190,7 +190,7 @@ test('TEAM: linked repo, unlinked repo, cross-team hand-off withheld, hub offlin
   // only at a line start; said_password, :152, only with "is"; keyed only with ":" or "="), so the session card title from
   // the prompt and the AI-added card title reach team X's board as written (the sk-ant key in the same titles is
   // redacted). Known in flight on bus-harden (card-title secret redaction).
-  await t.test('T8b a password written in a prompt or an AI-added card title never reaches a team card or hub payload', { todo: 'product bug: team card titles keep "password hunter2xyz" (src/secret-patterns.js:156 netrc_line is line-anchored, :152 said_password needs "is"; team titles go through src/work-capture.js:36 hubTitle → src/scrub.js:495 scrubTitle with only those patterns)' }, async () => {
+  await t.test('T8b a password written in a prompt or an AI-added card title never reaches a team card or hub payload', async () => {
     const wire = [...a.team.wire, ...b.team.wire, ...hub.wire].map((x) => JSON.stringify(x));
     assert.deepEqual(wire.filter((x) => x.includes('hunter2xyz')), [], 'hub payloads with the password');
     const cards = (await boardCards(A, X, X)).map((c) => c.title);
