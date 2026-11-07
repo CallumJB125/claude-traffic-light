@@ -14,6 +14,7 @@
     "dist": "electron-builder -c electron-builder.config.js --mac",
     "test": "node --import ./test/support/no-real-cli.mjs --test --test-timeout=300000 test/*.test.js test/*.test.mjs test/adapters/*.test.js && npm run test:remote && node --import ./test/support/no-real-cli.mjs --test --test-timeout=300000 site/test/*.test.js",
     "test:remote": "npm --prefix remote test",
+    "test:e2e:solo-team": "node --import ./test/support/no-real-cli.mjs --test --test-timeout=300000 test/e2e/solo-team-*.test.js",
     "fuzz": "FUZZ_SEQUENCES=${FUZZ_SEQUENCES:-2000} node --import ./test/support/no-real-cli.mjs --test test/state-fuzzer.test.js",
     "icons": "node scripts/build-icons.js",
     "dist:win": "electron-builder -c electron-builder.config.js --win",
