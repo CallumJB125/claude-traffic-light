@@ -823,15 +823,16 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     // Main-only: the listed sessions a local handover is kept for (src/session-handover-main.js).
     handoverRows(){return Object.values(state.tasks).filter(e=>!e.agent&&!e.pointer&&!BACKGROUND_TITLE.test(String(e.title??'').trim())).map(e=>({provider:e.provider,session_id:e.run_id??e.session_id,title:e.title,last_seen:e.last_seen??null}));},
     // The This Mac list: background entries saved before capture filtered them are hidden,
-    // and repeats of one piece of work collapse to a single row with a count.
-    snapshot(){
+    // and repeats of one piece of work collapse to a single row with a count. merge:false keeps one row per card
+    // (main's card reasons, buddy:card-routes): a merged row carries only its last card's id, so the others had none.
+    snapshot({merge=true}={}){
       const rows=new Map();
       for(const [key,e]of Object.entries(state.tasks)){
         if(BACKGROUND_TITLE.test(String(e.title??'').trim()))continue;
         // why: the routing rule that put it there (BOARD_WHY), so the UI can say "On <board> because this repo is linked".
         const row={key,repo:e.repo,provider:e.provider,title:e.title,status:e.status,card_id:e.card_id,untracked:!!e.untracked,reason:e.reason??null,destination:{...e.destination},count:1,
           why:e.why??null,...(e.pending_route?{pending_route:true}:{}),...(e.agent?{agent:true}:{}),...(e.pointer?{pointer:true}:{})};
-        const group=JSON.stringify([e.provider,e.title,e.destination]);
+        const group=merge?JSON.stringify([e.provider,e.title,e.destination]):key;
         const prev=rows.get(group);
         if(prev){row.count=prev.count+1;}
         rows.set(group,row);

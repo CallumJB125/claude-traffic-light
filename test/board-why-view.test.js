@@ -103,3 +103,26 @@ test('text from a row never carries control characters into a label', () => {
   const c = V.chip(row('linked_repo', { destination: team({ team_name: 'A\u0007cme\nTeam' }) }));
   assert.doesNotMatch(c.label, /[\u0000-\u001f]/);
 });
+
+test('repeats of one piece of work: This Mac merges them, but every card in the group still gets its reason', async (t) => {
+  const fs = require('node:fs'), path = require('node:path');
+  const { testTempDir } = require('./helpers/tmp');
+  const { createWorkCapture } = require('../src/work-capture.js');
+  const home = fs.realpathSync(testTempDir('why-merge-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  let n = 0;
+  const cap = createWorkCapture({ startEnabled: true, file: path.join(home, 'cap', 'capture.json'), host: 'mac', home, getRoutes: async () => ({ routes: [], complete: true }),
+    resolveRepo: async () => null, sendLocal: async () => ({ ok: true, card: { id: `card-${++n}` } }), sendTeam: async () => ({ ok: false }), now: () => 100000 });
+  t.after(() => cap.stop());
+  const at = new Date(100000).toISOString();
+  for (const sessionId of ['s1', 's2', 's3']) await cap.observe([{ source: 'codex', sessionId, host: 'mac', cwd: home, signal: 'tool-use', taskTitle: 'Tidy notes', updatedAt: at }]);
+  const merged = cap.snapshot();
+  assert.equal(merged.length, 1, 'This Mac shows one row');
+  assert.equal(merged[0].count, 3);
+  const each = cap.snapshot({ merge: false });
+  assert.deepEqual(each.map((r) => r.card_id).sort(), ['card-1', 'card-2', 'card-3']);
+  const { cards } = V.forBoard(each, { hub: null });
+  assert.deepEqual(Object.keys(cards).sort(), ['card-1', 'card-2', 'card-3'], 'no card in the group is left without its reason');
+  for (const c of Object.values(cards)) assert.equal(c.label, 'Not a repo · stays here');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'buddy-window', 'index.js'), 'utf8'), /BoardWhy\.forBoard\(workCapture\.snapshot\(\{ merge: false \}\)/, 'main builds card reasons from one row per card');
+});

@@ -1433,7 +1433,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     if (!fromHubView(e) || !captureEnabled) return null;
     const scope = hubInfo.team ? { hub: hubInfo.origin, team: hubInfo.org ?? null } : { hub: null };
     const solo = BoardWhy.isSolo(store.list());
-    return { ...BoardWhy.forBoard(workCapture.snapshot(), scope, { solo }), solo };
+    return { ...BoardWhy.forBoard(workCapture.snapshot({ merge: false }), scope, { solo }), solo };
   });
   // A chip's fix opens the page where the person changes that rule; nothing is changed for them.
   ipcMain.on('buddy:route-fix', (e, fix) => {
