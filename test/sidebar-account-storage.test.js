@@ -69,6 +69,11 @@ for (const [status, text] of [
     assert.equal(invite.disabled, false);
     invite.click();
     assert.deepEqual(f.sent.at(-1), ['buddy:select', 'team']);
+    // ...and someone who was sent an invite can still join from solo.
+    const join = f.document.querySelector('.ws-join');
+    assert.equal(join.textContent, 'Join with an invite…');
+    join.click();
+    assert.deepEqual(f.sent.at(-1), ['buddy:workspace', 'join']);
     // With a team: the switcher, still usable while sign-in is busy.
     f.update({ accountStorage: status, signedIn: true, workspaces: [{ id: 'local', name: 'My board', kind: 'local' }, { id: 'team:x', name: 'Acme', kind: 'team' }] });
     const workspace = f.document.querySelector('#ws-select');

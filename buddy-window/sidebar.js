@@ -207,12 +207,15 @@ function paintWorkspaces() {
   if (key === wsKey) return;
   wsKey = key;
   box.textContent = '';
-  // Solo (no team anywhere): no switcher and no team words, just the board and one gentle way to bring a team in.
+  // Solo (no team anywhere): no switcher and no team words, just the board, one gentle way to bring a team in, and
+  // one for someone who was sent an invite.
   if (!list.some((w) => w.kind !== 'local')) {
     box.append(el('p', { class: 'ws-solo', id: 'ws-solo' }, state.localBoard ?? 'My board'));
     const invite = el('button', { type: 'button', class: 'ws-invite' }, 'Invite your team');
     invite.addEventListener('click', () => window.buddy.select('team'));
-    box.append(invite);
+    const join = el('button', { type: 'button', class: 'ws-invite ws-join' }, 'Join with an invite…');
+    join.addEventListener('click', () => window.buddy.workspace('join'));
+    box.append(invite, join);
     return;
   }
   const label = el('label', { class: 'sr-only', for: 'ws-select' }, 'Workspace');
