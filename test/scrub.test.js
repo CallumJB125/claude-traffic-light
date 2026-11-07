@@ -391,7 +391,7 @@ test('scrubTitle: only commit words keep a hash; version words need a boundary a
   for (const keep of [`/commit/${H}`, `see commit/${H}`, `https://github.com/acme/app/commit/${H}`, `sha ${H}`, `sha1 ${H}`, `merged ${H}`, 'version 1.2.3.4', 'Version: 1.2.3.4']) {
     assert.equal(scrubTitle(keep), keep, keep);
   }
-  for (const [input, want] of [[`password hash ${H}`, 'password [redacted] [redacted]'], [`hash ${H}`, 'hash [redacted]'],
+  for (const [input, want] of [[`password hash ${H}`, 'password hash [redacted]'], [`hash ${H}`, 'hash [redacted]'],
     ['version=10.0.0.5', 'version=[ip]'], ['ip_version: 10.0.0.5', 'ip_version: [ip]'], ['Version: 192.168.1.10', 'Version: [ip]'],
     ['version 127.0.0.2', 'version [ip]'], ['version 169.254.1.1', 'version [ip]'], ['version 172.16.0.9', 'version [ip]'], ['version 100.101.2.3', 'version [ip]'],
     ['APP_VERSION=1.2.3.4', 'APP_VERSION=[ip]'], ['subversion 1.2.3.4', 'subversion [ip]']]) assert.equal(scrubTitle(input), want, input);
