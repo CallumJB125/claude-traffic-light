@@ -271,7 +271,7 @@ test('board reasons: every bus-contract why has a fixed phrase; solo reasons are
 });
 test('card records give a session its board when the roster does not; pointers and bad records are skipped', (t) => {
   const dir = fixtureDir(t), file = path.join(dir, 'work-capture.json');
-  assert.equal(meta.readCards(file).size, 0, 'no file, no boards');
+  assert.equal(meta.readCards(file, 0).size, 0, 'no file, no boards');
   const team = { kind: 'team', hub: 'https://hub.example', user_id: 'u1', team_id: 't1', board_id: 'b1', repo_id: 'r1', board_name: 'Payments' };
   fs.writeFileSync(file, JSON.stringify({ v: 1, tasks: {
     a: { provider: 'claude', session_id: 's1', task_id: null, destination: { kind: 'local' }, why: 'no_link', last_seen: 1, title: 'SECRET' },
@@ -282,12 +282,15 @@ test('card records give a session its board when the roster does not; pointers a
     f: { provider: 'claude', session_id: 's5', destination: { kind: 'local' }, why: 'inherited', pending_route: true, last_seen: 2 },
     g: { provider: '../x', session_id: 's6', destination: { kind: 'local' } }, h: null,
   } }));
-  const cards = meta.readCards(file);
+  const cards = meta.readCards(file, 10000);
   assert.deepEqual([...cards.keys()].sort(), ['claude|s1', 'claude|s5', 'codex|s2', 'codex|s4']);
   assert.deepEqual([cards.get('claude|s1').kind, cards.get('claude|s1').name, cards.get('claude|s1').short], ['team', 'Payments', 'repo linked'], 'the newest task wins');
   assert.equal(cards.get('codex|s2').name, 'No card'); assert.equal(cards.get('codex|s4').label, 'Board not chosen'); assert.equal(cards.get('claude|s5').pending, true);
   assert(!JSON.stringify([...cards.values()]).includes('SECRET'), 'titles and summaries never leave the reader');
-  assert.equal(meta.readCards(file), cards, 'an unchanged file is not parsed again');
+  assert.equal(meta.readCards(file, 30000), cards, 'an unchanged file is not parsed again');
+  fs.writeFileSync(file, JSON.stringify({ v: 1, tasks: {} }));
+  assert.equal(meta.readCards(file, 32000), cards, 'a change within 5 s waits');
+  assert.equal(meta.readCards(file, 36000).size, 0, 'and is read after 5 s');
 });
 test('unchanged hook files, rollups and rosters are served from the stat cache; a change is read again', (t) => {
   const dir = fixtureDir(t), now = Date.parse('2026-11-07T12:00:00Z'), file = path.join(dir, 'a.json');

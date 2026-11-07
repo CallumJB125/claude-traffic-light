@@ -69,7 +69,7 @@ function cached(file, read, id = file) {
   return value;
 }
 const readJsonCached = (file, cap) => cached(file, () => readJson(file, cap));
-function clearCache() { fileCache.clear(); cacheStats.hits = 0; cacheStats.reads = 0; }
+function clearCache() { fileCache.clear(); cardsLast.clear(); cacheStats.hits = 0; cacheStats.reads = 0; }
 
 // Bounded read of one owner-owned regular file; never follows a symlink.
 function readJson(file, cap = 128 * 1024) {
@@ -290,8 +290,16 @@ function boardView(board) {
 // roster does not cover (Plexiform not running, or a roster over five minutes
 // old). Keyed provider|session id, newest task wins; titles and summaries are
 // never read into the result.
-function readCards(file) {
-  return cached(file, () => cardsFrom(readJson(file, 8 * 1024 * 1024)), `${file}#cards`) || new Map();
+// work-capture.json can be megabytes and Plexiform rewrites it on every capture
+// pass; boards change rarely, so a change re-parses it at most every 5 s.
+const CARDS_MIN_MS = 5000;
+const cardsLast = new Map();
+function readCards(file, now = Date.now()) {
+  const last = cardsLast.get(file);
+  if (last && now - last.at < CARDS_MIN_MS) return last.out;
+  const out = cached(file, () => cardsFrom(readJson(file, 8 * 1024 * 1024)), `${file}#cards`) || new Map();
+  cardsLast.set(file, { at: now, out });
+  return out;
 }
 function cardsFrom(doc) {
   const out = new Map();
