@@ -82,6 +82,7 @@ const state = {
   integ: { status: 'idle', data: null, error: null, open: null, audit: {}, tokenFor: null, manifest: null, confirmDisconnect: null },
   pub: { status: 'idle' },
   cardsRev: 0,
+  routes: null, // loadRoutes(): why each card is on this board, from the app
   selection: new Set(), // card ids picked with Shift/⌘-click
   drag: null, // pointer drag in flight: {ids, over, mode}
   kbd: null, // keyboard pick-up: {ids, from, over}
@@ -170,6 +171,22 @@ function movePlan(id, direction, destination = null) {
 }
 const canOpenTeam = () => typeof globalThis.plexiformDesktop?.openTeam === 'function';
 const canOpenTimeline = () => typeof globalThis.plexiformDesktop?.openTimeline === 'function';
+// Why each card is on this board (the Plexiform app only): main answers {cards: {id: {label, tone, title, fix, pointer?, pending?}}, pending, solo}.
+const canRoutes = () => typeof globalThis.plexiformDesktop?.cardRoutes === 'function';
+let routesRev = -1, routesTimer = null, routesSeq = 0;
+function routesSoon(delay = 250) {
+  if (!canRoutes() || routesTimer) return;
+  routesTimer = setTimeout(() => { routesTimer = null; void loadRoutes(); }, delay);
+}
+async function loadRoutes() {
+  const seq = ++routesSeq;
+  routesRev = state.cardsRev;
+  let r = null;
+  try { r = await globalThis.plexiformDesktop.cardRoutes(); } catch { r = null; }
+  if (seq !== routesSeq) return;
+  state.routes = r && typeof r === 'object' && r.cards && typeof r.cards === 'object' ? r : null;
+  update();
+}
 const boardReadOnly = () => state.me?.member?.role === 'viewer' || !!state.board?.archived_at;
 const workflowScope = () => ({boardId:state.boardId,generation:boardGeneration,org:currentOrg(),member:state.me?.member?.id,user:state.me?.user?.id??state.me?.member?.user_id,
   role:state.me?.member?.role,auth:state.auth,accounts:state.authMode==='accounts',connected:state.conn.status==='open',readOnly:boardReadOnly(),epoch:state.dash?.epoch});
@@ -515,6 +532,8 @@ function buildModel() {
     planner: plannerState(),
     dashboard: state.view === 'dashboard' ? dashboardModel(live) : null,
     localCard: state.authMode === 'local' && !state.localCardDismissed,
+    routes: state.routes,
+    solo: state.routes ? state.routes.solo === true : null,
     openTeam: canOpenTeam(),
     accounts: state.authMode === 'accounts',
     local: state.authMode === 'local',
@@ -669,6 +688,7 @@ function update() {
 // Synchronous render, for callers that measure the DOM right after (FLIP).
 function renderNow() {
   queued = false;
+  if (state.cardsRev !== routesRev && state.board) routesSoon();
   if(state.dialog?.journey&&state.dialog.mode!=='execution-unavailable'&&!workflowJourney.current(state.dialog))workflowJourney.invalidate();
   render(root, screen());
   syncDialogs();
@@ -2422,6 +2442,7 @@ function onClick(e) {
     case 'history-open': state.history.selected = el.dataset.run; update(); openDetail(cardId); return;
     case 'open-team': if (canOpenTeam()) globalThis.plexiformDesktop.openTeam(); return;
     case 'open-timeline': if (canOpenTimeline() && cardId) globalThis.plexiformDesktop.openTimeline(cardId); return;
+    case 'route-fix': if (el.dataset.fix === 'session') { if (cardId) localSessionAction(cardId, 'open'); } else globalThis.plexiformDesktop?.routeFix?.(el.dataset.fix); return;
     case 'open-session': if (cardId) localSessionAction(cardId, 'open'); return;
     case 'local-handover-refresh': if (cardId) localSessionAction(cardId, 'refresh'); return;
     case 'local-handover-copy': if (cardId) localSessionAction(cardId, 'copy'); return;
@@ -2749,6 +2770,7 @@ setInterval(async () => {
 
 loadTheme();
 loadLocalCard();
+globalThis.plexiformDesktop?.onCardRoutesChanged?.(() => routesSoon(50));
 loadView();
 loadFilters();
 takeDevSecretFromHash();

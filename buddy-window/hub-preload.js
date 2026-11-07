@@ -11,4 +11,8 @@ contextBridge.exposeInMainWorld('plexiformDesktop', Object.freeze({
   continueIn: (cardId) => ipcRenderer.invoke('buddy:continue-in', String(cardId).slice(0, 100)),
   handoverAction: (cardId, action) => ['refresh', 'copy', 'save'].includes(action) ? ipcRenderer.invoke('buddy:card-session-action', action, String(cardId).slice(0, 100)) : Promise.resolve({ ok: false }),
   openSession: (cardId) => ipcRenderer.invoke('buddy:card-session-action', 'open', String(cardId).slice(0, 100)),
+  // Why each card is on this board, and the page that changes it (main decides which cards; plain strings only).
+  cardRoutes: () => ipcRenderer.invoke('buddy:card-routes'),
+  onCardRoutesChanged: (cb) => { ipcRenderer.on('buddy:card-routes-changed', () => cb()); },
+  routeFix: (fix) => { if (['link', 'choose', 'exclude', 'invite'].includes(fix)) ipcRenderer.send('buddy:route-fix', fix); },
 }));

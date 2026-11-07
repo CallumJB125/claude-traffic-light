@@ -39,6 +39,7 @@ const OptimiserTools = require('../src/optimiser-tools');
 const { createWorkCapture, repoFor } = require('../src/work-capture');
 const { createMyDayBroker } = require('../src/my-day-broker');
 const { createSessionBridge } = require('./session-bridge');
+const BoardWhy = require('../src/board-why-view');
 
 const SIDEBAR_W = 216;
 const USAGE_TABS_H = 40; // R7-2: the Usage tab strip, over the content area (chat-first preview only)
@@ -317,6 +318,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     },
     onChange() {
       if (flow.acct.screen === 'thismac' && accountView && !accountView.webContents.isDestroyed()) accountView.webContents.send('buddy:acct:changed');
+      routingSoon();
       const on = workCapture.enabled();
       if (on !== captureWas) { captureWas = on; onCaptureChange(on); }
     },
@@ -518,6 +520,23 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     optimiser.sync();
   }
 
+  // Board routing for the sidebar switcher and the board page (src/board-why-view.js): the cards made here per
+  // workspace, how many wait for a team hub, and whether the person is solo (no team: no team words anywhere).
+  function routingState() {
+    const workspaces = store.list();
+    const rows = captureEnabled ? workCapture.snapshot() : [];
+    const counts = BoardWhy.workspaceCounts(rows, workspaces);
+    return { solo: BoardWhy.isSolo(workspaces), counts, pending: Object.values(counts).reduce((n, c) => n + c.pending, 0) };
+  }
+  let routingTimer = null;
+  function routingSoon() {
+    if (routingTimer) return;
+    routingTimer = setTimeout(() => {
+      routingTimer = null;
+      if (sidebar && !sidebar.webContents.isDestroyed()) sidebar.webContents.send('buddy:state', { routing: routingState() });
+      if (hubView && !hubView.webContents.isDestroyed()) hubView.webContents.send('buddy:card-routes-changed');
+    }, 400);
+  }
   function pushState() {
     if (chatFirst === true) sendUsageTabs();
     // The selection left the thread before its next view is attached (a hub page loads first).
@@ -548,6 +567,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
         : [...vaults.values()].some(v => v.state() === 'locked') ? 'locked' : 'ready',
       accountStorageHelp: storageHelp(),
       runners: flow.runningTeams(),
+      routing: routingState(),
       ...(chatFirst === true ? { chat: { focus: sidebarFocus, thread: selected === 'thread' ? threadId : null, chats: chatsAllowed() } } : {}),
       hub: team
         ? { state: viewError ? 'failed' : 'ready', error: viewError, mode: 'team', name: team.name }
@@ -1380,7 +1400,7 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
       try {
         const result = await fn(...args);
         // projects: one row per repository with a team board, worded like the Sessions strip (src/work-routing-view.js).
-        return op === 'state' && result?.screen === 'thismac' ? { ...result, workCapture: { enabled: captureEnabled && workCapture.enabled(), notice: workCapture.notice(), tasks: workCapture.snapshot().slice(-100),
+        return op === 'state' && result?.screen === 'thismac' ? { ...result, workCapture: { enabled: captureEnabled && workCapture.enabled(), notice: workCapture.notice(), tasks: (() => { const solo = BoardWhy.isSolo(store.list()); return workCapture.snapshot().slice(-100).map((t) => ({ ...t, chip: BoardWhy.chip(t, { solo }) })); })(),
           projects: captureEnabled ? require('../src/work-routing-view.js').rowsFor(await workCapture.routing().catch(() => [])).map(({ repo, short, goesTo, note, change }) => ({ repo, short, goesTo, note, change })) : [] } } : result;
       } catch (err) { log('account action failed', op, err.message); return { ok: false, error: 'Something went wrong. Try again.' }; }
     });
@@ -1407,6 +1427,19 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     return wc && e.sender === wc && e.senderFrame === wc.mainFrame && isLocalPage(e.senderFrame.url) ? selectedSessionKey : null;
   });
   ipcMain.on('buddy:open-team', (e) => { if (fromHubView(e)) select('team'); });
+  // Why each card on the showing board is there (BOARD_WHY in words) and its one fix. Only that board's cards,
+  // from the work records kept here; a pointer card carries no detail at all.
+  ipcMain.handle('buddy:card-routes', (e) => {
+    if (!fromHubView(e) || !captureEnabled) return null;
+    const scope = hubInfo.team ? { hub: hubInfo.origin, team: hubInfo.org ?? null } : { hub: null };
+    const solo = BoardWhy.isSolo(store.list());
+    return { ...BoardWhy.forBoard(workCapture.snapshot(), scope, { solo }), solo };
+  });
+  // A chip's fix opens the page where the person changes that rule; nothing is changed for them.
+  ipcMain.on('buddy:route-fix', (e, fix) => {
+    if (!fromHubView(e) || typeof fix !== 'string' || !Object.hasOwn(BoardWhy.FIX_PAGE, fix)) return;
+    select(BoardWhy.FIX_PAGE[fix]);
+  });
   ipcMain.handle('buddy:local-handover', async (e, cardId) => {
     if (!fromHubView(e)) return null;
     try { return await sessionBridge.localHandover(cardId); } catch { return null; }

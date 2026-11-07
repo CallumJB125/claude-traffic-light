@@ -63,6 +63,14 @@ for (const [status, text] of [
     assert.equal(home.disabled, false);
     home.click();
     assert.deepEqual(f.sent, [['buddy:select', 'home']]);
+    // Solo: one gentle "Invite your team" instead of a switcher with nothing to switch to.
+    assert.equal(f.document.querySelector('#ws-select'), null);
+    const invite = f.document.querySelector('.ws-invite');
+    assert.equal(invite.disabled, false);
+    invite.click();
+    assert.deepEqual(f.sent.at(-1), ['buddy:select', 'team']);
+    // With a team: the switcher, still usable while sign-in is busy.
+    f.update({ accountStorage: status, signedIn: true, workspaces: [{ id: 'local', name: 'My board', kind: 'local' }, { id: 'team:x', name: 'Acme', kind: 'team' }] });
     const workspace = f.document.querySelector('#ws-select');
     assert.equal(workspace.disabled, false);
     workspace.value = 'signin';

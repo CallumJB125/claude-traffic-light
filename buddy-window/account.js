@@ -618,7 +618,8 @@ const SCREENS = {
         const status = t.untracked ? 'Tracking stopped' : !t.card_id ? 'Waiting to sync' : (STATUS[t.status] ?? 'Active');
         const row = el('div', { class: 'acct-item' }, el('div', { class: 'acct-who' },
           el('span', { class: 'acct-name' }, t.title), el('span', { class: 'acct-mail' }, `${destination} · ${status}`),
-          d.needs_routing ? el('span', { class: 'acct-mail' }, d.reason === 'team_read_only' ? 'Your team role is read-only, so this card stays personal.' : 'This repository is linked to more than one board. Choose where its new work goes in the table above; this card stays on My board.') : null));
+          t.chip ? el('span', { class: `acct-why acct-why-${['team', 'personal', 'warn', 'muted'].includes(t.chip.tone) ? t.chip.tone : 'muted'}`, title: t.chip.title || '' }, t.chip.label) : null,
+          !t.chip && d.needs_routing ? el('span', { class: 'acct-mail' }, d.reason === 'team_read_only' ? 'Your team role is read-only, so this card stays personal.' : 'This repository is linked to more than one board. Choose where its new work goes in the table above; this card stays on My board.') : null));
         sec.append(row);
       }
       if (!s.workCapture.tasks.length) sec.append(el('p', { class: 'acct-hint' }, 'Cards appear when a connected AI reports work.'));

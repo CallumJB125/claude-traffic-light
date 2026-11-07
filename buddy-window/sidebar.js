@@ -202,15 +202,28 @@ let wsKey = '';
 function paintWorkspaces() {
   const box = document.getElementById('ws');
   const list = state.workspaces ?? [];
-  const key = JSON.stringify([list, state.active, state.signedIn]);
+  const routing = state.routing ?? null;
+  const key = JSON.stringify([list, state.active, state.signedIn, routing]);
   if (key === wsKey) return;
   wsKey = key;
   box.textContent = '';
+  // Solo (no team anywhere): no switcher and no team words, just the board and one gentle way to bring a team in.
+  if (!list.some((w) => w.kind !== 'local')) {
+    box.append(el('p', { class: 'ws-solo', id: 'ws-solo' }, state.localBoard ?? 'My board'));
+    const invite = el('button', { type: 'button', class: 'ws-invite' }, 'Invite your team');
+    invite.addEventListener('click', () => window.buddy.select('team'));
+    box.append(invite);
+    return;
+  }
   const label = el('label', { class: 'sr-only', for: 'ws-select' }, 'Workspace');
   const sel = el('select', { class: 'ws-select', id: 'ws-select' });
   const groups = new Map();
   for (const w of list) {
-    const o = el('option', { value: w.id }, w.kind === 'local' ? state.localBoard : w.name);
+    // The live cards made here, per board, so a person sees where their work went without opening each one.
+    const n = routing?.counts?.[w.id]?.cards ?? 0;
+    // The switcher is 216px wide: with a count, the personal board goes by its short name so the count stays visible.
+    const name = w.kind === 'local' ? (n ? 'My board' : state.localBoard) : w.name;
+    const o = el('option', { value: w.id, title: n ? `${n} card${n === 1 ? '' : 's'} from this computer` : null }, `${name}${n ? ` · ${n}` : ''}`);
     if (w.id === state.active) o.selected = true;
     if (w.group) {
       if (!groups.has(w.group)) { const g = el('optgroup', { label: w.group }); groups.set(w.group, g); sel.append(g); }
@@ -228,6 +241,12 @@ function paintWorkspaces() {
     if (ACTIONS.includes(v)) { wsKey = ''; paintWorkspaces(); }
   });
   box.append(label, sel);
+  const pending = Number(routing?.pending) || 0;
+  if (pending) {
+    const note = el('p', { class: 'ws-pending', role: 'status', title: 'The team board could not be reached, so Plexiform could not check which board this work belongs on. It waits on My board and moves by itself once it answers.' },
+      `${pending} card${pending === 1 ? '' : 's'} waiting to reach the team board`);
+    box.append(note);
+  }
   const active = list.find((w) => w.id === state.active);
   if (active?.kind === 'access') {
     const out = el('button', { type: 'button', class: 'ws-signout' }, `Sign out of ${active.name}`);
