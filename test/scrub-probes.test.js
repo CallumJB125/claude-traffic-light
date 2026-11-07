@@ -419,3 +419,11 @@ test('secrets: documentation examples are redacted too (docExamples off: fail cl
   assert.equal(r(`token ${'gh' + 'p_'}${'x'.repeat(36)}`), 'token [redacted]');
   assert.equal(r(`key ${'AK' + 'IA'}IOSFODNN7EXAMPLE`), 'key [redacted]');
 });
+
+test('secrets: no over-redaction of prose at a line start or of a sentence\'s full stop; credentials still go', () => {
+  for (const t of ['password manager rollout', 'Password reset flow', 'password field validation', 'password policy']) assert.equal(redactSecretsPass(t), t);
+  assert.equal(redactSecretsPass('the PIN is 1234.'), 'the PIN is [redacted].');
+  assert.equal(redactSecretsPass('password hunter2xyz'), 'password [redacted]');
+  assert.equal(redactSecretsPass('password: s3cr3t!'), 'password: [redacted]');
+  assert.equal(redactSecretsPass('Fix login: password hunter2xyz and key x'), 'Fix login: password [redacted] and key x');
+});
