@@ -29,3 +29,24 @@ test('G8: a hand-off run gets a card row at once; the asker\'s board rides along
     assert.equal(row2.originBoard, KEY);
   } finally { await b.cleanup(); }
 });
+
+// Routing audit (2026-11-07): a fallback run is the same work. The run it replaced (failed for its provider) used to
+// stay on the board as "Needs you" beside the fallback's card; now it leaves the rows (its card goes idle) once a
+// fallback names it, and a finished fallback is never hidden.
+test('a hand-off run that a fallback replaced leaves the work rows; the fallback run\'s row carries on', async () => {
+  const seen = [];
+  const b = await startBus({ delayMs: 1500, text: 'Done.' }, { engineOpts: { onWork: (rows) => seen.push(rows) } });
+  try {
+    const first = await b.handoff({ request_id: rid('fb1'), title: 'First try' });
+    const t1 = await waitFor(() => b.taskOf(first.handoff_id), { label: 'task 1' });
+    await waitFor(() => seen.findLast((r) => r.some((x) => x.taskId === t1.id)), { label: 'row 1' });
+    const second = await b.handoff({ request_id: rid('fb2'), title: 'Second try' });
+    const t2 = await waitFor(() => b.taskOf(second.handoff_id), { label: 'task 2' });
+    // What the dispatcher's fallback does (bus-provider-health.test.js checks it sets fallbackOf): the first failed for
+    // its provider and the second replaces it.
+    t1.state = 'failed';
+    t2.sourceMeta.fallbackOf = first.handoff_id;
+    const after = await waitFor(() => seen.findLast((r) => r.some((x) => x.taskId === t2.id) && !r.some((x) => x.taskId === t1.id)), { label: 'rows without the replaced run', timeoutMs: 15000 });
+    assert.ok(after.some((x) => x.taskId === t2.id && x.handoff === true));
+  } finally { await b.cleanup(); }
+});

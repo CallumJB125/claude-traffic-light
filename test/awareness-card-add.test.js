@@ -34,7 +34,8 @@ test('PR B card_add: a verified session adds a card; the session, folder, scope,
   const me = roster.self['claude|X'];
   const res = await r.call({ title: 'Fix the parser', details: 'grammar.js', request_id: rid(), cwd: r.w.repoB, provider: 'codex', handle: 'codex-evil-0000', folder: 'elsewhere', personal: true, session_id: 'T', after_note: true });
   assert.equal(res.card_id, 'card-1', JSON.stringify(res));
-  assert.deepEqual(res.board, { kind: 'team', name: 'Team board' }, 'the board name is cut to a label on the way out');
+  // The same answer bus_peers gives: the rule that decided (a closed why) comes back with it (routing audit 2026-11-07).
+  assert.deepEqual(res.board, { kind: 'team', name: 'Team board', why: 'linked_repo' }, 'the board name is cut to a label on the way out');
   assert.match(res.note, /added by an AI\. Only your person moves or closes it\./);
   assert.equal(r.adds.length, 1);
   const { s, a } = r.adds[0];

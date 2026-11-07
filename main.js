@@ -1731,6 +1731,7 @@ function getBuddy() {
   if (!buddyWin) {
     buddyWin = createBuddyWindow({
       isConstrained: () => lowPowerOn,
+      captureExcluded: (cwd) => AgentAwareness.excludedForCards(cwd),
       chatFirst: CHAT_PREVIEW,
       onHubAccountEnded: (who) => { void sessionFollowups.signedOut(who); }, // an explicit sign-out or revoked token drops that account's queued team follow-ups
       // The chat-first sidebar's collapsed groups (only read or written with the preview on).
@@ -4303,7 +4304,7 @@ function commitConfig(partial) {
   // A provider-ish setting changed: read the login shell again (debounced; the reader's cache is dropped).
   if (Object.keys(partial).some((k) => /provider|shell|gateway/i.test(k))) loginEnvHub.invalidate();
   // A changed exclude list drops every cached awareness verdict; the switch rebuilds (or removes) the roster.
-  if ('agentBus' in partial && JSON.stringify(prev.agentBus?.exclude) !== JSON.stringify(next.agentBus?.exclude)) AgentAwareness.invalidate();
+  if ('agentBus' in partial && JSON.stringify(prev.agentBus?.exclude) !== JSON.stringify(next.agentBus?.exclude)) { AgentAwareness.invalidate(); buddyWin?.captureForgetExclusions?.(); }
   else if ('agentAwareness' in partial) AgentAwareness.schedule();
   // The bus tools follow (awareness || bus) && !mcpBusUserOff: added or removed when that flips.
   if (['agentAwareness', 'agentBus', 'mcpBusUserOff'].some((k) => k in partial) && McpAutoRule.effective(prev) !== McpAutoRule.effective(next)) registerBusTools().catch(() => {});

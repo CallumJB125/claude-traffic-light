@@ -127,7 +127,7 @@ async function probeHub(origin, partition) {
   });
 }
 
-function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, onHubAccountEnded = () => {}, onPresenceLeave = () => {}, onOverviewLeft = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, chatsOn = () => true, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, threadBindShared = async () => false, openTeamRow = () => false, onThreadRetired = () => {}, newChatBusy = () => false, onNewChatRetired = () => {}, loginEnv = () => null } = {}) {
+function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onClosed = () => {}, onHubAccountEnded = () => {}, onPresenceLeave = () => {}, onOverviewLeft = () => {}, log = (...a) => console.log('[buddy-window]', ...a), isDev = !app.isPackaged, devAccountsHub = null, captureEnabled = true, onCaptureChange = () => {}, onOverviewRetired = () => {}, isConstrained = () => false, handoverWriter = () => null, spendFor = () => null, openTimeline = () => false, continueIn = null, prFor = () => null, simpleMode = () => false, chatFirst = false, chatsOn = () => true, sidebarGroups = { load: () => null, save: () => {} }, homeBusy = () => false, onHomeRetired = () => {}, threadTarget = () => null, threadBindShared = async () => false, openTeamRow = () => false, onThreadRetired = () => {}, newChatBusy = () => false, onNewChatRetired = () => {}, loginEnv = () => null, captureExcluded = null } = {}) {
   // The dev-only mock accounts hub runs on loopback; that one exact origin is
   // the only non-https hub ever accepted.
   const allowOrigins = devAccountsHub && isDev ? [devAccountsHub] : [];
@@ -307,6 +307,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     ownedRoots: [path.join(userData, 'runner'), path.join(userData, 'tasks'), path.join(userData, 'plexiform-tasks')],
     log: (message) => log('[work-capture]', message),
     home: os.homedir(),
+    // The person's exclude list and the bus's never-rules: a folder there never gets an automatic card.
+    excluded: typeof captureExcluded === 'function' ? (cwd) => captureExcluded(cwd) : null,
     factsFor: (o) => handoverWriter()?.facts?.(o.provider === 'claude' ? 'claude-code' : o.provider, o.session_id) ?? null,
     docFactsFor: (o) => handoverWriter()?.docFacts?.(o.provider === 'claude' ? 'claude-code' : o.provider, o.session_id) ?? null,
     handoverFor(o) {
@@ -1782,6 +1784,8 @@ function createBuddyWindow({ openWindow = () => {}, onLocalPage = () => {}, onCl
     captureChoose: (repo, key) => captureEnabled && workCapture.choose(repo, key),
     /** After a Link: drop "Keep on My board" so the linked board takes the project's new work (#62 review B1). */
     captureClearLocal: (repo) => captureEnabled && workCapture.clearLocal(repo),
+    /** The exclude list changed: automatic cards ask again for every folder. */
+    captureForgetExclusions: () => workCapture.forgetExclusions(),
     /** The tray's automatic-cards item: null where capture is off for this run (the demo). */
     captureState: () => (captureEnabled ? { enabled: workCapture.enabled() } : null),
     /** Main-only: captured sessions' cards and work records, for Usage & cost's cost by work. */

@@ -27,8 +27,9 @@ function recordsFor(rows, { host }) {
     // No taskTitle for an untitled task: its team card reads "Claude · <folder>" like a native session's. localTitle (the
     // prompt's first line) is read by work-capture for a My board card only.
     const title = text(r.title), localTitle = text(r.localTitle);
-    // A hand-off run (G8): originBoard is the asker's board as an opaque route key; work-capture's rule 2 reads it.
-    const originBoard = r.handoff === true && typeof r.originBoard === 'string' && /^[a-f0-9]{64}$/.test(r.originBoard) ? r.originBoard : null;
+    // A hand-off run (G8): originBoard is the asker's board as an opaque route key, or 'local' when the asker's cards go
+    // to My board; work-capture's rule 2 reads it.
+    const originBoard = r.handoff === true && typeof r.originBoard === 'string' && /^(?:[a-f0-9]{64}|local)$/.test(r.originBoard) ? r.originBoard : null;
     out.push({ source: r.ai, sessionId: r.taskId, taskId: r.taskId, host, cwd: r.root, ...(title ? { taskTitle: title } : {}),
       ...(localTitle ? { localTitle } : {}), ...(originBoard ? { originBoard } : {}), signal, updatedAt: new Date(r.changedAt).toISOString() });
   }

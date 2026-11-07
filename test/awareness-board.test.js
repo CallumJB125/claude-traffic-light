@@ -247,7 +247,9 @@ test('boardFor: the session\'s own card destination, else the route a first card
   await wc.observe([event()]);
   assert.deepEqual(wc.boardFor(event()), { kind: 'team', name: 'Plexiform team' }, 'its card\'s board');
   assert.deepEqual(await fresh(wc, { sessionId: 'thread-2', cwd: '/working/two' }), { first: { kind: 'unknown' }, then: { kind: 'team', name: 'Plexiform team' } });
-  assert.deepEqual(wc.boardFor(event({ sessionId: 'thread-3', scope: { state: 'personal' } })), { kind: 'untracked' });
+  // A personal session's automatic card goes to My board (work capture makes it there), so the line says My board,
+  // not "no cards" (routing audit 2026-11-07).
+  assert.deepEqual(wc.boardFor(event({ sessionId: 'thread-3', scope: { state: 'personal' } })), { kind: 'personal' });
   // Personal after the card went to the team: its team updates stop, and so does the line.
   await wc.observe([event({ scope: { state: 'personal' } })]);
   assert.deepEqual(wc.boardFor(event()), { kind: 'untracked' });

@@ -397,3 +397,18 @@ test('trace (acceptance 7): every op and lifecycle step is one line; a hand-off\
   } finally { w.cleanup(); }
 });
 
+
+test('routing audit: a fallback run is marked as replacing the first (fallbackOf) and keeps the asker\'s board, My board included', async () => {
+  const w = await world({ fallback: { enabled: true, order: ['codex', 'claude'] } });
+  try {
+    const caller = { provider: 'claude', cwd: w.root, origin: { ...ORIGIN, board: 'local' } };
+    const first = await w.bus.op('handoff', { request_id: 'req-ph-local-0001', to: { provider: 'any' }, title: 'Local job', brief: 'Fix the parser.', provider: 'claude' }, caller);
+    const t = await w.until(() => w.taskOf(first.handoff_id), 'codex run');
+    assert.equal(t.spec.sourceMeta.originBoard, 'local');
+    w.engine.end(t.id, 'parked', { parkReason: 'limit', failKind: null, limitResetAt: null, evidence: null });
+    const res = await w.until(() => w.bus.log.result(first.handoff_id), 'result');
+    const fb = await w.until(() => w.taskOf(res.data.fallback.handoff_id), 'fallback run');
+    assert.equal(fb.spec.sourceMeta.fallbackOf, first.handoff_id);
+    assert.equal(fb.spec.sourceMeta.originBoard, 'local');
+  } finally { w.cleanup(); }
+});

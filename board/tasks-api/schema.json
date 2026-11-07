@@ -169,6 +169,14 @@
                 "local",
                 "team"
               ]
+            },
+            "originBoard": {
+              "type": "string",
+              "pattern": "^(?:[a-f0-9]{64}|local)$"
+            },
+            "fallbackOf": {
+              "type": "string",
+              "maxLength": 256
             }
           },
           "required": [],

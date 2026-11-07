@@ -12,6 +12,9 @@ const { withDeadline, GRACE_MS } = require('./bounded-io');
 const WorkRecord = require('./work-record');
 const { untag } = require('../hooks/handover-tap.js');
 const { neutral, label } = require('../board/shared/untrusted-frame.cjs');
+const RepoScope = require('../hooks/repo-scope.js');
+const { BOARD_WHY } = require('./bus-contract.js');
+const WHYS = new Set(Object.values(BOARD_WHY));
 const PROVIDERS = new Set(['codex','cursor','gemini','hermes','claude','copilot','goose','cline','opencode','aider']);
 const ID = /^[A-Za-z0-9_.:-]{1,120}$/;
 const isId = value => typeof value==='string'&&ID.test(value);
@@ -19,7 +22,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const HASH = /^[a-f0-9]{64}$/;
 const MAX_STATE_BYTES = 2 * 1024 * 1024;
 const RETRY_MS = 15000;
-const REPO_TTL_MS = 60000, REPO_CACHE_MAX = 200;
+const REPO_TTL_MS = 60000, REPO_CACHE_MAX = 200, EXCLUDE_MS = 5000;
 const ACK_RESERVE_BYTES = 2048;
 const BACKFILL_LIMIT = 25;
 const BACKFILL_BUDGET_MS = 2000;
@@ -73,6 +76,11 @@ function compactState(v) {
     const task={destination:compactDestination(e.destination),repo:safeCanonical(e.repo),provider:e.provider,session_id:e.session_id,task_id:e.task_id,
       title:clean(e.title,200),status:['working','waiting','review','ended','idle'].includes(e.status)?e.status:null,card_id:typeof e.card_id==='string'&&ID.test(e.card_id)?e.card_id:null};
     if(e.agent===true){task.agent=true;if(typeof e.summary==='string')task.summary=e.summary.slice(0,1200);}
+    // Where it went and why survive a restart: a pending card is still re-routed, and the UI can still say why.
+    if(WHYS.has(e.why))task.why=e.why;
+    if(e.pending_route===true)task.pending_route=true;
+    if(originOf(e.inherited))task.inherited=e.inherited;
+    if(e.pointer===true)task.pointer=true;
     if(e.untracked){task.untracked=true;task.reason=clean(e.reason,64);}
     else {
       for(const k of ['last_seen','attempt_at','sent_at','retry_at'])if(Number.isFinite(e[k])&&e[k]>=0)task[k]=e[k];
@@ -156,18 +164,35 @@ function routeFor(repo,routes,choice) {
 }
 // Which board a piece of work goes to (BACKBONE plan §3.5, G8): the first rule that matches wins, and the answer
 // always says why (src/bus-contract.js BOARD_WHY). An agent never picks; Plexiform decides with this alone.
-//  1 personal mark → none · 2 inherited (a hand-off or card carries the originator's board) · 3 linked to one team
-//  board · 4 several: the person's default, else My board with a "pick board" chip · 5 not linked: My board, with a
-//  link suggestion when its GitHub org matches a linked team repo's · 6 no repo → My board · 7 catalog unknown (hub
-//  offline) → My board marked pending_route, re-routed when the catalog arrives.
+//  0 excluded folder ($HOME, a root, a dot-folder, the person's exclude list) → no card · 1 personal mark → My board
+//  only · 2 inherited (a hand-off carries the asker's board: a team route key, or 'local' for My board), withheld when
+//  the work's repo is linked to another team's board · 3 linked to one team board · 4 several: the person's default,
+//  else My board with a "pick board" chip · 5 not linked: My board, with a link suggestion when its GitHub org matches
+//  a linked team repo's · 6 no repo → My board · 7 catalog unknown (hub offline) → My board marked pending_route,
+//  re-routed when the catalog arrives.
 // destination is work capture's own form (routeFor); kind is bus_peers' (none, personal, team, choose).
 const WRITABLE=['owner','admin','member'];
+const ORIGIN_BOARD=/^(?:[a-f0-9]{64}|local)$/;
+const originOf=v=>typeof v==='string'&&ORIGIN_BOARD.test(v)?v:null;
 const orgOf=u=>typeof u==='string'?(/^([^/]+\/[^/]+)\//.exec(u)||[])[1]??null:null;
-function routeBoard({personal=false,inherited=null,repo=null,routes=[],choice=null,catalogComplete=true}={}){
-  if(personal)return {kind:'none',why:'personal_mark',destination:null};
-  if(inherited&&catalogComplete){
+function routeBoard({excluded=false,personal=false,inherited=null,repo=null,routes=[],choice=null,catalogComplete=true}={}){
+  if(excluded)return {kind:'none',why:'excluded',destination:null};
+  // A personal session's automatic card stays on this Mac (My board); it never reaches a team.
+  if(personal)return {kind:'personal',why:'personal_mark',destination:{kind:'local'}};
+  inherited=originOf(inherited);
+  if(inherited==='local')return {kind:'personal',why:'inherited',destination:{kind:'local'}};
+  // The asker's team board can't be checked yet: My board for now, re-routed (with the asker's board) later.
+  if(inherited&&!catalogComplete)return {kind:'personal',why:'deferred',pending_route:true,destination:{kind:'local'}};
+  if(inherited){
     const r=routes.find(x=>routeKey(x)===inherited&&WRITABLE.includes(x.role));
-    if(r)return {kind:'team',why:'inherited',destination:{kind:'team',...r}};
+    if(r){
+      // Never leak one team's repo onto another team's board: work in a repo linked to a team the asker's board is not
+      // in stays on My board, and the asker's board gets a pointer with no title, folder or repo.
+      // No repo (no remote, a git timeout, a rejected remote, $HOME) can't be proven to be outside another team: withheld too.
+      const linked=repo?routes.filter(x=>x.canonical_url===repo):[];
+      if(!repo||linked.length&&!linked.some(x=>x.hub===r.hub&&x.team_id===r.team_id))return {kind:'personal',why:'withheld',destination:{kind:'local'},pointer:{kind:'team',...r}};
+      return {kind:'team',why:'inherited',destination:{kind:'team',...r}};
+    }
   }
   if(!repo)return {kind:'personal',why:'no_repo',destination:{kind:'local'}};
   if(!catalogComplete)return {kind:'personal',why:'deferred',pending_route:true,destination:{kind:'local'}};
@@ -180,6 +205,25 @@ function routeBoard({personal=false,inherited=null,repo=null,routes=[],choice=nu
   const org=orgOf(repo);
   const suggest=!!org&&routes.some(r=>WRITABLE.includes(r.role)&&orgOf(r.canonical_url)===org);
   return {kind:'personal',why:suggest?'no_link_suggested':'no_link',destination:d};
+}
+// The public, deterministic resolver: context → {board, reason}. board is {kind, name?}; reason is a BOARD_WHY value.
+// cardsOn false (automatic cards off) is 'cards_off'. pointer, when set, is the asker's team board for a withheld hand-off.
+function resolveBoard({cardsOn=true,...context}={}){
+  if(!cardsOn)return {board:{kind:'none'},reason:'cards_off',destination:null};
+  const r=routeBoard(context);
+  const name=r.destination?.kind==='team'&&typeof r.destination.board_name==='string'?clean(r.destination.board_name,60):null;
+  return {board:{kind:r.kind,...(name?{name}:{})},reason:r.why,destination:r.destination,...(r.pending_route?{pending_route:true}:{}),...(r.pointer?{pointer:r.pointer}:{})};
+}
+// A filesystem root, a folder holding $HOME, or a dot-folder or ~/Library under it (hooks/repo-scope.js isProtected):
+// never a card, whatever the session did there. $HOME itself is not excluded: a session there with a real prompt
+// (Hermes runs there) gets a My board card, and never a team card (homeFolder).
+const homeFolder=(cwd,home)=>typeof cwd==='string'&&typeof home==='string'&&!!home&&path.isAbsolute(cwd)&&path.resolve(cwd)===path.resolve(home);
+function protectedFolder(cwd,home){
+  if(typeof cwd!=='string'||!path.isAbsolute(cwd))return false;
+  const dir=path.resolve(cwd);
+  if(dir===path.parse(dir).root)return true;
+  if(typeof home!=='string'||!home||!path.isAbsolute(home)||homeFolder(dir,home))return false;
+  return RepoScope.isProtected(dir,path.resolve(home));
 }
 // Cards an AI session adds with bus_card_add (PR B). The text is the AI's, so it is folded first (the same fold the
 // note frame uses), then scrubbed, and Plexiform's own provenance is appended where the AI cannot reach it: any
@@ -237,7 +281,7 @@ const routeKey = r => crypto.createHash('sha256').update(JSON.stringify([r.hub,r
 // handoverFor(o): {available, written_at} for its local handover, or null. spendFor(o): {cost_usd, route}, or null.
 // docFactsFor(o): the facts its stored handover document still holds, or null (the backfill's fallback).
 function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam,resolveRepo=repoFor,ownedRoots=[],host=null,now=Date.now,log=()=>{},onChange=()=>{},
-  factsFor=null,handoverFor=null,spendFor=null,prFor=null,docFactsFor=null,home=null,recordsFile=path.join(path.dirname(file),'work-records.json')}) {
+  factsFor=null,handoverFor=null,spendFor=null,prFor=null,docFactsFor=null,home=null,excluded=null,excludeMs=EXCLUDE_MS,recordsFile=path.join(path.dirname(file),'work-records.json')}) {
   let store;
   try {store=privateState(file,startEnabled);store.save(store.state);}
   catch {
@@ -267,6 +311,45 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
   const shows=rec=>!!(rec&&(rec.goal||rec.summary||rec.files.edited.length));
   const placeless=cwd=>typeof cwd!=='string'||!path.isAbsolute(cwd)||path.resolve(cwd)===path.parse(path.resolve(cwd)).root||typeof home==='string'&&home!==''&&path.resolve(cwd)===path.resolve(home);
   const changed=()=>{try{onChange();}catch{/* UI updates do not affect capture */}};
+  // Rule 0: never a card for a protected folder, or one the person excluded (excluded(cwd): main's agentBus.exclude
+  // check, async). Cached per folder for a minute; until the person's list answers, the protected rule alone holds.
+  const exclusionCache=new Map();
+  // A folder check can stall for good (a macOS privacy prompt nobody answers): past the deadline it counts as excluded,
+  // for that folder only, so one stuck folder never holds up every session's cards or quitting.
+  const checkExcluded=cwd=>withDeadline(done=>{Promise.resolve().then(()=>excluded(cwd)).then(v=>done(!!v),()=>done(true));},excludeMs,true)
+    .then(v=>{if(v===true&&!protectedFolder(cwd,home))log('automatic cards: a folder is excluded');return v;});
+  function excludedNow(cwd){
+    if(protectedFolder(cwd,home))return true;
+    if(typeof excluded!=='function'||typeof cwd!=='string')return false;
+    let hit=exclusionCache.get(cwd);
+    if(!hit||now()-hit.at>=REPO_TTL_MS&&!hit.pending){
+      if(!hit&&exclusionCache.size>=REPO_CACHE_MAX)exclusionCache.delete(exclusionCache.keys().next().value);
+      hit={at:hit?.at??0,known:hit?.known??false,value:hit?.value??false,pending:true};exclusionCache.set(cwd,hit);
+      const h=hit;checkExcluded(cwd).then(v=>{h.value=v;h.known=true;}).finally(()=>{h.pending=false;h.at=now();});
+    }
+    return hit.known?hit.value:null;
+  }
+  async function isExcluded(cwd){
+    if(protectedFolder(cwd,home))return true;
+    if(typeof excluded!=='function'||typeof cwd!=='string')return false;
+    const hit=exclusionCache.get(cwd);
+    if(hit?.known&&now()-hit.at<REPO_TTL_MS)return hit.value;
+    // A check that fails is an exclusion: never a card for a folder Plexiform could not clear.
+    const value=await checkExcluded(cwd);
+    if(!exclusionCache.has(cwd)&&exclusionCache.size>=REPO_CACHE_MAX)exclusionCache.delete(exclusionCache.keys().next().value);
+    exclusionCache.set(cwd,{at:now(),known:true,value,pending:false});
+    return value;
+  }
+  const keyOf=(provider,session_id,task_id)=>crypto.createHash('sha256').update(JSON.stringify([provider,session_id,task_id])).digest('hex');
+  // A withheld hand-off's pointer on the asker's team board: Plexiform's fixed words, no title, folder, repo or summary.
+  const pointerKey=key=>crypto.createHash('sha256').update(JSON.stringify(['pointer',key])).digest('hex');
+  const pointerTitle=provider=>`${AGENT_NAMES[provider]??'An AI'} \u00b7 hand-off running in another team's repo`;
+  function addPointer(next,key,e,pointer){
+    const pk=pointerKey(key);
+    if(next.tasks[pk]||!pointer)return;
+    next.tasks[pk]={destination:compactDestination(pointer),repo:null,provider:e.provider,session_id:`ptr-${pk.slice(0,32)}`,task_id:`${e.task_id}.pointer`.slice(0,120),
+      title:pointerTitle(e.provider),status:null,card_id:null,pointer:true,why:'withheld',last_seen:now()};
+  }
   // The remembered board for a repo: a team pin, an explicit "Keep on My board", or none.
   const choiceOf=repo=>!repo?null:Object.hasOwn(state.choices,repo)?state.choices[repo]:state.local_choices?.[repo]===true?{kind:'local'}:null;
   const pinCount=()=>Object.keys(state.choices).length+Object.keys(state.local_choices??{}).length;
@@ -331,10 +414,17 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       const o=observation(raw,{ownedRoots,host});if(!o)continue;
       const key=crypto.createHash('sha256').update(JSON.stringify([o.provider,o.session_id,o.task_id])).digest('hex');current.add(key);
       let entry=state.tasks[key];
+      if(state.tasks[pointerKey(key)])current.add(pointerKey(key));
       if(entry?.untracked||entry?.agent)continue;
       if(o.personal&&entry?.destination.kind==='team'){
         if(commit(next=>{next.tasks[key].untracked=true;next.tasks[key].reason='personal_override';}))changed();
         log('automatic team updates stopped for personal work');continue;
+      }
+      // A folder excluded after its card was made: the card stops updating (the pointer too), like a personal mark.
+      if(entry&&await isExcluded(o.cwd)){
+        const pk=pointerKey(key);
+        if(commit(next=>{for(const k of [key,pk])if(next.tasks[k]){next.tasks[k].untracked=true;next.tasks[k].reason='excluded';}}))changed();
+        log('automatic updates stopped for an excluded folder');continue;
       }
       // Apply age on every activity request, including changed preferences and
       // retries. Source timestamps are reported change markers, never verified
@@ -344,15 +434,24 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       // account: it waits for a prompt, a summary or an edit before it gets a card.
       if(!entry&&!untag(raw.taskTitle)&&placeless(o.cwd)&&!shows(recordFor(o,raw)))continue;
       if(!entry){if(Object.keys(state.tasks).length>=2000){log('automatic card limit reached');continue;}
-        const repo=safeCanonical(await resolveRepo(o.cwd));
+        // Rule 0: an excluded or protected folder ($HOME included) never gets a card.
+        if(await isExcluded(o.cwd))continue;
+        // $HOME is never a team's repo, even when it is a dotfiles checkout: My board only.
+        const repo=homeFolder(o.cwd,home)?null:safeCanonical(await resolveRepo(o.cwd));
         if(typeof o.cwd==='string')remember(o.cwd,repo);
         if(stopped||state.enabled===false)return;
         if(!fresh(raw))continue;
+        // Hub offline: an automatic card waits rather than land on a board it may have to leave. The session keeps
+        // reporting, so its one card is made on the right board as soon as the catalog arrives (an AI-added card,
+        // made once, waits on My board instead: addAgentCard).
         if(!o.personal&&!catalog.complete){log('automatic card routing awaits a current team catalog');continue;}
-        // G8 rule 2: a run a hand-off started (originBoard, a route key) goes to the asker's board when it can write there.
-        const inherited=typeof raw.originBoard==='string'&&HASH.test(raw.originBoard)?routeBoard({inherited:raw.originBoard,repo,routes:catalog.routes??[],choice:choiceOf(repo)}):null;
-        const destination=compactDestination(o.personal?{kind:'local'}:inherited?.why==='inherited'?inherited.destination:routeFor(repo,catalog.routes??[],choiceOf(repo)));
-        if(!commit(next=>{next.tasks[key]={destination,repo,provider:o.provider,session_id:o.session_id,task_id:o.task_id,title:o.title,status:null,card_id:null,last_seen:now()};},ACK_RESERVE_BYTES))continue;
+        // One resolver for every path (routeBoard): a hand-off run carries its asker's board (originBoard, rule 2).
+        const inherited=originOf(raw.originBoard);
+        const route=routeBoard({personal:o.personal,inherited,repo,routes:catalog.complete===true?catalog.routes??[]:[],choice:choiceOf(repo),catalogComplete:catalog.complete===true});
+        if(route.kind==='none')continue;
+        const destination=compactDestination(route.destination);
+        if(!commit(next=>{next.tasks[key]={destination,repo,provider:o.provider,session_id:o.session_id,task_id:o.task_id,title:o.title,status:null,card_id:null,last_seen:now(),why:route.why,
+          ...(route.pending_route?{pending_route:true}:{}),...(inherited?{inherited}:{})};addPointer(next,key,next.tasks[key],route.pointer);},ACK_RESERVE_BYTES))continue;
         entry=state.tasks[key];changed();}
       const currentRoute=routesByKey.get(routeKey(entry.destination));
       const {title,summary}=cardText(o,raw,entry,currentRoute);
@@ -364,15 +463,21 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       // change marker detects new observations, never verified liveness.
       const marker=typeof raw.updatedAt==='string'?raw.updatedAt.slice(0,100):null;
       const fingerprint=crypto.createHash('sha256').update(JSON.stringify([body,marker])).digest('hex');
-      if(entry.fingerprint===fingerprint)continue;
-      await send(key,body,{fingerprint,title,raw});
+      const pk=pointerKey(key),pointer=state.tasks[pk];
+      if(entry.fingerprint!==fingerprint)await send(key,body,{fingerprint,title,raw});
+      // The pointer follows the work's state only: working, needs you, done.
+      if(pointer&&!pointer.untracked){
+        const pbody={install_id:state.install_id,provider:pointer.provider,session_id:pointer.session_id,task_id:pointer.task_id,repo_id:pointer.destination.repo_id??null,title:pointer.title,status:o.status};
+        const pfp=crypto.createHash('sha256').update(JSON.stringify([pbody,marker])).digest('hex');
+        if(pointer.fingerprint!==pfp)await send(pk,pbody,{fingerprint:pfp,title:pointer.title,raw});
+      }
     }
     for(const [key,entry]of Object.entries(state.tasks)) {
       if(stopped||state.enabled===false)return;
       // A card an AI added stays where the board put it until the person moves it: never swept.
       if(current.has(key)||entry.agent||entry.untracked||!entry.card_id||entry.status==='idle'||now()-entry.last_seen<30000)continue;
       const body={install_id:state.install_id,provider:entry.provider,session_id:entry.session_id,task_id:entry.task_id,repo_id:entry.destination.repo_id??null,title:entry.title,status:'idle'};
-      records.setStatus(`${state.install_id}:${entry.provider}:${entry.session_id}`,'idle');
+      if(!entry.pointer)records.setStatus(`${state.install_id}:${entry.provider}:${entry.session_id}`,'idle');
       await send(key,body);
     }
   }
@@ -456,16 +561,21 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     if(stopped)return unknown;
     if(state.enabled===false)return {kind:'off',why:'cards_off'};
     const o=observation(raw,{ownedRoots,host});if(!o)return unknown;
-    if(o.personal)return {kind:'untracked',why:'personal_mark'};
-    const entry=state.tasks[crypto.createHash('sha256').update(JSON.stringify([o.provider,o.session_id,o.task_id])).digest('hex')];
-    if(entry?.untracked)return {kind:'untracked',why:'personal_mark'};
+    const entry=state.tasks[keyOf(o.provider,o.session_id,o.task_id)];
+    // Rule 0: an excluded folder gets no card at all; until the person's list has answered, say nothing yet.
+    const ex=excludedNow(o.cwd);
+    if(ex===true)return {kind:'untracked',why:'excluded'};
+    // A personal session that already had a team card stops updating it; one without keeps its card on My board.
+    if(entry?.untracked||o.personal&&entry?.destination.kind==='team')return {kind:'untracked',why:'personal_mark'};
+    if(o.personal)return {kind:'personal',why:'personal_mark'};
+    if(ex===null&&!entry)return unknown;
     let d=entry?.destination,why=entry?.why??null;
     // A card kept on My board while the repo had no default board stays there once one is picked.
     if(d&&d.kind==='local'&&d.needs_routing&&!d.reason&&entry.repo&&choiceOf(entry.repo))return {kind:'personal',why:'repo_default'};
     if(!d||d.kind==='team'){
       if(!d){
         if(typeof o.cwd!=='string'||!path.isAbsolute(o.cwd))return unknown;
-        const r=repoOf(o.cwd);if(!r)return unknown;
+        const r=homeFolder(o.cwd,home)?{repo:null}:repoOf(o.cwd);if(!r)return unknown;
         // Not fetched yet: unknown (ask again soon). Fetched but incomplete (hub offline), rule 7: My board for now.
         if(!lastCatalogAt)return unknown;
         const route=routeBoard({repo:r.repo,routes:catalog.routes??[],choice:choiceOf(r.repo),catalogComplete:catalog.complete===true});
@@ -476,6 +586,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     }
     if(d.kind==='team'){const route=(catalog.routes??[]).find(x=>routeKey(x)===routeKey(d));return {kind:'team',name:typeof route?.board_name==='string'?route.board_name.slice(0,200):'',why:why??'linked_repo',key:routeKey(d)};}
     if(entry?.pending_route)return {kind:'personal',why:'deferred',pending_route:true};
+    if(why==='withheld'||why==='inherited'&&d.kind==='local')return {kind:'personal',why};
     return {kind:d.reason==='team_read_only'?'readonly':d.needs_routing?'choose':'personal',why:why??(d.reason==='team_read_only'?'read_only':d.needs_routing?'choose':'no_link')};
   }
   // The session's own hook facts (files it edited, when it started), for main's soft real-work check.
@@ -524,6 +635,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     if(complete){catalog=fresh;lastCatalogAt=now();}
     const repo=safeCanonical(await resolveRepo(o.cwd));
     remember(o.cwd,repo);
+    if(await isExcluded(o.cwd))return {reason:'EXCLUDED',message:'Plexiform does not add cards for this folder.'};
     if(stopped)return refuse('UNAVAILABLE');
     if(state.enabled===false)return refuse('CARDS_OFF');
     // A retry of a request whose answer was lost (the hub may already hold that card) resends exactly what was sent
@@ -534,7 +646,8 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       destination=prior.destination;cardTitle=prior.title;summary=typeof prior.summary==='string'?prior.summary:null;why=prior.why??null;pending=prior.pending_route===true;
     } else {
       // Rule 2: a hand-off carries the originator's board (a route key main took from boardFor); else rules 3 to 7.
-      const route=routeBoard({inherited:typeof a.origin_board==='string'&&HASH.test(a.origin_board)?a.origin_board:null,repo,routes:complete?fresh.routes??[]:[],choice:choiceOf(repo),catalogComplete:complete});
+      const inherited=originOf(a.origin_board);
+      const route=routeBoard({inherited,repo,routes:complete?fresh.routes??[]:[],choice:choiceOf(repo),catalogComplete:complete});
       if(route.why==='read_only')return refuse('READ_ONLY');
       if(Object.keys(state.tasks).length>=2000)return refuse('UNAVAILABLE');
       // Rule 4 with no default: My board with the "pick board" chip (needs_routing), never a refusal.
@@ -542,7 +655,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       summary=agentSummary({provider:o.provider,handle:a.handle,folder:a.folder,afterNote:a.after_note===true,details:a.details});
       // Scrubbed for a team board before it is saved, so what is stored is what is sent, and a retry sends it byte for byte.
       if(destination.kind==='team')({title:cardTitle,summary}=teamBody(destination,{title:cardTitle,summary}));
-      if(!commit(next=>{next.tasks[key]={destination,repo,provider:o.provider,session_id:o.session_id,task_id,title:cardTitle,summary,status:null,card_id:null,agent:true,last_seen:now(),why,...(pending?{pending_route:true}:{})};},ACK_RESERVE_BYTES))return refuse('UNAVAILABLE');
+      if(!commit(next=>{next.tasks[key]={destination,repo,provider:o.provider,session_id:o.session_id,task_id,title:cardTitle,summary,status:null,card_id:null,agent:true,last_seen:now(),why,...(pending?{pending_route:true}:{}),...(inherited?{inherited}:{})};},ACK_RESERVE_BYTES))return refuse('UNAVAILABLE');
       changed();
     }
     // The board's to-do state, never "Needs you": 'idle' is a status no hub moves to its own column, and the sweep and
@@ -557,7 +670,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     if(complete)void reroutePending(fresh);
     return {card_id:id,title:cardTitle,board:agentBoard(destination,why,pending)};
   }
-  // Rule 7's second half: cards written to My board while the hub was offline go to the board the catalog now
+  // Rule 7's second half: AI-added cards written to My board while the hub was offline go to the board the catalog now
   // gives. A team board gets the card (team-scrubbed); the My board copy is closed with one line saying it moved.
   // A send that fails leaves it pending for the next catalog. One pass at a time.
   let rerouting=null;
@@ -567,7 +680,8 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       for(const [key,e] of Object.entries(state.tasks)){
         if(stopped||state.enabled===false)return;
         if(!e.agent||!e.pending_route||!e.card_id)continue;
-        const route=routeBoard({repo:e.repo,routes:fresh.routes??[],choice:choiceOf(e.repo),catalogComplete:true});
+        // The asker's board it was carrying (rule 2) still decides, now that it can be checked.
+        const route=routeBoard({inherited:e.inherited??null,repo:e.repo,routes:fresh.routes??[],choice:choiceOf(e.repo),catalogComplete:true});
         if(route.kind!=='team'){
           if(commit(next=>{const x=next.tasks[key];if(x){delete x.pending_route;x.why=route.why;if(route.destination)x.destination=compactDestination(route.destination);}}))changed();
           continue;
@@ -589,7 +703,8 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
   async function drain() {while(latest&&!stopped){const next=latest;latest=null;await pass(next);}}
   function kick(){if(stopped||state.enabled===false)return;
     if(!active){active=drain().catch(()=>log('automatic cards unavailable')).finally(()=>{active=null;if(latest&&!stopped)kick();});}return active;}
-  return {observe(sessions,{wrapped=[]}={}){if(stopped||state.enabled===false)return;
+  return {forgetExclusions(){exclusionCache.clear();},
+    observe(sessions,{wrapped=[]}={}){if(stopped||state.enabled===false)return;
       latest={sessions:Array.isArray(sessions)?sessions:[],wrapped:Array.isArray(wrapped)?wrapped:[]};return kick();},
     // One-off card for one session, whatever the automatic toggle says. Same identity and
     // routing as the automatic path, so a session that already has a card never gets a second.
@@ -632,7 +747,8 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
       const out=[];
       for(const e of Object.values(state.tasks)){
         // An AI-added card is never an activity record: the team brief and memory are built from those (PR B review point 10).
-        if(e.untracked||e.agent||e.destination.kind!=='team')continue;
+        // A withheld hand-off's pointer must never carry the work's record to the asker's team.
+        if(e.untracked||e.agent||e.pointer||e.destination.kind!=='team')continue;
         const route=routesByKey.get(routeKey(e.destination));
         if(!route||!['owner','admin','member'].includes(route.role))continue;
         const record=WorkRecord.forShare(records.get(`${state.install_id}:${e.provider}:${e.session_id}`),route,{salt:shareSalt(),home});
@@ -643,7 +759,7 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     // Main-only: this Mac's own WorkRecords (local data, never sent by this call).
     localRecords:()=>records.list(),
     // Main-only: each captured session's card and PR, for cost per card (src/work-cost.js).
-    costRows(){return Object.values(state.tasks).filter(e=>!e.agent&&!BACKGROUND_TITLE.test(String(e.title??'').trim())).map(e=>({provider:e.provider,session_id:e.session_id,task_id:e.task_id,card_id:e.card_id,title:e.title,repo:e.repo,pr:e.pr??null,last_seen:e.last_seen??e.sent_at??null}));},
+    costRows(){return Object.values(state.tasks).filter(e=>!e.agent&&!e.pointer&&!BACKGROUND_TITLE.test(String(e.title??'').trim())).map(e=>({provider:e.provider,session_id:e.session_id,task_id:e.task_id,card_id:e.card_id,title:e.title,repo:e.repo,pr:e.pr??null,last_seen:e.last_seen??e.sent_at??null}));},
     enabled:()=>state.enabled!==false,
     notice:()=>notice,
     setEnabled(on){if(!commit(next=>{next.enabled=!!on;}))return false;if(!on)latest=null;changed();return true;},
@@ -695,16 +811,18 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     },
     choices(){return !catalog.complete?[]:(catalog.routes??[]).filter(r=>safeCanonical(r.canonical_url)&&['owner','admin','member'].includes(r.role)).map(r=>({key:routeKey(r),repo:r.canonical_url,team_name:clean(r.team_name??'Team',60),board_name:clean(r.board_name??'Board',60)}));},
     // Main-only identity join for Overview; never forwarded to a renderer.
-    overviewSnapshot(){return Object.values(state.tasks).filter(e=>!e.agent).map(e=>({provider:e.provider,session_id:e.run_id??e.session_id,task_id:e.task_id,card_id:e.card_id,untracked:!!e.untracked,destination:{...e.destination}}));},
+    overviewSnapshot(){return Object.values(state.tasks).filter(e=>!e.agent&&!e.pointer).map(e=>({provider:e.provider,session_id:e.run_id??e.session_id,task_id:e.task_id,card_id:e.card_id,untracked:!!e.untracked,destination:{...e.destination},why:e.why??null}));},
     // Main-only: the listed sessions a local handover is kept for (src/session-handover-main.js).
-    handoverRows(){return Object.values(state.tasks).filter(e=>!e.agent&&!BACKGROUND_TITLE.test(String(e.title??'').trim())).map(e=>({provider:e.provider,session_id:e.run_id??e.session_id,title:e.title,last_seen:e.last_seen??null}));},
+    handoverRows(){return Object.values(state.tasks).filter(e=>!e.agent&&!e.pointer&&!BACKGROUND_TITLE.test(String(e.title??'').trim())).map(e=>({provider:e.provider,session_id:e.run_id??e.session_id,title:e.title,last_seen:e.last_seen??null}));},
     // The This Mac list: background entries saved before capture filtered them are hidden,
     // and repeats of one piece of work collapse to a single row with a count.
     snapshot(){
       const rows=new Map();
       for(const [key,e]of Object.entries(state.tasks)){
         if(BACKGROUND_TITLE.test(String(e.title??'').trim()))continue;
-        const row={key,repo:e.repo,provider:e.provider,title:e.title,status:e.status,card_id:e.card_id,untracked:!!e.untracked,reason:e.reason??null,destination:{...e.destination},count:1,...(e.agent?{agent:true}:{})};
+        // why: the routing rule that put it there (BOARD_WHY), so the UI can say "On <board> because this repo is linked".
+        const row={key,repo:e.repo,provider:e.provider,title:e.title,status:e.status,card_id:e.card_id,untracked:!!e.untracked,reason:e.reason??null,destination:{...e.destination},count:1,
+          why:e.why??null,...(e.pending_route?{pending_route:true}:{}),...(e.agent?{agent:true}:{}),...(e.pointer?{pointer:true}:{})};
         const group=JSON.stringify([e.provider,e.title,e.destination]);
         const prev=rows.get(group);
         if(prev){row.count=prev.count+1;}
@@ -715,4 +833,4 @@ function createWorkCapture({startEnabled=false,file,getRoutes,sendLocal,sendTeam
     backfill,startBackfill,
     async stop(){stopped=true;latest=null;if(backfillTimer){clearTimeout(backfillTimer);backfillTimer=null;}await active;},idle:()=>active??Promise.resolve()};
 }
-module.exports={createWorkCapture,agentTitle,agentSummary,AGENT_TITLE_MAX,observation,isBackgroundSession,BACKGROUND_TITLE,routeFor,routeBoard,repoFor,clean,hubTitle,phase,routeKey,prBody};
+module.exports={createWorkCapture,agentTitle,agentSummary,AGENT_TITLE_MAX,observation,isBackgroundSession,BACKGROUND_TITLE,routeFor,routeBoard,resolveBoard,protectedFolder,repoFor,clean,hubTitle,phase,routeKey,prBody};

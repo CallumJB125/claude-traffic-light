@@ -220,8 +220,8 @@ test('G8: a hand-off run\'s card goes to My board by default, to the asker\'s te
   assert.equal(mine.calls[0].kind, 'local');
   assert.equal(mine.calls[0].body.title, 'Fix the parser');
   assert.equal(mine.calls[0].body.provider, 'codex');
-  // The asker's board is another team board the person can write to: rule 2 (inherited) wins over the repo's link.
-  const B = { ...R, team_id: 'team-b', board_id: 'board-b', repo_id: 'repo-b', canonical_url: 'github.com/org/other' };
+  // The asker's board is another board of the repo's own team: rule 2 (inherited) wins over the repo's link.
+  const B = { ...R, board_id: 'board-b', repo_id: 'repo-b', canonical_url: 'github.com/org/other' };
   const inh = rig(t, { getRoutes: async () => ({ routes: [R, B], complete: true }) });
   await inh.router.observe([], { wrapped: wrapped([hand({ originBoard: key(B) })]) });
   assert.equal(inh.calls[0].kind, 'team');

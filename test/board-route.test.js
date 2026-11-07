@@ -13,14 +13,21 @@ const { testTempDir } = require('./helpers/tmp');
 const R = { hub: 'https://hub.example.test', user_id: 'user-a', team_id: 'team-a', board_id: 'board-a', repo_id: 'repo-a', canonical_url: 'github.com/org/app', role: 'member', board_name: 'App board' };
 const B = { ...R, team_id: 'team-b', board_id: 'board-b', repo_id: 'repo-b', canonical_url: 'github.com/org/other', board_name: 'Other board' };
 const R2 = { ...R, board_id: 'board-a2', repo_id: 'repo-a2', board_name: 'App board 2' };
+// Another board of team A (the repo's own team), linking a different repo.
+const B2 = { ...R, board_id: 'board-a3', repo_id: 'repo-a3', canonical_url: 'github.com/org/other', board_name: 'Team A other' };
 const WHYS = new Set(Object.values(BOARD_WHY));
 const KINDS = new Set(Object.values(BOARD_KIND));
 
 test('routeBoard: the seven rules in order, each answer with a contract why', () => {
   const rows = [
     // [label, input, kind, why, extra]
-    ['1 personal mark wins over everything', { personal: true, inherited: routeKey(B), repo: R.canonical_url, routes: [R, B] }, 'none', 'personal_mark'],
-    ['2 inherited board', { inherited: routeKey(B), repo: R.canonical_url, routes: [R, B] }, 'team', 'inherited'],
+    ['1 personal mark wins over the rest: My board only', { personal: true, inherited: routeKey(B), repo: R.canonical_url, routes: [R, B] }, 'personal', 'personal_mark'],
+    ['2 inherited board, same team as the repo\'s link', { inherited: routeKey(B2), repo: R.canonical_url, routes: [R, B2] }, 'team', 'inherited'],
+    ['2 inherited board, work repo unlinked', { inherited: routeKey(B), repo: 'github.com/else/new', routes: [R, B] }, 'team', 'inherited'],
+    ['2 inherited, work repo linked to another team: withheld, My board', { inherited: routeKey(B), repo: R.canonical_url, routes: [R, B] }, 'personal', 'withheld'],
+    ['2 inherited My board (the asker\'s was)', { inherited: 'local', repo: R.canonical_url, routes: [R] }, 'personal', 'inherited'],
+    ['2 inherited while the hub is offline', { inherited: routeKey(B), repo: R.canonical_url, routes: [], catalogComplete: false }, 'personal', 'deferred', { pending_route: true }],
+    ['0 excluded folder wins over everything', { excluded: true, personal: true, inherited: routeKey(B), repo: R.canonical_url, routes: [R, B] }, 'none', 'excluded'],
     ['2 inherited, but read-only there: falls through to the repo rule', { inherited: routeKey(B), repo: R.canonical_url, routes: [R, { ...B, role: 'viewer' }] }, 'team', 'linked_repo'],
     ['3 linked to one team board', { repo: R.canonical_url, routes: [R] }, 'team', 'linked_repo'],
     ['4 linked to several, the person\'s default', { repo: R.canonical_url, routes: [R, R2], choice: { hub: R2.hub, user_id: R2.user_id, team_id: R2.team_id, board_id: R2.board_id, repo_id: R2.repo_id } }, 'team', 'repo_default'],
@@ -39,7 +46,8 @@ test('routeBoard: the seven rules in order, each answer with a contract why', ()
     assert.ok(WHYS.has(r.why) && KINDS.has(r.kind), label);
     for (const [k, v] of Object.entries(extra)) assert.equal(r[k], v, label);
   }
-  assert.equal(routeBoard({ inherited: routeKey(B), repo: R.canonical_url, routes: [R, B] }).destination.board_id, 'board-b');
+  assert.equal(routeBoard({ inherited: routeKey(B), repo: 'github.com/else/new', routes: [R, B] }).destination.board_id, 'board-b');
+  assert.equal(routeBoard({ inherited: routeKey(B), repo: R.canonical_url, routes: [R, B] }).pointer.board_id, 'board-b', 'withheld: the pointer goes to the asker\'s board');
 });
 
 const session = (extra = {}) => ({ source: 'codex', sessionId: 'thread-1', host: 'mac', cwd: '/working/app', signal: 'tool-use', updatedAt: new Date(100000).toISOString(), ...extra });
@@ -93,11 +101,15 @@ test('rule 4 with no default: My board with the "pick board" chip, not a refusal
   assert.equal(r.calls[0].kind, 'local');
 });
 
-test('rule 2: a card carrying the asker\'s board (origin_board) goes there, not to the repo\'s own link', async (t) => {
-  const r = rig(t, { value: { routes: [R, B], complete: true } });
-  const res = await r.add({ origin_board: routeKey(B) });
-  assert.deepEqual(res.board, { kind: 'team', name: 'Other board', why: 'inherited' });
-  assert.equal(r.calls[0].destination.board_id, 'board-b');
+test('rule 2: a card carrying the asker\'s board (origin_board) goes there when the repo is that team\'s, and is withheld when it is another team\'s', async (t) => {
+  const r = rig(t, { value: { routes: [R, B, B2], complete: true } });
+  const res = await r.add({ origin_board: routeKey(B2) });
+  assert.deepEqual(res.board, { kind: 'team', name: 'Team A other', why: 'inherited' });
+  assert.equal(r.calls[0].destination.board_id, 'board-a3');
+  // Team B's board would show team A's repo work: it stays on My board.
+  const leak = await r.add({ origin_board: routeKey(B) });
+  assert.deepEqual(leak.board, { kind: 'personal', why: 'withheld' });
+  assert.equal(r.calls.at(-1).kind, 'local');
   // A forged or unknown key is just ignored: the repo's own link.
   const res2 = await r.add({ origin_board: 'f'.repeat(64) });
   assert.deepEqual(res2.board, { kind: 'team', name: 'App board', why: 'linked_repo' });

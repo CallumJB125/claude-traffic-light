@@ -304,7 +304,9 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger, t
         text: taskText(ev), title: ev.data.title.slice(0, 120), cwd: ev.repo.root, ai: provider, surface: 'background', permissionLevel: 'auto-edits', planFirst: false,
         source: 'bus', sourceMeta: { displayName: 'Agent bus', handoffId: ev.handoff_id, fence: claim.fence, originTier: ev.source.tier, scope: 'local', ...(ev.card_id ? { cardId: ev.card_id } : {}),
           // G8 rule 2: the run's work inherits the asker's board (work-capture routeBoard inherited).
-          ...(ev.data?.origin?.board ? { originBoard: ev.data.origin.board } : {}) },
+          ...(ev.data?.origin?.board ? { originBoard: ev.data.origin.board } : {}),
+          // A fallback run is the same work: the run it replaces stops showing as a card of its own.
+          ...(ev.data?.fallback_of ? { fallbackOf: ev.data.fallback_of } : {}) },
         wallClockMs: s.wall_clock_min * 60_000,
         ...(provider === 'claude' && (s.caps.enabled || ev.data.budget_usd != null) ? { budgetUsd: ev.data.budget_usd ?? (ev.data.reservation || s.caps.handoff_usd) } : {}),
       };
@@ -617,7 +619,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger, t
         const agent_id = agentFor(provider, repo.root);
         // The session main verified as the caller (agent-awareness relay), for the result note (G5); never the request's.
         const origin = caller?.origin && SESSION_KEY.test(caller.origin.key ?? '') && HANDLE.test(caller.origin.handle ?? '')
-          ? { key: caller.origin.key, handle: caller.origin.handle, ...(/^[a-f0-9]{64}$/.test(caller.origin.board ?? '') ? { board: caller.origin.board } : {}) } : null;
+          ? { key: caller.origin.key, handle: caller.origin.handle, ...(/^(?:[a-f0-9]{64}|local)$/.test(caller.origin.board ?? '') ? { board: caller.origin.board } : {}) } : null;
         return post({ ...a, requestKey: `${agent_id}|${a.request_id}`, repoRoot: repo.root, brief: a.brief ?? '', ...(origin ? { origin } : {}), trace_id: caller?.trace?.trace_id,
           source: { device_id: deviceId, agent_id, provider, tier: 'local_attested', identity_source: 'local_token' },
           hop: log.hopOf(await hopDomain(caller), now() - HOUR_MS) + 1, visited: [agent_id], after_note: caller?.after_note === true });

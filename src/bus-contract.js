@@ -81,10 +81,14 @@ function providerHealth(provider, over = {}) {
 // Board routing (§3.5): first matching rule wins, and the answer always carries why.
 //   {kind, why, name?, pending_route?}
 //   kind: none | personal | team | choose
+//   src/work-capture.js resolveBoard is the one resolver: every automatic card, hand-off run, AI-added card, bus_peers
+//   and bus_hello answer comes from it, and every card keeps its why so the UI can say why it is where it is.
 const BOARD_KIND = freeze({ NONE: 'none', PERSONAL: 'personal', TEAM: 'team', CHOOSE: 'choose' });
 const BOARD_WHY = freeze({
-  PERSONAL_MARK: 'personal_mark', // 1: the person marked the session personal → none
-  INHERITED: 'inherited', // 2: started by a hand-off or card → the originator's board
+  EXCLUDED: 'excluded', // 0: $HOME, a root, a dot-folder or ~/Library, Plexiform's data, or an agentBus.exclude folder → no card at all
+  PERSONAL_MARK: 'personal_mark', // 1: the person marked the session personal → My board only (an AI's own card is refused)
+  INHERITED: 'inherited', // 2: started by a hand-off or card → the originator's board (My board when the asker's was)
+  WITHHELD: 'withheld', // 2: a hand-off whose work repo is linked to another team's board → My board, and a redacted pointer on the asker's
   LINKED_REPO: 'linked_repo', // 3: repo linked to exactly one team board
   REPO_DEFAULT: 'repo_default', // 4: linked to several boards, the person's default for the repo
   CHOOSE: 'choose', // 4: linked to several, no default → My board with a "pick board" chip

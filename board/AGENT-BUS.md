@@ -35,7 +35,7 @@ Delivery is at-least-once; dedupe by `(source agent, request_id)` (the same requ
 
 | Tool | Surface | Returns |
 |---|---|---|
-| `bus_hello {provider}` | interactive | `{agent_id, tier, scope_allowed, policy_summary}`; `policy_summary.repo_enabled` with `repo_reason` + `repo_reason_text` when false, `repo_why` when true (§7.3) |
+| `bus_hello {provider}` | interactive | `{agent_id, tier, scope_allowed, policy_summary, board?}` (`board` for a bound caller, §7.6); `policy_summary.repo_enabled` with `repo_reason` + `repo_reason_text` when false, `repo_why` when true (§7.3) |
 | `bus_handoff {request_id, to:{provider: any\|claude\|codex\|[list]}, repo?, card_id?, title, brief?, files?, branch?, budget_usd?, ttl_s?}` | interactive | `{handoff_id, state, hop, provider}` or `{reason}` (§7.4) |
 | `bus_wait {handoff_id, timeout_s ≤ 120}` | interactive | the framed result, or `{state:'pending'}` |
 | `bus_read {topic: handoff\|result, after_offset?, limit ≤ 50}` | interactive | framed events, `next_offset` |
@@ -118,16 +118,21 @@ Main passes the verified asker (`caller.origin = {key, handle, board?}`) on a ha
 The origin (which session the result note goes to) reaches the helper only over its parentPort, which only main holds: `tasks-service` sends a hand-off carrying `caller.origin` through `busMain` once the socket is up and has the bus context, and `engine.bus` drops an origin that arrives over `tasks.sock`, so no same-user process can aim a result note at a session. The same holds for `bound`: through the socket every caller is unbound (security review #1), so main sends every bound caller's `hello` and hand-off over parentPort, origin or not. A trace id is accepted on either channel. Over parentPort a hand-off's refusal keeps its wording; the note ops still return a code only.
 
 ### 7.6 Which board (G8)
-`src/work-capture.js routeBoard`: the first rule that matches wins, and every answer carries `why` (`BOARD_WHY`).
-1. Marked personal: `none`, `personal_mark`.
-2. `inherited`: the hand-off's board (main puts the asker's route key on the hand-off as `origin.board`; it reaches the run as `sourceMeta.originBoard`, and `bus_card_add` takes it as `origin_board`).
+`src/work-capture.js routeBoard` (public form `resolveBoard(context) → {board, reason}`) is the one resolver: automatic cards, Plexiform Tasks, hand-off runs, AI-added cards, `bus_peers`, `bus_hello` and `bus_card_add` all answer from it. The first rule that matches wins, and every answer carries `why` (`BOARD_WHY`), which each card keeps (also across a restart) and the This Mac list shows.
+0. Excluded: no card at all, `excluded`. A filesystem root, a folder holding `$HOME`, a dot-folder or `~/Library` under it, Plexiform's data, a `DENY_READ` path, or an `agentBus.exclude` folder or remote. A folder git could not answer for gets the path rules alone (excluded if the list names any remote) and, with no repo, a My board card. A check that does not answer in 5 s counts as excluded for that folder. Excluding a folder later stops its existing card (and pointer) from updating. `$HOME` itself is not excluded: a session there with a real prompt (Hermes) gets a My board card, never a team card. (Open: a non-git folder under a `$HOME` that is itself a dotfiles checkout still resolves the dotfiles remote.)
+1. Marked personal: My board only, `personal_mark` (an AI's `bus_card_add` is refused; a session that already had a team card stops updating it).
+2. `inherited`: the hand-off's board. Main puts the asker's board on the hand-off as `origin.board`: its team route key, or `local` when the asker's cards go to My board (unlinked, personal, read-only, or not yet chosen), so the run never lands on a team board its asker's work would not. It reaches the run as `sourceMeta.originBoard`; `bus_card_add` takes it as `origin_board`. A hand-off from a session whose board is not yet known (hub offline) carries no board. **Withheld**: when the run's repo is linked to a board of another team than the asker's, or the run has no repo Plexiform could read (no remote, git timed out, `$HOME`), so it can't be shown to be outside another team, the card stays on My board (`withheld`) and the asker's board gets a pointer, "<AI> · hand-off running in another team's repo", that follows the run's state and carries no title, folder, repo or summary (never a shared record either).
 3. One linked team board: `linked_repo`.
 4. Several: the person's default (`repo_default`); with none, My board with the pick-board chip (`choose`). Not a refusal.
 5. Not linked: My board, `no_link_suggested` when a linked repo shares its GitHub org, else `no_link`.
-6. No repo: My board, `no_repo`.
-7. Catalog incomplete (hub offline): My board with `pending_route`, `why: deferred`. The card is re-routed when a complete catalog arrives: a team card is made, and the My board copy is closed with one line saying it moved.
+6. No repo (or `$HOME`): My board, `no_repo`.
+7. Catalog incomplete (hub offline), `deferred`. An automatic card waits and is made on the right board once the catalog arrives (the session keeps reporting, so it is never on two boards). An AI-added card, made once, waits on My board with `pending_route`; when a complete catalog arrives it is re-routed (with the asker's board it carried): a team card is made, and the My board copy is closed with one line saying it moved.
 
-A hand-off run is carded from the moment the engine creates it: the engine's work rows (`onWork`, the same path as the person's own tasks, `src/wrapped-work.js`) include `source: 'bus'` tasks with `handoff: true` and the asker's `originBoard` when it has a team board, so rule 2 puts the card there; otherwise the repo rules apply (My board by default). The hand-off's title is an AI's: it is shown on My board only, and a team card reads "<AI> · <folder>" like an untitled task. The route key stays in main and the Tasks helper; offers and bus.db carry no board.
+One card per session or task: a session's card is keyed by its provider, session and task id (a Claude Code session has one task, so every turn updates the same card), a Plexiform Task's or hand-off run's by its task id, and each moves through working, needs you, review and done. A fallback run (§7.4) replaces the run it follows: the replaced run leaves the engine's work rows (its card goes idle) instead of sitting at "Needs you".
+
+A hand-off run is carded from the moment the engine creates it: the engine's work rows (`onWork`, the same path as the person's own tasks, `src/wrapped-work.js`) include `source: 'bus'` tasks with `handoff: true` and the asker's `originBoard`. The hand-off's title is an AI's: it is shown on My board only, and a team card reads "<AI> · <folder>" like an untitled task. The route key stays in main and the Tasks helper; offers and bus.db carry no board.
+
+`bus_hello` (bound callers), `bus_peers` and `bus_card_add` answer the board as `{kind, name?, why, fix?, pending_route?}`, so an AI never guesses where its work goes.
 
 ### 7.7 Trace (G11)
 `src/bus-trace.js` appends one JSONL line per bus op, shaped `{t, trace_id, span, op, from_handle, to, provider, repo_key_hash, result, reason, ms, ref}`. The file is 0600 and rotates at 5 MB. Every field passes a closed pattern, so no body, brief, title, path or CLI text can be written.

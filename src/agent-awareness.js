@@ -936,8 +936,8 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
       log(`[awareness] card ${r && r.reason ? String(r.reason).toLowerCase() : r && r.duplicate ? 'duplicate' : r && r.card_id ? 'added' : 'error'}`);
       if (!r || typeof r !== 'object') return { reason: 'UNAVAILABLE', message: 'Plexiform could not add the card just now.' };
       if (r.reason) return { reason: String(r.reason).slice(0, 32), message: typeof r.message === 'string' ? r.message.slice(0, 200) : '', ...(typeof r.fix === 'string' ? { fix: r.fix.slice(0, 200) } : {}) };
-      const board = Hook.boardOf({ board: r.board });
-      return { card_id: r.card_id, title: r.title, board: { kind: board.kind, ...(board.kind === 'team' && board.name ? { name: board.name } : {}) }, ...(r.duplicate ? { duplicate: true } : {}),
+      // The same board answer bus_peers gives, why and pending_route included, so the AI is never left to guess.
+      return { card_id: r.card_id, title: r.title, board: boardAnswer(r.board), ...(r.duplicate ? { duplicate: true } : {}),
         note: 'Plexiform marked the card as added by an AI. Only your person moves or closes it.' };
     } finally { cardBusy.delete(b.key); }
   }
@@ -956,14 +956,17 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
 const BOARD_WHY = Object.freeze({
   team: ['linked_repo', null],
   personal: ['no_link', 'To share this work, link the repo to a team board in Plexiform.'],
-  untracked: ['personal_mark', 'Your person marked this work personal; it gets no cards.'],
+  untracked: ['personal_mark', 'This work gets no cards: your person marked it personal after it had a team card, or its folder is excluded.'],
   choose: ['choose', 'Cards wait on My board until your person picks a default board for this repo in Plexiform (This Mac).'],
   readonly: ['read_only', 'Your team role is read-only; ask a team admin, or keep it on My board.'],
   off: ['cards_off', 'Automatic cards are off in Plexiform.'],
   unknown: ['unknown', 'Plexiform does not know yet. Try again in a minute; never guess the board.'],
 });
 const WHY_FIX = Object.freeze({
-  deferred: 'Plexiform could not reach the team boards just now: cards wait on My board and move when it can.',
+  deferred: 'Plexiform could not reach the team boards just now: this work\'s card is made on the right board once it can (a card you add waits on My board and moves).',
+  excluded: 'This folder is excluded in Plexiform (or is a system or dot folder), so its work gets no cards.',
+  personal_mark: 'Your person marked this work personal: its cards stay on My board and never go to a team board.',
+  withheld: 'This hand-off works in a repo linked to another team: its card stays on My board, and the asker\'s board gets a pointer with no details.',
   no_link_suggested: 'A team board already links a repo from this GitHub org: your person can link this one in Plexiform.',
   no_repo: 'This folder is not a git repo with a remote, so its cards go to My board.',
   inherited: null, repo_default: null, linked_repo: null,
@@ -1056,9 +1059,17 @@ function boardAnswer(board) {
         // Who asked, as main verified it: the hand-off's result comes back to this session as a note (G5).
         const me = op === 'handoff' && lastRoster && has(lastRoster.self, b.key) ? lastRoster.self[b.key] : null;
         let board = null;
-        try { board = op === 'handoff' ? boardFor(b.session) : null; } catch { board = null; }
-        // Rule 2 (G8): the hand-off carries the board the asker's own cards go to, as an opaque route key.
-        const originBoard = board && board.kind === 'team' && /^[a-f0-9]{64}$/.test(board.key || '') ? board.key : null;
+        try { board = boardFor(b.session); } catch { board = null; }
+        // Rule 2 (G8): the hand-off carries the board the asker's own cards go to: a team route key, or 'local' when
+        // they go to My board (so a personal or unlinked asker's hand-off never lands on a team board). Unknown or off: none.
+        const originBoard = board && board.kind === 'team' && /^[a-f0-9]{64}$/.test(board.key || '') ? board.key
+          : board && !board.pending_route && board.why !== 'deferred' && ['personal', 'untracked', 'choose', 'readonly'].includes(board.kind) ? 'local' : null;
+        // bus_hello says where this session's cards go, the same answer as bus_peers.
+        if (op === 'hello') {
+          caller = { ...caller, bound: true, provider: b.provider, ...(typeof b.session.cwd === 'string' && path.isAbsolute(b.session.cwd) ? { cwd: b.session.cwd } : {}) };
+          const r = await forward(op, args, caller);
+          return r && typeof r === 'object' && !Array.isArray(r) ? { ...r, board: boardAnswer(board) } : r;
+        }
         const origin = me && me.verified === true && typeof me.handle === 'string' ? { key: b.key, handle: me.handle, ...(originBoard ? { board: originBoard } : {}) } : null;
         if (origin) rememberOrigin(b.key);
         if (me && typeof me.handle === 'string') tc.from_handle = me.handle;
@@ -1406,7 +1417,22 @@ function boardAnswer(board) {
 
   // QoL1: a click's "is this session still running?" check (src/terminal.js): the same process checks, as a yes/no.
   const isAiProcess = (pid, provider) => (Number.isInteger(pid) && pid > 1 && ['claude', 'codex'].includes(provider) ? aiProcess(pid, provider).then(Boolean, () => false) : Promise.resolve(false));
-  return { isAiProcess, gitInfo, build, refresh, schedule, start, stop, invalidate, visible, rosterFile, classify, bindCaller, busOp, relay, syncNotes, peersForTask, ackNotices: () => ackNotices(lastRoster ? lastRoster.self : {}) };
+  // Automatic cards (src/work-capture.js excluded): the same never-rules as the bus and the roster, with the person's
+  // exclude list. $HOME itself and dot-folders are work capture's own rule ($HOME gets My board cards), so HOME and
+  // PROTECTED are left to it. A folder git could not answer for (UNRESOLVED) gets the path rules alone: work capture
+  // finds no repo there either, so it is a My board card, never a team card (a hand-off there is withheld). An exclude
+  // entry naming a remote can't be checked without git, so with one in the list it stays excluded.
+  async function excludedForCards(cwd) {
+    const { exclude } = settings();
+    const cls = await classify(cwd, exclude);
+    if (cls.allowed || cls.reason === 'HOME' || cls.reason === 'PROTECTED') return false;
+    if (cls.reason !== 'UNRESOLVED') return true;
+    if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || (exclude || []).some((k) => !path.isAbsolute(k))) return true;
+    const noGit = () => Promise.reject(new Error('unresolved'));
+    const why = await RepoScope.neverReason(path.resolve(cwd), { home, dataDirs, exclude, git: noGit, realpath }).catch(() => 'UNRESOLVED');
+    return why !== null && why !== 'HOME';
+  }
+  return { isAiProcess, gitInfo, build, refresh, schedule, start, stop, invalidate, visible, rosterFile, classify, excludedForCards, bindCaller, busOp, relay, syncNotes, peersForTask, ackNotices: () => ackNotices(lastRoster ? lastRoster.self : {}) };
 }
 
 module.exports = { create, CARD_LIMITS, REAL_WORK_MS, normalize, handleFor, allowedExe, parseLsof, lsofFiles, statusOf, interactiveOf, DEFAULTS, SESSION_FIELDS, HEARTBEAT_MS, DEBOUNCE_MS, BUILD_TIMEOUT_MS, BURST_WINDOW_MS, GROUP_BUMP_MS };

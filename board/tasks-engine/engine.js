@@ -529,8 +529,13 @@ export class TasksEngine extends EventEmitter {
   }
   #workRows() {
     const rows = [];
+    // A hand-off run that a fallback replaced (D4) is not separate work: its failed run would otherwise sit on the
+    // board as "Needs you" next to the run doing the work. Its card goes idle; the fallback run's card carries on.
+    const replaced = new Set();
+    for (const t of this.tasks.values()) if (t.source === 'bus' && typeof t.sourceMeta?.fallbackOf === 'string') replaced.add(t.sourceMeta.fallbackOf);
     for (const t of this.tasks.values()) {
       if (t.workedAt == null || !t.cardAi || !CARD_SOURCES.includes(t.source) || t.parentId) continue;
+      if (t.source === 'bus' && replaced.has(t.sourceMeta?.handoffId) && !LEASED.has(t.state)) continue;
       const root = t.repo?.root ?? t.worktree;
       if (typeof root !== 'string') continue;
       // A team card gets a title only when the person gave the task one; an untitled task's title is the first line of
@@ -538,7 +543,7 @@ export class TasksEngine extends EventEmitter {
       const bus = t.source === 'bus';
       const titled = !bus && typeof t.spec?.title === 'string' && t.spec.title.trim() !== '';
       // G8 rule 2: a hand-off run's card goes to the asker's board (a route key main put on the hand-off), if any.
-      const originBoard = bus && /^[a-f0-9]{64}$/.test(t.sourceMeta?.originBoard ?? '') ? t.sourceMeta.originBoard : null;
+      const originBoard = bus && /^(?:[a-f0-9]{64}|local)$/.test(t.sourceMeta?.originBoard ?? '') ? t.sourceMeta.originBoard : null;
       rows.push({ taskId: t.id, ai: t.cardAi, title: titled ? t.title : null, localTitle: t.title, state: t.state, blockedKind: t.blockedKind ?? null, root, changedAt: Math.max(t.stateSince ?? 0, t.workedAt),
         ...(bus ? { handoff: true } : {}), ...(originBoard ? { originBoard } : {}) });
     }
