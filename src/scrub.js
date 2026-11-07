@@ -63,13 +63,14 @@ const EXTRA_SECRETS = [
 const [PASSWORD_IS, ...LATER_SECRETS] = EXTRA_SECRETS;
 // Prose with no ":" or "=": "always use password <value> for staging", "my pin <digits>", "set the passcode to
 // <value>". A prompt like that once became a board card's title word for word. The word alone is not enough
-// ("fix the password reset flow", "pin to the map"), so the value must look like one: a PIN word takes 4 to 12
-// digits or letters with digits, a password word a digit, a symbol or inner capitals.
-const PROSE_SECRET = /(?<![\w-])(?<w>passwords?|passwd|pass ?codes?|passphrases?|pwd|pw|pins?(?:[ -]?(?:codes?|numbers?))?|pincodes?)(?:[ \t]{0,8}[:=][ \t]{0,8}|[ \t]{1,8}(?:(?:is|was|to|of|=)[ \t]{1,8}(?:[:=][ \t]{0,8})?)?)(?<v>[^\s,;]{1,256})/gi;
+// ("fix the password reset flow", "pin to the map", "Pin to node22 in CI"), so the value must look like one: a PIN
+// word takes digits only (4 or more, dashes allowed) and never "to" ("pin X to Y" pins a version), a password word a
+// digit, a symbol or inner capitals.
+const PROSE_SECRET = /(?<![\w-])(?<w>passwords?|passwd|pass ?codes?|passphrases?|pwd|pw|pins?(?:[ -]?(?:codes?|numbers?))?|pincodes?)(?:[ \t]{0,8}[:=][ \t]{0,8}|[ \t]{1,8}(?:(?<j>is|was|to|of|=)[ \t]{1,8}(?:[:=][ \t]{0,8})?)?)(?<v>[^\s,;]{1,256})/gi;
 const TRAILING = /[.,;:!?)\]}'"`]+$/;
 function proseValueOk(word, v) {
   if (!v || v === R || /^<[^>]{0,64}>$/.test(v) || /^<redacted/.test(v) || /^\{\{/.test(v) || /^\$\{?[A-Z_][A-Z0-9_]*\}?$/.test(v)) return false;
-  if (/^pin/i.test(word)) return (/^\d[\d-]{2,14}\d$/.test(v) && v.replace(/\D/g, '').length >= 4) || (v.length >= 4 && /\d/.test(v) && /[A-Za-z]/.test(v));
+  if (/^pin/i.test(word)) return /^\d[\d-]{2,14}\d$/.test(v) && v.replace(/\D/g, '').length >= 4;
   if (v.length < 4) return false;
   return /\d/.test(v) || (v.length >= 6 && /[^A-Za-z]/.test(v)) || /[a-z][A-Z]/.test(v);
 }
@@ -95,7 +96,7 @@ function redactProse(text) {
     const q = /^["'`]/.test(v) ? v[0] : '';
     if (v.slice(q.length).startsWith(R)) return m;
     const core = v.slice(q.length).replace(TRAILING, '');
-    if (!proseValueOk(g.w, core)) return m;
+    if ((/^pin/i.test(g.w) && g.j?.toLowerCase() === 'to') || !proseValueOk(g.w, core)) return m;
     const at = m.length - v.length;
     return `${m.slice(0, at)}${q}${R}${v.slice(q.length + core.length)}`;
   });

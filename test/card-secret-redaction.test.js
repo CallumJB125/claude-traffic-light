@@ -42,7 +42,7 @@ const SECRETS = [
 const BENIGN = [
   'fix the password reset flow', 'add a pin to the map', 'change password field label', 'pin 3 deps',
   'update pw hashing to argon2id', 'Rename SomeVeryLongComponentNameForTheSettingsPage', 'edit src/components/settings/PasswordForm.tsx',
-  'bump react to 18.3.1',
+  'bump react to 18.3.1', 'Pin to node22 in CI', 'pin to 2024 releases', 'pin v2beta3 for now',
 ];
 
 test('the one scrubber removes every secret shape a card, hub, note or hand-off could carry', () => {
