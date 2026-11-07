@@ -49,6 +49,28 @@ function describe(bucket, data) {
 const ms = (iso, now) => { const t = Date.parse(iso); return Number.isFinite(t) ? Math.max(0, now - t) : null; };
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 
+// Parsed files are kept while their inode, size and mtime are unchanged, so a
+// tick re-reads only what changed. lstat never follows a symlink; readJson
+// re-checks the opened file.
+const fileCache = new Map(), FILE_CACHE_MAX = 600;
+const cacheStats = { hits: 0, reads: 0 };
+function statKey(file) {
+  try { const st = fs.lstatSync(file); return st.isFile() ? `${st.ino}:${st.size}:${st.mtimeMs}` : null; } catch { return null; }
+}
+function cached(file, read, id = file) {
+  const key = statKey(file);
+  if (key === null) { fileCache.delete(id); return undefined; }
+  const hit = fileCache.get(id);
+  if (hit && hit.key === key) { cacheStats.hits++; return hit.value; }
+  cacheStats.reads++;
+  let value; try { value = read(); } catch { value = undefined; }
+  if (fileCache.size >= FILE_CACHE_MAX && !hit) fileCache.delete(fileCache.keys().next().value);
+  fileCache.set(id, { key, value });
+  return value;
+}
+const readJsonCached = (file, cap) => cached(file, () => readJson(file, cap));
+function clearCache() { fileCache.clear(); cacheStats.hits = 0; cacheStats.reads = 0; }
+
 // Bounded read of one owner-owned regular file; never follows a symlink.
 function readJson(file, cap = 128 * 1024) {
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -61,14 +83,21 @@ function readJson(file, cap = 128 * 1024) {
 }
 const privateDir = (directory) => { try { const d = fs.lstatSync(directory); return d.isDirectory() && !d.isSymbolicLink() && d.uid === process.getuid(); } catch { return false; } };
 
-// The hook's `since` is when an agent started while it works, and when it ended
-// once it is done or stopped; a finished agent's start_ms is filled in by
-// trackAgents only if this window saw it start.
-function subagentView(agents, now) {
+// The hook's `since` is when an agent started while it works (and still while it
+// waits: going to `waiting` keeps it), and when it ended once it is done or
+// stopped; a finished agent's start_ms is filled in by trackAgents only if this
+// window saw it start. wait_ms is when a waiting agent began waiting: its oldest
+// open input request's askedAt, else the moment this window saw it turn waiting
+// (trackAgents), else unknown.
+function subagentView(agents, now, asked = new Map()) {
   const all = agents.map((a) => {
     const status = text(a.status, 16) || 'unknown', live = status === 'working' || status === 'running' || status === 'waiting';
-    const out = { name: text(a.name, 40) || 'subagent', kind: a.kind === 'teammate' ? 'teammate' : 'subagent', status, start_ms: live ? ms(a.since, now) : null, end_ms: live ? null : ms(a.since, now), depth: 1 };
-    const aid = typeof a.id === 'string' ? a.id.slice(0, 64) : null;
+    const id = typeof a.id === 'string' ? a.id.slice(0, 64) : null;
+    const own = Array.isArray(a.codexInputRequests) ? a.codexInputRequests.map((r) => Date.parse(r?.askedAt)).filter(Number.isFinite) : [];
+    const askedAt = Math.min(...own, id && asked.has(id) ? asked.get(id) : Infinity);
+    const out = { name: text(a.name, 40) || 'subagent', kind: a.kind === 'teammate' ? 'teammate' : 'subagent', status, start_ms: live ? ms(a.since, now) : null, end_ms: live ? null : ms(a.since, now),
+      wait_ms: status === 'waiting' && Number.isFinite(askedAt) ? Math.max(0, now - askedAt) : null, depth: 1 };
+    const aid = id;
     Object.defineProperty(out, 'aid', { value: aid, enumerable: false });
     return { out, aid, parent: typeof a.parent === 'string' ? a.parent.slice(0, 64) : null, live, since: Date.parse(a.since) || 0 };
   });
@@ -97,7 +126,7 @@ function readMetadata(directory, now = Date.now(), { isAlive = alive } = {}) {
     if (!privateDir(directory)) return rows;
     for (const name of fs.readdirSync(directory).filter((x) => /^[\w.-]+\.json$/.test(x)).slice(0, 200)) {
       try {
-        const data = readJson(path.join(directory, name)); if (!data || typeof data !== 'object') continue;
+        const data = readJsonCached(path.join(directory, name)); if (!data || typeof data !== 'object') continue;
         const provider = Object.hasOwn(PROVIDERS, data.source) ? data.source : data.source ? 'other' : 'claude';
         const age = ms(data.updatedAt, now);
         const pid = Number(data.claudePid);
@@ -105,6 +134,12 @@ function readMetadata(directory, now = Date.now(), { isAlive = alive } = {}) {
         if (Number.isSafeInteger(pid) && pid > 1 && !isAlive(pid)) continue;
         const bucket = bucketOf(data.signal);
         const agents = Array.isArray(data.agents) ? data.agents.filter((a) => a && typeof a === 'object').slice(0, 100) : null;
+        // A subagent's open approval or question: the oldest askedAt per agent id.
+        const asked = new Map();
+        for (const r of Array.isArray(data.claudeInputRequests) ? data.claudeInputRequests.slice(0, 16) : []) {
+          const at = Date.parse(r?.askedAt);
+          if (typeof r?.agentId === 'string' && Number.isFinite(at)) asked.set(r.agentId.slice(0, 64), Math.min(at, asked.get(r.agentId.slice(0, 64)) ?? Infinity));
+        }
         const tasks = data.tasks && Number.isSafeInteger(data.tasks.created) && Number.isSafeInteger(data.tasks.done) ? { created: data.tasks.created, done: data.tasks.done } : null;
         const quiet = bucket === 'working' && age !== null && age > 10 * 60 * 1000;
         const row = {
@@ -114,7 +149,7 @@ function readMetadata(directory, now = Date.now(), { isAlive = alive } = {}) {
           status: quiet ? 'Quiet · no hook update in 10 min' : bucket === 'needs' ? 'Needs you in its own app' : bucket === 'working' ? 'Working · observed' : bucket === 'check' ? 'Finished · check its app' : bucket === 'stuck' ? 'Needs attention' : 'Idle · observed',
           age_ms: age, since_ms: ms(data.signalSince, now) ?? age, working_ms: bucket === 'working' ? ms(data.workingSince, now) : null, started_ms: ms(data.startedAt, now),
           model: modelLabel(data.model), hostApp: text(data.hostApp), interactive: data.interactive === true,
-          subagents: agents ? subagentView(agents, now) : null,
+          subagents: agents ? subagentView(agents, now, asked) : null,
           tasks, cost: null, approvals: null, branch: null, changes: null, ci: null, tabId: null, timeline: [], lane: [],
           handle: null, board: null, notesWaiting: null,
         };
@@ -154,7 +189,7 @@ function readSpend(dataDir, now = Date.now()) {
   const day = dayKey(now), out = { day, usd: null, turns: 0, unpricedTurns: 0, byCwd: new Map() };
   try {
     const dir = path.join(dataDir, 'usage/daily'); if (!privateDir(dir)) return out;
-    const doc = readJson(path.join(dir, `${day.slice(0, 7)}.json`), 16 * 1024 * 1024);
+    const doc = readJsonCached(path.join(dir, `${day.slice(0, 7)}.json`), 16 * 1024 * 1024);
     const sources = doc?.days?.[day]?.sources; if (!sources || typeof sources !== 'object') return out;
     let usd = 0;
     for (const models of Object.values(sources)) for (const [model, folders] of Object.entries(models || {})) {
@@ -175,7 +210,7 @@ function readSpend(dataDir, now = Date.now()) {
 function readCi(dataDir) {
   const out = new Map();
   try {
-    const doc = readJson(path.join(dataDir, 'git-signals.json'), 4 * 1024 * 1024);
+    const doc = readJsonCached(path.join(dataDir, 'git-signals.json'), 4 * 1024 * 1024);
     const items = [...(Array.isArray(doc?.recent) ? doc.recent : []), ...(Array.isArray(doc?.events) ? doc.events : [])].slice(0, 2000);
     for (const e of items) {
       if (!e || typeof e.branch !== 'string' || typeof e.signal !== 'string') continue;
@@ -216,28 +251,66 @@ function parseStatus(stdout) {
 
 const LANE_MS = 60 * 60 * 1000;
 
-// Board routing as the roster reports it ({kind, why, name?}). Two vocabularies
-// exist (the awareness hook's and bus-contract §3.5); both map to fixed phrases.
-// An unknown kind or why shows nothing rather than a guess.
-const BOARD_WHY_TEXT = {
-  linked_repo: 'repo is linked to this team', repo_default: 'your default board for this repo', inherited: 'started from a hand-off or card',
-  no_link: 'repo not linked to a team', no_link_suggested: 'repo not linked; a team matches its GitHub org', no_repo: 'not a git repo with a remote',
-  deferred: 'team hub offline, will re-route', read_only: 'your team role is read-only', read_only_role: 'your team role is read-only',
-  choose: 'several team boards, none chosen', multiple_links_unchosen: 'several team boards, none chosen',
-  personal_mark: 'marked personal', cards_off: 'automatic cards are off',
+// Board routing as the roster (or a card record) reports it: {kind, why, name?,
+// pending_route?}. Two vocabularies exist (the awareness hook's and bus-contract
+// §3.5 BOARD_WHY); both map to fixed phrases, a long one for the status line and
+// a short one for a sidebar row or lane. An unknown kind shows nothing rather
+// than a guess, and an unknown why shows no reason.
+const BOARD_WHY = {
+  linked_repo: ['repo is linked to this team', 'repo linked'], repo_default: ['your default board for this repo', 'your default'],
+  inherited: ['started from a hand-off or card', 'from a hand-off'], withheld: ['the hand-off’s repo belongs to another team', 'other team’s repo'],
+  no_link: ['repo not linked to a team', 'repo not linked'], no_link_suggested: ['repo not linked; a team matches its GitHub org', 'team match found'],
+  no_repo: ['not a git repo with a remote', 'no git remote'], excluded: ['folder is excluded from cards', 'folder excluded'],
+  deferred: ['team hub offline, will re-route', 'route pending'], pending_route: ['team hub offline, will re-route', 'route pending'],
+  read_only: ['your team role is read-only', 'read-only role'], read_only_role: ['your team role is read-only', 'read-only role'],
+  choose: ['several team boards, none chosen', 'pick a board'], multiple_links_unchosen: ['several team boards, none chosen', 'pick a board'],
+  personal_mark: ['marked personal', 'marked personal'], cards_off: ['automatic cards are off', 'cards off'],
 };
+// Reasons that only make sense with a team in the picture; a solo person never sees them.
+const TEAM_WHY = new Set(['linked_repo', 'repo_default', 'withheld', 'no_link', 'no_link_suggested', 'read_only', 'read_only_role', 'choose', 'multiple_links_unchosen']);
 function boardView(board) {
   if (!board || typeof board !== 'object') return null;
-  const why = BOARD_WHY_TEXT[board.why] || null;
+  const code = Object.hasOwn(BOARD_WHY, board.why) ? board.why : null;
+  const pending = board.pending_route === true || code === 'deferred' || code === 'pending_route';
+  const [why, short] = code ? BOARD_WHY[code] : pending ? BOARD_WHY.deferred : [null, null];
   const name = text(board.name, 60);
+  const base = { why, short, code, pending, team: TEAM_WHY.has(code) };
   switch (board.kind) {
-    case 'team': return { kind: 'team', label: name ? `On ${name}` : 'On a team board', why };
-    case 'personal': case 'readonly': return { kind: 'personal', label: 'My board', why };
-    case 'choose': return { kind: 'none', label: 'Board not chosen', why };
-    case 'none': case 'untracked': return { kind: 'none', label: 'No board', why };
-    case 'off': return { kind: 'none', label: 'Cards off', why };
+    case 'team': return { kind: 'team', label: name ? `On ${name}` : 'On a team board', name: name || 'Team board', ...base, team: true };
+    case 'personal': case 'readonly': return { kind: 'personal', label: 'My board', name: 'My board', ...base };
+    case 'choose': return { kind: 'none', label: 'Board not chosen', name: 'No board yet', ...base, team: true };
+    case 'none': case 'untracked': return { kind: 'none', label: 'No board', name: 'No card', ...base };
+    case 'off': return { kind: 'none', label: 'Cards off', name: 'Cards off', ...base };
     default: return null; // 'unknown' and anything new: say nothing
   }
+}
+
+// Plexiform's card records (<userData>/work-capture.json, src/work-capture.js):
+// where each captured task's card went and why. The fallback for a session the
+// roster does not cover (Plexiform not running, or a roster over five minutes
+// old). Keyed provider|session id, newest task wins; titles and summaries are
+// never read into the result.
+function readCards(file) {
+  return cached(file, () => cardsFrom(readJson(file, 8 * 1024 * 1024)), `${file}#cards`) || new Map();
+}
+function cardsFrom(doc) {
+  const out = new Map();
+  try {
+    if (!doc || typeof doc !== 'object' || doc.v !== 1 || !doc.tasks || typeof doc.tasks !== 'object') return out;
+    const seen = new Map();
+    for (const t of Object.values(doc.tasks).slice(0, 5000)) {
+      if (!t || typeof t !== 'object' || typeof t.session_id !== 'string' || !/^[\w.:-]{1,128}$/.test(t.session_id) || typeof t.provider !== 'string' || !/^[a-z]{1,16}$/.test(t.provider)) continue;
+      if (t.pointer === true) continue; // a redacted pointer on the asker's board is not this session's own card
+      const key = `${t.provider}|${t.session_id}`, at = Number.isFinite(t.last_seen) ? t.last_seen : 0;
+      if (seen.has(key) && seen.get(key) > at) continue;
+      const d = t.destination && typeof t.destination === 'object' ? t.destination : {};
+      const kind = t.untracked ? 'untracked' : d.kind === 'team' ? 'team' : d.kind !== 'local' ? null : d.needs_routing && !d.reason ? 'choose' : d.reason === 'team_read_only' ? 'readonly' : 'personal';
+      const view = kind && boardView({ kind, why: t.why ?? (t.untracked ? t.reason : null), name: d.board_name || d.team_name, pending_route: t.pending_route === true });
+      if (!view) continue;
+      seen.set(key, at); out.set(key, view);
+    }
+  } catch { /* no card records: boards stay unknown */ }
+  return out;
 }
 
 // Plexiform's awareness roster: which observed sessions are on the agent bus,
@@ -249,7 +322,7 @@ function readRoster(dataDir, now = Date.now()) {
     // Same freshness rule as Plexiform's hook: the app is running (port file) and
     // the roster was rebuilt in the last five minutes; otherwise it is ignored.
     if (!fs.existsSync(path.join(dataDir, 'port'))) return out;
-    const doc = readJson(path.join(dir, 'roster.json'), 1024 * 1024);
+    const doc = readJsonCached(path.join(dir, 'roster.json'), 1024 * 1024);
     if (!doc || typeof doc !== 'object' || doc.v !== 1) return out;
     const age = now - Date.parse(doc.generated_at);
     if (!(age >= -60000 && age < 5 * 60000)) return out;
@@ -275,28 +348,65 @@ const REASON_TEXT = {
   PROVIDER_UNAVAILABLE: 'provider unavailable', QUOTA: 'out of quota', AUTH: 'signed out', MISSING: 'not installed', CRASH: 'crashed',
   NO_ELIGIBLE_AGENT: 'no AI could take it', NO_LOCAL_CHECKOUT: 'no local checkout', POLICY_DENIED: 'not allowed here', EXCLUDED: 'folder excluded', BLOCKED: 'blocked on its person',
 };
-function readTrace(files, now = Date.now(), { windowMs = 2 * LANE_MS, cap = 1024 * 1024 } = {}) {
+const NOTE = /^note_[a-f0-9]{16,32}$/;
+const TRACE_ID = /^tr_[0-9a-f]{16}$/;
+function readTrace(files, now = Date.now(), opts = {}) { return readBus(files, now, opts).handoffs; }
+// Hand-offs and notes between sessions from the trace and its rotation (.1).
+function readBus(files, now = Date.now(), { windowMs = 2 * LANE_MS, cap = 1024 * 1024 } = {}) {
   const lines = [];
-  for (const file of [].concat(files)) tailLines(file, cap, lines);
-  return handoffsFrom(lines, now, windowMs);
+  for (const file of [].concat(files)) lines.push(...tailLines(file, cap));
+  return { handoffs: handoffsFrom(lines, now, windowMs), notes: notesFrom(lines, now, windowMs) };
 }
-function tailLines(file, cap, lines) {
+// The trace is append-only between rotations: while the inode is the same and
+// the file only grew, just the new bytes are read; a rotation (new inode), a
+// shrink or a first look reads the bounded tail again. Torn or malformed lines
+// are skipped; only hand-off and note lines are kept, and at most TRACE_KEEP.
+const traceTails = new Map(), TRACE_KEEP = 4000;
+const traceLine = (p) => /"ref"\s*:\s*"hof_|"op"\s*:\s*"note"/.test(p);
+function tailLines(file, cap) {
+  let fd;
   try {
-    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-    try {
-      const st = fs.fstatSync(fd); if (!st.isFile() || st.uid !== process.getuid()) return;
-      const len = Math.min(st.size, cap), b = Buffer.alloc(len); fs.readSync(fd, b, 0, len, st.size - len);
-      const parts = b.toString('utf8').split('\n'); if (st.size > len) parts.shift();
-      for (const p of parts) { if (p.includes('"ref":"hof_')) { try { lines.push(JSON.parse(p)); } catch { /* torn line */ } } }
-    } finally { fs.closeSync(fd); }
-  } catch { /* no trace file */ }
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const st = fs.fstatSync(fd); if (!st.isFile() || st.uid !== process.getuid()) { traceTails.delete(file); return []; }
+    let tail = traceTails.get(file);
+    // A last line with no newline yet is used if it parses, but kept as partial.
+    const withPartial = (t) => { if (!t.partial || !traceLine(t.partial)) return t.lines; try { const e = JSON.parse(t.partial); return e && typeof e === 'object' ? [...t.lines, e] : t.lines; } catch { return t.lines; } };
+    if (tail && tail.ino === st.ino && tail.size === st.size && tail.mtimeMs === st.mtimeMs) { cacheStats.hits++; return withPartial(tail); }
+    cacheStats.reads++;
+    const grew = tail && tail.ino === st.ino && st.size > tail.size && st.size - tail.size <= cap;
+    // A fresh tail reads one byte early so a window that starts on a line boundary keeps that line.
+    const from = grew ? tail.size : Math.max(0, st.size - cap - 1), len = st.size - from, b = Buffer.alloc(len);
+    const n = fs.readSync(fd, b, 0, len, from);
+    const parts = ((grew ? tail.partial : '') + b.subarray(0, n).toString('utf8')).split('\n');
+    if (!grew && from > 0) parts.shift(); // a line cut by the tail window (or the empty rest of the previous one)
+    const partial = parts.pop(); // incomplete until its newline arrives
+    const lines = grew ? tail.lines.slice() : [];
+    for (const p of parts) { if (traceLine(p)) { try { const e = JSON.parse(p); if (e && typeof e === 'object') lines.push(e); } catch { /* torn line */ } } }
+    if (lines.length > TRACE_KEEP) lines.splice(0, lines.length - TRACE_KEEP);
+    tail = { ino: st.ino, size: from + n, mtimeMs: st.mtimeMs, partial: partial.length > 64 * 1024 ? '' : partial, lines };
+    if (traceTails.size > 8 && !traceTails.has(file)) traceTails.delete(traceTails.keys().next().value);
+    traceTails.set(file, tail);
+    return withPartial(tail);
+  } catch { traceTails.delete(file); return []; /* no trace file */ } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+// Notes between sessions: who wrote to whom and when, never the note itself.
+function notesFrom(lines, now, windowMs) {
+  const byRef = new Map(), handle = (v) => typeof v === 'string' && HANDLE.test(v) ? v : null;
+  for (const e of lines) {
+    if (!e || e.op !== 'note' || e.result !== 'ok' || typeof e.ref !== 'string' || !NOTE.test(e.ref) || !Number.isFinite(e.t) || now - e.t > windowMs || now - e.t < -60000) continue;
+    const from = handle(e.from_handle), to = handle(e.to);
+    if (!from || !to || byRef.has(e.ref)) continue;
+    byRef.set(e.ref, { id: crypto.createHash('sha256').update(e.ref).digest('hex').slice(0, 12), from, to, ago_ms: Math.max(0, now - e.t) });
+  }
+  return [...byRef.values()].sort((a, b) => b.ago_ms - a.ago_ms).slice(-60);
 }
 function handoffsFrom(lines, now, windowMs) {
   const byRef = new Map();
   for (const e of lines) {
     if (!e || typeof e.ref !== 'string' || !HOF.test(e.ref) || !Number.isFinite(e.t) || now - e.t > windowMs) continue;
     let h = byRef.get(e.ref);
-    if (!h) { h = { id: crypto.createHash('sha256').update(e.ref).digest('hex').slice(0, 12), at: e.t, from: null, to: null, asker: null, provider: null, steps: new Set(), final: null, early: null, reason: null, blocked: false, last: e.t }; byRef.set(e.ref, h); }
+    if (!h) { h = { id: crypto.createHash('sha256').update(e.ref).digest('hex').slice(0, 12), at: e.t, from: null, to: null, asker: null, provider: null, steps: new Set(), final: null, early: null, reason: null, blocked: false, last: e.t, trace: null }; byRef.set(e.ref, h); }
+    if (!h.trace && typeof e.trace_id === 'string' && TRACE_ID.test(e.trace_id)) h.trace = e.trace_id;
     h.at = Math.min(h.at, e.t); h.last = Math.max(h.last, e.t);
     const handle = (v) => typeof v === 'string' && HANDLE.test(v) ? v : null;
     const reason = REASON.test(e.reason || '') ? e.reason : null;
@@ -320,7 +430,11 @@ function handoffsFrom(lines, now, windowMs) {
       if (reason === 'BLOCKED') h.blocked = true;
     }
   }
-  return [...byRef.values()].sort((a, b) => a.at - b.at).slice(-60).map((h) => {
+  // One collaboration shares a trace_id: a fallback (the bus re-posting a failed
+  // run to the next provider) and any later hand-off it caused. Each links to the
+  // one before it; a link after a failure is a fallback.
+  const sorted = [...byRef.values()].sort((a, b) => a.at - b.at).slice(-60), lastOf = new Map();
+  const out = sorted.map((h) => {
     const has = (op) => h.steps.has(op), bad = (op) => h.steps.has(`${op}:bad`);
     const stage = (label, ops) => ({ label, state: ops.some(bad) ? 'bad' : ops.some(has) ? 'done' : 'todo' });
     const state = h.final || h.early || (h.blocked ? 'blocked' : has('start') ? 'running' : has('claim') ? 'claimed' : 'sent');
@@ -329,13 +443,26 @@ function handoffsFrom(lines, now, windowMs) {
       id: h.id, from: h.from ?? h.asker, to: h.to ?? h.provider, provider: h.provider, ago_ms: Math.max(0, now - h.at), last_ms: Math.max(0, now - h.last),
       state, reason: reason ? REASON_TEXT[reason] || reason.toLowerCase().replace(/_/g, ' ') : null,
       steps: [stage('Sent', ['handoff']), stage('Claimed', ['claim']), stage('Ran', ['start']), stage('Result', ['result'])],
+      chain: h.trace ? crypto.createHash('sha256').update(h.trace).digest('hex').slice(0, 8) : null, after: null, fallback: false,
     };
   });
+  out.forEach((v, i) => {
+    const trace = sorted[i].trace; if (!trace) return;
+    const prev = lastOf.get(trace);
+    // A fallback is posted by the bus for the same asker: it inherits who asked when its own lines don't say.
+    if (prev) { v.after = prev.id; v.fallback = prev.state === 'failed' || prev.state === 'ended'; if (v.fallback) v.from ??= prev.from; }
+    lastOf.set(trace, v);
+  });
+  return out;
 }
 
-// A finished subagent's start is known only if this window saw it working.
+// A finished subagent's start is known only if this window saw it working, and a
+// waiting one's wait start (without an askedAt) only if this window saw it turn
+// waiting; an agent already waiting when first seen has no wait time.
+const waitMemory = new WeakMap();
 function trackAgents(memory, rows, now = Date.now()) {
-  const live = new Set();
+  const live = new Set(), waits = waitMemory.get(memory) || new Map(), seenWaits = new Set();
+  waitMemory.set(memory, waits);
   for (const row of rows) {
     // Every agent in the file, not just the listed ones, so a start is remembered while the agent is cut.
     for (const [aid, start] of row.subagents?.starts || []) {
@@ -344,10 +471,19 @@ function trackAgents(memory, rows, now = Date.now()) {
     }
     for (const a of row.subagents?.list || []) {
       const key = `${row.id}:${a.aid}`;
-      if (a.aid && a.start_ms === null && memory.has(key)) a.start_ms = Math.max(0, now - memory.get(key));
+      if (!a.aid) continue;
+      if (a.start_ms === null && memory.has(key)) a.start_ms = Math.max(0, now - memory.get(key));
+      const w = waits.get(key) || { status: undefined, at: null }; seenWaits.add(key);
+      if (a.status !== 'waiting') w.at = null;
+      else if (a.wait_ms === null) {
+        if (w.at === null && w.status !== undefined && w.status !== 'waiting') w.at = now;
+        if (w.at !== null) a.wait_ms = Math.max(0, now - w.at);
+      }
+      w.status = a.status; waits.set(key, w);
     }
   }
   for (const key of memory.keys()) if (!live.has(key)) memory.delete(key);
+  for (const key of waits.keys()) if (!seenWaits.has(key)) waits.delete(key);
 }
 
 // Observed transitions since this window opened, newest last.
@@ -390,4 +526,4 @@ function trackTimeline(history, rows, now = Date.now()) {
 const TIMELINE_CAP = 400;
 const LANE_LABEL = { working: 'Working', needs: 'Needs you', check: 'Finished', idle: 'Idle', stuck: 'Needs attention' };
 
-module.exports = { readMetadata, readSpend, readCi, readRoster, readTrace, boardView, trackAgents, gitInfo, parseStatus, trackTimeline, bucketOf, SIGNALS, PRICES, priceKey, costOf, modelLabel };
+module.exports = { readMetadata, readSpend, readCi, readRoster, readTrace, readBus, readCards, boardView, clearCache, cacheStats, trackAgents, gitInfo, parseStatus, trackTimeline, bucketOf, SIGNALS, PRICES, priceKey, costOf, modelLabel };

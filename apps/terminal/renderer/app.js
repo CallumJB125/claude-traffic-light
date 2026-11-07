@@ -53,8 +53,8 @@
     return node;
   };
 
-  let snapshot = { sessions: [], rows: [], totals: null, bus: null, handoffs: [], connected: null, at: Date.now() };
-  let view = { name: 'overview' }, activeId = null, term = null, fitAddon = null, range = 30;
+  let snapshot = { sessions: [], rows: [], totals: null, bus: null, handoffs: [], notes: [], connected: null, at: Date.now() };
+  let view = { name: 'overview' }, activeId = null, term = null, fitAddon = null, range = 30, boardFilter = null;
   const OPENED_AT = Date.now();
   let selecting = 0, spawning = false, fitFrame = 0, knownIds = null, items = [], earlierOpen = false;
   const detached = new Set();
@@ -138,6 +138,27 @@
     if (handle === 'any' && h?.provider) return `${PROVIDER[h.provider] || h.provider} (any AI)`;
     return PROVIDER[handle] || handle || 'another session';
   };
+
+  // ---- Boards ------------------------------------------------------------
+  // Team mode: any session routes to, or is held back from, a team board. A solo
+  // person never sees board names or team reasons, only a session whose work
+  // makes no card at all (excluded folder, cards off).
+  const teamMode = () => snapshot.rows.some(row => row.board?.team || row.board?.pending);
+  function boardOf(item) {
+    const b = item?.row?.board;
+    if (!b || typeof b !== 'object' || typeof b.name !== 'string') return null;
+    if (!teamMode() && b.kind === 'personal') return null;
+    return b;
+  }
+  function boardTag(item, cls) {
+    const b = boardOf(item); if (!b) return null;
+    const tag = el('span', `${cls} board-${b.kind}${b.pending ? ' pending' : ''}`);
+    tag.append(el('span', 'board-name', b.name));
+    if (b.short) tag.append(el('span', 'board-why', b.short));
+    tag.title = [b.label, b.why].filter(Boolean).join(' · ');
+    return tag;
+  }
+  const boardKey = item => { const b = item?.row?.board; return b?.kind === 'team' ? `team:${b.name}` : b?.kind === 'personal' ? 'mine' : 'none'; };
 
   // ---- Terminal ----------------------------------------------------------
   const theme = () => {
@@ -253,6 +274,8 @@
     const subs = item.row?.subagents;
     if (subs?.running) doing.append(el('span', 'srow-agents', `+${subs.running}`));
     main.append(top, doing);
+    const board = boardTag(item, 'srow-board');
+    if (board) main.append(board);
     row.append(indicator(item.status), main);
     if (item.type === 'external') row.append(el('span', 'srow-ext', '↗'));
     row.addEventListener('click', () => open(item));
@@ -326,6 +349,8 @@
     const steps = el('div', 'steps');
     for (const s of h.steps) { const step = el('div', `step ${s.state}`); step.append(el('span', '', s.label)); steps.append(step); }
     card.append(steps);
+    if (h.fallback) card.append(el('div', 'hcard-chain', 'Fallback · the AI before it could not run this'));
+    else if (h.after) card.append(el('div', 'hcard-chain', 'Follow-on in the same piece of work'));
     if (h.reason) card.append(el('div', 'hcard-reason', h.reason));
     card.append(el('div', 'hcard-foot', `Brief not shown · ${ago(since(h.ago_ms))}`));
     return card;
@@ -347,13 +372,30 @@
     return [];
   }
   const pct = ms => `${Math.max(0, Math.min(100, (1 - ms / (range * 60000)) * 100))}%`;
-  function segment(state, start, end, label) {
-    // A clipped label reads as noise, so short segments keep it in the tooltip only.
-    const seg = el('span', 'seg', (start - end) / (range * 60000) >= 0.08 ? label : '');
+  function segment(state, start, end, label, short) {
+    const seg = el('span', 'seg');
     seg.dataset.s = state;
     seg.style.left = pct(start); seg.style.right = `${100 - parseFloat(pct(end))}%`;
     seg.title = label || '';
+    // The label is fitted after layout (fitLabels): full text, else the state's
+    // short name, else none; a clipped word is never shown.
+    if (label && state !== 'unseen' && (start - end) / (range * 60000) >= 0.03) {
+      const text = el('span', 'seg-label', label);
+      if (short && short !== label) text.dataset.short = short;
+      seg.append(text);
+    }
     return seg;
+  }
+  function fitLabels() {
+    const labels = [...$('lanes').querySelectorAll('.seg-label')];
+    // Reads first, then writes, so thirty lanes cost one layout.
+    const reset = labels.map(node => { const full = node.dataset.full ?? node.textContent; node.dataset.full = full; return [node, full]; });
+    for (const [node, full] of reset) { node.textContent = full; node.hidden = false; }
+    const fits = node => node.scrollWidth <= node.clientWidth + 0.5;
+    const first = reset.map(([node]) => fits(node));
+    reset.forEach(([node], i) => { if (!first[i]) { if (node.dataset.short) node.textContent = node.dataset.short; else node.hidden = true; } });
+    const second = reset.map(([node], i) => first[i] || node.hidden || fits(node));
+    reset.forEach(([node], i) => { if (!second[i]) node.hidden = true; });
   }
   function renderOverview() {
     const max = range * 60000;
@@ -371,6 +413,9 @@
     document.querySelectorAll('[data-range]').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.range) === range)));
 
     const lanes = $('lanes'), frag = document.createDocumentFragment();
+    // Lanes and filter buttons are rebuilt on every push; keep keyboard focus where it was.
+    const focusLane = document.activeElement?.closest?.('#lanes button.lane-head')?.dataset.key;
+    const focusFilter = document.activeElement?.closest?.('#board-filter .bf')?.dataset.key;
     const axis = el('div', 'axis'); axis.setAttribute('role', 'row');
     const axisTrack = el('div', 'axis-track');
     const step = range <= 30 ? 5 : 10;
@@ -378,17 +423,22 @@
     const nowTick = el('span', 'axis-tick axis-now', 'now'); nowTick.style.left = '100%'; axisTrack.append(nowTick);
     axis.append(el('div', 'axis-label label', 'Session / agent'), axisTrack, el('div', 'axis-tail'));
     frag.append(axis);
-    const shown = live.filter(item => item.row || (item.type === 'tab' && running(item.session)));
+    const laned = live.filter(item => item.row || (item.type === 'tab' && running(item.session)));
+    renderBoardFilter(laned);
+    const shown = boardFilter ? laned.filter(item => boardKey(item) === boardFilter) : laned;
     for (const item of shown) {
       const lane = el('div', `lane lane-${item.group}`); lane.setAttribute('role', 'row');
       if (item.row?.handle) lane.dataset.handle = item.row.handle;
-      const head = el('button', 'lane-head');
+      const head = el('button', 'lane-head'); head.dataset.key = item.key;
       const text = el('span', 'lane-text');
       text.append(el('span', 'lane-title', item.project), el('span', 'lane-sub', `${item.tool} · ${item.waitingOn || item.doing}`));
+      const board = boardTag(item, 'lane-board');
+      if (board) text.append(board);
       head.append(indicator(item.status), text);
+      head.setAttribute('aria-label', [item.project, item.tool, STATUS[item.status].label, item.waitingOn || item.doing, boardOf(item)?.label].filter(Boolean).join(', '));
       head.addEventListener('click', () => open(item));
       const track = el('div', 'lane-track');
-      for (const s of laneSegments(item)) track.append(segment(s.bucket, Math.min(s.start_ms, max), s.end_ms, s.bucket === 'unseen' ? 'Before this window opened' : s.text || SEG_TEXT[s.bucket]));
+      for (const s of laneSegments(item)) track.append(segment(s.bucket, Math.min(s.start_ms, max), s.end_ms, s.bucket === 'unseen' ? 'Before this window opened' : s.text || SEG_TEXT[s.bucket], s.bucket === 'unseen' ? '' : SEG_TEXT[s.bucket]));
       lane.append(head, track, el('div', 'lane-tail', dur(since(item.elapsed))));
       frag.append(lane);
       for (const a of item.row?.subagents?.list || []) {
@@ -400,22 +450,33 @@
         const strack = el('div', 'lane-track');
         // A finished agent whose start this window never saw is a mark at its end, not a guessed bar.
         const start = finite(a.start_ms) ? Math.min(a.start_ms, max) : end + max / 200;
-        strack.append(segment(live ? 'sub-working' : a.status === 'failed' ? 'sub-failed' : 'sub-done', start, end, ''));
-        sub.append(sh, strack, el('div', 'lane-tail', live ? dur(since(a.start_ms)) : finite(a.start_ms) ? dur(a.start_ms - a.end_ms) : 'done'));
+        strack.append(segment(a.status === 'waiting' ? 'sub-waiting' : live ? 'sub-working' : a.status === 'failed' ? 'sub-failed' : 'sub-done', start, end, ''));
+        // A waiting agent's wait is drawn over its run when known.
+        if (a.status === 'waiting' && finite(a.wait_ms)) strack.append(segment('needs', Math.min(since(a.wait_ms), max), 0, ''));
+        sub.append(sh, strack, el('div', 'lane-tail', a.status === 'waiting' ? (finite(a.wait_ms) ? dur(since(a.wait_ms)) : 'waiting') : live ? dur(since(a.start_ms)) : finite(a.start_ms) ? dur(a.start_ms - a.end_ms) : 'done'));
         frag.append(sub);
       }
     }
-    if (!shown.length) frag.append(el('p', 'lanes-note', 'No live sessions. Sessions appear here when you start one, or when Plexiform’s hooks report an agent in another app.'));
+    if (!shown.length && boardFilter) frag.append(el('p', 'lanes-empty', 'No live sessions send work to this board.'));
+    else if (!shown.length) {
+      const empty = el('div', 'lanes-empty');
+      empty.append(el('p', 'lanes-empty-title', 'Nothing running right now'), el('p', '', 'Start a shell, Claude or Codex from the sidebar (⌘T for a shell). Agents in other apps appear here when Plexiform’s hooks report them.'));
+      frag.append(empty);
+    }
     const folded = items.filter(item => item.group === 'earlier').length;
     if (folded) frag.append(el('p', 'lanes-note', `${folded} earlier ${folded === 1 ? 'session is' : 'sessions are'} folded in the sidebar.`));
     frag.append(el('p', 'lanes-note', 'Lanes show states Plexiform reported while this window was open; dotted time is before that. Subagents report start and finish only.'));
     lanes.replaceChildren(frag);
+    if (focusLane) lanes.querySelector(`button.lane-head[data-key="${CSS.escape(focusLane)}"]`)?.focus();
+    if (focusFilter) $('board-filter').querySelector(`.bf[data-key="${CSS.escape(focusFilter)}"]`)?.focus();
     const legend = [['working', 'Working'], ['needs', 'Needs you'], ['check', 'Finished'], ['idle', 'Idle'], ['stuck', 'Failed'], ['unseen', 'Not observed']].map(([s, label]) => {
       const span = el('span', ''), i = el('i', 'seg'); i.dataset.s = s; i.style.position = 'static'; span.append(i, document.createTextNode(label)); return span;
     });
-    if (snapshot.bus) { const span = el('span', ''), i = el('i', ''); i.style.background = 'var(--hand)'; i.style.height = '2px'; span.append(i, document.createTextNode('Hand-off')); legend.push(span); }
+    if (snapshot.bus || snapshot.handoffs?.length) {
+      for (const [cls, label] of [['hand', 'Hand-off'], ['fallback', 'Fallback'], ['note', 'Note']]) { const span = el('span', ''), i = el('i', `lg-${cls}`); span.append(i, document.createTextNode(label)); legend.push(span); }
+    }
     $('lanes-legend').replaceChildren(...legend);
-    requestAnimationFrame(drawArrows);
+    requestAnimationFrame(() => { fitLabels(); drawArrows(); });
 
     $('queue-count').textContent = queue.length || '';
     const q = document.createDocumentFragment();
@@ -432,45 +493,110 @@
     $('queue').replaceChildren(q);
     const hs = [...(snapshot.handoffs || [])].reverse().slice(0, 8);
     $('handoff-count').textContent = hs.length || '';
-    $('handoffs').replaceChildren(...(hs.length ? hs.map(h => handoffCard(h, null)) : [el('p', 'empty-line', snapshot.bus ? 'No hand-offs in the last two hours.' : 'The agent bus is not reporting on this Mac.')]));
+    $('handoffs').replaceChildren(...(hs.length ? hs.map(h => handoffCard(h, null)) : [el('p', 'empty-line', snapshot.bus ? 'No hand-offs in the last two hours. When one AI hands work to another, it shows here and as an arrow between lanes.' : 'The agent bus is not reporting on this Mac.')]));
+    const ns = snapshot.notes || [];
+    $('notes-block').hidden = !ns.length;
+    $('note-count').textContent = ns.length || '';
+    $('notes').replaceChildren(...[...ns].reverse().slice(0, 6).map(n => {
+      const row = el('div', 'nrow');
+      row.append(el('span', 'nrow-peer', peerName(n.from, null, true)), el('span', 'hcard-arrow', '→'), el('span', 'nrow-peer', peerName(n.to, null, true)), el('span', 'nrow-time', ago(since(n.ago_ms))));
+      return row;
+    }));
+  }
+  // Teams: filter lanes by the board their work goes to. Solo: no control at all.
+  function renderBoardFilter(laned) {
+    const wrap = $('board-filter');
+    if (!teamMode()) { wrap.hidden = true; boardFilter = null; return; }
+    const counts = new Map();
+    for (const item of laned) { const k = boardKey(item); counts.set(k, (counts.get(k) || 0) + 1); }
+    if (boardFilter && !counts.has(boardFilter)) boardFilter = null;
+    const name = k => k === 'mine' ? 'My board' : k === 'none' ? 'No board' : k.slice(5);
+    const keys = [...counts.keys()].sort((a, b) => (a.startsWith('team:') ? 0 : a === 'mine' ? 1 : 2) - (b.startsWith('team:') ? 0 : b === 'mine' ? 1 : 2) || a.localeCompare(b));
+    const button = (key, label, n) => {
+      const b = el('button', 'bf'); b.dataset.key = key ?? 'all'; b.setAttribute('aria-pressed', String(boardFilter === key));
+      b.append(el('span', 'bf-name', label)); if (n !== null) b.append(el('span', 'bf-count', n));
+      b.addEventListener('click', () => { boardFilter = key; render(); });
+      return b;
+    };
+    wrap.hidden = false;
+    wrap.replaceChildren(button(null, 'All boards', null), ...keys.map(k => button(k, name(k), counts.get(k))));
   }
   // Hand-off arrows: from the sender's lane to the receiver's lane at the moment
-  // it was sent; a run with no lane of its own (a fresh headless run) gets a label.
+  // it was sent; a run with no lane of its own (a fresh headless run) gets a
+  // label that turns inward at the track's edges. A fallback (the bus re-posting
+  // a failed run to the next AI) is a dashed link from the failed run's mark; a
+  // note is a dotted line ending in a small square.
   function drawArrows() {
     const lanes = $('lanes');
     lanes.querySelector('svg.arrows')?.remove();
-    if (view.name !== 'overview' || !snapshot.handoffs?.length) return;
+    if (view.name !== 'overview' || (!snapshot.handoffs?.length && !snapshot.notes?.length)) return;
     const box = lanes.getBoundingClientRect();
     const track = lanes.querySelector('.lane:not(.sub) .lane-track');
     if (!track) return;
     const t = track.getBoundingClientRect(), max = range * 60000;
+    const left = t.left - box.left, right = left + t.width;
     const laneOf = handle => handle ? lanes.querySelector(`.lane[data-handle="${CSS.escape(handle)}"]`) : null;
     const mid = node => { const r = node.getBoundingClientRect(); return r.top - box.top + r.height / 2; };
+    const xAt = ms => left + t.width * (1 - ms / max);
     const art = svg('svg', { class: 'arrows', width: box.width, height: lanes.scrollHeight, 'aria-hidden': 'true' });
-    for (const h of snapshot.handoffs) {
+    lanes.append(art);
+    const marks = new Map(); // hand-off id → where its arrow ends, for fallback links
+    // Labels never run past the track: near the right edge the label and its leader sit left of the mark.
+    const place = m => {
+      const w = m.label.getComputedTextLength?.() || m.label.textContent.length * 6;
+      const dir = m.x0 + 19 + w > right && m.x0 - 19 - w >= left ? -1 : 1;
+      m.label.setAttribute('x', m.x0 + dir * 19); m.label.setAttribute('text-anchor', dir < 0 ? 'end' : 'start');
+      m.leader.setAttribute('d', `M${m.x0} ${m.y0} l${dir * 10} -12 h${dir * 6}`);
+      m.x = m.x0 + dir * 16;
+    };
+    for (const h of snapshot.handoffs || []) {
       const at = since(h.ago_ms);
       if (!finite(at) || at > max) continue;
-      const from = laneOf(h.from); if (!from) continue;
-      const x = t.left - box.left + t.width * (1 - at / max), y1 = mid(from);
-      const to = laneOf(h.to);
-      const cls = h.state === 'failed' ? 'refused' : '';
+      const fromLane = laneOf(h.from);
+      const x = xAt(at), to = laneOf(h.to);
+      const cls = h.state === 'failed' ? 'refused' : h.fallback ? 'fallback' : '';
+      const prev = h.after ? marks.get(h.after) : null;
+      // A fallback to an AI with no lane continues its failed run's label: "→ Codex ✕ ↻ Gemini".
+      if (prev?.label && !to && (!fromLane || fromLane === prev.lane)) {
+        const more = svg('tspan', { class: h.state === 'failed' ? 'refused' : 'fallback' });
+        more.textContent = `  ↻ ${PROVIDER[h.provider] || PROVIDER[h.to] || clean(h.to) || 'run'}${h.state === 'failed' ? ' ✕' : ''}`;
+        prev.label.append(more);
+        place(prev);
+        marks.set(h.id, prev);
+        continue;
+      }
+      let y1;
+      if (fromLane) y1 = mid(fromLane);
+      else if (prev) y1 = prev.y; // a fallback has no sender line of its own: it starts where the failed run ended
+      else continue;
+      if (prev) art.append(svg('path', { d: `M${prev.x} ${prev.y} L${x} ${y1}`, class: 'link' }));
       if (to) {
-        const y2 = mid(to), bend = Math.max(14, Math.abs(y2 - y1) / 3);
-        art.append(svg('path', { d: `M${x} ${y1} C${x + bend} ${y1}, ${x + bend} ${y2}, ${x + 6} ${y2}`, class: cls }), svg('circle', { cx: x, cy: y1, r: 3 }));
-        art.append(svg('path', { d: `M${x + 1} ${y2 - 3.5} L${x + 6} ${y2} L${x + 1} ${y2 + 3.5}`, class: cls }));
+        const y2 = mid(to), bend = Math.max(14, Math.abs(y2 - y1) / 3), dir = x + bend + 6 > right ? -1 : 1;
+        art.append(svg('path', { d: `M${x} ${y1} C${x + dir * bend} ${y1}, ${x + dir * bend} ${y2}, ${x + dir * 6} ${y2}`, class: cls }), svg('circle', { cx: x, cy: y1, r: 3, class: cls }));
+        art.append(svg('path', { d: `M${x + dir} ${y2 - 3.5} L${x + dir * 6} ${y2} L${x + dir} ${y2 + 3.5}`, class: cls }));
+        marks.set(h.id, { x: x + dir * 6, y: y2 });
       } else {
-        art.append(svg('path', { d: `M${x} ${y1} l10 -12 h6`, class: cls }), svg('circle', { cx: x, cy: y1, r: 3 }));
-        const label = svg('text', { x: x + 19, y: y1 - 8.5 }); label.textContent = `→ ${PROVIDER[h.provider] || PROVIDER[h.to] || h.to || 'run'}`;
-        art.append(label);
+        const name = `${h.fallback ? '↻ ' : '→ '}${PROVIDER[h.provider] || PROVIDER[h.to] || clean(h.to) || 'run'}${h.state === 'failed' ? ' ✕' : ''}`;
+        const label = svg('text', { y: y1 - 8.5, class: cls }); label.textContent = name;
+        const leader = svg('path', { class: cls });
+        art.append(label, leader, svg('circle', { cx: x, cy: y1, r: 3, class: cls }));
+        const mark = { y: y1 - 12, y0: y1, label, leader, x0: x, lane: fromLane };
+        place(mark);
+        marks.set(h.id, mark);
       }
     }
-    lanes.append(art);
+    for (const n of snapshot.notes || []) {
+      const at = since(n.ago_ms), from = laneOf(n.from), to = laneOf(n.to);
+      if (!finite(at) || at > max || !from || !to || from === to) continue;
+      const x = xAt(at), y1 = mid(from), y2 = mid(to);
+      art.append(svg('path', { d: `M${x} ${y1} L${x} ${y2 + (y2 > y1 ? -4 : 4)}`, class: 'note' }), svg('rect', { x: x - 3, y: y2 - 3, width: 6, height: 6, rx: 1, class: 'note' }));
+    }
   }
 
   // ---- Session: header, rail, status line, read-only detail --------------
   const ciText = ci => ci ? [ci.pr ? `#${ci.pr}` : null, ci.label].filter(Boolean).join(' · ') : null;
   const LIVE_SUB = s => s === 'working' || s === 'running' || s === 'waiting';
-  const SUB_STATE = s => s === 'working' || s === 'running' ? 'working' : s === 'failed' ? 'stuck' : s === 'done' ? 'check' : 'idle';
+  const SUB_STATE = s => s === 'working' || s === 'running' ? 'working' : s === 'waiting' ? 'needs' : s === 'failed' ? 'stuck' : s === 'done' ? 'check' : 'idle';
   function renderSessionHead(item) {
     const row = item.row || {};
     const ind = $('session-ind'); ind.dataset.s = item.status; ind.setAttribute('aria-label', STATUS[item.status].label); ind.setAttribute('role', 'img');
@@ -506,9 +632,12 @@
     for (const a of subs?.list || []) {
       const li = el('li', `child depth-${Math.min(2, a.depth || 1)}`);
       const n = el('span', 't-name', a.name); n.append(el('span', 't-kind', a.kind));
-      const timing = a.status === 'waiting' ? `waiting · ${dur(since(a.start_ms))}` : LIVE_SUB(a.status) ? dur(since(a.start_ms))
+      // A waiting agent shows how long it has waited (when that is known), not how long it has run.
+      const timing = a.status === 'waiting' ? (finite(a.wait_ms) ? `waiting ${dur(since(a.wait_ms))}` : 'waiting') : LIVE_SUB(a.status) ? dur(since(a.start_ms))
         : finite(a.start_ms) && finite(a.end_ms) ? `${a.status} in ${dur(a.start_ms - a.end_ms)}` : `${clean(a.status)} ${ago(since(a.end_ms))}`;
-      li.append(indicator(SUB_STATE(a.status), 'small'), n, el('span', 't-time', timing));
+      const time = el('span', 't-time', timing);
+      if (a.status === 'waiting') { time.classList.add('waiting'); time.title = finite(a.start_ms) ? `Running for ${dur(since(a.start_ms))}` : ''; }
+      li.append(indicator(SUB_STATE(a.status), 'small'), n, time);
       tree.append(li);
     }
     const hs = handoffsFor(item);
@@ -548,9 +677,11 @@
     const row = item.row || {}, bits = [];
     const span = (cls, text) => el('span', cls, text);
     bits.push(span('sl-provider', [item.tool, row.model].filter(Boolean).join(' · ')));
-    if (row.board) {
-      const b = span(`sl-board ${row.board.kind}`, row.board.label);
-      if (row.board.why) b.append(span('sl-why', `· ${row.board.why}`));
+    const board = boardOf(item);
+    if (board) {
+      const b = span(`sl-board ${board.kind}`, board.label);
+      if (board.why) b.append(span('sl-why', `· ${board.why}`));
+      b.title = [board.label, board.why].filter(Boolean).join(' · ');
       bits.push(b);
     }
     if (Number.isSafeInteger(row.notesWaiting) && row.notesWaiting > 0) bits.push(span('sl-notes', `${row.notesWaiting} ${row.notesWaiting === 1 ? 'note' : 'notes'} waiting`));
@@ -572,6 +703,8 @@
     const pairs = [['Branch', item.branch || DASH, true], ['Changes', row.changes ? (row.changes.count ? `${row.changes.count} uncommitted` : 'Clean') : DASH], ['PR / CI', ciText(row.ci) || DASH],
       ['Tasks', row.tasks ? `${row.tasks.done} of ${row.tasks.created} done` : DASH], ['Spend today', Number.isFinite(item.cost) ? `${money(item.cost)} in this folder` : DASH],
       ['Started', finite(item.started) ? ago(since(item.started)) : DASH], ['Last report', ago(since(row.age_ms))]];
+    const board = boardOf(item);
+    if (board) pairs.push(['Board', [board.label, board.why].filter(Boolean).join(' · ')]);
     for (const [name, value, mono] of pairs) { const wrap = el('div', 'fact'); wrap.append(el('dt', '', name), el('dd', mono ? 'mono' : '', value)); facts.append(wrap); }
     const blocks = [now, facts];
     if (row.changes?.files?.length) {
@@ -606,6 +739,7 @@
     if (state.totals && typeof state.totals === 'object') snapshot.totals = state.totals;
     if ('bus' in state) snapshot.bus = state.bus && typeof state.bus === 'object' ? state.bus : null;
     if (Array.isArray(state.handoffs)) snapshot.handoffs = state.handoffs.filter(h => h && typeof h === 'object' && Array.isArray(h.steps));
+    if (Array.isArray(state.notes)) snapshot.notes = state.notes.filter(n => n && typeof n === 'object' && typeof n.from === 'string' && typeof n.to === 'string');
     if (typeof state.connected === 'boolean') snapshot.connected = state.connected;
     if (typeof state.development === 'boolean') $('development').hidden = !state.development;
     snapshot.at = Date.now();
@@ -736,13 +870,17 @@
   $('next-needs').addEventListener('click', nextNeeds);
   $('dismiss-notice').addEventListener('click', () => { $('notice').hidden = true; });
 
-  // Arrow keys move between sidebar rows.
-  $('session-list').addEventListener('keydown', event => {
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-    const rows = [...$('session-list').querySelectorAll('.srow')], at = rows.indexOf(document.activeElement);
-    if (at < 0) return;
-    event.preventDefault(); rows[Math.max(0, Math.min(rows.length - 1, at + (event.key === 'ArrowDown' ? 1 : -1)))].focus();
+  // Arrow keys (and Home/End) move between sidebar rows and between Overview lanes.
+  const listKeys = (container, selector) => container.addEventListener('keydown', event => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const rows = [...container.querySelectorAll(selector)].filter(node => node.offsetParent !== null), at = rows.indexOf(document.activeElement);
+    if (at < 0 || !rows.length) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : Math.max(0, Math.min(rows.length - 1, at + (event.key === 'ArrowDown' ? 1 : -1)));
+    rows[next].focus(); rows[next].scrollIntoView({ block: 'nearest' });
   });
+  listKeys($('session-list'), '.srow');
+  listKeys($('lanes'), 'button.lane-head');
   document.addEventListener('keydown', event => {
     if (event.key === 'Meta') document.body.classList.add('cmd-held');
     if (event.key === 'Escape' && !$('palette').hidden) { event.preventDefault(); closePalette(); return; }
@@ -759,7 +897,7 @@
   window.addEventListener('blur', () => document.body.classList.remove('cmd-held'));
 
   new ResizeObserver(scheduleFit).observe($('terminal'));
-  new ResizeObserver(() => { if (view.name === 'overview') requestAnimationFrame(drawArrows); }).observe($('lanes'));
+  new ResizeObserver(() => { if (view.name === 'overview') requestAnimationFrame(() => { fitLabels(); drawArrows(); }); }).observe($('lanes'));
   matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (term) term.options.theme = theme(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleFit(); });
   window.addEventListener('focus', () => { if (terminalShown() && $('palette').hidden) term?.focus(); });

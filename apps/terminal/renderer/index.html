@@ -38,6 +38,7 @@
       <section id="overview-view" class="view overview" aria-label="Overview of all sessions">
         <header class="view-head drag">
           <div class="head-text"><h1>Overview</h1><p id="overview-summary" class="sub"></p></div>
+          <div id="board-filter" class="board-filter" role="group" aria-label="Show sessions by board" hidden></div>
           <div class="range" role="group" aria-label="Time range">
             <button data-range="15" aria-pressed="false">15m</button><button data-range="30" aria-pressed="true">30m</button><button data-range="60" aria-pressed="false">60m</button>
           </div>
@@ -56,6 +57,11 @@
             <section class="block">
               <div class="block-head"><h2 class="label">Hand-offs</h2><span id="handoff-count" class="count"></span></div>
               <div id="handoffs" class="handoff-list"></div>
+            </section>
+            <section id="notes-block" class="block" hidden>
+              <div class="block-head"><h2 class="label">Notes between sessions</h2><span id="note-count" class="count"></span></div>
+              <div id="notes" class="note-list"></div>
+              <p class="block-note">Who wrote to whom. Note text stays with the AIs.</p>
             </section>
           </aside>
         </div>

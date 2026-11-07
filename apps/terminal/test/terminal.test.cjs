@@ -121,7 +121,7 @@ test('packaged app declares take-over and .command handling without claiming the
   assert.equal(config.mac.extendInfo.PlexiformTakeover, true);
   assert.deepEqual(config.fileAssociations.map((a) => [a.ext, a.rank]), [['command', 'Alternate']]);
   assert(config.files.includes('takeover.js'));
-  assert.equal(require('../package.json').version, '0.3.0');
+  assert.equal(require('../package.json').version, '0.3.1');
   const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
   assert.doesNotMatch(main, /showOpenDialog/, 'new tabs open without a folder picker');
 });
@@ -136,13 +136,14 @@ test('roster joins by provider|session id, gives board with a fixed reason, coun
   write('2026-11-07T11:58:00Z');
   const r = meta.readRoster(dir, now);
   assert.deepEqual(r.bus, { enabled: true, halted: null }); assert.equal(r.peers, 2);
-  assert.deepEqual(r.self.get('claude|s1'), { handle: 'claude-plexiform-ab12', board: { kind: 'team', label: 'On Platform', why: 'repo is linked to this team' }, notesWaiting: 2 });
-  assert.deepEqual(r.self.get('codex|s2'), { handle: null, board: { kind: 'personal', label: 'My board', why: null }, notesWaiting: null });
+  assert.deepEqual(r.self.get('claude|s1'), { handle: 'claude-plexiform-ab12', board: { kind: 'team', label: 'On Platform', name: 'Platform', why: 'repo is linked to this team', short: 'repo linked', code: 'linked_repo', pending: false, team: true }, notesWaiting: 2 });
+  assert.deepEqual(r.self.get('codex|s2'), { handle: null, board: { kind: 'personal', label: 'My board', name: 'My board', why: null, short: null, code: null, pending: false, team: false }, notesWaiting: null });
   assert.equal(r.self.has('claude|s3'), false, 'excluded sessions never join');
   write('2026-11-07T11:50:00Z'); assert.equal(meta.readRoster(dir, now).self.size, 0, 'a roster older than five minutes is ignored');
   write('2026-11-07T11:58:00Z'); fs.rmSync(path.join(dir, 'port')); assert.equal(meta.readRoster(dir, now).bus, null, 'no running app, no roster');
   assert.equal(meta.boardView({ kind: 'unknown' }), null);
-  assert.deepEqual(meta.boardView({ kind: 'untracked', why: 'personal_mark' }), { kind: 'none', label: 'No board', why: 'marked personal' });
+  const untracked = meta.boardView({ kind: 'untracked', why: 'personal_mark' });
+  assert.deepEqual([untracked.kind, untracked.label, untracked.why, untracked.team], ['none', 'No board', 'marked personal', false]);
 });
 test('observed rows carry the roster key privately; claude files without a source default to claude', (t) => {
   const dir = fixtureDir(t), now = Date.parse('2026-11-07T12:00:00Z');
@@ -252,4 +253,115 @@ test('renderer folds old sessions, keeps hand-off briefs out, and never builds m
   assert.match(app, /Brief not shown/);
   assert.doesNotMatch(app, /\.brief\b|\.notices\b|(?<!document)\.body\b/, 'no hand-off or note text is read');
   assert.doesNotMatch(app, /innerHTML|outerHTML|insertAdjacentHTML/);
+});
+
+test('board reasons: every bus-contract why has a fixed phrase; solo reasons are not team reasons; pending is flagged', () => {
+  // bus-contract.js BOARD_WHY (board-routing); this branch may not carry it yet, so its list is pinned here too.
+  const contractFile = path.join(__dirname, '../../../src/bus-contract.js');
+  const contract = fs.existsSync(contractFile) && fs.readFileSync(contractFile, 'utf8').match(/const BOARD_WHY = freeze\(\{([\s\S]*?)\}\);/);
+  const whys = contract ? [...contract[1].matchAll(/: '([a-z_]+)'/g)].map((m) => m[1]) : ['excluded', 'personal_mark', 'inherited', 'withheld', 'linked_repo', 'repo_default', 'choose', 'no_link_suggested', 'no_link', 'no_repo', 'deferred', 'read_only', 'cards_off'];
+  for (const why of [...whys, 'pending_route']) { const v = meta.boardView({ kind: 'personal', why }); assert(v.why && v.short, why); }
+  assert.equal(meta.boardView({ kind: 'personal', why: 'no_repo' }).team, false);
+  assert.equal(meta.boardView({ kind: 'personal', why: 'withheld' }).team, true, 'a withheld card means a team is involved');
+  const pending = meta.boardView({ kind: 'personal', why: 'inherited', pending_route: true });
+  assert.equal(pending.pending, true); assert.equal(pending.why, 'started from a hand-off or card');
+  assert.equal(meta.boardView({ kind: 'personal', pending_route: true }).short, 'route pending');
+  assert.equal(meta.boardView({ kind: 'team', name: '<b>Pay‮ments</b>', why: 'nonsense' }).name, '<b>Payments</b>', 'names are text; unknown reasons are dropped');
+  assert.equal(meta.boardView({ kind: 'team', why: 'nonsense' }).why, null);
+});
+test('card records give a session its board when the roster does not; pointers and bad records are skipped', (t) => {
+  const dir = fixtureDir(t), file = path.join(dir, 'work-capture.json');
+  assert.equal(meta.readCards(file).size, 0, 'no file, no boards');
+  const team = { kind: 'team', hub: 'https://hub.example', user_id: 'u1', team_id: 't1', board_id: 'b1', repo_id: 'r1', board_name: 'Payments' };
+  fs.writeFileSync(file, JSON.stringify({ v: 1, tasks: {
+    a: { provider: 'claude', session_id: 's1', task_id: null, destination: { kind: 'local' }, why: 'no_link', last_seen: 1, title: 'SECRET' },
+    b: { provider: 'claude', session_id: 's1', task_id: 't', destination: team, why: 'linked_repo', last_seen: 5, title: 'SECRET', summary: 'SECRET' },
+    c: { provider: 'codex', session_id: 's2', destination: { kind: 'local' }, untracked: true, why: 'excluded', last_seen: 3 },
+    d: { provider: 'gemini', session_id: 's3', destination: { kind: 'local' }, pointer: true, why: 'withheld', last_seen: 9 },
+    e: { provider: 'codex', session_id: 's4', destination: { kind: 'local', needs_routing: true }, why: 'choose', last_seen: 2 },
+    f: { provider: 'claude', session_id: 's5', destination: { kind: 'local' }, why: 'inherited', pending_route: true, last_seen: 2 },
+    g: { provider: '../x', session_id: 's6', destination: { kind: 'local' } }, h: null,
+  } }));
+  const cards = meta.readCards(file);
+  assert.deepEqual([...cards.keys()].sort(), ['claude|s1', 'claude|s5', 'codex|s2', 'codex|s4']);
+  assert.deepEqual([cards.get('claude|s1').kind, cards.get('claude|s1').name, cards.get('claude|s1').short], ['team', 'Payments', 'repo linked'], 'the newest task wins');
+  assert.equal(cards.get('codex|s2').name, 'No card'); assert.equal(cards.get('codex|s4').label, 'Board not chosen'); assert.equal(cards.get('claude|s5').pending, true);
+  assert(!JSON.stringify([...cards.values()]).includes('SECRET'), 'titles and summaries never leave the reader');
+  assert.equal(meta.readCards(file), cards, 'an unchanged file is not parsed again');
+});
+test('unchanged hook files, rollups and rosters are served from the stat cache; a change is read again', (t) => {
+  const dir = fixtureDir(t), now = Date.parse('2026-11-07T12:00:00Z'), file = path.join(dir, 'a.json');
+  meta.clearCache();
+  fs.writeFileSync(file, JSON.stringify({ sessionId: 's', signal: 'tool-use', tool: 'Bash', updatedAt: '2026-11-07T11:59:00Z' }));
+  meta.readMetadata(dir, now, { isAlive: () => true }); meta.readMetadata(dir, now, { isAlive: () => true }); meta.readMetadata(dir, now + 1000, { isAlive: () => true });
+  assert.deepEqual([meta.cacheStats.reads, meta.cacheStats.hits], [1, 2]);
+  fs.writeFileSync(file, JSON.stringify({ sessionId: 's', signal: 'permission-ask', tool: 'Edit', updatedAt: '2026-11-07T11:59:30Z' }));
+  const [row] = meta.readMetadata(dir, now, { isAlive: () => true });
+  assert.equal(row.waitingOn, 'Approve Edit'); assert.equal(meta.cacheStats.reads, 2);
+  fs.rmSync(file); assert.deepEqual(meta.readMetadata(dir, now, { isAlive: () => true }), [], 'a removed file is gone at once');
+});
+test('trace tail reads only appended bytes, survives rotation, torn and malformed lines', (t) => {
+  const dir = fixtureDir(t), now = 1_800_000_000_000, file = path.join(dir, 'bus-trace.jsonl');
+  const line = (o) => JSON.stringify({ trace_id: 'tr_0123456789abcdef', span: 'sp_01234567', ms: 1, reason: null, ...o }) + '\n';
+  meta.clearCache();
+  fs.writeFileSync(file, line({ t: now - 60000, op: 'handoff', from_handle: 'claude-a-ab12', to: 'codex', provider: 'codex', result: 'ok', ref: 'hof_aaaaaaaaaaaa' }) + 'not json {"ref":"hof_\n');
+  assert.equal(meta.readTrace(file, now)[0].state, 'sent');
+  const before = meta.cacheStats.reads; meta.readTrace(file, now); assert.equal(meta.cacheStats.reads, before, 'unchanged: no read');
+  // A line arriving in two writes is used only once whole.
+  fs.appendFileSync(file, line({ t: now - 50000, op: 'claim', result: 'ok', ref: 'hof_aaaaaaaaaaaa' }).slice(0, 20));
+  assert.equal(meta.readTrace(file, now)[0].state, 'sent');
+  fs.appendFileSync(file, line({ t: now - 50000, op: 'claim', result: 'ok', ref: 'hof_aaaaaaaaaaaa' }).slice(20));
+  assert.equal(meta.readTrace(file, now)[0].state, 'claimed');
+  // Rotation: the file moves to .1 and a new one starts.
+  fs.renameSync(file, `${file}.1`);
+  fs.writeFileSync(file, line({ t: now - 40000, op: 'start', provider: 'codex', result: 'ok', ref: 'hof_aaaaaaaaaaaa' }));
+  const [h] = meta.readTrace([`${file}.1`, file], now);
+  assert.equal(h.state, 'running', 'both halves of a rotated hand-off are joined');
+});
+test('fallbacks and follow-ons are linked by trace id; a fallback inherits its asker; notes carry no text', (t) => {
+  const dir = fixtureDir(t), now = 1_800_000_000_000, file = path.join(dir, 'bus-trace.jsonl');
+  const line = (o) => JSON.stringify({ span: 'sp_01234567', ms: 1, reason: null, ...o });
+  const asker = 'claude-plexiform-ab12', A = 'tr_aaaaaaaaaaaaaaaa', B = 'tr_bbbbbbbbbbbbbbbb';
+  fs.writeFileSync(file, [
+    line({ t: now - 90000, trace_id: A, op: 'handoff', from_handle: asker, to: 'any', provider: 'codex', result: 'ok', ref: 'hof_111111111111' }),
+    line({ t: now - 89000, trace_id: A, op: 'result', provider: 'codex', result: 'error', reason: 'QUOTA', ref: 'hof_111111111111' }),
+    line({ t: now - 88000, trace_id: A, op: 'claim', result: 'ok', ref: 'hof_222222222222' }),
+    line({ t: now - 87000, trace_id: A, op: 'start', provider: 'gemini', result: 'ok', ref: 'hof_222222222222' }),
+    line({ t: now - 50000, trace_id: B, op: 'handoff', from_handle: asker, to: 'codex-mobile-ab12', provider: 'codex', result: 'ok', ref: 'hof_333333333333' }),
+    line({ t: now - 40000, trace_id: B, op: 'handoff', from_handle: 'codex-mobile-ab12', to: 'gemini', provider: 'gemini', result: 'ok', ref: 'hof_444444444444' }),
+    line({ t: now - 30000, trace_id: B, op: 'note', from_handle: 'gemini-docs-ab12', to: asker, result: 'ok', ref: 'note_0123456789abcdef' }),
+    line({ t: now - 29000, trace_id: B, op: 'note', from_handle: 'gemini-docs-ab12', to: asker, result: 'refused', ref: 'note_1123456789abcdef' }),
+    line({ t: now - 28000, trace_id: B, op: 'note', from_handle: 'gemini-docs-ab12', to: 'not a handle', result: 'ok', ref: 'note_2123456789abcdef' }),
+  ].join('\n') + '\n');
+  const { handoffs, notes } = meta.readBus(file, now);
+  const [first, fallback, ask, onward] = handoffs;
+  assert.equal(first.state, 'failed'); assert.equal(first.reason, 'out of quota');
+  assert.deepEqual([fallback.after, fallback.fallback, fallback.from, fallback.provider, fallback.chain], [first.id, true, asker, 'gemini', first.chain]);
+  assert.deepEqual([onward.after, onward.fallback, onward.from], [ask.id, false, 'codex-mobile-ab12'], 'a follow-on hand-off is linked, not a fallback');
+  assert.notEqual(ask.chain, first.chain); assert.equal(ask.after, null);
+  assert.deepEqual(notes, [{ id: notes[0].id, from: 'gemini-docs-ab12', to: asker, ago_ms: 30000 }], 'only delivered notes between real handles');
+  assert(!JSON.stringify({ handoffs, notes }).match(/tr_|note_|hof_/), 'ids are hashed');
+});
+test('a waiting subagent reports when it began waiting, not when it started', (t) => {
+  const dir = fixtureDir(t), now = Date.parse('2026-11-07T12:00:00Z'), at = (min) => new Date(now - min * 60000).toISOString();
+  fs.writeFileSync(path.join(dir, 'a.json'), JSON.stringify({ sessionId: 's', signal: 'tool-use', updatedAt: at(0),
+    claudeInputRequests: [{ id: 'toolu_1', agentId: 'ag1', kind: 'request', tool: 'Bash', askedAt: at(2) }, { id: 'toolu_2', agentId: 'ag1', kind: 'request', tool: 'Bash', askedAt: at(1) }],
+    agents: [{ id: 'ag1', name: 'executor', status: 'waiting', since: at(10) }, { id: 'ag2', name: 'explore', status: 'waiting', since: at(6) }, { id: 'ag3', name: 'codex-kid', status: 'waiting', since: at(8), codexInputRequests: [{ askedAt: at(3) }] }] }));
+  const [row] = meta.readMetadata(dir, now, { isAlive: () => true });
+  const by = Object.fromEntries(row.subagents.list.map((a) => [a.name, a]));
+  assert.equal(by.executor.start_ms, 10 * 60000, 'start stays the start'); assert.equal(by.executor.wait_ms, 2 * 60000, 'oldest open request');
+  assert.equal(by['codex-kid'].wait_ms, 3 * 60000); assert.equal(by.explore.wait_ms, null, 'no request: not guessed');
+  // Seen working, then waiting: the wait starts when this window saw the change.
+  const memory = new Map(), mk = (status) => { const a = Object.defineProperty({ name: 'x', status, start_ms: 60000, end_ms: null, wait_ms: null }, 'aid', { value: 'w' }); return { id: 'r', subagents: Object.defineProperty({ list: [a] }, 'starts', { value: [['w', 60000]] }) }; };
+  meta.trackAgents(memory, [mk('working')], 1_000_000);
+  const w1 = mk('waiting'); meta.trackAgents(memory, [w1], 1_030_000); assert.equal(w1.subagents.list[0].wait_ms, 0);
+  const w2 = mk('waiting'); meta.trackAgents(memory, [w2], 1_090_000); assert.equal(w2.subagents.list[0].wait_ms, 60000);
+  const fresh = new Map(), w3 = mk('waiting'); meta.trackAgents(fresh, [w3], 1_000_000); assert.equal(w3.subagents.list[0].wait_ms, null, 'already waiting when first seen: unknown');
+});
+test('main watches its sources with a debounce, keeps a slow poll, and skips unchanged pushes', () => {
+  const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+  assert.match(main, /fs\.watch\(dir/); assert.match(main, /WATCH_DEBOUNCE_MS = \d+/); assert.match(main, /POLL_MS = 10000/);
+  assert.doesNotMatch(main, /setInterval\(refresh, 3000\)/);
+  assert.match(main, /if \(json === lastSent\) return;/);
+  assert.match(main, /work-capture\.json/);
 });

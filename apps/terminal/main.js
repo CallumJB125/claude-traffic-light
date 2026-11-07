@@ -9,12 +9,12 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
   const { execFile } = require('node:child_process');
   const manifest = require('./manifest.json');
   const { KeeperClient } = require('./keeper-client');
-  const { readMetadata, readSpend, readCi, readRoster, readTrace, gitInfo, trackTimeline, trackAgents } = require('./metadata');
+  const { readMetadata, readSpend, readCi, readRoster, readBus, readCards, gitInfo, trackTimeline, trackAgents } = require('./metadata');
   const takeover = require('./takeover');
   const native = require('./native/keeper-socket/keeper-socket.node');
   let window, client, sessions = [], rows = [], active = null, channel = null, selectedEpoch = 0, attaching = null;
   let polling = null, refreshQueued = false, quitting = false, finishStartup;
-  let observed = [], totals = { spendToday: null, unpricedTurns: 0, day: null }, bus = null, handoffs = [];
+  let observed = [], totals = { spendToday: null, unpricedTurns: 0, day: null }, bus = null, handoffs = [], notes = [], lastSent = '';
   const history = new Map(), gitCache = new Map(), agentStarts = new Map();
   const startup = new Promise(resolve => { finishStartup = resolve; });
   app.setName(manifest.development ? 'Plexiform Terminal Development Preview' : 'Plexiform Terminal');
@@ -32,8 +32,11 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
   if (!app.requestSingleInstanceLock()) app.quit();
   else {
     const html = path.join(__dirname, 'renderer/index.html');
-    const snapshot = () => ({ sessions, rows, totals, bus, handoffs, development: manifest.development, connected: Boolean(client && !client.socket.destroyed) });
+    const snapshot = () => ({ sessions, rows, totals, bus, handoffs, notes, development: manifest.development, connected: Boolean(client && !client.socket.destroyed) });
     const dataDir = () => labArg ? path.join(app.getPath('userData'), 'fixture-data') : path.join(os.homedir(), '.claude-traffic-light');
+    const metadataDir = () => labArg ? path.join(app.getPath('userData'), 'fixture-metadata') : path.join(os.homedir(), '.claude-traffic-light/sessions');
+    // Plexiform's own app data (card records, the Tasks helper's trace copy).
+    const plexiformDir = () => labArg ? dataDir() : path.join(os.homedir(), 'Library/Application Support/Plexiform');
     // Folder git status is cached and refreshed in the background so a slow
     // repository never delays the session list.
     function git(cwd) {
@@ -47,13 +50,13 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
       return entry?.info ?? null;
     }
     function publish() {
-      const spend = readSpend(dataDir()), ci = readCi(dataDir()), roster = readRoster(dataDir());
+      const spend = readSpend(dataDir()), ci = readCi(dataDir()), roster = readRoster(dataDir()), cards = readCards(path.join(plexiformDir(), 'work-capture.json'));
       totals = { spendToday: spend.usd, unpricedTurns: spend.unpricedTurns, day: spend.day };
       bus = roster.bus ? { ...roster.bus, peers: roster.peers } : null;
       // The Tasks helper writes its own copy when it runs without the shared path;
       // each rotates to .1 at 5 MB, and the recent hand-offs may sit in either.
-      const traces = labArg ? [path.join(dataDir(), 'bus-trace.jsonl')] : [path.join(dataDir(), 'bus-trace.jsonl'), path.join(os.homedir(), 'Library/Application Support/Plexiform/tasks/bus-trace.jsonl')];
-      handoffs = readTrace(traces.flatMap((file) => [`${file}.1`, file]));
+      const traces = labArg ? [path.join(dataDir(), 'bus-trace.jsonl')] : [path.join(dataDir(), 'bus-trace.jsonl'), path.join(plexiformDir(), 'tasks/bus-trace.jsonl')];
+      ({ handoffs, notes } = readBus(traces.flatMap((file) => [`${file}.1`, file])));
       const byPid = new Map(sessions.filter((s) => Number.isSafeInteger(s.pid) && s.pid > 1).map((s) => [s.pid, s.sessionId]));
       for (const row of observed) {
         const info = git(row.cwd);
@@ -63,11 +66,15 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
         const usd = row.cwd ? spend.byCwd.get(row.cwd) : undefined;
         row.cost = Number.isFinite(usd) ? { usd: Math.round(usd * 100) / 100, scope: 'folder-today' } : null;
         const me = row.key ? roster.self.get(row.key) : null;
-        row.handle = me?.handle ?? null; row.board = me?.board ?? null; row.notesWaiting = me?.notesWaiting ?? null;
+        // The roster is current only while Plexiform runs; the card records say where this session's cards went before.
+        row.handle = me?.handle ?? null; row.board = me?.board ?? (row.key ? cards.get(row.key) : null) ?? null; row.notesWaiting = me?.notesWaiting ?? null;
       }
       rows = observed.map((row) => ({ ...row }));
       sessions = sessions.map((s) => { const info = git(s.cwd); return { ...s, branch: info?.branch ?? null, changes: info ? { count: info.changed, files: info.files } : null }; });
-      send('state', snapshot());
+      // A tick that changed nothing is not sent: the window re-renders on its own clock.
+      const next = snapshot(), json = JSON.stringify(next);
+      if (json === lastSent) return;
+      lastSent = json; send('state', next);
     }
     const send = (event, data) => { if (window && !window.isDestroyed()) window.webContents.send(`terminal:${event}`, data); };
     const notice = (s) => send('notice', String(s).slice(0, 400));
@@ -84,8 +91,7 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
           try {
             // Observed agents stay visible even when the keeper is unavailable.
             if (client && !client.socket.destroyed) { try { sessions = (await client.call('list')).sessions || []; } catch (e) { notice(e.message); } } else sessions = sessions.map((s) => ({ ...s, state: s.state === 'running' ? 'unknown' : s.state }));
-            const metadataDir = labArg ? path.join(app.getPath('userData'), 'fixture-metadata') : path.join(os.homedir(), '.claude-traffic-light/sessions');
-            observed = readMetadata(metadataDir); trackTimeline(history, observed); trackAgents(agentStarts, observed); publish();
+            observed = readMetadata(metadataDir()); trackTimeline(history, observed); trackAgents(agentStarts, observed); publish();
             const needs = rows.filter((r) => r.bucket === 'needs').length;
             app.dock?.setBadge(needs ? String(needs) : '');
           } catch (e) { notice(e.message); }
@@ -190,6 +196,40 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
       if (r.response !== 1 || !window.isFocused() || active !== target.sessionId || selectedEpoch !== epoch) return { cancelled: true };
       await client.call('signal', { sessionId: v.sessionId, signal: 'HUP' }); await refresh(); return { ok: true };
     });
+    // Hook files, the roster, the trace and the card records change on disk; a
+    // watcher on each folder refreshes within WATCH_DEBOUNCE_MS of a burst (and at
+    // most every WATCH_MAX_MS while writes keep coming). fs.watch can miss events
+    // or fail on a folder that appears later, so a slow poll stays as the fallback
+    // and re-attaches watchers that are missing.
+    const WATCH_DEBOUNCE_MS = 120, WATCH_MAX_MS = 600, POLL_MS = 10000;
+    const watchers = new Map();
+    let debounce = null, burstAt = 0;
+    function changed() {
+      const now = Date.now(); if (!debounce) burstAt = now;
+      clearTimeout(debounce);
+      debounce = setTimeout(() => { debounce = null; void refresh(); }, now - burstAt >= WATCH_MAX_MS ? 0 : WATCH_DEBOUNCE_MS);
+    }
+    function watchData() {
+      // Only the files the window shows: Plexiform's folders hold much else that changes.
+      const trace = (f) => /^bus-trace\.jsonl(?:\.1)?$/.test(f);
+      const dirs = [[metadataDir(), (f) => /\.json$/.test(f)], [dataDir(), (f) => trace(f) || f === 'git-signals.json' || f === 'port' || f === 'usage'],
+        [path.join(dataDir(), 'awareness'), (f) => f === 'roster.json'], [path.join(dataDir(), 'usage/daily'), () => true],
+        [plexiformDir(), (f) => f === 'work-capture.json' || trace(f)], [path.join(plexiformDir(), 'tasks'), trace]];
+      const byDir = new Map();
+      for (const [dir, test] of dirs) byDir.set(dir, [...(byDir.get(dir) || []), test]);
+      for (const [dir, tests] of byDir) {
+        const wanted = (f) => tests.some((t) => t(f));
+        if (watchers.has(dir)) continue;
+        try {
+          // A null filename (some platforms) counts as a change.
+          const w = fs.watch(dir, { persistent: false }, (_event, file) => { if (!file || wanted(String(file))) changed(); });
+          w.on('error', () => { w.close(); watchers.delete(dir); });
+          watchers.set(dir, w);
+        } catch { /* missing folder: the poll retries */ }
+      }
+    }
+    const poll = setInterval(() => { watchData(); void refresh(); }, POLL_MS); poll.unref();
+    app.on('before-quit', () => { clearInterval(poll); clearTimeout(debounce); for (const w of watchers.values()) w.close(); watchers.clear(); });
     async function connect() {
       const socketDir = path.join(os.tmpdir(), `pf-terminal-${manifest.development ? 'dev' : 'signed'}-${process.getuid()}`);
       fs.mkdirSync(socketDir, { recursive: true, mode: 0o700 });
@@ -217,7 +257,7 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
         if (e.channel === channel && active) send('data', { sessionId: active, data: e.data.toString('base64') });
       });
       client.on('event', (e) => { if (e.ev === 'session.added' || e.ev === 'session.exited') refresh(); });
-      const current = client; client.on('notice', notice); client.on('closed', () => { if (client !== current) return; channel = null; send('state', snapshot()); notice('Session Keeper disconnected. Choose Reconnect in the sidebar; tabs were not retried.'); });
+      const current = client; client.on('notice', notice); client.on('closed', () => { if (client !== current) return; channel = null; lastSent = ''; send('state', snapshot()); notice('Session Keeper disconnected. Choose Reconnect in the sidebar; tabs were not retried.'); });
       await refresh();
     }
     app.on('second-instance', () => { window?.show(); window?.focus(); });
@@ -237,7 +277,7 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
       window.webContents.on('render-process-gone', () => { active = null; channel = null; ++selectedEpoch; client?.close(); });
       await window.loadFile(html); window.show();
       try { await connect(); } catch (e) { finishStartup(); notice(e.message); send('state', snapshot()); await dialog.showMessageBox(window, { type: 'error', message: 'Plexiform Terminal could not connect', detail: e.message }); } finally { finishStartup(); }
-      const timer = setInterval(refresh, 3000); timer.unref();
+      watchData();
       // Like any terminal: with no tabs and nothing handed over, open a shell at home.
       if (!labArg && client && !pendingFiles.length && !sessions.length) { try { await start('shell', home()); } catch (e) { notice(e.message); } }
       if (client) void startDrain();

@@ -1,7 +1,7 @@
 {
   "name": "plexiform-terminal",
   "productName": "Plexiform Terminal",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Plexiform's separate terminal and agent overview. Local development preview.",
   "main": "main.js",
