@@ -1460,3 +1460,23 @@ dialog::backdrop { background: var(--backdrop); transition: opacity 200ms ease; 
 @media (forced-colors: active) {
   .filter-input:focus-visible, .pal-input:focus-visible, .drawer-title:focus-visible, .card-open:focus-visible { outline: 2px solid Highlight; }
 }
+
+/* ── why a card is on this board (the app's routing reason) ───────────────
+   One quiet line: a tone dot, the reason, and its fix as a text button.
+   Tone colours only on the dot and the fix, so text keeps body contrast. */
+.route-why { position: relative; z-index: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; min-width: 0; font-size: var(--text-xs); color: var(--muted); line-height: 1.4; }
+.route-why-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.route-why-label::before { content: ''; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--tone-unknown); }
+.route-why[data-tone="team"] .route-why-label::before { background: var(--tone-quiet); }
+.route-why[data-tone="personal"] .route-why-label::before { background: var(--tone-violet); }
+.route-why[data-tone="warn"] .route-why-label::before { background: var(--tone-amber); }
+.route-why[data-tone="warn"] .route-why-label { color: var(--text); }
+.route-why-fix { all: unset; cursor: pointer; padding: 2px 4px; margin: -2px 0; min-height: 24px; display: inline-flex; align-items: center; border-radius: var(--radius-sm); color: var(--text); font-weight: 600; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 2px; }
+.route-why-fix:hover { text-decoration-color: currentColor; }
+.route-why-fix:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.card.is-pointer { background: transparent; border-style: dashed; box-shadow: none; }
+.card.is-pointer .card-title { color: var(--muted); font-weight: 500; }
+.pointer-foot { margin: 0; }
+.banner-route { background: color-mix(in oklab, var(--tone-amber) 14%, var(--bg)); color: var(--text); }
+.banner-route .icon { color: var(--tone-amber); }
+@media (prefers-reduced-motion: no-preference) { .route-why-fix { transition: text-decoration-color 120ms ease-out; } }

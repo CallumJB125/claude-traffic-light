@@ -23,8 +23,10 @@ handle agents:update
 handle aitools:add-custom
 handle aitools:connect
 handle aitools:connect-all
+handle aitools:connections
 handle aitools:copy
 handle aitools:disconnect
+handle aitools:fix-connection
 handle aitools:fix-runner
 handle aitools:focus
 handle aitools:open-install
@@ -89,6 +91,7 @@ handle buddy:acct:teamDeleteCode
 handle buddy:acct:teamDeleteOAuth
 handle buddy:acct:teamDeleteResend
 handle buddy:acct:teamDeleteStart
+handle buddy:card-routes
 handle buddy:card-session-action
 handle buddy:continue-in
 handle buddy:local-handover
@@ -564,6 +567,7 @@ on buddy:open-team
 on buddy:open-timeline
 on buddy:optimiser-section
 on buddy:retry
+on buddy:route-fix
 on buddy:select
 on buddy:signout
 on buddy:workspace

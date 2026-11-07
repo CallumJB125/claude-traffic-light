@@ -114,8 +114,10 @@ test('account client routes and card-id-only local session actions are sender ch
   const { ROUTES } = require('../buddy-window/accounts.js');
   assert.deepEqual([ROUTES.createRepo, ROUTES.addBoardRepo, ROUTES.salvageHandover], [['POST', '/api/repos'], ['POST', '/api/boards/:board/repos'], ['POST', '/api/cards/:card/handover/salvage']]);
   const pre = fs.readFileSync(path.join(__dirname, '../buddy-window/hub-preload.js'), 'utf8');
-  assert.equal((pre.match(/ipcRenderer\.invoke\(/g) || []).length, 4); assert.match(pre, /buddy:local-handover/);
-  assert.deepEqual([...pre.matchAll(/ipcRenderer\.invoke\('([^']+)'/g)].map(m => m[1]), ['buddy:local-handover', 'buddy:continue-in', 'buddy:card-session-action', 'buddy:card-session-action']);
+  assert.equal((pre.match(/ipcRenderer\.invoke\(/g) || []).length, 5); assert.match(pre, /buddy:local-handover/);
+  assert.deepEqual([...pre.matchAll(/ipcRenderer\.invoke\('([^']+)'/g)].map(m => m[1]), ['buddy:local-handover', 'buddy:continue-in', 'buddy:card-session-action', 'buddy:card-session-action', 'buddy:card-routes']);
+  // Why each card is on this board: no argument crosses; main answers for the showing board's cards only.
+  assert.match(pre, /cardRoutes: \(\) => ipcRenderer\.invoke\('buddy:card-routes'\),/);
   assert.match(pre, /\['refresh', 'copy', 'save'\]\.includes\(action\)/);
   assert.match(pre, /continueIn: \(cardId\) => ipcRenderer\.invoke\('buddy:continue-in', String\(cardId\)\.slice\(0, 100\)\)/, 'the card id is the only thing that crosses; main shows the menu');
   const idx = fs.readFileSync(path.join(__dirname, '../buddy-window/index.js'), 'utf8');
@@ -126,11 +128,15 @@ test('account client routes and card-id-only local session actions are sender ch
 });
 test('the hub page can only ask to show the Team page or a card\'s timeline: main checks the sender, resolves the card and picks the page', () => {
   const pre = fs.readFileSync(path.join(__dirname, '../buddy-window/hub-preload.js'), 'utf8');
-  assert.equal((pre.match(/ipcRenderer\.send\(/g) || []).length, 2);
+  assert.equal((pre.match(/ipcRenderer\.send\(/g) || []).length, 3);
+  // A why-chip's fix names one of four places; main maps it to a page (src/board-why-view.js FIX_PAGE).
+  assert.match(pre, /routeFix: \(fix\) => \{ if \(\['link', 'choose', 'exclude', 'invite'\]\.includes\(fix\)\) ipcRenderer\.send\('buddy:route-fix', fix\); \},/);
   assert.match(pre, /openTeam: \(\) => ipcRenderer\.send\('buddy:open-team'\),/);
   assert.match(pre, /openTimeline: \(cardId\) => ipcRenderer\.send\('buddy:open-timeline', String\(cardId\)\.slice\(0, 100\)\),/);
   const idx = fs.readFileSync(path.join(__dirname, '../buddy-window/index.js'), 'utf8');
   assert.match(idx, /ipcMain\.on\('buddy:open-team', \(e\) => \{ if \(fromHubView\(e\)\) select\('team'\); \}\);/);
+  assert.match(idx, /ipcMain\.on\('buddy:route-fix', \(e, fix\) => \{\n\s+if \(!fromHubView\(e\) \|\| typeof fix !== 'string' \|\| !Object\.hasOwn\(BoardWhy\.FIX_PAGE, fix\)\) return;/);
+  assert.match(idx, /ipcMain\.handle\('buddy:card-routes', \(e\) => \{\n\s+if \(!fromHubView\(e\) \|\| !captureEnabled\) return null;/);
   assert.match(idx, /ipcMain\.on\('buddy:open-timeline', \(e, cardId\) => \{\n\s+if \(fromHubView\(e\)\) void sessionBridge\.sessionForCard\(cardId\)/);
   const { pageById } = require('../buddy-window/pages.js');
   assert.deepEqual([pageById('team').kind, pageById('team').screen], ['local', 'team']);

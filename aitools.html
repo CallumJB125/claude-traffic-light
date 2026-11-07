@@ -15,6 +15,11 @@
 </section>
 <section id="all-preview" class="panel" hidden aria-label="Connect all detected tools"></section>
 <div id="list"></div>
+<section id="connections" class="panel" aria-labelledby="connections-title" hidden>
+<div class="top"><div><h2 id="connections-title">Connections</h2><p id="connections-summary" class="muted"></p></div></div>
+<p class="muted">How each AI tool talks to Plexiform and to the other AI sessions running here. Fix adds Plexiform's entry to that tool's own settings and changes nothing else.</p>
+<ul id="connections-list" class="conn-list"></ul>
+</section>
 <section class="panel" aria-labelledby="custom-title">
 <h2 id="custom-title">Add a custom tool</h2>
 <p class="muted">For anything without hooks of its own (Aider, OpenCode, Copilot CLI, Amp…). Run it as <code>plexiform-run &lt;command&gt;</code> and it appears in the widget as working, then done or failed. That is all it can report: it cannot answer prompts or show what the tool is doing.</p>
@@ -25,4 +30,4 @@
 </section>
 <p class="muted">Your team boards can also be offered inside AI apps: that is in Settings → Advanced.</p>
 <p class="muted disclosure">Connecting edits only the tool's own hook settings, never its chats or logins. A copy of the file is kept next to it first (<code>.plexiform-backup-…</code>) and Undo puts it back. Plexiform reads no conversation text; it sees that a session started, worked, or finished.</p>
-</main><script src="aitools.js"></script></body></html>
+</main><script src="src/connections-view.js"></script><script src="aitools.js"></script></body></html>

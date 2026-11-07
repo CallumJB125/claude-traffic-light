@@ -43,7 +43,7 @@ test('the two documents: own file and preload, outside PAGES, never config owner
 test('the preloads expose only their own channels, never get-config / save-config', () => {
   const chans = (f) => [...new Set([...read(f).matchAll(/(?:invoke|send|on)\('([A-Za-z:-]+)'/g)].map((m) => m[1]))].sort();
   assert.deepEqual(chans('phone-pairing-preload.js'), ['phone:changed', 'phone:pair-cancel', 'phone:pair-confirm', 'phone:pair-start', 'phone:revoke', 'phone:set', 'phone:state', 'phone:upgrade', 'settings:go-pane', 'settings:shown']);
-  assert.deepEqual(chans('aitools-preload.js'), ['aitools:add-custom', 'aitools:connect', 'aitools:connect-all', 'aitools:copy', 'aitools:disconnect', 'aitools:fix-runner', 'aitools:focus', 'aitools:open-install', 'aitools:preview', 'aitools:remove-custom', 'aitools:scan', 'aitools:terminal', 'aitools:terminal-get', 'aitools:terminal-open', 'aitools:undo', 'burst-action', 'burst:codex-routing', 'mcp-set-enabled', 'mcp-status', 'settings:go-pane', 'settings:shown', 'status-changed']);
+  assert.deepEqual(chans('aitools-preload.js'), ['aitools:add-custom', 'aitools:connect', 'aitools:connect-all', 'aitools:connections', 'aitools:copy', 'aitools:disconnect', 'aitools:fix-connection', 'aitools:fix-runner', 'aitools:focus', 'aitools:open-install', 'aitools:preview', 'aitools:remove-custom', 'aitools:scan', 'aitools:terminal', 'aitools:terminal-get', 'aitools:terminal-open', 'aitools:undo', 'burst-action', 'burst:codex-routing', 'mcp-set-enabled', 'mcp-status', 'settings:go-pane', 'settings:shown', 'status-changed']);
 });
 
 test('phonePage / aiToolsPage: the old page or that ONE document (top frame, preview only)', () => {

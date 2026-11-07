@@ -28,5 +28,12 @@ form { display: grid; gap: 10px; grid-template-columns: 1fr 2fr auto; align-item
 label { display: grid; gap: 4px; font-size: var(--text-sm); color: var(--muted); }
 input { font: inherit; min-height: 44px; padding: 8px 10px; color: var(--text); background: var(--bg); border: 1px solid var(--line-input); border-radius: var(--radius); }
 .disclosure { margin-top: 20px; }
+.conn-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+.conn { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); min-width: 0; }
+.conn.fix, .conn.blocked { border-color: var(--amber); }
+.conn.missing { padding: 8px 14px; }
+.conn.missing h3 { color: var(--muted); font-weight: 500; }
+.conn p { overflow-wrap: anywhere; }
+.small { font-size: var(--text-sm); }
 [hidden] { display: none !important; }
 @media (max-width: 640px) { main { padding: 14px; } form { grid-template-columns: 1fr; } }

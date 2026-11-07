@@ -101,6 +101,7 @@ tasks	test-visual/tasks-engine.spec.js	data-page	2
 team	buddy-window/index.js	select	1
 team	buddy-window/pages.js	PAGES	1
 team	buddy-window/pages.js	SECTIONS	1
+team	buddy-window/sidebar.js	select	1
 team	test-visual/simple-mode.spec.js	data-page	1
 thismac	buddy-window/dev-walk.js	select	1
 thismac	buddy-window/pages.js	PAGES	1

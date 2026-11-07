@@ -163,7 +163,29 @@ export function labelChips(view, model, labels = view.labels ?? []) {
   }));
 }
 
+const ROUTE_TONES = new Set(['team', 'personal', 'warn', 'muted']);
+/** Why this card is on this board, in the app's words, with its one fix (link a repo, pick a board, unmark, exclude). */
+export function routeChip(route, view) {
+  if (!route || typeof route.label !== 'string' || !route.label) return null;
+  const tone = ROUTE_TONES.has(route.tone) ? route.tone : 'muted';
+  const fix = route.fix && typeof route.fix.label === 'string' && /^(link|choose|exclude|session)$/.test(route.fix.id) ? route.fix : null;
+  return h('div', { class: 'route-why', 'data-tone': tone },
+    h('span', { class: 'route-why-label', title: typeof route.title === 'string' ? route.title : null },
+      h('span', { class: 'sr-only' }, 'On this board because: '), route.label),
+    fix ? h('button', { type: 'button', class: 'route-why-fix', 'data-action': 'route-fix', 'data-fix': fix.id, 'data-card': view.id, 'aria-label': `${fix.label.replace(/…$/, '')}: ${route.label}` }, fix.label) : null);
+}
+
+/** A hand-off running in another team's repository: a placeholder with no details and nothing to open. */
+export function pointerCard({ view }, route) {
+  return h('article', { key: view.id, class: 'card is-pointer', 'data-card-id': view.id, 'aria-labelledby': `t-${view.id}` },
+    h('div', { class: 'card-top' }, h('span', { class: 'card-key num' }, view.key)),
+    h('h3', { class: 'card-title', id: `t-${view.id}` }, typeof view.title === 'string' && view.title ? view.title : 'Hand-off'),
+    h('p', { class: 'card-foot pointer-foot', title: route.title ?? null }, route.label, ' · details stay with the asker'));
+}
+
 export function card({ view, face, elapsed_ms = 0 }, model) {
+  const route = model.routes?.cards?.[view.id] ?? null;
+  if (route?.pointer) return pointerCard({ view }, route);
   const members = model.members;
   const assignees = (view.assignee_ids ?? []).map((id) => members.get(id));
   const owner = view.run?.owner ? members.get(view.run.owner.member_id) ?? view.run.owner : null;
@@ -206,6 +228,7 @@ export function card({ view, face, elapsed_ms = 0 }, model) {
     h('button', { type: 'button', class: 'card-open', 'data-action': pending ? null : 'open', 'data-card': view.id, disabled: pending || null, 'aria-describedby': draggable ? 'dnd-help' : null }, view.title)),
   observed ? captureBadge(view, elapsed_ms, model.conn?.status === 'lost') : pill(chips.some((c) => c.id === 'proof' || (c.id === 'pr' && face.state === 'in_review')) ? { ...face, reason: null } : face),
   workPhase ? h('p', { class: 'card-work-phase' }, workPhase) : null,
+  routeChip(route, view),
   observed ? captureRecord(view) : null,
   // Organised views PR 7: which project the routed work came from, by the repo short name the card already has.
   observed ? h('p', { class: 'card-foot' }, typeof view.repo?.short_name === 'string' && view.repo.short_name
@@ -333,8 +356,30 @@ const EMPTY = {
 
 // Local mode only: the board works alone, and a team is where it is shared. Signing in happens
 // on the app's Team page; outside the app (no openTeam bridge) the card says where that is.
+/** Cards waiting on My board because the team board could not be reached: they move by themselves when it is back. */
+export function routePendingBanner(model) {
+  const n = Number(model.routes?.pending) || 0;
+  if (n < 1 || model.view !== 'board') return null;
+  return h('div', { class: 'banner banner-route', role: 'status' },
+    icon('sync', 'icon-xs'),
+    h('span', null, h('strong', null, `${n} card${n === 1 ? '' : 's'} waiting to reach the team board. `),
+      n === 1 ? 'Plexiform could not check which board it belongs on, so it stays here and moves by itself once the team board answers.'
+        : 'Plexiform could not check which board they belong on, so they stay here and move by themselves once the team board answers.'));
+}
+
 export function localCard(model) {
   if (!model.localCard || model.view !== 'board') return null;
+  // In the app with a team already: My board is just one of the person's boards, so no sign-in pitch.
+  if (model.solo === false) return null;
+  if (model.solo === true && model.openTeam) {
+    return h('section', { class: 'localcard', 'aria-labelledby': 'localcard-title' },
+      h('div', { class: 'localcard-text' },
+        h('h2', { id: 'localcard-title', class: 'localcard-title' }, 'Just you for now'),
+        h('p', { class: 'localcard-body muted small' }, 'Everything here works on your own. When you want teammates and their AI sessions on one shared board, invite your team.')),
+      h('div', { class: 'localcard-actions' },
+        h('button', { type: 'button', class: 'btn btn-sm btn-primary', 'data-action': 'open-team' }, 'Invite your team'),
+        h('button', { type: 'button', class: 'btn btn-sm btn-ghost', 'data-action': 'local-card-dismiss' }, 'Dismiss')));
+  }
   return h('section', { class: 'localcard', 'aria-labelledby': 'localcard-title' },
     h('div', { class: 'localcard-text' },
       h('h2', { id: 'localcard-title', class: 'localcard-title' }, 'You’re on your local board'),
@@ -472,6 +517,7 @@ export function boardScreen(model, body = null) {
     model.board?.archived_at ? h('p', { class: 'board-archived callout', role: 'status' }, 'This board is archived and read-only. An admin can restore it from Boards.') : null,
     alertsStrip(model.alerts, model),
     needsYouSection(model.needsYou, model),
+    routePendingBanner(model),
     localCard(model),
     pinboardPanel(model),
     sharedViewsPanel(model),

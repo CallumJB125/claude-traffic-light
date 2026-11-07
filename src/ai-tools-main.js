@@ -5,6 +5,8 @@
 const AiTools = require('./ai-tools.js');
 
 const KNOWN = new Set(AiTools.TOOLS.map((t) => t.id));
+// Connection ids are the registry's (claude, codex, gemini, cursor, vscode, claude-desktop, hermes…), not only the hook adapters'.
+const KNOWN_CONN = (id) => typeof id === 'string' && /^[a-z][a-z0-9-]{1,24}$/.test(id);
 const str = (v, max) => typeof v === 'string' && v.length <= max;
 
 // Help links to the page as 'aitools', 'aitools:codex' (that row) or 'aitools:all' (the connect-all preview).
@@ -32,6 +34,9 @@ function register({ ipcMain, fromPage, focusAllowed = fromPage, shell, clipboard
   on('aitools:add-custom', (name, command) => (str(name, 60) && str(command, 400) ? tools.addCustom(name, command) : { ok: false, error: 'Enter a name and the command you run.' }));
   on('aitools:remove-custom', (name) => (str(name, 60) ? tools.removeCustom(name) : { ok: false }));
   on('aitools:fix-runner', () => tools.fixRunner());
+  // Connections panel: each tool's MCP entry and bus tier (McpAuto's registry), and Fix = the bus sync for one row.
+  on('aitools:connections', () => (tools.connections ? tools.connections() : []));
+  on('aitools:fix-connection', (id) => (KNOWN_CONN(id) && tools.fixConnection ? tools.fixConnection(id) : { ok: false, error: 'Unknown tool.' }));
   on('aitools:copy', (text) => { if (!str(text, 500) || /[\0-\x1f\x7f]/.test(text)) return false; clipboard.writeText(text); return true; });
   on('aitools:open-install', (id) => {
     const url = KNOWN.has(id) ? tools.installUrl(id) : null;

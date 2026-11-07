@@ -110,6 +110,47 @@ function rowEl(row) {
   return el;
 }
 
+// Connections: every tool McpAuto knows (Claude Code, Codex, Gemini, Cursor, VS Code, Claude desktop, Hermes), with Fix where Fix can help.
+let conns = null;
+const connResults = new Map(); // tool id -> { ok, text }
+function connectionRow(r) {
+  const li = node('li', '', `conn ${r.state}`);
+  li.id = `conn-${r.id.replace(/[^a-z0-9-]/gi, '_')}`;
+  const head = node('div', '', 'top');
+  const name = node('div', '', 'name');
+  name.append(node('h3', r.label), node('span', r.status, `pill ${r.state === 'connected' ? 'connected' : r.state === 'missing' || r.state === 'off' ? 'missing' : 'fix'}`));
+  head.append(name);
+  if (r.fix) {
+    const b = node('button', 'Fix', 'primary'); b.type = 'button';
+    b.setAttribute('aria-label', `Fix ${r.label}`);
+    b.addEventListener('click', () => act(async () => {
+      b.disabled = true; b.textContent = 'Fixing…';
+      const out = await api.fixConnection(r.id);
+      connResults.set(r.id, { ok: !!out?.ok, text: out?.ok ? `${r.label} is connected.${r.restart ? ` ${r.restart}` : ''}` : out?.error || 'Plexiform could not connect it. Try again.' });
+      await drawConnections();
+    }));
+    head.append(b);
+  }
+  li.append(head);
+  if (r.state === 'missing') return li;
+  li.append(node('p', r.detail, r.state === 'blocked' ? '' : 'muted'));
+  const facts = [r.tier, r.hooks].filter(Boolean);
+  if (facts.length) li.append(node('p', facts.join(' · '), 'muted small'));
+  const res = connResults.get(r.id);
+  if (res) { const p = node('p', res.text, `result ${res.ok ? '' : 'error'}`); p.setAttribute('role', res.ok ? 'status' : 'alert'); li.append(p); }
+  return li;
+}
+async function drawConnections() {
+  if (!api.connections || !window.ConnectionsView) return;
+  const caps = await api.connections().catch(() => null);
+  const box = $('connections');
+  if (!Array.isArray(caps) || !caps.length) { box.hidden = true; return; }
+  conns = window.ConnectionsView.rows(caps);
+  $('connections-summary').textContent = window.ConnectionsView.summary(conns);
+  $('connections-list').replaceChildren(...conns.map(connectionRow));
+  box.hidden = false;
+}
+
 let mcp = null;
 function mcpBlock() {
   const box = node('div', '', 'mcp');
@@ -139,6 +180,7 @@ async function refresh() {
   [snap, mcp] = await Promise.all([api.scan(), api.mcpStatus().catch(() => null)]);
   burstCodex = api.burstCodex ? (await api.burstCodex().catch(() => null))?.view ?? null : null;
   draw();
+  await drawConnections().catch(() => {});
 }
 
 allBtn.addEventListener('click', () => act(async () => {
@@ -200,7 +242,7 @@ $('terminal-action').addEventListener('click', () => act(async () => {
   await drawTerminal();
 }));
 
-$('refresh').addEventListener('click', () => act(async () => { previews.clear(); results.clear(); await refresh(); await drawTerminal(); }));
+$('refresh').addEventListener('click', () => act(async () => { previews.clear(); results.clear(); connResults.clear(); await refresh(); await drawTerminal(); }));
 $('custom-form').addEventListener('submit', (e) => {
   e.preventDefault();
   act(async () => {

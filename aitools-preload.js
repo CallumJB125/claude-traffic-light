@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('aiToolsApi', {
   addCustom: (name, command) => ipcRenderer.invoke('aitools:add-custom', name, command),
   removeCustom: (name) => ipcRenderer.invoke('aitools:remove-custom', name),
   fixRunner: () => ipcRenderer.invoke('aitools:fix-runner'),
+  connections: () => ipcRenderer.invoke('aitools:connections'),
+  fixConnection: (id) => ipcRenderer.invoke('aitools:fix-connection', id),
   copy: (text) => ipcRenderer.invoke('aitools:copy', text),
   openInstall: (id) => ipcRenderer.invoke('aitools:open-install', id),
   terminal: () => ipcRenderer.invoke('aitools:terminal'),
