@@ -832,9 +832,30 @@ export class TasksEngine extends EventEmitter {
     }
   }
 
+  // Decision 7: a bus run is started only by the bus itself (the dispatcher, in this process), for a hand-off in bus.db.
+  // Through tasks.sock (any same-user process holding tasks.token, which carries ctx.auth) source 'bus' is refused, and
+  // in process its originBoard and fallbackOf must be the hand-off's own: the board main put on it over parentPort, and
+  // a run of the same chain that failed. main still keeps a team key only if the person has a writable route for it.
+  #checkBusSpec(spec, ctx) {
+    if (ctx && (ctx.auth || ctx.principal)) throw new ApiError('POLICY_DENIED', 'agent bus runs are started only by the agent bus');
+    const m = spec.sourceMeta && typeof spec.sourceMeta === 'object' ? spec.sourceMeta : {};
+    if (m.originBoard == null && m.fallbackOf == null) return;
+    const log = this.agentBus?.log;
+    const offer = typeof m.handoffId === 'string' ? log?.handoff(m.handoffId) : null;
+    if (!offer) throw new ApiError('VALIDATION', 'originBoard and fallbackOf need the hand-off they belong to');
+    if (m.originBoard != null && (typeof m.originBoard !== 'string' || !/^(?:[a-f0-9]{64}|local)$/.test(m.originBoard) || offer.data?.origin?.board !== m.originBoard)) {
+      throw new ApiError('VALIDATION', "originBoard is not the board on this run's hand-off");
+    }
+    if (m.fallbackOf != null) {
+      const failed = typeof m.fallbackOf === 'string' && offer.data?.fallback_of === m.fallbackOf ? log.result(m.fallbackOf) : null;
+      if (failed?.kind !== 'result.failed') throw new ApiError('VALIDATION', 'fallbackOf must name a failed run of the same hand-off chain');
+    }
+  }
+
   async #create(spec, ctx = {}) {
     if (this.closing || this.closed) throw new ApiError('INTERNAL', 'shutting down');
     const source = spec.source ?? 'local';
+    if (source === 'bus') this.#checkBusSpec(spec, ctx);
     // A spin-off's parent: the task whose session asked for it (§9.2, inherited rules).
     const parent = source === 'mcp' && spec.sourceMeta?.parentSessionId
       ? [...this.tasks.values()].find((t) => t.sessionId === spec.sourceMeta.parentSessionId) ?? null : null;
