@@ -2351,6 +2351,8 @@ export class TasksEngine extends EventEmitter {
       ? { trace_id: obj.trace.trace_id, from_handle: typeof obj.trace.from_handle === 'string' ? obj.trace.from_handle.slice(0, 40) : null } : null;
     const c = { provider: typeof obj.provider === 'string' ? obj.provider.slice(0, 12) : null, cwd: typeof obj.cwd === 'string' && path.isAbsolute(obj.cwd) ? obj.cwd.slice(0, 1024) : null,
       ...(obj.after_note === true ? { after_note: true } : {}), ...(bound ? {} : { unbound: true }), ...(trace ? { trace } : {}),
+      // How long main waits for this answer: a later one is traced as a timeout (it only labels the trace line).
+      ...(Number.isSafeInteger(obj.timeout_ms) && obj.timeout_ms > 0 ? { timeout_ms: obj.timeout_ms } : {}),
       ...(main && obj.origin && typeof obj.origin === 'object' ? { origin: { key: obj.origin.key, handle: obj.origin.handle, board: obj.origin.board } } : {}) };
     try { return await this.agentBus.op(op, args, c); } catch (e) {
       if (e instanceof BusRefusal) throw new ApiError(['VALIDATION', 'POLICY_DENIED', 'CONFLICT'].includes(e.code) ? e.code : 'INTERNAL', e.message);

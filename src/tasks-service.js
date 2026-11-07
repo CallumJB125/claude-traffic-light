@@ -829,26 +829,48 @@ function createTasksService(opts) {
   // src/tasks-process.js), never the socket, which refuses them; with no parentPort (a dev fixture home) they are
   // UNAVAILABLE, with no fallback.
   const NOTE_OPS = new Set(['note', 'notes', 'notes_ack', 'notes_pending', 'notified']);
+  // Liveness probe: a helper that is not up and answering within busProbeMs (a cold start, or one stuck behind a
+  // macOS keychain prompt) is refused at once, before anything is sent, instead of holding the caller for the whole
+  // relay deadline. HELPER_STARTING: it is not up yet; HELPER_STUCK: connected, but its heartbeat (every 5 s) stopped.
+  const probeMs = opts.busProbeMs ?? 4_000;
+  const unreachable = (helper) => Object.assign(new Error('unavailable'), { code: 'SUPERVISOR_UNREACHABLE', helper });
+  async function ensureQuick(until) {
+    const ensured = opts.ensureSupervisor?.();
+    if (!ensured || typeof ensured.then !== 'function') return;
+    let timer;
+    const LATE = Symbol('late');
+    const late = new Promise((resolve) => { timer = setTimeout(() => resolve(LATE), Math.max(0, until - now())); });
+    try {
+      if ((await Promise.race([ensured, late])) === LATE) throw unreachable('starting');
+    } catch (e) { throw e?.helper ? e : unreachable('down'); } finally { clearTimeout(timer); }
+  }
+  // Ops that only read answer within this; a hand-off keeps the longer limit, since a timeout there is ambiguous.
+  const QUICK_OP_MS = 8_000;
   async function bus(op, args = {}, caller = null) {
+    const until = now() + probeMs;
     if (NOTE_OPS.has(op)) {
       if (typeof opts.busMain !== 'function') throw Object.assign(new Error('unavailable'), { code: 'UNAVAILABLE' });
-      try { await opts.ensureSupervisor?.(); } catch { throw Object.assign(new Error('unavailable'), { code: 'SUPERVISOR_UNREACHABLE' }); }
+      await ensureQuick(until);
       return opts.busMain(op, args);
     }
-    try { await opts.ensureSupervisor?.(); } catch { throw Object.assign(new Error('unavailable'), { code: 'SUPERVISOR_UNREACHABLE' }); }
+    await ensureQuick(until);
     start();
-    const until = now() + 10_000;
     while (!connected()) {
-      if (stopped || now() > until) throw Object.assign(new Error('unavailable'), { code: 'SUPERVISOR_UNREACHABLE' });
+      if (stopped || now() > until) throw unreachable('starting');
       await new Promise((r) => setTimeout(r, 100));
     }
     const channel = client;
+    const hbAt = channel.lastHbAt;
+    if (typeof hbAt === 'number' && performance.now() - hbAt > (opts.busHbStaleMs ?? 15_000)) throw unreachable('stuck');
     if (op !== 'busSetContext' && opts.busContext) await (busContextFor === channel ? busContextSent : pushBusContext(channel));
-    const timeoutMs = op === 'wait' ? (Math.min(120, Math.max(0, Number(args?.timeout_s ?? 60) || 0)) + 10) * 1000 : 12_000;
+    const timeoutMs = op === 'wait' ? (Math.min(120, Math.max(0, Number(args?.timeout_s ?? 60) || 0)) + 10) * 1000
+      : op === 'handoff' ? 12_000 : QUICK_OP_MS;
     // A bound caller (and a hand-off's origin, for the result note) is believed only over parentPort (engine.bus).
     // With no parentPort (a dev fixture home) it goes through the socket and counts as unbound.
-    if (parentRouted(op, caller, opts)) return opts.busMain(op, args, { caller, timeoutMs });
-    return channel.bus(op, args, caller, { timeoutMs });
+    // timeout_ms lets the helper trace an answer that comes after main stopped waiting as the timeout it was.
+    const timed = op === 'busSetContext' ? caller : { ...(caller && typeof caller === 'object' ? caller : {}), timeout_ms: timeoutMs };
+    if (parentRouted(op, caller, opts)) return opts.busMain(op, args, { caller: timed, timeoutMs });
+    return channel.bus(op, args, timed, { timeoutMs });
   }
 
   // Folder choices are handed to the page as opaque handles with a display label.

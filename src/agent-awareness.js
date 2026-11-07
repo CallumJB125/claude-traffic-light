@@ -1022,6 +1022,8 @@ function boardAnswer(board) {
   const trace = traceOpt === undefined ? BusTrace.createTrace({ file: path.join(rootDir, 'bus-trace.jsonl'), now }) : traceOpt;
   const noteTraces = new Map(); // note_id → trace_id, for the notified line
   const TRACED_HERE = { peers: 'peers', session: 'peers', note: 'note', notes: 'notes', card_add: 'card' };
+  const FORWARDED = new Set(['hello', 'handoff', 'read', 'wait', 'status']);
+  const HELPER_FAULTS = new Set(['SUPERVISOR_UNREACHABLE', 'UNAVAILABLE', 'TIMEOUT']);
   async function relay(op, args, caller, ident, opts) {
     const t0 = now();
     const tc = { trace_id: BusTrace.newTraceId(), from_handle: null, to: null, ref: null, repo_key_hash: null };
@@ -1031,6 +1033,10 @@ function boardAnswer(board) {
     if (trace && Object.hasOwn(TRACED_HERE, op)) {
       if (op === 'note' && r && typeof r.note_id === 'string') { tc.ref = r.note_id; noteTraces.set(r.note_id, tc.trace_id); while (noteTraces.size > 500) noteTraces.delete(noteTraces.keys().next().value); }
       trace.append({ trace_id: tc.trace_id, op: TRACED_HERE[op], from_handle: tc.from_handle, to: tc.to, repo_key_hash: tc.repo_key_hash, ref: tc.ref, ms: now() - t0, ...BusTrace.resultOf(r, err) });
+    } else if (trace && FORWARDED.has(op) && (HELPER_FAULTS.has(err?.code) || (r && typeof r === 'object' && r.available === false))) {
+      // The helper writes the line for the ops it answers; one it never answered (down, stuck behind a prompt, timed
+      // out) would leave none, or a late "ok", so main writes the error line itself.
+      trace.append({ trace_id: tc.trace_id, op, from_handle: tc.from_handle, ms: now() - t0, ...BusTrace.resultOf(r, err) });
     }
     if (err) throw err;
     return r;

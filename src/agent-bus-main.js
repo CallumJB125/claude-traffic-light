@@ -71,7 +71,11 @@ function register({ ipcMain, sessionsAllowed, tasks, started = () => true, confi
     relay: async (op, args, caller) => {
       if (op === 'handoff' && !used) { used = true; onChange(); }
       // Sessions come and go: the helper hears the current folders before it decides whether a repo is on the bus.
-      if ((op === 'hello' || op === 'handoff') && started()) { const ctx = context(); if (JSON.stringify(ctx) !== sent) await push(ctx).catch(() => {}); }
+      // A helper the push found down or stuck is the answer: asking again would make the caller wait a second probe.
+      if ((op === 'hello' || op === 'handoff') && started()) {
+        const ctx = context();
+        if (JSON.stringify(ctx) !== sent) await push(ctx).catch((e) => { if (e?.code === 'SUPERVISOR_UNREACHABLE') throw e; });
+      }
       return call(op, args, caller);
     },
     sync: () => { if (started()) push().catch(() => {}); },

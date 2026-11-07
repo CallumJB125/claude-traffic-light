@@ -43,10 +43,19 @@ function sanitize(e, now) {
   };
 }
 
-/** A reply's outcome for the trace: refused (a {reason}), error, or ok. */
+// Reasons that say the bus could not do its job (the helper down, stuck or slow, a fault), not that it said no.
+const FAULTS = new Set(['UNAVAILABLE', 'SUPERVISOR_UNREACHABLE', 'TIMEOUT', 'INTERNAL', 'ERROR', 'TASKS_HELPER_UNAVAILABLE']);
+const REFUSALS = new Set(Object.values(C.BUS_REASON).filter((r) => !FAULTS.has(r)));
+const codeOf = (v) => { const s = String(v ?? '').toUpperCase(); return REASON.test(s) ? s : 'ERROR'; };
+/**
+ * A reply's outcome for the trace: ok, refused (the bus said no: a {reason} or a thrown refusal), deferred (a hand-off
+ * whose outcome is unknown), or error (the helper was down, stuck or timed out, or a fault). An unavailable answer
+ * ({available: false}) is never ok.
+ */
 function resultOf(r, err = null) {
-  if (err) return { result: 'error', reason: REASON.test(String(err.code || '')) ? err.code : 'ERROR' };
-  if (r && typeof r === 'object' && typeof r.reason === 'string') return { result: 'refused', reason: r.reason };
+  if (err) { const code = codeOf(err.code); return { result: REFUSALS.has(code) ? 'refused' : 'error', reason: code }; }
+  if (r && typeof r === 'object' && r.available === false) return { result: r.outcome === 'unknown' ? 'deferred' : 'error', reason: codeOf(r.reason) };
+  if (r && typeof r === 'object' && typeof r.reason === 'string') { const code = codeOf(r.reason); return { result: FAULTS.has(code) ? 'error' : 'refused', reason: code }; }
   if (r && typeof r === 'object' && r.outcome === 'unknown') return { result: 'deferred', reason: null };
   return { result: 'ok', reason: null };
 }
