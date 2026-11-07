@@ -18,64 +18,69 @@
         <span id="development" class="dev-pill" title="Development build for local testing. Not signed or notarized for public release." hidden>Preview</span>
       </div>
       <div class="sidebar-nav">
-        <button id="nav-overview" class="nav-item" aria-current="page"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1.2"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1.2"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1.2"/><rect x="9" y="9" width="4.5" height="4.5" rx="1.2"/></svg><span>Overview</span><kbd>⌘0</kbd></button>
-        <button id="quick-open" class="nav-item"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25"/><path d="M10.2 10.2 13.5 13.5"/></svg><span>Jump to…</span><kbd>⌘P</kbd></button>
+        <button id="quick-open" class="jump"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25"/><path d="M10.2 10.2 13.5 13.5"/></svg><span>Jump to session…</span><kbd>⌘P</kbd></button>
+        <button id="nav-overview" class="nav-item"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h7M2.5 8h11M2.5 12h5"/></svg><span>Overview</span><span id="overview-count" class="nav-count"></span><kbd>⌘0</kbd></button>
         <button id="next-needs" class="nav-item needs-jump" hidden><span class="ind" data-s="needs" aria-hidden="true"></span><span id="next-needs-label">Next waiting</span><kbd>⌘J</kbd></button>
       </div>
-      <nav id="session-list" class="session-list" aria-label="Agent sessions and terminals"></nav>
+      <nav id="session-list" class="session-list" aria-label="Sessions"></nav>
       <div class="sidebar-foot">
         <div class="launch" role="group" aria-label="Start a session">
-          <button data-spawn="shell" title="New shell in the current tab's folder (⌘T)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9"/></svg>Shell</button>
-          <button data-spawn="claude" title="Start Claude Code in the current tab's folder">Claude</button>
-          <button data-spawn="codex" title="Start Codex in the current tab's folder">Codex</button>
+          <button data-spawn="shell" title="New shell in the current session's folder (⌘T)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9"/></svg>Shell</button>
+          <button data-spawn="claude" title="Start Claude Code in the current session's folder">Claude</button>
+          <button data-spawn="codex" title="Start Codex in the current session's folder">Codex</button>
         </div>
         <div class="keeper-state"><span id="keeper-dot" class="keeper-dot" aria-hidden="true"></span><span id="keeper-state">Connecting to Session Keeper…</span><button id="reconnect" class="link" hidden>Reconnect</button></div>
+        <div id="bus-state" class="keeper-state" hidden><span id="bus-dot" class="keeper-dot" aria-hidden="true"></span><span id="bus-text"></span></div>
       </div>
     </aside>
 
     <main class="main">
-      <section id="overview-view" class="view overview" aria-label="Agents overview">
+      <section id="overview-view" class="view overview" aria-label="Overview of all sessions">
         <header class="view-head drag">
           <div class="head-text"><h1>Overview</h1><p id="overview-summary" class="sub"></p></div>
+          <div class="range" role="group" aria-label="Time range">
+            <button data-range="15" aria-pressed="false">15m</button><button data-range="30" aria-pressed="true">30m</button><button data-range="60" aria-pressed="false">60m</button>
+          </div>
         </header>
-        <div class="scroll">
-          <div class="page">
-            <div id="stats" class="stats"></div>
-            <section class="block" aria-labelledby="queue-title">
-              <div class="block-head"><h2 id="queue-title">Needs you</h2><span id="queue-count" class="count"></span></div>
+        <div id="stats" class="stats" aria-label="Totals"></div>
+        <div class="overview-body">
+          <div class="scroll lanes-scroll">
+            <div id="lanes" class="lanes" role="table" aria-label="Sessions over time"></div>
+            <div id="lanes-legend" class="legend"></div>
+          </div>
+          <aside class="overview-side scroll" aria-label="Needs you and hand-offs">
+            <section class="block">
+              <div class="block-head"><h2 class="label">Needs you</h2><span id="queue-count" class="count"></span></div>
               <div id="queue" class="queue"></div>
             </section>
-            <section class="block" aria-labelledby="agents-title">
-              <div class="block-head"><h2 id="agents-title">Agents</h2><span id="agent-count" class="count"></span><span class="block-note">Reported by Plexiform hooks · read-only</span></div>
-              <div id="agents" class="cards"></div>
+            <section class="block">
+              <div class="block-head"><h2 class="label">Hand-offs</h2><span id="handoff-count" class="count"></span></div>
+              <div id="handoffs" class="handoff-list"></div>
             </section>
-            <section id="terminals-block" class="block" aria-labelledby="terminals-title">
-              <div class="block-head"><h2 id="terminals-title">Terminals</h2><span id="keeper-count" class="count"></span><span class="block-note">Kept running by the Session Keeper</span></div>
-              <div id="keeper-sessions" class="terminal-list"></div>
-            </section>
-            <p class="footnote">Input goes only to the selected terminal while this window is focused. Sessions started in other apps are shown here but never receive input from Plexiform Terminal.</p>
-          </div>
+          </aside>
         </div>
       </section>
 
-      <section id="terminal-view" class="view terminal-view" aria-label="Terminal" hidden>
+      <section id="session-view" class="view session-view" aria-label="Session" hidden>
         <header class="view-head drag session-bar">
           <div class="session-title">
             <span id="session-ind" class="ind" aria-hidden="true"></span>
             <div class="session-text">
-              <div class="session-line"><strong id="session-project"></strong><span id="session-tool" class="chip"></span><span id="session-branch" class="chip mono" hidden></span></div>
-              <div id="session-doing" class="session-doing"></div>
+              <div class="session-line"><strong id="session-project"></strong><span id="session-ext" class="chip" hidden>Read-only</span></div>
+              <div id="session-sub" class="session-sub"></div>
             </div>
           </div>
+          <div id="session-chips" class="session-chips"></div>
           <div class="session-actions"><button id="detach" title="Hide this terminal and keep its process running">Detach</button><button id="stop" class="danger" title="End this terminal's process">Stop…</button></div>
         </header>
-        <div class="terminal-frame"><div id="terminal" role="region" aria-label="Terminal output" hidden></div></div>
-        <footer class="terminal-footer"><span id="connection">Connecting to Session Keeper…</span><span id="session-cwd" class="mono"></span><span id="dimensions" class="mono"></span></footer>
-      </section>
-
-      <section id="detail-view" class="view detail" aria-label="Session details" hidden>
-        <header class="view-head drag"><div id="detail-head" class="detail-head"></div></header>
-        <div class="scroll"><div id="detail-body" class="page"></div></div>
+        <div class="session-body">
+          <div id="terminal-view" class="pane terminal-pane" hidden>
+            <div class="terminal-frame"><div id="terminal" role="region" aria-label="Terminal output" hidden></div></div>
+          </div>
+          <div id="detail-view" class="pane detail-pane scroll" hidden><div id="detail-body" class="detail-page"></div></div>
+          <aside id="rail" class="rail scroll" aria-label="Agents in this session"></aside>
+        </div>
+        <footer id="statusline" class="statusline" aria-label="Session status"></footer>
       </section>
     </main>
   </div>

@@ -121,7 +121,135 @@ test('packaged app declares take-over and .command handling without claiming the
   assert.equal(config.mac.extendInfo.PlexiformTakeover, true);
   assert.deepEqual(config.fileAssociations.map((a) => [a.ext, a.rank]), [['command', 'Alternate']]);
   assert(config.files.includes('takeover.js'));
-  assert.equal(require('../package.json').version, '0.2.0');
+  assert.equal(require('../package.json').version, '0.3.0');
   const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
   assert.doesNotMatch(main, /showOpenDialog/, 'new tabs open without a folder picker');
+});
+test('roster joins by provider|session id, gives board with a fixed reason, counts notes, and is ignored when stale', (t) => {
+  const dir = fixtureDir(t), now = Date.parse('2026-11-07T12:00:00Z');
+  fs.mkdirSync(path.join(dir, 'awareness'), { mode: 0o700 }); fs.writeFileSync(path.join(dir, 'port'), '47172');
+  const write = (generated) => fs.writeFileSync(path.join(dir, 'awareness/roster.json'), JSON.stringify({ v: 1, generated_at: generated, bus: { enabled: true, halted: 'unknown' }, peers: [{}, {}], self: {
+    'claude|s1': { allowed: true, handle: 'claude-plexiform-ab12', caps: { notes: true }, notices: [{ note_id: 'note_1', from_handle: 'codex-x-ab12' }, { note_id: 'note_2' }], board: { kind: 'team', name: 'Platform', why: 'linked_repo' } },
+    'codex|s2': { allowed: true, handle: 'not a handle <b>', caps: { notes: false }, notices: [{}], board: { kind: 'personal', why: 'something_new' } },
+    'claude|s3': { allowed: false, handle: 'claude-hidden-ab12' },
+  } }));
+  write('2026-11-07T11:58:00Z');
+  const r = meta.readRoster(dir, now);
+  assert.deepEqual(r.bus, { enabled: true, halted: null }); assert.equal(r.peers, 2);
+  assert.deepEqual(r.self.get('claude|s1'), { handle: 'claude-plexiform-ab12', board: { kind: 'team', label: 'On Platform', why: 'repo is linked to this team' }, notesWaiting: 2 });
+  assert.deepEqual(r.self.get('codex|s2'), { handle: null, board: { kind: 'personal', label: 'My board', why: null }, notesWaiting: null });
+  assert.equal(r.self.has('claude|s3'), false, 'excluded sessions never join');
+  write('2026-11-07T11:50:00Z'); assert.equal(meta.readRoster(dir, now).self.size, 0, 'a roster older than five minutes is ignored');
+  write('2026-11-07T11:58:00Z'); fs.rmSync(path.join(dir, 'port')); assert.equal(meta.readRoster(dir, now).bus, null, 'no running app, no roster');
+  assert.equal(meta.boardView({ kind: 'unknown' }), null);
+  assert.deepEqual(meta.boardView({ kind: 'untracked', why: 'personal_mark' }), { kind: 'none', label: 'No board', why: 'marked personal' });
+});
+test('observed rows carry the roster key privately; claude files without a source default to claude', (t) => {
+  const dir = fixtureDir(t), now = Date.parse('2026-11-07T12:00:00Z');
+  fs.writeFileSync(path.join(dir, 'a.json'), JSON.stringify({ sessionId: 's1', cwd: '/x/p', signal: 'tool-use', tool: 'Grep', updatedAt: '2026-11-07T11:59:00Z' }));
+  fs.writeFileSync(path.join(dir, 'b.json'), JSON.stringify({ source: 'hermes', sessionId: 'h-1', signal: 'stop', updatedAt: '2026-11-07T11:59:00Z' }));
+  const rows = meta.readMetadata(dir, now, { isAlive: () => true });
+  const a = rows.find((r) => r.provider === 'claude'), b = rows.find((r) => r.provider === 'hermes');
+  assert.equal(a.key, 'claude|s1'); assert.equal(b.key, 'hermes|h-1');
+  assert(!JSON.stringify(rows).includes('s1') && !JSON.stringify(rows).includes('h-1'), 'session ids never leave main');
+});
+test('hand-offs come from the trace by id, with stages, failure reasons and no text', (t) => {
+  const dir = fixtureDir(t), now = 1_800_000_000_000, file = path.join(dir, 'bus-trace.jsonl');
+  const line = (o) => JSON.stringify({ trace_id: 'tr_0123456789abcdef', span: 'sp_01234567', repo_key_hash: null, ms: 1, reason: null, ...o });
+  fs.writeFileSync(file, [
+    line({ t: now - 600000, op: 'handoff', from_handle: 'claude-plexiform-ab12', to: 'any', provider: 'any', result: 'ok', ref: 'hof_aaaaaaaaaaaa' }),
+    line({ t: now - 590000, op: 'claim', result: 'ok', ref: 'hof_aaaaaaaaaaaa' }),
+    line({ t: now - 580000, op: 'start', provider: 'claude', result: 'ok', ref: 'hof_aaaaaaaaaaaa' }),
+    line({ t: now - 300000, op: 'result', provider: 'claude', result: 'ok', ref: 'hof_aaaaaaaaaaaa' }),
+    line({ t: now - 200000, op: 'handoff', from_handle: 'claude-plexiform-ab12', to: 'codex', provider: 'codex', result: 'ok', ref: 'hof_bbbbbbbbbbbb' }),
+    line({ t: now - 199000, op: 'result', provider: 'codex', result: 'error', reason: 'PROVIDER_UNAVAILABLE', ref: 'hof_bbbbbbbbbbbb' }),
+    line({ t: now - 100000, op: 'note', from_handle: 'claude-plexiform-ab12', to: 'codex-x-ab12', result: 'ok', ref: 'note_0123456789abcdef' }),
+    '{"t":' + (now - 50000) + ',"op":"handoff","ref":"hof_cccc', // torn final line
+    line({ t: now - 9 * 3600000, op: 'handoff', from_handle: 'claude-old-ab12', to: 'claude', result: 'ok', ref: 'hof_dddddddddddd' }),
+  ].join('\n'));
+  const hs = meta.readTrace([file, path.join(dir, 'missing.jsonl')], now);
+  assert.equal(hs.length, 2, 'notes, torn lines and old hand-offs are skipped');
+  const [ok, refused] = hs;
+  assert.equal(ok.state, 'succeeded'); assert.equal(ok.provider, 'claude'); assert.equal(ok.to, 'any'); assert.equal(ok.from, 'claude-plexiform-ab12');
+  assert.deepEqual(ok.steps.map((s) => s.state), ['done', 'done', 'done', 'done']); assert.equal(ok.ago_ms, 600000);
+  assert.equal(refused.state, 'failed'); assert.equal(refused.reason, 'provider unavailable'); assert.deepEqual(refused.steps.map((s) => s.state), ['done', 'todo', 'todo', 'bad']);
+  assert(!JSON.stringify(hs).includes('hof_'), 'only a hashed id is exposed');
+});
+test('hand-off outcome comes only from result lines; returned is delivery, blocked and fallback asker', (t) => {
+  const dir = fixtureDir(t), now = 1_800_000_000_000, file = path.join(dir, 'bus-trace.jsonl');
+  const line = (ref, o) => JSON.stringify({ trace_id: 'tr_0123456789abcdef', span: 'sp_01234567', ms: 1, reason: null, ref: `hof_${ref.repeat(12)}`, ...o });
+  const asker = 'claude-plexiform-ab12';
+  fs.writeFileSync(file, [
+    line('e', { t: now - 50000, op: 'handoff', from_handle: asker, to: 'codex', provider: 'codex', result: 'ok' }),
+    line('e', { t: now - 40000, op: 'result', provider: 'codex', result: 'deferred', reason: 'EXPIRED' }),
+    line('f', { t: now - 30000, op: 'handoff', from_handle: asker, to: 'claude', provider: 'claude', result: 'ok' }),
+    line('f', { t: now - 29000, op: 'claim', result: 'ok' }), line('f', { t: now - 28000, op: 'start', provider: 'claude', result: 'ok' }),
+    line('f', { t: now - 27000, op: 'returned', to: asker, result: 'ok', reason: 'BLOCKED' }),
+    line('a', { t: now - 20000, op: 'handoff', from_handle: asker, to: 'gemini', provider: 'gemini', result: 'ok' }),
+    line('a', { t: now - 19000, op: 'result', provider: 'gemini', result: 'ok' }),
+    line('a', { t: now - 18000, op: 'returned', to: asker, result: 'error', reason: 'NO_SESSION' }),
+    // A fallback is posted inside the bus: no handoff line.
+    line('b', { t: now - 10000, op: 'claim', result: 'ok' }), line('b', { t: now - 9000, op: 'start', provider: 'codex', result: 'ok' }),
+    line('b', { t: now - 8000, op: 'result', provider: 'codex', result: 'ok' }), line('b', { t: now - 7000, op: 'returned', to: asker, result: 'ok' }),
+  ].join('\n'));
+  const [expired, blocked, delivered, fallback] = meta.readTrace(file, now);
+  assert.equal(expired.state, 'ended'); assert.equal(expired.reason, 'expired');
+  assert.equal(blocked.state, 'blocked'); assert.equal(blocked.reason, 'blocked on its person'); assert.equal(blocked.steps[3].state, 'todo', 'Result stage is not done while blocked');
+  assert.equal(delivered.state, 'succeeded', 'a failed delivery does not undo a success'); assert.equal(delivered.reason, null);
+  assert.equal(fallback.from, asker); assert.equal(fallback.to, 'codex'); assert.equal(fallback.state, 'succeeded');
+});
+test('subagents: live first, nested only under a listed parent, and a cut agent keeps its remembered start', (t) => {
+  const dir = fixtureDir(t), now = Date.parse('2026-11-07T12:00:00Z'), at = (min) => new Date(now - min * 60000).toISOString();
+  const agents = [{ id: 'old', name: 'old-live', status: 'working', since: at(50) }, { id: 'kid', name: 'kid', status: 'working', since: at(2), parent: 'p' }];
+  for (let i = 0; i < 30; i++) agents.push({ id: `d${i}`, name: `done${i}`, status: 'done', since: at(1) });
+  agents.push({ id: 'p', name: 'parent', status: 'working', since: at(5) }, { id: 'orphan', name: 'orphan', status: 'working', since: at(3), parent: 'gone' });
+  fs.writeFileSync(path.join(dir, 'a.json'), JSON.stringify({ sessionId: 's', signal: 'tool-use', tool: 'Bash', updatedAt: at(0), agents }));
+  const [row] = meta.readMetadata(dir, now, { isAlive: () => true });
+  const names = row.subagents.list.map((a) => [a.name, a.depth]);
+  assert(names.some(([n]) => n === 'old-live'), 'a long-running agent is never cut by newer finished ones');
+  const pi = names.findIndex(([n]) => n === 'parent'); assert.deepEqual(names[pi + 1], ['kid', 2], 'a child follows its parent');
+  assert.deepEqual(names.find(([n]) => n === 'orphan'), ['orphan', 1], 'a child of an unlisted parent is not indented');
+  assert.equal(row.subagents.running, 4); assert.equal(row.subagents.list.length, 24);
+  assert(!JSON.stringify(row).includes('"starts"'), 'start list stays main-process only');
+  const memory = new Map(); meta.trackAgents(memory, [row], now);
+  assert.equal(memory.size, 4, 'every live agent start is remembered; finished ones are never guessed');
+});
+test('subagent timing: start while working, end once finished, start remembered only if seen', () => {
+  const now = 10_000_000, memory = new Map();
+  const row = (status, since) => {
+    const a = Object.defineProperty({ name: 'executor', status, start_ms: status === 'working' ? now - since : null, end_ms: status === 'working' ? null : now - since }, 'aid', { value: 'a1' });
+    return { id: 'r', subagents: Object.defineProperty({ list: [a] }, 'starts', { value: [['a1', a.start_ms]] }) };
+  };
+  meta.trackAgents(memory, [row('working', 1000)], now);
+  const done = row('done', 600000); meta.trackAgents(memory, [done], now + 60000);
+  assert.equal(done.subagents.list[0].start_ms, 60000 + now - 1000);
+  const unseen = { id: 'q', subagents: Object.defineProperty({ list: [Object.defineProperty({ name: 'x', status: 'done', start_ms: null, end_ms: 5 }, 'aid', { value: 'b' })] }, 'starts', { value: [['b', null]] }) };
+  meta.trackAgents(memory, [unseen], now); assert.equal(unseen.subagents.list[0].start_ms, null, 'never guessed');
+  assert.equal(memory.size, 0, 'forgotten when the session ends');
+});
+test('lanes mark time before the window saw a session as unseen and keep an hour', () => {
+  const history = new Map(), row = { id: 'a', bucket: 'working', doing: 'Thinking', since_ms: 60000, started_ms: 600000 };
+  meta.trackTimeline(history, [row], 1_000_000);
+  assert.deepEqual(row.lane.map((s) => [s.bucket, s.start_ms, s.end_ms]), [['unseen', 600000, 60000], ['working', 60000, 0]]);
+  const later = { ...row, bucket: 'needs', doing: 'Approve Bash', since_ms: 0 }; meta.trackTimeline(history, [later], 1_030_000);
+  assert.deepEqual(later.lane.map((s) => s.bucket), ['unseen', 'working', 'needs']);
+});
+test('lanes keep a state that began over an hour ago, and a busy session keeps its whole hour', () => {
+  const H = 3600000, history = new Map();
+  const long = { id: 'l', bucket: 'working', doing: 'Thinking', since_ms: 90 * 60000, started_ms: 3 * H };
+  meta.trackTimeline(history, [long], 10 * H);
+  assert.deepEqual(long.lane.map((s) => s.bucket), ['working'], 'the current state stays even though it began 90 minutes ago');
+  const busy = new Map(); let t = 10 * H, row;
+  for (let i = 0; i < 400; i++, t += 15000) { row = { id: 'b', bucket: 'working', doing: `Running T${i % 7}`, since_ms: 0, started_ms: t - 9 * H }; meta.trackTimeline(busy, [row], t); }
+  row = { ...row, bucket: 'idle', doing: 'Idle', since_ms: 0 }; meta.trackTimeline(busy, [row], t + 20 * 60000);
+  assert(row.lane[0].start_ms >= H, 'the lane still reaches back a full hour');
+  assert.deepEqual(row.lane.map((s) => [s.bucket, s.text]), [['working', 'Working'], ['idle', 'Idle']], 'a run of tools is one segment named by its state');
+  assert(busy.get('b').length <= 400, 'the history is bounded');
+});
+test('renderer folds old sessions, keeps hand-off briefs out, and never builds markup from data', () => {
+  const app = fs.readFileSync(path.join(__dirname, '../renderer/app.js'), 'utf8');
+  assert.match(app, /Earlier today/); assert.match(app, /EARLIER_MS = 30 \* 60000/);
+  assert.match(app, /Brief not shown/);
+  assert.doesNotMatch(app, /\.brief\b|\.notices\b|(?<!document)\.body\b/, 'no hand-off or note text is read');
+  assert.doesNotMatch(app, /innerHTML|outerHTML|insertAdjacentHTML/);
 });

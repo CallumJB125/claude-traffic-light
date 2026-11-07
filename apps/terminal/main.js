@@ -9,19 +9,19 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
   const { execFile } = require('node:child_process');
   const manifest = require('./manifest.json');
   const { KeeperClient } = require('./keeper-client');
-  const { readMetadata, readSpend, readCi, gitInfo, trackTimeline } = require('./metadata');
+  const { readMetadata, readSpend, readCi, readRoster, readTrace, gitInfo, trackTimeline, trackAgents } = require('./metadata');
   const takeover = require('./takeover');
   const native = require('./native/keeper-socket/keeper-socket.node');
   let window, client, sessions = [], rows = [], active = null, channel = null, selectedEpoch = 0, attaching = null;
   let polling = null, refreshQueued = false, quitting = false, finishStartup;
-  let observed = [], totals = { spendToday: null, unpricedTurns: 0, day: null };
-  const history = new Map(), gitCache = new Map();
+  let observed = [], totals = { spendToday: null, unpricedTurns: 0, day: null }, bus = null, handoffs = [];
+  const history = new Map(), gitCache = new Map(), agentStarts = new Map();
   const startup = new Promise(resolve => { finishStartup = resolve; });
   app.setName(manifest.development ? 'Plexiform Terminal Development Preview' : 'Plexiform Terminal');
   const labArg = process.argv.find((x) => x.startsWith('--lab-state-root='));
   if (manifest.development && labArg) {
     const dir = labArg.slice('--lab-state-root='.length);
-    if (!path.isAbsolute(dir) || !dir.startsWith('/private/tmp/pf-terminal-lab-')) throw Error('Lab state must be in the temporary folder.');
+    if (!path.isAbsolute(dir) || path.resolve(dir) !== dir || !dir.startsWith('/private/tmp/pf-terminal-lab-')) throw Error('Lab state must be in the temporary folder.');
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); app.setPath('userData', dir);
   }
   const keepSpellcheckOffline = ses => { if (process.platform === 'darwin') return; ses.setSpellCheckerEnabled(false); ses.setSpellCheckerDictionaryDownloadURL('http://127.0.0.1:9/'); }; // privacy-flow: spellcheck-off
@@ -32,7 +32,7 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
   if (!app.requestSingleInstanceLock()) app.quit();
   else {
     const html = path.join(__dirname, 'renderer/index.html');
-    const snapshot = () => ({ sessions, rows, totals, development: manifest.development, connected: Boolean(client && !client.socket.destroyed) });
+    const snapshot = () => ({ sessions, rows, totals, bus, handoffs, development: manifest.development, connected: Boolean(client && !client.socket.destroyed) });
     const dataDir = () => labArg ? path.join(app.getPath('userData'), 'fixture-data') : path.join(os.homedir(), '.claude-traffic-light');
     // Folder git status is cached and refreshed in the background so a slow
     // repository never delays the session list.
@@ -47,8 +47,13 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
       return entry?.info ?? null;
     }
     function publish() {
-      const spend = readSpend(dataDir()), ci = readCi(dataDir());
+      const spend = readSpend(dataDir()), ci = readCi(dataDir()), roster = readRoster(dataDir());
       totals = { spendToday: spend.usd, unpricedTurns: spend.unpricedTurns, day: spend.day };
+      bus = roster.bus ? { ...roster.bus, peers: roster.peers } : null;
+      // The Tasks helper writes its own copy when it runs without the shared path;
+      // each rotates to .1 at 5 MB, and the recent hand-offs may sit in either.
+      const traces = labArg ? [path.join(dataDir(), 'bus-trace.jsonl')] : [path.join(dataDir(), 'bus-trace.jsonl'), path.join(os.homedir(), 'Library/Application Support/Plexiform/tasks/bus-trace.jsonl')];
+      handoffs = readTrace(traces.flatMap((file) => [`${file}.1`, file]));
       const byPid = new Map(sessions.filter((s) => Number.isSafeInteger(s.pid) && s.pid > 1).map((s) => [s.pid, s.sessionId]));
       for (const row of observed) {
         const info = git(row.cwd);
@@ -57,6 +62,8 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
         row.ci = row.branch && ci.get(row.branch) ? { ...ci.get(row.branch), ago_ms: Date.now() - ci.get(row.branch).at } : null;
         const usd = row.cwd ? spend.byCwd.get(row.cwd) : undefined;
         row.cost = Number.isFinite(usd) ? { usd: Math.round(usd * 100) / 100, scope: 'folder-today' } : null;
+        const me = row.key ? roster.self.get(row.key) : null;
+        row.handle = me?.handle ?? null; row.board = me?.board ?? null; row.notesWaiting = me?.notesWaiting ?? null;
       }
       rows = observed.map((row) => ({ ...row }));
       sessions = sessions.map((s) => { const info = git(s.cwd); return { ...s, branch: info?.branch ?? null, changes: info ? { count: info.changed, files: info.files } : null }; });
@@ -78,7 +85,7 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
             // Observed agents stay visible even when the keeper is unavailable.
             if (client && !client.socket.destroyed) { try { sessions = (await client.call('list')).sessions || []; } catch (e) { notice(e.message); } } else sessions = sessions.map((s) => ({ ...s, state: s.state === 'running' ? 'unknown' : s.state }));
             const metadataDir = labArg ? path.join(app.getPath('userData'), 'fixture-metadata') : path.join(os.homedir(), '.claude-traffic-light/sessions');
-            observed = readMetadata(metadataDir); trackTimeline(history, observed); publish();
+            observed = readMetadata(metadataDir); trackTimeline(history, observed); trackAgents(agentStarts, observed); publish();
             const needs = rows.filter((r) => r.bucket === 'needs').length;
             app.dock?.setBadge(needs ? String(needs) : '');
           } catch (e) { notice(e.message); }
@@ -236,6 +243,49 @@ if (blocked.some((x) => app.commandLine.hasSwitch(x)) || process.argv.some((x) =
       if (client) void startDrain();
       // Fixed disposable packaged acceptance. Available only in a dev artifact
       // with an isolated clean HOME/socket; no arbitrary commands or paths.
+      // Fixed screenshot pass for the development preview, same isolation as the
+      // smoke: one disposable shell, fixture data a driver writes into the lab
+      // folder, captures of the real window, then the shell and keeper stop.
+      if (manifest.development && labArg && process.argv.includes('--lab-shots')) {
+        const lab = app.getPath('userData'), wait = (ms) => new Promise(r => setTimeout(r, ms));
+        const run = (js) => window.webContents.executeJavaScript(js);
+        // An occluded window stops painting and capturePage returns its last frame.
+        const shot = async (name) => {
+          window.moveTop(); await wait(700);
+          const state = await run("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r({ overview: !document.getElementById('overview-view').hidden, session: !document.getElementById('session-view').hidden, current: document.querySelector('.srow[aria-current]')?.dataset.key || null }))))");
+          fs.appendFileSync(path.join(lab, 'lab-shots.log'), `${name} ${JSON.stringify(state)}\n`, { mode: 0o600 });
+          fs.writeFileSync(path.join(lab, `shot-${name}.png`), (await window.webContents.capturePage(undefined, { stayHidden: true })).toPNG(), { mode: 0o600 });
+        };
+        window.webContents.setBackgroundThrottling(false);
+        let shellId;
+        try {
+          if (!client) throw Error('Screenshot pass has no authenticated keeper.');
+          window.setSize(1440, 900); window.center();
+          const shell = await start('shell', isDir(path.join(lab, 'plexiform')) ? path.join(lab, 'plexiform') : lab); shellId = shell.sessionId;
+          fs.writeFileSync(path.join(lab, 'lab-shell.json'), JSON.stringify({ pid: shell.pid }), { mode: 0o600 });
+          for (let i = 0; i < 40 && (active !== shellId || !channel); i++) await wait(100);
+          window.focus();
+          for (const ch of "clear; print -P '%F{green}❯%f npm test -- registry'; print -P '%F{green}✔%f registry resolves every adapter (4.1ms)'; print -P '%F{green}✔%f enrol keeps the bus handle stable (2.7ms)'; print -P '%F{8}ℹ tests 31 · pass 31 · fail 0%f'\r") {
+            const result = await run(`window.terminal.write(${JSON.stringify({ sessionId: shellId, data: ch })})`);
+            if (result?.error || !result?.ok) throw Error(result?.error || 'Lab shell input was refused.');
+          }
+          for (let i = 0; i < 6000 && !fs.existsSync(path.join(lab, 'lab-shots.go')); i++) await wait(100);
+          await refresh();
+          await run(`document.querySelector('[data-tab-id="${shellId}"]').click()`); await shot('session');
+          await run("document.querySelector('#nav-overview').click(); document.querySelector('[data-range=\"15\"]').click(); document.querySelector('.earlier') && (document.querySelector('.earlier').open = true)"); await shot('overview');
+          await run("document.querySelector('.group-needs .srow')?.click()"); await shot('readonly');
+          nativeTheme.themeSource = 'light'; await wait(300);
+          await run("document.querySelector('#nav-overview').click()"); await shot('overview-light');
+          await run(`document.querySelector('[data-tab-id="${shellId}"]').click()`); await shot('session-light');
+        } catch (e) {
+          fs.writeFileSync(path.join(lab, 'lab-shots-error.txt'), String(e.message), { mode: 0o600 });
+        } finally {
+          if (shellId) { try { await client.call('signal', { sessionId: shellId, signal: 'HUP' }); } catch {} }
+          await wait(350);
+          try { await client?.call('shutdown'); } catch {}
+          app.quit();
+        }
+      }
       if (manifest.development && labArg && process.argv.includes('--lab-smoke')) {
         let fixtureId;
         try {
