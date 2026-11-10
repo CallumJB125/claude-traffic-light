@@ -906,12 +906,14 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     if (!aw.enabled) return { reason: 'AWARENESS_OFF', message: 'Your person turned off "Let my AI sessions see each other" in Plexiform, so AI sessions cannot add cards.' };
     const b = await bindCaller(ident);
     if (!b.bound) return { reason: 'NOT_BOUND', message: 'Plexiform could not tell which AI session is calling, so it cannot add a card for it.' };
-    if (!(await classify(b.session.cwd, exclude)).allowed) return { reason: 'EXCLUDED', message: 'Plexiform does not add cards for this folder.' };
+    const cls = await classify(b.session.cwd, exclude);
+    if (!cls.allowed) return { reason: 'EXCLUDED', message: 'Plexiform does not add cards for this folder.' };
     const roster = await current(b.key);
     const me = roster && has(roster.self, b.key) ? roster.self[b.key] : null;
     const who = book.get(b.key);
     if (!me || me.verified !== true || typeof me.handle !== 'string' || !who) return { reason: 'NOT_BOUND', message: 'Plexiform could not verify this session, so it cannot add a card for it.' };
     tc.from_handle = me.handle;
+    tc.repo_key_hash = cls.repoKey ? BusTrace.repoKeyHash(cls.top) : null;
     const title = typeof args.title === 'string' ? args.title : '';
     const details = typeof args.details === 'string' ? args.details : undefined;
     if (!title.trim() || title.length > 120 || (details !== undefined && details.length > 800) || typeof args.request_id !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(args.request_id)) {
@@ -937,6 +939,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
       log(`[awareness] card ${r && r.reason ? String(r.reason).toLowerCase() : r && r.duplicate ? 'duplicate' : r && r.card_id ? 'added' : 'error'}`);
       if (!r || typeof r !== 'object') return { reason: 'UNAVAILABLE', message: 'Plexiform could not add the card just now.' };
       if (r.reason) return { reason: String(r.reason).slice(0, 32), message: typeof r.message === 'string' ? r.message.slice(0, 200) : '', ...(typeof r.fix === 'string' ? { fix: r.fix.slice(0, 200) } : {}) };
+      tc.ref = r.card_id;
       // The same board answer bus_peers gives, why and pending_route included, so the AI is never left to guess.
       return { card_id: r.card_id, title: r.title, board: boardAnswer(r.board), ...(r.duplicate ? { duplicate: true } : {}),
         note: 'Plexiform marked the card as added by an AI. Only your person moves or closes it.' };
@@ -1077,6 +1080,9 @@ function boardAnswer(board) {
           : board && !board.pending_route && board.why !== 'deferred' && ['personal', 'untracked', 'choose', 'readonly'].includes(board.kind) ? 'local' : null;
         // bus_hello says where this session's cards go, the same answer as bus_peers.
         if (op === 'hello') {
+          const roster = await current(b.key).catch(() => null);
+          const mine = roster && has(roster.self, b.key) ? roster.self[b.key] : null;
+          if (mine && mine.verified === true && typeof mine.handle === 'string') tc.from_handle = mine.handle;
           caller = { ...caller, bound: true, provider: b.provider, ...(typeof b.session.cwd === 'string' && path.isAbsolute(b.session.cwd) ? { cwd: b.session.cwd } : {}) };
           const r = await forward(op, args, caller);
           return r && typeof r === 'object' && !Array.isArray(r) ? { ...r, board: boardAnswer(board) } : r;

@@ -109,7 +109,7 @@ const TRACE_ID_RE = /^tr_[0-9a-f]{16}$/;
 const SPAN_ID_RE = /^sp_[0-9a-f]{8}$/;
 const TRACE_OPS = freeze(['hello', 'peers', 'note', 'notes', 'notified', 'notice', 'handoff', 'claim', 'start', 'result',
   'returned', 'wait', 'read', 'status', 'card', 'route', 'breaker', 'halt', 'resume']);
-// ref: the handoff_id or note_id the line is about (added 2026-11-06 with src/bus-trace.js; ids only, never text).
+// ref: the handoff_id, note_id or card_id the line is about (added 2026-11-06 with src/bus-trace.js; ids only, never text).
 const TRACE_FIELDS = freeze(['t', 'trace_id', 'span', 'op', 'from_handle', 'to', 'provider', 'repo_key_hash', 'result', 'reason', 'ms', 'ref']);
 const TRACE_RESULTS = freeze(['ok', 'refused', 'error', 'deferred']);
 const isTraceId = (s) => typeof s === 'string' && TRACE_ID_RE.test(s);

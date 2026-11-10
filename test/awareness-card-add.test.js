@@ -172,3 +172,23 @@ test('PR B card_add: a hung board send times out as UNAVAILABLE and frees the se
   assert.match(hung.message, /same request_id/);
   assert.equal((await r.call({ title: 'Next', request_id: rid() })).card_id, 'c2', 'the slot is free after the timeout');
 });
+
+test('live acceptance B4: a card line carries its card_id and repo hash; a bound caller\'s hello carries its handle', async (t) => {
+  const CARD = '0f8e2c1a-4b3d-4e5f-8a9b-0c1d2e3f4a5b';
+  const r = rig(t, { add: async (s, a) => ({ card_id: CARD, title: a.title, board: { kind: 'personal' } }) });
+  const roster = await r.aw.build();
+  const handle = roster.self['claude|X'].handle;
+  assert.equal((await r.call({ title: 'Fix the parser', request_id: rid() })).card_id, CARD);
+  const seen = [];
+  const forward = async (op, args, caller) => { seen.push({ op, caller }); return { agent_id: 'a', tier: 'local_attested' }; };
+  await r.aw.relay('hello', { provider: 'claude' }, { provider: 'claude', cwd: null }, r.w.call(101), { forward });
+  assert.equal(seen[0].caller.trace.from_handle, handle);
+  const file = path.join(r.w.root, 'bus-trace.jsonl');
+  let line = null;
+  for (let i = 0; i < 100 && !line; i += 1) {
+    await new Promise((res) => setTimeout(res, 10));
+    line = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((l) => l.op === 'card') : null;
+  }
+  assert.deepEqual([line.from_handle, line.ref, line.result], [handle, CARD, 'ok']);
+  assert.equal(line.repo_key_hash, require('../src/bus-trace.js').repoKeyHash(fs.realpathSync(r.w.repoA)));
+});
