@@ -736,7 +736,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
         for (const [owner, list] of byOwner) {
           const done = await bus('notified', { to: { key: owner }, note_ids: list }).catch(() => null);
           if (done && Array.isArray(done.notified)) for (const id of list) acked.add(id);
-          if (trace && done && Array.isArray(done.notified)) for (const id of list) trace.append({ trace_id: noteTraces.get(id), op: 'notified', to: book.get(owner)?.handle ?? null, ref: id, result: 'ok' });
+          if (trace && done && Array.isArray(done.notified)) for (const id of list) trace.append({ trace_id: noteTraces.get(id) ?? done.traces?.[id], op: 'notified', to: book.get(owner)?.handle ?? null, ref: id, result: 'ok' });
         }
         log(`[awareness] notices notified=${fresh.length}`);
       }

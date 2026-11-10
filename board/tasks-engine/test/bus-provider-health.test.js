@@ -399,6 +399,20 @@ test('trace (acceptance 7): every op and lifecycle step is one line; a hand-off\
     for (const l of lines) assert.deepEqual(Object.keys(l).sort(), ['from_handle', 'ms', 'op', 'provider', 'reason', 'ref', 'repo_key_hash', 'result', 'span', 't', 'to', 'trace_id']);
     for (const bit of ['SECRET', 'Parser fixed', '/Users/', w.root, 'Job ']) assert.ok(!text.includes(bit), `trace has ${bit}`);
     assert.doesNotMatch(text, /"(?:\/|~\/)[^"]*"/, 'no absolute path anywhere');
+    // Live acceptance B3: a duplicate bus_handoff (main minted a fresh trace_id for the call) is a line of the
+    // original's trace, with its provider; main's notified line for the result note gets the same trace_id.
+    const dup = await w.bus.op('handoff', { request_id: 'req-trace-0001', to: { provider: 'claude' }, title: 'SECRET-TITLE', brief: 'SECRET-BRIEF at /Users/someone/x', provider: 'claude' },
+      { provider: 'claude', cwd: w.root, origin: ORIGIN, trace: { trace_id: 'tr_fedcba9876543210', from_handle: ORIGIN.handle } });
+    assert.equal(dup.duplicate, true);
+    const pending = (await w.bus.op('notes_pending', {})).notes.filter((n) => n.to_key === ORIGIN.key).map((n) => n.note_id);
+    assert.equal(pending.length, 1);
+    const done = await w.bus.op('notified', { to: { key: ORIGIN.key }, note_ids: pending });
+    assert.deepEqual(done.traces, { [pending[0]]: TRACE });
+    await w.bus.trace.flush();
+    const after = fs.readFileSync(`${w.dir}/bus-trace.jsonl`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const d = after.filter((l) => l.op === 'handoff').at(-1);
+    assert.deepEqual([d.trace_id, d.provider, d.to, d.ref], [TRACE, 'claude', 'claude', r.handoff_id]);
+    assert.ok(!after.some((l) => l.trace_id === 'tr_fedcba9876543210'));
   } finally { w.cleanup(); }
 });
 

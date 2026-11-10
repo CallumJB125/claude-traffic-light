@@ -23,8 +23,8 @@ const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const clean = (s) => fold(s).slice(0, NOTE_LIMITS.text);
 const HALTED = Object.freeze({ reason: 'HALTED', message: 'The agent bus is stopped on this Mac, so notes are held. Your person can resume it from the tray or Sessions.' });
 
-/** log: openBusLog(); halted(): whether the bus is stopped; record(kind, data): a note.* event without the text. */
-export function createNotes({ log, now = Date.now, halted = () => false, record = () => {} }) {
+/** log: openBusLog(); halted(): whether the bus is stopped; record(kind, data): a note.* event without the text; traceOf(handoff_id): its trace_id. */
+export function createNotes({ log, now = Date.now, halted = () => false, record = () => {}, traceOf = () => null }) {
   const parse = (S, a) => { const r = S.safeParse(a ?? {}); return r.success ? { args: r.data } : { refusal: { reason: 'VALIDATION', message: issue(r) } }; };
   const mark = (kind, rows) => { for (const r of rows) record(kind, { note_id: r.note_id, from: r.from_handle, to: r.to_handle }); };
 
@@ -120,7 +120,10 @@ export function createNotes({ log, now = Date.now, halted = () => false, record 
     const ids = log.setNotes(a.to.key, a.note_ids, 'notified', now());
     const rows = ids.map((id) => log.noteFor(a.to.key, id, 0)).filter(Boolean);
     mark('note.notified', rows);
-    return { notified: ids };
+    // A hand-off's result or blocked note is part of that hand-off's trace (its request key names the handoff_id).
+    const traces = {};
+    for (const r of rows) { const t = r.from_key === SYSTEM.key ? traceOf(r.request_key.split('|')[3]) : null; if (t) traces[r.note_id] = t; }
+    return { notified: ids, ...(Object.keys(traces).length ? { traces } : {}) };
   }
 
   return {

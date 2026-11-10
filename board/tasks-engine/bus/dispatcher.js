@@ -106,7 +106,7 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger, t
   const append = (ev, keys) => log.append(ev, keys);
   const systemSource = { device_id: deviceId, agent_id: 'bus:local:dispatcher', provider: 'bus', tier: 'person', identity_source: 'local_token' };
   // Notes (plan-agent-awareness §3.6): main's ops only; their events carry handles and states, never the text.
-  const notes = createNotes({ log, now, halted: () => log.state('halted', false),
+  const notes = createNotes({ log, now, halted: () => log.state('halted', false), traceOf: (id) => traceOf(log.handoff(id)) ?? null,
     record: (kind, data) => append(envelope({ topic: 'note', kind, handoff: null, source: systemSource, data })) });
   // The trace (src/bus-trace.js): this helper's half, same shape and trace_ids as main's. A hand-off's trace_id is
   // kept on its offer, so its claim, start, result and returned note are lines of the same collaboration.
@@ -588,9 +588,12 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger, t
     const late = Number.isFinite(caller?.timeout_ms) && now() - t0 > caller.timeout_ms;
     const res = BusTrace.resultOf(r, err);
     const a = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
-    trace.append({ trace_id: caller?.trace?.trace_id, op: name, from_handle: caller?.origin?.handle ?? caller?.trace?.from_handle ?? null,
-      to: name === 'handoff' ? (r?.provider ?? (typeof a.to?.provider === 'string' ? a.to.provider : null)) : null,
-      provider: name === 'handoff' ? r?.provider ?? null : null, ref: r?.handoff_id ?? (typeof a.handoff_id === 'string' ? a.handoff_id : null),
+    // A duplicate hand-off is a line of the hand-off it returned: that one's trace_id and provider.
+    const prior = name === 'handoff' && r?.duplicate && typeof r.handoff_id === 'string' ? log.handoff(r.handoff_id) : null;
+    const provider = name === 'handoff' ? r?.provider ?? (typeof prior?.to?.provider === 'string' ? prior.to.provider : null) : null;
+    trace.append({ trace_id: traceOf(prior) ?? caller?.trace?.trace_id, op: name, from_handle: caller?.origin?.handle ?? caller?.trace?.from_handle ?? null,
+      to: name === 'handoff' ? (provider ?? (typeof a.to?.provider === 'string' ? a.to.provider : null)) : null,
+      provider, ref: r?.handoff_id ?? (typeof a.handoff_id === 'string' ? a.handoff_id : null),
       repo_key_hash: r?.handoff_id ? BusTrace.repoKeyHash(log.handoff(r.handoff_id)?.repo?.root) : null,
       ms: now() - t0, ...(!late ? res : name === 'handoff' ? (res.result === 'ok' ? { result: 'deferred', reason: 'TIMEOUT' } : res) : { result: 'error', reason: 'TIMEOUT' }) });
     if (err) throw err;
