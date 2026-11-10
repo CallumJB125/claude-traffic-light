@@ -232,6 +232,11 @@ test('dedupe: never hands back a failed, expired or unknown-outcome hand-off; a 
     // The same request_id again is the same request (idempotent), whatever its state.
     const replay = await w.bus.op('handoff', { request_id: 'req-dd-retry-0001', to: { provider: 'codex' }, ...same, provider: 'claude' }, { provider: 'claude', cwd: w.root, origin: ORIGIN });
     assert.deepEqual([replay.handoff_id, replay.duplicate], [retry.handoff_id, true]);
+    assert.equal(replay.hint, undefined, 'a live one needs no hint');
+    // The failed one's own request_id: still the same request, never a re-run, and it says how to run it again.
+    const dead = await w.bus.op('handoff', { request_id: 'req-ph-1-0000', to: { provider: 'codex' }, ...same, provider: 'claude' }, { provider: 'claude', cwd: w.root, origin: ORIGIN });
+    assert.deepEqual([dead.handoff_id, dead.state, dead.duplicate], [first.handoff_id, 'failed', true]);
+    assert.match(dead.hint, /new request_id/);
   } finally { w.cleanup(); }
 });
 

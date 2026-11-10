@@ -225,7 +225,8 @@ export function createAgentBus({ engine, dataDir, now = Date.now, log: logger, t
   function post(input) {
     let h = input;
     const prior = log.byRequest(h.requestKey);
-    if (prior) return { handoff_id: prior.handoff_id, state: stateOf(prior.handoff_id), duplicate: true };
+    if (prior) return { handoff_id: prior.handoff_id, state: stateOf(prior.handoff_id), duplicate: true,
+      ...(DEAD_END.has(log.result(prior.handoff_id)?.kind) ? { hint: 'This request_id already ran and ended. Use a new request_id to run it again.' } : {}) };
     // Content dedupe (same card or repo, title and brief, within the hour) is per requested target: asking another
     // provider, 'any' or a list is a new request. It joins a hand-off still under way or done (its result is the
     // answer); one that failed (stopped or cancelled included), expired or ended unknown is never handed back, so a
