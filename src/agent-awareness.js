@@ -773,7 +773,8 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     if (!aw.enabled || !aw.notes) return NOTES_OFF;
     const b = await bindCaller(ident);
     if (!b.bound) return { ...NOT_BOUND, binding: bindingStatus(b), ...(op === 'notes' ? { notes: [] } : {}) };
-    if (!(await classify(b.session.cwd, exclude)).allowed) return { reason: 'EXCLUDED', message: 'Plexiform does not carry notes for this folder.' };
+    const cls = await classify(b.session.cwd, exclude);
+    if (!cls.allowed) return { reason: 'EXCLUDED', message: 'Plexiform does not carry notes for this folder.' };
     const status = op === 'notes' && args.status === true;
     if (halted() === 'unknown') { await Promise.resolve().then(refreshHalt).catch(() => {}); if (halted() !== 'unknown') await refresh(); }
     if (!status && halted() === true) return NOTES_HALTED;
@@ -781,7 +782,7 @@ function create({ rootDir, host, home, codexHome = path.join(home, '.codex'), da
     const me = roster && has(roster.self, b.key) ? roster.self[b.key] : null;
     if (!me || me.verified !== true || typeof me.handle !== 'string' || !book.has(b.key)) return op === 'notes' ? { ...NOT_BOUND, notes: [] } : NOT_BOUND;
     tc.from_handle = me.handle;
-    tc.repo_key_hash = typeof me.repo_key === 'string' ? me.repo_key : null;
+    tc.repo_key_hash = cls.repoKey ? BusTrace.repoKeyHash(cls.top) : null;
     if (op === 'notes') {
       const r = await forward('notes', { me: { key: b.key }, ...(status ? { status: true } : {}), ...(typeof args.note_id === 'string' && Hook.NOTE_ID.test(args.note_id) ? { note_id: args.note_id } : {}) }, null);
       const got = !status && r && Array.isArray(r.notes) ? r.notes.map((n) => n && n.note_id).filter((id) => typeof id === 'string' && Hook.NOTE_ID.test(id)) : [];

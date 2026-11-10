@@ -222,6 +222,8 @@ test('G1 mid-turn: a note to a working session shows on its next PostToolUse as 
   const tl = traced.trim().split('\n').map((l) => JSON.parse(l));
   const noteLine = tl.find((l) => l.op === 'note' && l.ref === sent.note_id);
   assert.deepEqual([noteLine.from_handle, noteLine.to, noteLine.result], [x, y, 'ok']);
+  // The same repo key a hand-off from that repo traces (the helper hashes its git top): sha256(repo), not of its .git.
+  assert.equal(noteLine.repo_key_hash, require('../src/bus-trace.js').repoKeyHash(fs.realpathSync(s.w.repoB)));
   assert.ok(tl.some((l) => l.op === 'notified' && l.ref === sent.note_id && l.trace_id === noteLine.trace_id));
   for (const bit of ['Rotate', 'AKIA', 'hunter2', 'example.com', 'second', s.w.root, '/Users/', '/private/']) assert.ok(!traced.includes(bit), `trace has ${bit}`);
   // Turned off: nothing mid-turn.
