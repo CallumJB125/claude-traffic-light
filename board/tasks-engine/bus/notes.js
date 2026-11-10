@@ -113,6 +113,8 @@ export function createNotes({ log, now = Date.now, halted = () => false, record 
     return { notes: log.unread(now()).map((r) => ({ note_id: r.note_id, to_key: r.to_key, from_handle: r.from_handle, from_provider: r.from_provider, from_folder: r.from_folder, expires_at: r.expires_at })) };
   }
 
+  const handoffOf = (k) => (typeof k === 'string' && k.startsWith(`${SYSTEM.key}|`) ? k.slice(SYSTEM.key.length + 1).split('|')[1] ?? null : null);
+
   // Main saw the recipient's hook write the notice (a receipt, not proof anyone read it): queued → notified.
   function notified(raw) {
     const { args: a, refusal } = parse(NotifiedArgs, raw);
@@ -122,7 +124,7 @@ export function createNotes({ log, now = Date.now, halted = () => false, record 
     mark('note.notified', rows);
     // A hand-off's result or blocked note is part of that hand-off's trace (its request key names the handoff_id).
     const traces = {};
-    for (const r of rows) { const t = r.from_key === SYSTEM.key ? traceOf(r.request_key.split('|')[3]) : null; if (t) traces[r.note_id] = t; }
+    for (const r of rows) { const t = r.from_key === SYSTEM.key ? traceOf(handoffOf(r.request_key)) : null; if (t) traces[r.note_id] = t; }
     return { notified: ids, ...(Object.keys(traces).length ? { traces } : {}) };
   }
 

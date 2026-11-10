@@ -1080,7 +1080,7 @@ function boardAnswer(board) {
           : board && !board.pending_route && board.why !== 'deferred' && ['personal', 'untracked', 'choose', 'readonly'].includes(board.kind) ? 'local' : null;
         // bus_hello says where this session's cards go, the same answer as bus_peers.
         if (op === 'hello') {
-          const roster = await current(b.key).catch(() => null);
+          const roster = lastRoster && has(lastRoster.self, b.key) ? lastRoster : await current(b.key).catch(() => null);
           const mine = roster && has(roster.self, b.key) ? roster.self[b.key] : null;
           if (mine && mine.verified === true && typeof mine.handle === 'string') tc.from_handle = mine.handle;
           caller = { ...caller, bound: true, provider: b.provider, ...(typeof b.session.cwd === 'string' && path.isAbsolute(b.session.cwd) ? { cwd: b.session.cwd } : {}) };
